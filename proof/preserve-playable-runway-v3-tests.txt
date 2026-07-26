@@ -1,0 +1,50 @@
+=== pytest tests/ ===
+........................................................................ [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 96%]
+........................................................................ [ 97%]
+........................................................................ [ 99%]
+.......................................                                  [100%]
+=============================== warnings summary ===============================
+<workspace>/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1
+  <workspace>/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5373 passed, 3 skipped, 21 deselected, 1 warning in 143.67s (0:02:23)
+
+# NOTE (accepted): the single warning is an upstream StarletteDeprecationWarning
+# emitted by FastAPI's bundled TestClient (starlette.testclient imports httpx),
+# not by this PR's code. It is accepted as an upstream follow-up pending a
+# fastapi/starlette bump; all 5373 assertions pass.
+
+=== pytest -m requires_ffmpeg ===
+# Audio-pipeline change: the FFmpeg-marked suite is deselected by default and is
+# run explicitly here (per the repo's audio-pipeline test rule).
+............
+[broadcast-chain CPU] 3s segment colour pass: 0.04s
+.........                                                    [100%]
+21 passed, 5376 deselected, 1 warning in 6.33s
+
+=== ruff check . ===
+All checks passed!
+
+=== ruff format --check . ===
+319 files already formatted
+
+=== mypy mammamiradio/ tests/ ===
+Success: no issues found in 290 source files
+
+=== scripts/validate-addon.sh ===
+  PASS  ha-addon/mammamiradio-edge/logo.png
+  PASS  ha-addon/mammamiradio-edge/apparmor.txt
+  PASS  ha-addon/mammamiradio-edge/translations/en.yaml
+  PASS  edge AppArmor profile matches stable
+  PASS  edge host_network: true
+  PASS  edge ingress_port: 8000
+  PASS  edge timeout: 240 (>= 120)
+
+=== Results ===
+All checks passed. Safe to push.

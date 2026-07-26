@@ -236,6 +236,21 @@ for _pace_opt, _pace_env in (
     except (TypeError, ValueError):
         continue
     print('export ' + _pace_env + '=' + shlex.quote(str(_pace_int)))
+# Normalization cache ceiling. A larger cache keeps more of the rotation ready and
+# reduces cold renders. Config loading clamps the value, so malformed input uses a
+# safe bound instead of stopping startup.
+cache_mb = opts.get('norm_cache_mb', 1500)
+try:
+    # Python treats bool as an int. Without this guard, True becomes a 1 MB cache.
+    # Reject bool before conversion to match _apply_addon_options in core/config.py.
+    if isinstance(cache_mb, bool):
+        raise ValueError
+    cache_mb_int = int(cache_mb)
+    if cache_mb_int <= 0:
+        raise ValueError
+except (TypeError, ValueError):
+    cache_mb_int = 1500
+print('export MAMMAMIRADIO_MAX_CACHE_MB=' + shlex.quote(str(cache_mb_int)))
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse add-on config, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null

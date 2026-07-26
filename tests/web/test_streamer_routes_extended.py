@@ -8,6 +8,7 @@ import json
 import os
 import time
 from pathlib import Path
+from threading import Event
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -20,7 +21,7 @@ from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, Stati
 from mammamiradio.playlist.playlist import ExplicitSourceError
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, router
+from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, _admin_track_id, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -73,6 +74,29 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
     app.state.config = config
     app.state.start_time = time.time()
     return app
+
+
+def _row_target(app: FastAPI, index: int) -> dict[str, object]:
+    state = app.state.station_state
+    track = state.playlist[index]
+    return {
+        "revision": state.playlist_revision,
+        "index": index,
+        "id": _admin_track_id(track),
+    }
+
+
+def _move_target(app: FastAPI, source: int, destination: int) -> dict[str, object]:
+    state = app.state.station_state
+    source_track = state.playlist[source]
+    destination_track = state.playlist[destination]
+    return {
+        "revision": state.playlist_revision,
+        "from": source,
+        "from_id": _admin_track_id(source_track),
+        "to": destination,
+        "to_id": _admin_track_id(destination_track),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +320,52 @@ async def test_queue_remove_item_demotes_carried_moment_receipt(tmp_path):
     assert row.drop_reason == "operator_queue_remove"
 
 
+@pytest.mark.asyncio
+async def test_queue_remove_item_fails_closed_on_exposed_ordinary_music_tail(tmp_path):
+    """Removing the queue tail must not blindly re-trust the newly exposed tail.
+
+    Same invariant _apply_ban was hardened for: an arbitrary single-item
+    removal can expose a previously-interior, untrusted (non-rescue) music
+    segment as the new tail. That segment may carry an egress-processed
+    path, so it must not become the "clean" speech-bed adjacency source.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    ordinary_path = tmp_path / "ordinary-survivor.mp3"
+    ordinary_path.write_bytes(b"ordinary")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={"artist": "Safe Artist", "title_only": "Safe Song", "queue_id": "q1"},
+        ephemeral=False,
+    )
+    removable_path = tmp_path / "removable-tail.mp3"
+    removable_path.write_bytes(b"removable")
+    removable = Segment(
+        type=SegmentType.MUSIC,
+        path=removable_path,
+        duration_sec=180.0,
+        metadata={"artist": "Removed Artist", "title_only": "Removed Song", "queue_id": "q2"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(ordinary)
+    app.state.queue.put_nowait(removable)
+    state.queued_segments = [{"id": "q1", "label": "Safe Song"}, {"id": "q2", "label": "Removed Song"}]
+    state.last_music_file = removable_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"id": "q2"})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert list(app.state.queue._queue) == [ordinary]
+    assert state.last_enqueued_type is None
+
+
 # ---------------------------------------------------------------------------
 # Skip
 # ---------------------------------------------------------------------------
@@ -320,36 +390,48 @@ async def test_skip_nothing_streaming():
 async def test_remove_track_valid_index():
     app = _make_test_app()
     starting_revision = app.state.station_state.playlist_revision
+    payload = _row_target(app, 1)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/remove", json={"index": 1})
+        resp = await client.post("/api/playlist/remove", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
     assert "Song B" in body["removed"]
     assert len(app.state.station_state.playlist) == 2
     assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert body["playlist_revision"] == starting_revision + 1
 
 
 @pytest.mark.asyncio
 async def test_remove_track_invalid_index():
     app = _make_test_app()
+    state = app.state.station_state
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/remove", json={"index": 99})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/remove",
+            json={"revision": state.playlist_revision, "index": 99, "id": "t2"},
+        )
+    assert resp.status_code == 409
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "stale_playlist"
 
 
 @pytest.mark.asyncio
 async def test_remove_track_rejects_non_integer_index_without_mutating_playlist():
     app = _make_test_app()
+    state = app.state.station_state
     before = [t.spotify_id for t in app.state.station_state.playlist]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/remove", json={"index": "abc"})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/remove",
+            json={"revision": state.playlist_revision, "index": "abc", "id": "t2"},
+        )
+    assert resp.status_code == 422
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "invalid_target"
     assert [t.spotify_id for t in app.state.station_state.playlist] == before
 
 
@@ -362,9 +444,10 @@ async def test_remove_track_rejects_non_integer_index_without_mutating_playlist(
 async def test_move_track_valid():
     app = _make_test_app()
     starting_revision = app.state.station_state.playlist_revision
+    payload = _move_target(app, 2, 0)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move", json={"from": 2, "to": 0})
+        resp = await client.post("/api/playlist/move", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
@@ -372,27 +455,50 @@ async def test_move_track_valid():
     # Song C should now be first
     assert app.state.station_state.playlist[0].title == "Song C"
     assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert body["playlist_revision"] == starting_revision + 1
 
 
 @pytest.mark.asyncio
 async def test_move_track_invalid_indices():
     app = _make_test_app()
+    state = app.state.station_state
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move", json={"from": -1, "to": 100})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/move",
+            json={
+                "revision": state.playlist_revision,
+                "from": 2,
+                "from_id": "t3",
+                "to": 100,
+                "to_id": "t1",
+            },
+        )
+    assert resp.status_code == 409
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "stale_playlist"
 
 
 @pytest.mark.asyncio
 async def test_move_track_rejects_non_integer_indices_without_mutating_playlist():
     app = _make_test_app()
+    state = app.state.station_state
     before = [t.spotify_id for t in app.state.station_state.playlist]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move", json={"from": "x", "to": 0})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/move",
+            json={
+                "revision": state.playlist_revision,
+                "from": "x",
+                "from_id": "t3",
+                "to": 0,
+                "to_id": "t1",
+            },
+        )
+    assert resp.status_code == 422
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "invalid_target"
     assert [t.spotify_id for t in app.state.station_state.playlist] == before
 
 
@@ -409,9 +515,10 @@ async def test_move_to_next_valid(tmp_path):
     app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
     app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
     starting_revision = app.state.station_state.playlist_revision
+    payload = _row_target(app, 2)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
+        resp = await client.post("/api/playlist/move_to_next", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
@@ -420,6 +527,7 @@ async def test_move_to_next_valid(tmp_path):
     assert app.state.station_state.pinned_track.title == "Song C"
     assert app.state.station_state.force_next == SegmentType.MUSIC
     assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert body["playlist_revision"] == starting_revision + 1
     # Pre-rendered segments are intentionally preserved — no purge on move_to_next
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
     assert app.state.queue.qsize() == 1
@@ -429,11 +537,16 @@ async def test_move_to_next_valid(tmp_path):
 @pytest.mark.asyncio
 async def test_move_to_next_invalid():
     app = _make_test_app()
+    state = app.state.station_state
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move_to_next", json={"index": 99})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/move_to_next",
+            json={"revision": state.playlist_revision, "index": 99, "id": "t3"},
+        )
+    assert resp.status_code == 409
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "stale_playlist"
 
 
 @pytest.mark.asyncio
@@ -444,12 +557,14 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
     app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
     app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
     starting_revision = app.state.station_state.playlist_revision
+    payload = {"revision": starting_revision, "index": "abc", "id": "t3"}
     before = [t.spotify_id for t in app.state.station_state.playlist]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move_to_next", json={"index": "abc"})
-    assert resp.status_code == 200
+        resp = await client.post("/api/playlist/move_to_next", json=payload)
+    assert resp.status_code == 422
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "invalid_target"
     assert [t.spotify_id for t in app.state.station_state.playlist] == before
     assert app.state.station_state.playlist_revision == starting_revision
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
@@ -461,9 +576,10 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
 async def test_move_to_next_does_not_fake_public_upcoming_preview():
     app = _make_test_app()
     app.state.station_state.segments_produced = 1
+    payload = _row_target(app, 2)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        move_resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
+        move_resp = await client.post("/api/playlist/move_to_next", json=payload)
         status_resp = await client.get("/public-status")
 
     assert move_resp.status_code == 200
@@ -473,6 +589,199 @@ async def test_move_to_next_does_not_fake_public_upcoming_preview():
     assert body["upcoming_mode"] == "building"
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.display == "Artist C – Song C"
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/playlist/remove", {"index": 1}),
+        ("/api/playlist/move", {"from": 2, "to": 0}),
+        ("/api/playlist/move_to_next", {"index": 2}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_playlist_row_mutations_reject_legacy_index_only_payloads(path, payload):
+    app = _make_test_app()
+    state = app.state.station_state
+    before = ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(path, json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["reason"] == "invalid_target"
+    assert ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track) == before
+
+
+@pytest.mark.parametrize(
+    "payload_override",
+    [
+        {"revision": "0"},
+        {"index": True},
+        {"id": "   "},
+    ],
+)
+@pytest.mark.asyncio
+async def test_move_to_next_rejects_wrong_target_field_types_without_side_effects(payload_override):
+    app = _make_test_app()
+    state = app.state.station_state
+    payload = _row_target(app, 1)
+    payload.update(payload_override)
+    before = (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["reason"] == "invalid_target"
+    assert (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+    ) == before
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_rejects_cached_index_after_an_earlier_row_is_removed():
+    app = _make_test_app()
+    state = app.state.station_state
+    cached_target = _row_target(app, 1)
+
+    state.playlist.pop(0)
+    state.playlist_revision += 1
+    revision_after_remove = state.playlist_revision
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=cached_target)
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "stale_playlist"
+    assert state.pinned_track is None
+    assert state.force_next is None
+    assert state.playlist_revision == revision_after_remove
+    assert [track.title for track in state.playlist] == ["Song B", "Song C"]
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_rejects_wrong_row_id_without_side_effects():
+    app = _make_test_app()
+    state = app.state.station_state
+    payload = _row_target(app, 1)
+    payload["id"] = "t3"
+    before = ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "stale_playlist"
+    assert ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track) == before
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_disambiguates_duplicate_tokens_with_revision_and_index():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.playlist = [
+        Track(title="First", artist="Artist", duration_ms=180_000, spotify_id="duplicate"),
+        Track(title="Second", artist="Artist", duration_ms=180_000, spotify_id="duplicate"),
+    ]
+    payload = _row_target(app, 1)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=payload)
+
+    assert response.status_code == 200
+    assert state.pinned_track is state.playlist[1]
+    assert state.pinned_track.title == "Second"
+
+
+@pytest.mark.asyncio
+async def test_move_track_validates_both_source_and_destination_tokens():
+    app = _make_test_app()
+    state = app.state.station_state
+    payload = _move_target(app, 2, 0)
+    payload["to_id"] = "t2"
+    before = ([track.spotify_id for track in state.playlist], state.playlist_revision)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "stale_playlist"
+    assert ([track.spotify_id for track in state.playlist], state.playlist_revision) == before
+
+
+@pytest.mark.asyncio
+async def test_playlist_row_mutations_fail_fast_while_rotation_lock_is_busy():
+    app = _make_test_app()
+    state = app.state.station_state
+    requests = [
+        ("/api/playlist/remove", _row_target(app, 1)),
+        ("/api/playlist/move", _move_target(app, 2, 0)),
+        ("/api/playlist/move_to_next", _row_target(app, 2)),
+    ]
+    before = (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+        dict(state.blocklist),
+    )
+
+    await app.state.source_switch_lock.acquire()
+    try:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            responses = [await client.post(path, json=payload) for path, payload in requests]
+    finally:
+        app.state.source_switch_lock.release()
+
+    assert [response.status_code for response in responses] == [409, 409, 409]
+    assert [response.json()["reason"] for response in responses] == ["rotation_updating"] * 3
+    assert (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+        dict(state.blocklist),
+    ) == before
+
+
+@pytest.mark.asyncio
+async def test_playlist_row_mutation_releases_rotation_lock_on_success():
+    """A successful row mutation must release the shared source_switch_lock.
+
+    The three row endpoints acquire ``source_switch_lock`` — the same lock source
+    switching uses — and release it in a ``finally``. If a regression drops that
+    release, the lock wedges permanently: the next source switch and every later
+    row mutation would return ``rotation_updating`` forever. Guard it by asserting
+    the lock is free after a 200 and by driving a second consecutive mutation.
+    """
+    app = _make_test_app()
+    lock = app.state.source_switch_lock
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/playlist/move", json=_move_target(app, 2, 0))
+        assert first.status_code == 200
+        assert not lock.locked()
+
+        # A second mutation only succeeds if the first actually released the lock.
+        second = await client.post("/api/playlist/remove", json=_row_target(app, 1))
+        assert second.status_code == 200
+        assert second.json()["ok"] is True
+        assert not lock.locked()
 
 
 @pytest.mark.asyncio
@@ -993,6 +1302,31 @@ async def test_add_track_play_next():
 
 
 @pytest.mark.asyncio
+async def test_add_track_numeric_spotify_id_remains_readable_in_playlist_and_search():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        add_response = await client.post(
+            "/api/playlist/add",
+            json={
+                "title": "Numeric ID Song",
+                "artist": "Artist",
+                "duration_ms": 200_000,
+                "spotify_id": 123,
+            },
+        )
+        playlist_response = await client.get("/api/playlist")
+        search_response = await client.get("/api/search?q=Numeric&include_external=false")
+
+    assert add_response.status_code == 200
+    assert playlist_response.status_code == 200
+    assert search_response.status_code == 200
+    playlist_track = next(track for track in playlist_response.json()["tracks"] if track["title"] == "Numeric ID Song")
+    assert playlist_track["id"] == "123"
+    assert search_response.json()["results"][0]["id"] == "123"
+
+
+@pytest.mark.asyncio
 async def test_add_track_missing_title():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -1071,6 +1405,7 @@ async def test_playlist_load_purges_queue_and_skips():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
     assert resp.json()["ok"] is True
+    assert resp.json()["skipped"] is True
     assert app.state.queue.qsize() == 1
     assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert app.state.skip_event.is_set()
@@ -1107,6 +1442,7 @@ async def test_playlist_load_does_not_skip_when_no_ready_cutover_runway(tmp_path
             response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
 
     assert response.json()["ok"] is True
+    assert response.json()["skipped"] is False
     assert app.state.queue.empty()
     assert not app.state.skip_event.is_set()
 
@@ -1165,10 +1501,60 @@ async def test_playlist_load_keeps_ready_runway_when_assets_are_missing(tmp_path
             response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
 
     assert response.json()["ok"] is True
-    assert app.state.skip_event.is_set()
+    assert response.json()["skipped"] is False
+    assert not app.state.skip_event.is_set()
     assert list(app.state.queue._queue) == [queued_head]
     assert state.queued_segments == [{"id": "ready-head", "type": "music", "label": "Ready head"}]
     assert state.continuity_slot is slot
+
+
+@pytest.mark.asyncio
+async def test_playlist_load_preserves_old_source_head_without_fresh_runway(tmp_path):
+    """A preserved old-source head prevents a source switch from cutting early."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    old_head_path = tmp_path / "old_source_head.mp3"
+    old_head_path.write_bytes(b"old-source-audio")
+    old_head = Segment(
+        type=SegmentType.MUSIC,
+        path=old_head_path,
+        duration_sec=180.0,
+        metadata={"title": "Old source head", "title_only": "Old source head", "artist": "Old Artist"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(old_head)
+    state.queued_segments = [{"label": "Old source head"}]
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] is False
+    assert not app.state.skip_event.is_set()
+    assert list(app.state.queue._queue) == [old_head]
+    assert state.queued_segments[0]["label"] == "Old source head"
+    assert state.playlist[0].title == "URL Track"
 
 
 # ---------------------------------------------------------------------------
@@ -1184,6 +1570,7 @@ async def test_search_empty_query():
         resp = await client.get("/api/search?q=")
     assert resp.status_code == 200
     body = resp.json()
+    assert body["revision"] == app.state.station_state.playlist_revision
     assert body["results"] == []
     assert body["external"] == []
     assert body["total"] == 0
@@ -1316,6 +1703,7 @@ async def test_search_returns_playlist_and_external_results():
             resp = await client.get("/api/search?q=Song")
     assert resp.status_code == 200
     body = resp.json()
+    assert body["revision"] == app.state.station_state.playlist_revision
     assert len(body["results"]) >= 1
     assert body["results"][0]["album_art"] == "https://img.example/song-a.jpg"
     assert body["results"][0]["source"] == "classic"
@@ -1344,12 +1732,47 @@ async def test_search_playlist_results_are_paginated_with_absolute_indices():
             resp = await client.get("/api/search?q=Song&offset=2&limit=3")
     assert resp.status_code == 200
     body = resp.json()
+    assert body["revision"] == app.state.station_state.playlist_revision
     assert [track["title"] for track in body["results"]] == ["Song 2", "Song 3", "Song 4"]
     assert [track["index"] for track in body["results"]] == [2, 3, 4]
     assert body["total"] == 7
     assert body["offset"] == 2
     assert body["limit"] == 3
     assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_keeps_captured_revision_and_rows_across_slow_external_lookup():
+    app = _make_test_app()
+    state = app.state.station_state
+    captured_revision = state.playlist_revision
+    search_started = Event()
+    release_search = Event()
+
+    def _held_external_search(_query: str, _limit: int):
+        search_started.set()
+        assert release_search.wait(timeout=2)
+        return []
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+        side_effect=_held_external_search,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request_task = asyncio.create_task(client.get("/api/search?q=Song"))
+            assert await asyncio.to_thread(search_started.wait, 1)
+            state.playlist.pop(0)
+            state.playlist_revision += 1
+            release_search.set()
+            response = await request_task
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["revision"] == captured_revision
+    assert [row["index"] for row in body["results"]] == [0, 1, 2]
+    assert [row["title"] for row in body["results"]] == ["Song A", "Song B", "Song C"]
+    assert state.playlist_revision == captured_revision + 1
 
 
 @pytest.mark.asyncio

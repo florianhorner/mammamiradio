@@ -210,7 +210,7 @@ class TestSkipEndpoint:
         assert app.state.station_state.force_next is SegmentType.MUSIC
 
     @pytest.mark.asyncio
-    async def test_skip_does_not_purge_queue(self):
+    async def test_skip_does_not_purge_playable_queue(self, tmp_path):
         """Skip only interrupts the current segment; queued segments survive."""
         shadow = [{"type": "music", "label": "Next Up", "metadata": {}}]
         app = _make_app(
@@ -218,6 +218,9 @@ class TestSkipEndpoint:
             shadow=shadow,
             queue_items=1,
         )
+        queued_path = tmp_path / "next-up.mp3"
+        queued_path.write_bytes(b"playable")
+        app.state.queue._queue[0].path = queued_path
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/skip", headers=AUTH)
@@ -1448,7 +1451,7 @@ class TestRuntimeProviderTransparencyUI:
         assert isinstance(bridge_health["session_count"], int)
         assert isinstance(bridge_health["window_count"], int)
         assert isinstance(bridge_health["unhealthy"], bool)
-        assert set(bridge_health["by_type"]) == {"drain", "resume", "idle"}
+        assert set(bridge_health["by_type"]) == {"drain", "resume", "idle", "continuity"}
         assert bridge_health["threshold"] >= 1
         assert bridge_health["window_seconds"] > 0
         assert "last_fire" in bridge_health

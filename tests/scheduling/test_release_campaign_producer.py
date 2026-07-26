@@ -222,6 +222,69 @@ async def test_release_beat_attempt_restored_when_banter_tts_fails(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_release_beat_attempt_restored_when_banter_tts_unavailable(tmp_path):
+    """The TTSUnavailableError-typed non-chaos banter branch must restore an
+    in-flight release-beat attempt the same way its generic-Exception sibling
+    (test_release_beat_attempt_restored_when_banter_tts_fails) does. Unlike that
+    sibling, this branch re-raises instead of retrying inline — the producer's
+    outer recovery ladder is what actually queues a segment."""
+    from mammamiradio.audio.tts import TTSUnavailableError
+
+    config = load_config(TOML_PATH)
+    config.pacing.lookahead_segments = 1
+    config.homeassistant.enabled = False
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    campaign = _Campaign()
+    state = StationState(
+        listeners_active=1,
+        playlist=[Track(title="Canzone", artist="Artista", duration_ms=180_000, spotify_id="song1")],
+        release_campaign=campaign,
+    )
+    queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    commit = SimpleNamespace(release_beat=_ReleaseCommit())
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Novita!")], commit),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=tmp_path / "transition.mp3"),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=tmp_path / "transition.mp3"),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_dialogue",
+            new_callable=AsyncMock,
+            side_effect=TTSUnavailableError("all configured TTS routes are unavailable"),
+        ),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.check_reactive_triggers", return_value=None),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not campaign.abandoned:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not restore the stranded release-beat attempt")
+                await asyncio.sleep(0.02)
+        finally:
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except asyncio.CancelledError:
+                pass
+
+    assert campaign.abandoned == ["attempt-1"]
+
+
+@pytest.mark.asyncio
 async def test_release_beat_attempt_restored_when_transition_raises_in_gather(tmp_path):
     """F5: write_banter succeeds (opening an attempt) but its sibling
     write_transition raises inside the same asyncio.gather. The tuple never

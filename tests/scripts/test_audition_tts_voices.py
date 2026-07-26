@@ -978,6 +978,39 @@ def test_cli_verifies_complete_host_performance_gate(tmp_path, capsys) -> None:
 
 
 def test_committed_host_performance_receipt_is_valid_when_human_approval_adds_it() -> None:
-    """When committed after a real audition, the receipt must prove the full gate."""
-    if audition.HOST_PERFORMANCE_RECEIPT_PATH.exists():
-        audition.load_host_performance_receipt(require_approved_matrix=True)
+    """A committed receipt is an immutable record of a real audition, so it must
+    always load and validate. It also can never disagree with production config:
+    V3 may ship only when the receipt approves the full Marco/Giulia matrix, so if
+    the gate does not pass (e.g. V3 was auditioned and rejected) no host may be
+    configured on eleven_v3."""
+    # The receipt is a durable, tracked audit trail — it must stay committed so
+    # this cross-artifact guard can never be silently disabled by deleting it.
+    assert audition.HOST_PERFORMANCE_RECEIPT_PATH.exists(), (
+        f"committed host-performance receipt is missing: {audition.HOST_PERFORMANCE_RECEIPT_PATH}"
+    )
+
+    from mammamiradio.core.config import load_config
+
+    # Always a valid immutable record (raises on a malformed or tampered receipt).
+    receipt = audition.load_host_performance_receipt()
+
+    try:
+        audition.assert_host_performance_gate(receipt)
+        gate_approves_v3 = True
+    except ValueError as exc:
+        # Only the human-rejection outcome is an acceptable non-approval. A
+        # structural failure (missing/duplicate rows, inconsistent hashes) must
+        # fail loudly rather than pass as "V3 simply not approved".
+        assert str(exc).startswith("host performance receipt is not approved for "), (
+            f"unexpected host-performance gate failure: {exc}"
+        )
+        gate_approves_v3 = False
+
+    config = load_config(str(Path(__file__).resolve().parents[2] / "radio.toml"))
+    hosts_on_v3 = [h.name for h in config.hosts if h.elevenlabs_model == "eleven_v3"]
+
+    if not gate_approves_v3:
+        assert hosts_on_v3 == [], (
+            "radio.toml ships hosts on eleven_v3 but the committed host-performance "
+            f"receipt does not approve V3: {hosts_on_v3}"
+        )

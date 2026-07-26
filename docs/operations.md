@@ -9,7 +9,7 @@ This repo supports three deployment models: Docker container, Home Assistant add
 - writable `tmp/` and `cache/` directories
 - outbound network access for Apple Music charts API, Anthropic/OpenAI, and optional Home Assistant
 
-Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from one packaged recovery clip per empty-queue gap, then the norm cache, then bundled demo music assets when present; only if no eligible music exists anywhere (quality-rejected and operator-banned cache files sit on disk but never air) does it repeat the packaged clip, and after 60 seconds without any bridge asset it requests forced banter from the producer so the queue recovers without crashing or stalling on silence. The `/healthz` - `/readyz` silence gate keys on nothing airing at all, not on the queue being empty — a station bridging on the packaged clip is on air, so the add-on watchdog is not invited to restart it mid-recovery. Packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, not temp renders: producer and playback cleanup paths guard that tree before unlinking any segment marked ephemeral. A connecting listener does not wait long for that rescue: on an empty queue the rescue ladder opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Resume, idle, and active-playback drain bridges pre-seed both pieces when they can: a short branded continuity clip first, then one cached song as real runway while the producer renders the next live segment. Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The cold-launch first-byte path is guarded by `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`), which boots a real station on temp dirs and asserts first byte within 2s. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
+Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from one packaged recovery clip per empty-queue gap, then the norm cache, then bundled demo music assets when present; only if no eligible music exists anywhere (quality-rejected and operator-banned cache files sit on disk but never air) does it repeat the packaged clip, and after 60 seconds without any bridge asset it requests forced banter from the producer so the queue recovers without crashing or stalling on silence. The `/healthz` - `/readyz` silence gate keys on nothing airing at all, not on the queue being empty — a station bridging on the packaged clip is on air, so the add-on watchdog is not invited to restart it mid-recovery. Packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, not temp renders: producer and playback cleanup paths guard that tree before unlinking any segment marked ephemeral. A connecting listener does not wait long for that rescue: on an empty queue the rescue ladder opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Resume, idle, and active-playback drain bridges reach for a cached song first and fall back to the short branded continuity clip only when the cache has nothing eligible — a real song is both the better listener experience and the faster one to first byte (the cached payload takes its duration from the sidecar, while the packaged clip needs an ffprobe first). Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The cold-launch first-byte path is guarded by `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`), which boots a real station on temp dirs and asserts first byte within 2s. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
 
 Acquisition failures from yt-dlp or a direct source create a small `_failed_<cache-key>.mp3` marker rather than synthesized silence. That marker deliberately fails `validate_download` before FFprobe or normalization; the producer deny-lists the source key for the current process, while the marker prevents another acquisition attempt until startup purges it for a fresh retry. A newly synced raw, legacy, local, or bundled-demo file can receive one fresh admission attempt; if it fails, the marker refreshes so that same corrupt file cannot loop. A later explicit external download clears the stale marker and session denial only after it is admitted to rotation. If all music candidates are unavailable, the producer enters its bounded recovery ladder so the sweeper and emergency-tone rungs can keep the station audible. Downloads that otherwise fail `validate_download` (missing file, too-short duration, corrupt) follow the same purge-and-denylist path so the same track is not re-selected endlessly. The main producer loop and prewarm use a bounded retry around `select_next_track`; prefetch filters denied candidates from its non-mutating lookahead. The denylist clears on restart. Music quality-gate rejections (silence, post-normalization artifacts) do NOT denylist the source track — they remove the cached normalization, including on the circuit-breaker path, and use the same producer recovery ladder when direct recovery media is exhausted. Log signatures:
 
@@ -70,6 +70,45 @@ even when a receipt fails. Use unit tests—not a paid run—as CI enforcement.
 
 - `tmp/` rendered segments and temp assets
 - `cache/` downloaded track assets
+
+### Music cache sizing
+
+The normalization cache stores ready-to-play songs. A cached song starts almost
+instantly. An uncached song takes a full render, about 65 seconds on HA Green
+hardware, so a small cache makes listeners wait more often.
+
+`MAMMAMIRADIO_MAX_CACHE_MB` sets the ceiling. Standalone defaults to 500 MB. The
+add-on defaults to 1500 MB and exposes the **Music cache size (MB)** option
+(`norm_cache_mb`). Explicit environment values outside 200-8000 are clamped; a
+malformed environment value uses the applicable default. Either correction logs
+a warning so config loading can complete. Supervisor validates the add-on option
+as an integer in that range before the container starts. If unsupported
+non-positive add-on input nevertheless reaches an internal ingestion path, both
+`run.sh` and the direct fallback silently use the 1500 MB add-on default.
+
+Size the cache for the rotation. A 200-track Jamendo rotation needs about 1 GB.
+Below that, LRU eviction can remove tracks before the rotation returns, which
+causes repeated cold renders. If a few songs repeat while others rarely play,
+increase the cache. **On-Air Sound** roughly doubles the per-track footprint
+because each song keeps a normalized file and a coloured bake.
+
+At startup, the station combines free space, reclaimable cache bytes, and a 512 MB
+reserve to choose the effective ceiling. It writes that value back to the config
+object so the producer periodic eviction pass uses the same limit. A configured
+ceiling above available free space would not trigger eviction and could fill the
+volume. On the add-on, that volume is `/data`, shared with the database and ledger.
+The station logs the configured and effective values when it lowers the ceiling.
+
+The effective ceiling stops at 200 MB. The norm cache also supplies fallback audio
+when the playback queue needs a ready track, so startup keeps that floor even when
+the disk has less room. In that case, the log says the disk is nearly full, warns
+that the minimum may still exceed available space, and tells the operator to free
+space on the add-on data disk.
+
+The effective ceiling appears in the startup log and in authenticated `/status`
+as `cache_limit_mb`. The add-on Configuration tab continues to show the value you
+entered. If songs still repeat after raising the setting, check `ha apps logs`
+for a trim warning.
 
 ## Startup model
 
@@ -166,9 +205,28 @@ keeps playing, but it is rotation/canned fallback, not fresh content. The fields
 
 - `session_count` / `by_type` — lifetime bridge fires this session, split across
   `drain` (queue emptied mid-playback), `resume` (waking from a stopped session),
-  and `idle` (a listener connected after the station went idle).
-- `window_count` — bridge fires inside the rolling window (`window_seconds`,
-  default 1800s / 30 min).
+  `idle` (a listener connected after the station went idle), and `continuity`
+  (safety audio reserved by a live control — skip, ban, purge, a mode toggle, a
+  rotation edit — that went on to actually air). The `continuity` bucket exists
+  because that path used to be completely silent on success: the station could
+  bridge on it repeatedly while this row still read "Healthy", which is how a
+  repeated song reached a listener before it reached an operator. It counts at
+  **air** time rather than reservation time. Every live control reserves safety
+  audio before it mutates the queue, and most of that audio is never heard
+  because the real queue refills first, so counting reservations would cross the
+  2-per-30-minutes threshold after two ordinary admin actions and report a
+  healthy station as "running on rescue".
+- `window_count` — **producer** bridge fires inside the rolling window
+  (`window_seconds`, default 1800s / 30 min). `continuity` is excluded here.
+  Air-time counting alone did not keep the false alarm away: reserved audio does
+  often air, since it sits at the head of the queue right after the control, so
+  two skips or bans in half an hour would still have flipped the row. A
+  continuity fire records an operator action that the safety net covered, so it
+  stays out of the alarm while remaining visible in `session_count` and
+  `by_type`. Any future bridge
+  type that fires on ordinary operator activity rather than station failure
+  belongs in `_NON_ALARMING_BRIDGE_TYPES` (`web/streamer.py`) for the same reason;
+  every new type feeds the window by default.
 - `last_fire` — the most recent bridge `{bridge_type, source, timestamp}`.
 - `queue_empty_elapsed_s` — how long the queue has been empty right now.
 - `unhealthy` — `true` once **either** signal trips: `window_count` reaches
@@ -200,6 +258,53 @@ this session), `cooling` (how many are still inside the cooldown), and `most_rec
 (the humanized label of the last rescue heard). The rotation is session-local and
 resets on restart.
 
+A song enters that rest window on the **first chunk a listener accepts**, not when
+its segment ends. That matters because live controls (skip, ban, purge, a mode
+toggle, a rotation edit) reserve safety audio at whatever moment the operator acts
+— frequently mid-song. Stamping only at the end left a song that was two minutes
+into a three-and-a-half-minute play looking like it had never aired, so a control
+firing in that window could reserve the song already on the air. Both the
+playback-gap rescue and the live-control continuity reservation now ask the same
+shared question (`recent_music_identity_keys` / `is_recent_music` in
+`mammamiradio/audio/norm_cache.py`) before picking a cached song, so the two paths
+cannot disagree about what is currently playing.
+
+Whether a caller may re-serve a recent song is now an explicit parameter
+(`allow_recent_repeat`) rather than a property of where the code happens to live.
+Each caller declares what sits below it on the ladder.
+
+- `False` — the producer's music-first bridge rung, the first cache ask inside
+  `_queue_continuity_bridge`. It has the packaged continuity clip and then the
+  emergency tone underneath it, so re-airing the song currently on air is never
+  its best option; it falls through to the rung below instead. The live-control
+  continuity reservation reaches the same answer by a different route: it skips
+  on-air and recently-heard cache files outright (`_is_recent_music`) rather than
+  passing this flag.
+- `True` — the second cache ask inside `_queue_continuity_bridge`, reached when
+  there is no packaged clip; `_producer_error_recovery_segment`; and the
+  playback-gap rescue in `run_playback_loop`. Below the first sits two seconds of
+  emergency tone. Below the second sits `_blocklist_safe_last_music`, which
+  recycles the last-known-good song and is therefore a guaranteed repeat. The
+  third has nothing below it at all: `assets/demo/music/` is not packaged, so the
+  bundled-demo rung is a no-op in every shipped container, and the packaged-clip
+  branch sets `segment_ready`, which makes the 60-second forced-banter escape
+  unreachable. A strict ask there means the same 4.4-second station ident on a
+  loop while a playable song sits in the cache. At all three depths a song the
+  listener heard recently is the better radio, so they ask permissively.
+
+  `_queue_continuity_bridge` therefore appears in both buckets: its two cache
+  asks sit at different depths and answer differently.
+
+Permissive still prefers a non-recent candidate. `select_norm_cache_rescue`
+returns a recent one only when the cache holds nothing else, matching the
+pre-existing behaviour. The flag decides what happens once every candidate is
+recent: decline and fall through, or serve the best available repeat.
+
+That parameter is not cosmetic. Reaching for cached music first (above) made the
+loose fallback reachable in a place it had never been: on a one-song warm cache a
+drain bridge would have queued the song already playing, back-to-back, with
+nothing in between — a worse repeat than the one this work exists to fix.
+
 ### Reading generated segment waste
 
 `runtime_status.generation_waste` reports rendered audio that was discarded
@@ -213,8 +318,14 @@ fields:
 - `recent_segments` / `recent_duration_sec` — discards inside the rolling window
   (`window_seconds`, default 900s / 15 min).
 - `by_reason` / `by_type` — lifetime breakdown by discard reason and segment
-  type (`stale_source` for a true source switch, `stale_playlist` for a
-  same-source playlist edit, `quality_gate_reject`, `operator_stop`, etc.).
+  type (`stale_source` for a true source switch, `stale_playlist` for a song that
+  left the rotation while it was being rendered, `quality_gate_reject`,
+  `operator_stop`, etc.). `stale_playlist` no longer fires for a pool that merely
+  grew or was reordered: adding, shuffling, moving, or enriching the rotation
+  leaves a finished render exactly as playable as when it started, and binning it
+  cost minutes of Pi CPU while opening the gap the rescue ladder then had to
+  cover. Only a removal or a ban invalidates it. Speech and rescue fills are never
+  bound to a rotation row at all, so no playlist edit discards them.
 - `recent_top_reason` — dominant reason in the rolling window (for "mostly …"
   copy in the admin card).
 - `unproduced_segments` — discarded segments that never reached the produced
@@ -275,22 +386,39 @@ bridge. The fields:
   headroom decision.
 - `buffered_audio_sec` — total seconds of audio already queued in the real
   playback queue, summed from segment durations (plus an active protected
-  continuity slot when one exists).
+  continuity slot when one exists). Only segments playback would actually
+  accept count: a banned/blocklisted song, a companionship cue whose listener
+  session has since moved on, or a file that is missing, empty, or not a
+  regular file on disk contributes `0` seconds even while it still occupies a
+  queue slot, so a queue that looks full on `queue_depth` alone can still show
+  a thin `buffered_audio_sec`.
 - `runway_floor_sec` — minimum ready-audio runway used by the continuity guard.
 - `continuity_slot_sec` — seconds held in the capacity-exempt protected
-  continuity slot (`0` when none is reserved); already included in
-  `buffered_audio_sec`, surfaced separately so an operator can see how much of
-  the runway is out-of-band safety audio rather than queued program.
-- `headroom_ok` — `true` once `buffered_audio_sec >= runway_floor_sec`.
+  continuity slot (`0` when none is reserved, or when the reserved slot itself
+  is no longer playback-valid); already included in `buffered_audio_sec`,
+  surfaced separately so an operator can see how much of the runway is
+  out-of-band safety audio rather than queued program.
+- `headroom_ok` — `true` once `buffered_audio_sec >= runway_floor_sec` **and**
+  the immediate head of the queue (or the continuity slot, if the queue is
+  empty) is itself playback-valid. Unplayable segments never add seconds to
+  `buffered_audio_sec`, but they can still sit ahead of playable ones in the
+  queue — so the floor can be cleared entirely by playable audio seated
+  *behind* an unplayable head, and `headroom_ok` stays `false` until that head
+  clears, because playback would hit the bad segment first.
 - `reason` — human-readable: `"ready runway"` or `"building runway"`.
 
-The fields are operator-facing observability. The same real-queue seconds
-calculation also informs the producer's runway governor: when natural optional
-speech (`BANTER`, `AD`, `NEWS_FLASH`, `STATION_ID`, `TIME_CHECK`) would run below
-the floor while the bounded queue can still build more runway, the producer
-chooses music instead. If the bounded queue is effectively saturated and still
-cannot reach the seconds floor, the due speech is allowed so optional breaks do
-not starve forever on short-track stations.
+The fields are operator-facing observability. The producer's own runway
+governor makes the natural-pacing music-vs-speech call from a separate,
+simpler seconds count (`_producer_buffered_seconds`) that sums raw queued
+segment durations without the blocklist/companionship-session/on-disk
+filtering described above — so `buffered_audio_sec` here and the count behind
+a pacing decision can diverge when the queue holds an otherwise-unplayable
+segment. When natural optional speech (`BANTER`, `AD`, `NEWS_FLASH`,
+`STATION_ID`, `TIME_CHECK`) would run below the floor on the governor's count
+while the bounded queue can still build more runway, the producer chooses
+music instead. If the bounded queue is effectively saturated and still cannot
+reach the seconds floor, the due speech is allowed so optional breaks do not
+starve forever on short-track stations.
 
 ### Reading stream-delivery diagnostics
 
@@ -366,8 +494,10 @@ of being hidden by the runtime Edge fallback.
 
 ### ElevenLabs V3 host-performance gate
 
-Marco and Giulia are the only configured V3 host profiles. Before an edge
-release, make an on-demand comparison matrix — never infer V3 success from a
+No host currently ships on `eleven_v3`: Marco and Giulia were reverted to V2
+after their V3 host-performance audition was rejected (recorded in the tracked
+receipt `proof/2026-07-16-v3-host-performance.json`). If a host opts back into
+`eleven_v3`, run this gate before an edge release — never infer V3 success from a
 provider-key check or an ordinary live segment:
 
 ```bash

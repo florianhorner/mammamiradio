@@ -11,7 +11,8 @@ import os
 import re
 import shutil
 import threading
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +21,7 @@ from uuid import uuid4
 
 import edge_tts
 import httpx
+import openai
 
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import (
@@ -79,6 +81,17 @@ _XML_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # error. Reset via reset_voice_failures().
 _failed_edge_voices: set[str] = set()
 _failed_cloud_voices: set[tuple[str, str, str, str]] = set()
+# Provider-wide failures (timeouts, 5xx, revoked credentials) are broader than
+# one voice. The route breaker keeps later parts on Edge until the route is
+# ready to be tried again, WITHOUT serializing healthy traffic: Marco and
+# Giulia's dialogue lines (same ElevenLabs route) must render concurrently on
+# every break, so only the half-open probe is single-flight, never the closed
+# state. Entry values: a finite monotonic deadline = cooling down; math.inf =
+# one half-open probe is in flight (everyone else skips); None = disabled for
+# the session (auth/config failure).
+_CLOUD_ROUTE_COOLDOWN_SECONDS = 30.0
+_ROUTE_PROBE_IN_FLIGHT = math.inf
+_failed_cloud_routes: dict[tuple[str, str, str, str], float | None] = {}
 _cloud_voice_attempt_locks: dict[tuple[str, str, str, str], asyncio.Lock] = {}
 _cloud_voice_state_lock = threading.Lock()
 
@@ -93,6 +106,52 @@ _MIN_DIALOGUE_LINE_DURATION_SEC = 0.5
 _DISCLAIMER_RATE_BY_FORMAT = {
     "classic_pitch": "+55%",
 }
+
+
+class TTSUnavailableError(RuntimeError):
+    """Every configured route for required speech failed."""
+
+
+def _prioritized_failure(results: list[object | BaseException]) -> BaseException | None:
+    """Keep cancellation and total voice outage semantics across fan-outs."""
+
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(result, Exception):
+            return result
+    for result in results:
+        if isinstance(result, TTSUnavailableError):
+            return result
+    return next((result for result in results if isinstance(result, Exception)), None)
+
+
+async def _settle_owned(*awaitables: Awaitable[object]) -> list[object | BaseException]:
+    """Await owned concurrent work to completion, including during cancellation.
+
+    Shielding matters for TTS normalization: cancelling an asyncio wrapper does
+    not stop an FFmpeg worker already running in the executor.  Scratch cleanup
+    is therefore only safe after the aggregate future has actually settled.
+    """
+    settled = asyncio.gather(*awaitables, return_exceptions=True)
+    try:
+        return list(await asyncio.shield(settled))
+    except asyncio.CancelledError:
+        # Re-shield: a second cancellation must not interrupt this drain and let
+        # the caller unlink scratch while an FFmpeg worker is still writing.
+        while not settled.done():
+            try:
+                await asyncio.shield(settled)
+            except asyncio.CancelledError:
+                continue
+        raise
+
+
+async def _settle_executor(awaitable: Awaitable[object]) -> object:
+    """Await one executor operation until its worker has really settled."""
+    results = await _settle_owned(awaitable)
+    failure = _prioritized_failure(results)
+    if failure is not None:
+        raise failure
+    return results[0]
 
 
 def _looks_like_openai_voice(voice: str) -> bool:
@@ -122,10 +181,11 @@ def _configured_openai_tts_model() -> str | None:
 
 
 def reset_voice_failures() -> None:
-    """Clear the session-memoized voice failure sets. Used by tests."""
+    """Clear memoized voice and route failures. Used by tests."""
     _failed_edge_voices.clear()
     with _cloud_voice_state_lock:
         _failed_cloud_voices.clear()
+        _failed_cloud_routes.clear()
         _cloud_voice_attempt_locks.clear()
 
 
@@ -148,6 +208,9 @@ def _cloud_failure_key(
     elif engine == "elevenlabs":
         credential = _secret_fingerprint(os.getenv("ELEVENLABS_API_KEY", ""))
         model = elevenlabs_model.strip() if isinstance(elevenlabs_model, str) else ""
+    elif engine == "openai":
+        credential = _secret_fingerprint(os.getenv("OPENAI_API_KEY", ""))
+        model = ""
     else:
         credential = ""
         model = ""
@@ -164,6 +227,104 @@ def _memoize_failed_cloud_voice(cloud_key: tuple[str, str, str, str]) -> None:
         _failed_cloud_voices.add(cloud_key)
 
 
+def _cloud_route_key(engine: str, *, elevenlabs_model: str = "") -> tuple[str, str, str, str]:
+    """Identify a provider credential/model route independently of voice ID."""
+    engine = engine.strip().lower()
+    if engine == "azure":
+        return (
+            engine,
+            os.getenv("AZURE_SPEECH_REGION", ""),
+            _secret_fingerprint(os.getenv("AZURE_SPEECH_KEY", "")),
+            "",
+        )
+    if engine == "elevenlabs":
+        return (
+            engine,
+            _secret_fingerprint(os.getenv("ELEVENLABS_API_KEY", "")),
+            elevenlabs_model.strip() if isinstance(elevenlabs_model, str) else "",
+            "",
+        )
+    if engine == "openai":
+        return (engine, _secret_fingerprint(os.getenv("OPENAI_API_KEY", "")), "", "")
+    return (engine, "", "", "")
+
+
+def _claim_cloud_route(route_key: tuple[str, str, str, str]) -> str:
+    """Return the route breaker state, claiming the half-open probe when due.
+
+    Returns one of:
+      - ``"ok"`` — route is healthy (no breaker entry); call the provider freely.
+      - ``"probe"`` — the cooldown just expired and THIS caller atomically won
+        the single half-open trial. It must resolve the probe (success clears
+        the entry, a route-wide failure installs a new cooldown, and
+        ``_resolve_unfinished_cloud_route_probe`` sweeps anything else).
+      - ``"cooldown"`` — cooling down, or another caller's probe is in flight.
+      - ``"permanent"`` — disabled for the session (auth/config failure).
+
+    Only the probe is single-flight. Healthy traffic is deliberately never
+    serialized: Marco and Giulia share one ElevenLabs route, so a route-wide
+    mutex would halve dialogue render throughput on every break.
+    """
+    with _cloud_voice_state_lock:
+        if route_key not in _failed_cloud_routes:
+            return "ok"
+        retry_at = _failed_cloud_routes[route_key]
+        if retry_at is None:
+            return "permanent"
+        if time.monotonic() < retry_at:
+            return "cooldown"
+        _failed_cloud_routes[route_key] = _ROUTE_PROBE_IN_FLIGHT
+        return "probe"
+
+
+def _resolve_unfinished_cloud_route_probe(route_key: tuple[str, str, str, str]) -> None:
+    """Clear a probe claim that no outcome overwrote.
+
+    A probe that succeeded, or failed with a voice-specific error (the provider
+    answered, so the route itself is reachable), leaves the in-flight marker in
+    place — deleting it reopens the route. A route-wide failure has already
+    overwritten the marker with a new cooldown via _memoize_failed_cloud_route,
+    so this is a no-op there.
+    """
+    with _cloud_voice_state_lock:
+        if _failed_cloud_routes.get(route_key) == _ROUTE_PROBE_IN_FLIGHT:
+            del _failed_cloud_routes[route_key]
+
+
+def _clear_cloud_route(route_key: tuple[str, str, str, str]) -> None:
+    """Reopen a route after a successful probe — fresher evidence than any
+    stale failure a straggler call recorded while the probe was in flight."""
+    with _cloud_voice_state_lock:
+        _failed_cloud_routes.pop(route_key, None)
+
+
+def _memoize_failed_cloud_route(route_key: tuple[str, str, str, str], *, retryable: bool) -> None:
+    """Block a route permanently for auth/config errors or briefly for outages."""
+    retry_at = time.monotonic() + _CLOUD_ROUTE_COOLDOWN_SECONDS if retryable else None
+    with _cloud_voice_state_lock:
+        # A session disable (revoked key) is never downgraded to a cooldown by
+        # a straggler timeout — that would resume doomed probes against a key
+        # already known to be rejected.
+        if retryable and route_key in _failed_cloud_routes and _failed_cloud_routes[route_key] is None:
+            return
+        _failed_cloud_routes[route_key] = retry_at
+
+
+def _should_disable_cloud_route(exc: Exception) -> bool:
+    """Return whether a cloud error is route-wide rather than voice-specific.
+
+    400 and 404 are typically a single bad voice ID, not a route-wide outage —
+    the per-voice memoization already covers that case, so another configured
+    character on the same route can still try. Only provider/network error
+    types count as route evidence at all: a local failure after the provider
+    responded (FFmpeg, disk) says nothing about the route and must not cool a
+    healthy provider.
+    """
+    if _cloud_http_status(exc) in (400, 404):
+        return False
+    return isinstance(exc, httpx.HTTPError | openai.OpenAIError | TimeoutError)
+
+
 def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str, str]) -> asyncio.Lock:
     """Return the per-key async lock for cloud attempts.
 
@@ -178,14 +339,155 @@ def _cloud_voice_attempt_lock(cloud_key: tuple[str, str, str, str]) -> asyncio.L
         return lock
 
 
+def _route_skip_reason(claimed: str) -> str:
+    return "provider_cooldown" if claimed == "cooldown" else "provider_disabled_session"
+
+
+async def _run_cloud_route_attempt(
+    route_key: tuple[str, str, str, str],
+    provider_call: Callable[[], Awaitable[Path]],
+    engine_label: str,
+) -> tuple[Path | None, str]:
+    """Run one provider call under the route circuit breaker.
+
+    Returns ``(result, "")`` on success or ``(None, fallback_reason)`` when the
+    breaker skipped the call. A provider exception propagates to the caller for
+    per-engine logging/per-voice memoization AFTER the route-wide consequence
+    (cooldown or session disable) has been recorded here.
+
+    The breaker is re-checked after acquiring the render slot: with only two
+    slots, calls queue behind an outage's hanging requests, and without the
+    re-check each would fire its own doomed 30-second call as a slot freed —
+    a 4-voice ad would stack three timeout waves instead of one.
+    """
+    claimed = _claim_cloud_route(route_key)
+    if claimed in ("cooldown", "permanent"):
+        logger.info("%s TTS route %s; using edge fallback", engine_label, claimed)
+        return None, _route_skip_reason(claimed)
+    probing = claimed == "probe"
+    try:
+        async with _HEAVY_SEM:
+            if not probing:
+                claimed = _claim_cloud_route(route_key)
+                if claimed in ("cooldown", "permanent"):
+                    logger.info("%s TTS route %s; using edge fallback", engine_label, claimed)
+                    return None, _route_skip_reason(claimed)
+                probing = claimed == "probe"
+            result = await provider_call()
+            if probing:
+                _clear_cloud_route(route_key)
+            return result, ""
+    except Exception as e:
+        if _should_disable_cloud_route(e):
+            _memoize_failed_cloud_route(route_key, retryable=not bool(_non_retryable_cloud_tts_error(e)))
+        raise
+    finally:
+        if probing:
+            _resolve_unfinished_cloud_route_probe(route_key)
+
+
+def _record_tts_runtime_state(
+    state: StationState | None,
+    *,
+    engine: str,
+    current_provider: str,
+    fallback_active: bool,
+    reason: str,
+) -> None:
+    """Keep the admin TTS provider status aligned with the route just rendered.
+
+    Configured keys only prove that a route can be attempted. The synthesis
+    boundary is where we know whether that route actually produced audio. Keep
+    one per-engine state plus an aggregate ``tts_provider`` state so a mixed
+    configuration can show a live Edge fallback without exposing credentials or
+    raw provider responses.
+    """
+    if state is None or engine == "edge":
+        return
+    try:
+        state.update_runtime_provider(
+            f"tts:{engine}",
+            current_provider=current_provider,
+            primary_provider=engine,
+            fallback_active=fallback_active,
+            reason=reason,
+        )
+        active = [
+            (provider_class.removeprefix("tts:"), details.get("reason") or "fallback active")
+            for provider_class, details in state.runtime_provider_state.items()
+            if provider_class.startswith("tts:") and details.get("fallback_active")
+        ]
+        aggregate_active = bool(active)
+        aggregate_reason = (
+            "Runtime TTS fallback: " + "; ".join(f"{provider}={details}" for provider, details in active)
+            if aggregate_active
+            else "Cloud TTS route rendered successfully"
+        )
+        state.update_runtime_provider(
+            "tts_provider",
+            current_provider="edge" if aggregate_active else current_provider,
+            primary_provider="mixed_tts",
+            fallback_active=aggregate_active,
+            reason=aggregate_reason,
+        )
+    except Exception:  # pragma: no cover - telemetry must never stop synthesis
+        logger.debug("TTS provider state update failed", exc_info=True)
+
+
+def _record_tts_fallback(
+    state: StationState | None,
+    *,
+    requested_engine: str,
+    requested_voice: str,
+    effective_voice: str,
+    reason: str,
+    host_name: str,
+) -> None:
+    """Record and log an explicit provider-to-Edge route transition."""
+    _record_tts_runtime_state(
+        state,
+        engine=requested_engine,
+        current_provider="edge",
+        fallback_active=True,
+        reason=reason,
+    )
+    character = f" character={host_name}" if host_name else ""
+    logger.info(
+        "TTS fallback provider=%s requested_voice=%s effective_provider=edge effective_voice=%s reason=%s%s",
+        requested_engine,
+        requested_voice,
+        effective_voice,
+        reason,
+        character,
+    )
+
+
+def _cloud_http_status(exc: Exception) -> int | None:
+    """Return the HTTP status code from either an httpx or OpenAI SDK error.
+
+    The OpenAI client raises its own exception hierarchy (``openai.APIStatusError``
+    and subclasses) rather than ``httpx.HTTPStatusError``, even though it uses
+    httpx internally — so a bare ``isinstance(exc, httpx.HTTPStatusError)`` check
+    never matches an OpenAI failure and silently skips the voice/route
+    classification below for that engine.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    if isinstance(exc, openai.APIStatusError):
+        return exc.status_code
+    return None
+
+
 def _non_retryable_cloud_tts_error(exc: Exception) -> str:
     """Return a compact reason for auth/config failures that should not repeat."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        if status in {401, 403, 404}:
-            return f"HTTP {status}"
-        body = getattr(exc.response, "text", "").lower()
-        if status == 400 and ("invalid" in body or "voice" in body):
+    status = _cloud_http_status(exc)
+    if status is None:
+        return ""
+    if status in {401, 403, 404}:
+        return f"HTTP {status}"
+    if status == 400:
+        body = getattr(getattr(exc, "response", None), "text", "") or str(getattr(exc, "message", "") or "")
+        if "invalid" in body.lower() or "voice" in body.lower():
             return f"HTTP {status}"
     return ""
 
@@ -342,9 +644,9 @@ async def synthesize_openai(
         raw_path.write_bytes(audio_bytes)
 
         await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
     except Exception:
-        raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
+        _unlink_many([raw_path])  # clean up orphaned raw file on any failure
         raise
 
     logger.info("Synthesized (OpenAI): %s (%s)", output_path.name, voice)
@@ -395,9 +697,9 @@ async def synthesize_azure(
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
     except Exception:
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
         raise
 
     logger.info("Synthesized (Azure): %s (%s)", output_path.name, voice)
@@ -563,9 +865,9 @@ async def synthesize_elevenlabs(
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
     except Exception:
-        raw_path.unlink(missing_ok=True)
+        _unlink_many([raw_path])
         raise
 
     logger.info(
@@ -600,7 +902,8 @@ async def synthesize(
 
     engine="openai" uses the registry-selected OpenAI speech model. Falls back
     to edge-tts if the key or registry route is unavailable. When falling back,
-    uses edge_fallback_voice if set.
+    uses edge_fallback_voice if set, then the house Edge voice. If every route
+    fails, partial artifacts are removed and ``TTSUnavailableError`` is raised.
 
     loudnorm=False skips the EBU R128 pass — use for intermediate lines that will
     be assembled and loudnorm'd as a single unit by the caller.
@@ -613,7 +916,10 @@ async def synthesize(
     Best-effort only: never raises into the audio path.
     """
     engine = (engine or "edge").strip().lower()
+    requested_engine = engine
+    requested_voice = voice
     fallback_voice = edge_fallback_voice or _EDGE_DEFAULT_FALLBACK_VOICE
+    fallback_reason = ""
 
     billed = False
 
@@ -634,33 +940,67 @@ async def synthesize(
 
     if engine == "openai":
         if os.getenv("OPENAI_API_KEY", ""):
-            try:
-                async with _HEAVY_SEM:
-                    result = await synthesize_openai(
-                        text,
-                        voice,
-                        output_path,
-                        instructions=openai_instructions,
-                        loudnorm=loudnorm,
-                        on_paid_provider_success=_bill_tts,
+            cloud_key = _cloud_failure_key(engine, voice)
+            route_key = _cloud_route_key(engine)
+            if _cloud_voice_failed(cloud_key):
+                fallback_reason = "provider_disabled_session"
+                logger.debug("OpenAI TTS voice '%s' previously failed this session; using edge fallback", voice)
+            else:
+                try:
+                    result, fallback_reason = await _run_cloud_route_attempt(
+                        route_key,
+                        partial(
+                            synthesize_openai,
+                            text,
+                            voice,
+                            output_path,
+                            instructions=openai_instructions,
+                            loudnorm=loudnorm,
+                            on_paid_provider_success=_bill_tts,
+                        ),
+                        "OpenAI",
                     )
-                return result
-            except Exception as e:
-                logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
+                    if result is not None:
+                        _record_tts_runtime_state(
+                            state,
+                            engine=engine,
+                            current_provider=engine,
+                            fallback_active=False,
+                            reason="primary_success",
+                        )
+                        return result
+                except Exception as e:
+                    reason = _non_retryable_cloud_tts_error(e)
+                    if reason:
+                        _memoize_failed_cloud_voice(cloud_key)
+                        fallback_reason = f"provider_disabled:{reason}"
+                        logger.warning(
+                            "OpenAI TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
+                            voice,
+                            reason,
+                        )
+                    else:
+                        fallback_reason = f"provider_error:{type(e).__name__}"
+                        logger.warning("OpenAI TTS failed, falling back to edge-tts: %s", e)
         else:
-            logger.debug("OpenAI TTS requested but OPENAI_API_KEY not set, using edge-tts")
+            fallback_reason = "missing_credentials"
+            logger.warning("OpenAI TTS requested but OPENAI_API_KEY not set, using edge-tts")
         # Use edge fallback voice when falling back from OpenAI
         voice = fallback_voice
     elif engine == "azure":
         if os.getenv("AZURE_SPEECH_KEY", "") and os.getenv("AZURE_SPEECH_REGION", ""):
             cloud_key = _cloud_failure_key(engine, voice)
+            route_key = _cloud_route_key(engine)
             async with _cloud_voice_attempt_lock(cloud_key):
                 if _cloud_voice_failed(cloud_key):
+                    fallback_reason = "provider_disabled_session"
                     logger.debug("Azure TTS voice '%s' previously failed this session; using edge fallback", voice)
                 else:
                     try:
-                        async with _HEAVY_SEM:
-                            result = await synthesize_azure(
+                        result, fallback_reason = await _run_cloud_route_attempt(
+                            route_key,
+                            partial(
+                                synthesize_azure,
                                 text,
                                 voice,
                                 output_path,
@@ -668,27 +1008,42 @@ async def synthesize(
                                 pitch=pitch,
                                 loudnorm=loudnorm,
                                 on_paid_provider_success=_bill_tts,
+                            ),
+                            "Azure",
+                        )
+                        if result is not None:
+                            _record_tts_runtime_state(
+                                state,
+                                engine=engine,
+                                current_provider=engine,
+                                fallback_active=False,
+                                reason="primary_success",
                             )
-                        return result
+                            return result
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
                             _memoize_failed_cloud_voice(cloud_key)
+                            fallback_reason = f"provider_disabled:{reason}"
                             logger.warning(
                                 "Azure TTS disabled for voice '%s' this session after %s; falling back to edge-tts",
                                 voice,
                                 reason,
                             )
                         else:
+                            fallback_reason = f"provider_error:{type(e).__name__}"
                             logger.warning("Azure TTS failed, falling back to edge-tts: %s", e)
         else:
-            logger.debug("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
+            fallback_reason = "missing_credentials"
+            logger.warning("Azure TTS requested but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION not set, using edge-tts")
         voice = fallback_voice
     elif engine == "elevenlabs":
         if os.getenv("ELEVENLABS_API_KEY", ""):
             cloud_key = _cloud_failure_key(engine, voice, elevenlabs_model=elevenlabs_model)
+            route_key = _cloud_route_key(engine, elevenlabs_model=elevenlabs_model)
             async with _cloud_voice_attempt_lock(cloud_key):
                 if _cloud_voice_failed(cloud_key):
+                    fallback_reason = "provider_disabled_session"
                     logger.debug(
                         "ElevenLabs TTS voice '%s' model '%s' previously failed this session; using edge fallback",
                         voice,
@@ -696,8 +1051,10 @@ async def synthesize(
                     )
                 else:
                     try:
-                        async with _HEAVY_SEM:
-                            result = await synthesize_elevenlabs(
+                        result, fallback_reason = await _run_cloud_route_attempt(
+                            route_key,
+                            partial(
+                                synthesize_elevenlabs,
                                 text,
                                 voice,
                                 output_path,
@@ -708,12 +1065,23 @@ async def synthesize(
                                 delivery_profile=delivery_profile,
                                 host_name=host_name,
                                 on_paid_provider_success=_bill_tts,
+                            ),
+                            "ElevenLabs",
+                        )
+                        if result is not None:
+                            _record_tts_runtime_state(
+                                state,
+                                engine=engine,
+                                current_provider=engine,
+                                fallback_active=False,
+                                reason="primary_success",
                             )
-                        return result
+                            return result
                     except Exception as e:
                         reason = _non_retryable_cloud_tts_error(e)
                         if reason:
                             _memoize_failed_cloud_voice(cloud_key)
+                            fallback_reason = f"provider_disabled:{reason}"
                             logger.warning(
                                 "ElevenLabs TTS disabled for voice '%s' model '%s' this session after %s; "
                                 "falling back to edge-tts",
@@ -722,19 +1090,24 @@ async def synthesize(
                                 reason,
                             )
                         else:
+                            fallback_reason = f"provider_error:{type(e).__name__}"
                             logger.warning(
                                 "ElevenLabs TTS model '%s' failed, falling back to edge-tts: %s",
                                 elevenlabs_model,
                                 e,
                             )
         else:
-            logger.debug("ElevenLabs TTS requested but ELEVENLABS_API_KEY not set, using edge-tts")
+            fallback_reason = "missing_credentials"
+            logger.warning("ElevenLabs TTS requested but ELEVENLABS_API_KEY not set, using edge-tts")
         voice = fallback_voice
     elif engine != "edge":
+        fallback_reason = "unknown_engine"
         logger.warning("Unknown TTS engine '%s'; using edge-tts", engine)
         voice = fallback_voice
 
     edge_voice = _coerce_edge_voice(voice, edge_fallback_voice=edge_fallback_voice)
+    if not fallback_reason and edge_voice != voice:
+        fallback_reason = "invalid_edge_voice"
 
     # Honour runtime memoization: if this voice already failed once this
     # session, skip the primary attempt and go straight to the fallback.
@@ -745,6 +1118,17 @@ async def synthesize(
             fallback_voice,
         )
         edge_voice = fallback_voice
+        fallback_reason = fallback_reason or "edge_voice_disabled_session"
+
+    if fallback_reason:
+        _record_tts_fallback(
+            state,
+            requested_engine=requested_engine,
+            requested_voice=requested_voice,
+            effective_voice=edge_voice,
+            reason=fallback_reason,
+            host_name=host_name,
+        )
 
     async with _HEAVY_SEM:
         raw_path = output_path.with_suffix(".raw.mp3")
@@ -754,16 +1138,41 @@ async def synthesize(
 
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-            raw_path.unlink(missing_ok=True)
+            _unlink_many([raw_path])
 
-            logger.info("Synthesized: %s (%s)", output_path.name, edge_voice)
+            if fallback_reason:
+                character = f" character={host_name}" if host_name else ""
+                logger.info(
+                    "Synthesized (Edge fallback): %s (voice=%s requested_engine=%s requested_voice=%s reason=%s%s)",
+                    output_path.name,
+                    edge_voice,
+                    requested_engine,
+                    requested_voice,
+                    fallback_reason,
+                    character,
+                )
+            else:
+                logger.info("Synthesized: %s (%s)", output_path.name, edge_voice)
             return output_path
         except Exception as e:
-            raw_path.unlink(missing_ok=True)  # clean up orphaned raw file on any failure
+            _unlink_many([raw_path])  # clean up orphaned raw file on any failure
             logger.error("TTS failed with %s: %s", edge_voice, e)
+            final_error = e
             # Memoize the failure so subsequent segments skip this voice.
             _failed_edge_voices.add(edge_voice)
-            # Retry with a fallback voice before resorting to silence
+            if not fallback_reason:
+                fallback_reason = "edge_voice_failure"
+                _record_tts_fallback(
+                    state,
+                    requested_engine=requested_engine,
+                    requested_voice=requested_voice,
+                    effective_voice=_EDGE_DEFAULT_FALLBACK_VOICE,
+                    reason=fallback_reason,
+                    host_name=host_name,
+                )
+            # Retry with the station's house voice after the configured Edge
+            # fallback. Required speech must never degrade into generated
+            # silence: the caller owns the canned/music/continuity rescue.
             fallback = _EDGE_DEFAULT_FALLBACK_VOICE
             if edge_voice != fallback:
                 try:
@@ -772,15 +1181,25 @@ async def synthesize(
                     await asyncio.wait_for(comm.save(str(raw_path)), timeout=15.0)
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, lambda: normalize(raw_path, output_path, loudnorm=loudnorm))
-                    raw_path.unlink(missing_ok=True)
-                    logger.info("Fallback synthesized: %s (%s)", output_path.name, fallback)
+                    _unlink_many([raw_path])
+                    character = f" character={host_name}" if host_name else ""
+                    logger.info(
+                        "Fallback synthesized (Edge fallback): %s (voice=%s requested_engine=%s "
+                        "requested_voice=%s reason=%s%s)",
+                        output_path.name,
+                        fallback,
+                        requested_engine,
+                        requested_voice,
+                        fallback_reason,
+                        character,
+                    )
                     return output_path
                 except Exception as e2:
-                    raw_path.unlink(missing_ok=True)  # clean up on fallback failure too
+                    _unlink_many([raw_path])  # clean up on fallback failure too
                     logger.error("Fallback TTS also failed: %s", e2)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, generate_silence, output_path, 2.0)
-            return output_path
+                    final_error = e2
+            _unlink_speech_artifacts([output_path])
+            raise TTSUnavailableError("all configured TTS routes are unavailable") from final_error
 
 
 async def synthesize_ad(
@@ -896,7 +1315,15 @@ async def synthesize_ad(
             if part.role == "disclaimer_goblin":
                 extra["rate"] = _DISCLAIMER_RATE_BY_FORMAT.get(script.format, "+35%")
             # Skip per-part loudnorm — normalize_ad() handles the final loudnorm pass
-            return await synthesize(part.text, voice_for_part.voice, part_path, **extra, loudnorm=False, state=state)
+            return await synthesize(
+                part.text,
+                voice_for_part.voice,
+                part_path,
+                **extra,
+                loudnorm=False,
+                host_name=voice_for_part.name,
+                state=state,
+            )
         if part.type == "sfx" and part.sfx:
             sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
             try:
@@ -914,32 +1341,96 @@ async def synthesize_ad(
         for part in script.parts
         if part.type in ("voice", "sfx", "pause") and (part.type != "voice" or part.text)
     ]
+    # A voice part with empty text drops out here. has_required_voice below only
+    # asserts that SOME voice survived, so the ad still airs with a hole where
+    # that copy was — leave a trace rather than losing it silently.
+    dropped_voice_parts = sum(1 for part in script.parts if part.type == "voice" and not part.text)
+    if dropped_voice_parts:
+        logger.warning(
+            "Ad %s dropped %d empty voice part(s) of %d before render",
+            getattr(script, "brand", "?"),
+            dropped_voice_parts,
+            sum(1 for part in script.parts if part.type == "voice"),
+        )
 
-    # Launch motif generation + all parts concurrently
+    # Launch motif generation + all parts concurrently.  Every owned task must
+    # settle before cleanup: a sibling can still be writing from an executor
+    # after another required voice has already failed.
     part_tasks = [_render_part(p, path) for p, path in renderable]
-    if motif_path and sonic_sig:
+    motif_result: Path | None = None
+    try:
+        if motif_path and sonic_sig:
 
-        async def _gen_motif():
-            try:
-                await loop.run_in_executor(None, _render_brand_motif, motif_path)
-                return motif_path
-            except Exception as e:
-                logger.warning("Brand motif generation failed, skipping: %s", e)
-                return None
+            async def _gen_motif():
+                try:
+                    await loop.run_in_executor(None, _render_brand_motif, motif_path)
+                    return motif_path
+                except Exception as e:
+                    logger.warning("Brand motif generation failed, skipping: %s", e)
+                    _unlink_many([motif_path])
+                    return None
 
-        all_results = await asyncio.gather(_gen_motif(), *part_tasks)
-        motif_result = all_results[0]
+            all_results = await _settle_owned(_gen_motif(), *part_tasks)
+            motif_value = all_results[0]
+            if isinstance(motif_value, Path):
+                motif_result = motif_value
+            results = all_results[1:]
+        else:
+            results = await _settle_owned(*part_tasks)
+    except BaseException:
+        _unlink_speech_artifacts([path for _, path in renderable])
+        if motif_path:
+            _unlink_many([motif_path])
+        raise
+
+    # Base exceptions (notably cancellation) remain fatal even for decorative
+    # parts. Ordinary SFX/pause errors are optional; required voice errors are
+    # not. Inspect only after every sibling above has settled.
+    fatal = next(
+        (result for result in results if isinstance(result, BaseException) and not isinstance(result, Exception)),
+        None,
+    )
+    if fatal is not None:
+        _unlink_speech_artifacts([path for _, path in renderable])
         if motif_result:
-            ad_parts.append(motif_result)
-        results = all_results[1:]
-    else:
-        results = await asyncio.gather(*part_tasks)
+            _unlink_many([motif_result])
+        raise fatal
 
-    voice_sfx_parts = [r for r in results if r is not None]
+    voice_failures: list[Exception] = []
+    successful_results: list[Path] = []
+    for (part, part_path), result in zip(renderable, results, strict=True):
+        if isinstance(result, Exception):
+            if part.type == "voice":
+                voice_failures.append(result)
+            else:
+                logger.warning("Optional ad %s part failed, skipping: %s", part.type, result)
+                _unlink_speech_artifacts([part_path])
+            continue
+        if isinstance(result, Path):
+            successful_results.append(result)
+        elif part.type == "voice":
+            voice_failures.append(TTSUnavailableError("required ad voice produced no audio"))
 
-    if not voice_sfx_parts:
-        # Fallback: synthesize brand name with the configured engine so cloud
-        # voices aren't silently downgraded to edge-tts on this path.
+    if voice_failures:
+        _unlink_speech_artifacts(
+            [path for _, path in renderable] + successful_results,
+        )
+        if motif_result:
+            _unlink_many([motif_result])
+        raise next(
+            (failure for failure in voice_failures if isinstance(failure, TTSUnavailableError)),
+            voice_failures[0],
+        )
+
+    has_required_voice = any(part.type == "voice" for part, _ in renderable)
+    if not has_required_voice:
+        # SFX-only, pause-only, and empty scripts still get a spoken brand.  A
+        # decorative part is never allowed to masquerade as a complete ad.
+        _unlink_speech_artifacts(
+            [path for _, path in renderable] + successful_results,
+        )
+        if motif_result:
+            _unlink_many([motif_result])
         fallback_path = tmp_dir / f"ad_fallback_{uuid4().hex[:8]}.mp3"
         await synthesize(
             script.brand,
@@ -949,9 +1440,15 @@ async def synthesize_ad(
             edge_fallback_voice=default_voice.edge_fallback_voice,
             openai_instructions=_openai_instructions_for_ad_voice(default_voice),
             voice_settings=default_voice.voice_settings,
+            host_name=default_voice.name,
             state=state,
         )
         return fallback_path
+
+    if motif_result:
+        ad_parts.append(motif_result)
+
+    voice_sfx_parts = successful_results
 
     # Concatenate voice+sfx parts
     if len(voice_sfx_parts) == 1:
@@ -959,9 +1456,19 @@ async def synthesize_ad(
     else:
         voice_path = tmp_dir / f"ad_voice_{uuid4().hex[:8]}.mp3"
         # Skip loudnorm — each part already normalized by synthesize()
-        await loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
-        for p in voice_sfx_parts:
-            p.unlink(missing_ok=True)
+        try:
+            concat_results = await _settle_owned(
+                loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
+            )
+            concat_failure = _prioritized_failure(concat_results)
+            if concat_failure is not None:
+                raise concat_failure
+        except BaseException:
+            _unlink_speech_artifacts([*voice_sfx_parts, voice_path])
+            if motif_result:
+                _unlink_many([motif_result])
+            raise
+        _unlink_many(voice_sfx_parts)
 
     # 3+4. Generate foley loop + env bed + music bed in parallel, then mix sequentially.
     # Layer order (quietest → loudest): foley → env bed → music bed → voice.
@@ -974,30 +1481,47 @@ async def synthesize_ad(
     env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3" if env_name else None
     bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
 
+    def _cleanup_cancelled_ad_render(*paths: Path | None) -> None:
+        owned = [path for path in (*paths, *voice_sfx_parts, *ad_parts, motif_result) if path is not None]
+        _unlink_speech_artifacts(owned)
+
     # Generate all three beds concurrently
     _dur = voice_duration + 1.0
-    bed_tasks: list = [
+    bed_paths = [bed_path]
+    bed_tasks: list[Awaitable[object]] = [
         loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur)),
     ]
     if env_name:
         _env = env_name
         _env_bed_path: Path = env_bed_path  # type: ignore[assignment]  # non-None when env_name is set
         _foley_path: Path = foley_path  # type: ignore[assignment]  # non-None when env_name is set
+        bed_paths.extend((_env_bed_path, _foley_path))
         bed_tasks.append(loop.run_in_executor(None, lambda: _render_music_bed(_env_bed_path, _env, _dur)))
         bed_tasks.append(loop.run_in_executor(None, lambda: _render_foley(_foley_path, _env, _dur)))
     try:
-        await asyncio.gather(*bed_tasks)
-    except Exception as e:
-        logger.warning("Bed generation failed: %s", e)
+        bed_results = await _settle_owned(*bed_tasks)
+    except BaseException:
+        _cleanup_cancelled_ad_render(voice_path, output_path, *bed_paths)
+        raise
+    for bed_result, generated_path in zip(bed_results, bed_paths, strict=True):
+        if isinstance(bed_result, BaseException):
+            logger.warning("Bed generation failed for %s: %s", generated_path.name, bed_result)
+            _unlink_many([generated_path])
 
     # Mix foley first (quietest layer — ambient texture under everything else)
     if foley_path and foley_path.exists():
+        foley_mixed_path: Path | None = None
         try:
             foley_mixed_path = tmp_dir / f"foley_mix_{uuid4().hex[:8]}.mp3"
-            await loop.run_in_executor(None, mix_with_bed, voice_path, foley_path, foley_mixed_path, 0.07)
+            await _settle_executor(
+                loop.run_in_executor(None, mix_with_bed, voice_path, foley_path, foley_mixed_path, 0.07)
+            )
             foley_path.unlink(missing_ok=True)
             voice_path.unlink(missing_ok=True)
             voice_path = foley_mixed_path
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(voice_path, foley_path, foley_mixed_path, output_path, *bed_paths)
+            raise
         except Exception as e:
             logger.warning("Foley mix failed (%s), continuing without: %s", env_name, e)
             if foley_path:
@@ -1005,19 +1529,25 @@ async def synthesize_ad(
 
     # Mix env bed (medium layer — tonal environment character)
     if env_bed_path and env_bed_path.exists():
+        env_mixed_path: Path | None = None
         try:
             env_mixed_path = tmp_dir / f"envmix_{uuid4().hex[:8]}.mp3"
-            await loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.14)
+            await _settle_executor(
+                loop.run_in_executor(None, mix_with_bed, voice_path, env_bed_path, env_mixed_path, 0.14)
+            )
             env_bed_path.unlink(missing_ok=True)
             voice_path.unlink(missing_ok=True)
             voice_path = env_mixed_path
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(voice_path, env_bed_path, env_mixed_path, output_path, *bed_paths)
+            raise
         except Exception as e:
             logger.warning("Environment bed mixing failed (%s), continuing without: %s", env_name, e)
 
     # Mix music bed (loudest bed layer — harmonic colour)
     if bed_path.exists() and bed_path.stat().st_size > 0:
         try:
-            await loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24)
+            await _settle_executor(loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24))
             if output_path.exists() and output_path.stat().st_size > 0:
                 bed_path.unlink(missing_ok=True)
                 voice_path.unlink(missing_ok=True)
@@ -1028,6 +1558,9 @@ async def synthesize_ad(
                 if voice_path != output_path:
                     output_path.unlink(missing_ok=True)
                     shutil.move(str(voice_path), str(output_path))
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(voice_path, bed_path, output_path, *bed_paths)
+            raise
         except Exception as e:
             logger.warning("Music bed mixing failed (%s), using voice-only: %s", mood, e)
             bed_path.unlink(missing_ok=True)
@@ -1045,10 +1578,13 @@ async def synthesize_ad(
         ad_parts.append(output_path)
         final_path = tmp_dir / f"ad_final_{uuid4().hex[:8]}.mp3"
         try:
-            await loop.run_in_executor(None, concat_files, ad_parts, final_path, 100)
+            await _settle_executor(loop.run_in_executor(None, concat_files, ad_parts, final_path, 100))
             for p in ad_parts:
                 p.unlink(missing_ok=True)
             output_path = final_path
+        except asyncio.CancelledError:
+            _cleanup_cancelled_ad_render(*ad_parts, final_path, output_path)
+            raise
         except Exception as e:
             logger.warning("Motif concat failed, using ad without motif: %s", e)
             for p in ad_parts[:-1]:
@@ -1057,7 +1593,7 @@ async def synthesize_ad(
     # 6. Broadcast-style processing: compression + treble boost + loudness bump
     broadcast_path = tmp_dir / f"ad_broadcast_{uuid4().hex[:8]}.mp3"
     try:
-        await loop.run_in_executor(None, normalize_ad, output_path, broadcast_path)
+        await _settle_executor(loop.run_in_executor(None, normalize_ad, output_path, broadcast_path))
         # Only delete original after verifying broadcast file is non-empty
         if broadcast_path.exists() and broadcast_path.stat().st_size > 0:
             output_path.unlink(missing_ok=True)
@@ -1065,6 +1601,9 @@ async def synthesize_ad(
         logger.warning("Broadcast processing produced empty file, using unprocessed ad")
         broadcast_path.unlink(missing_ok=True)
         return output_path
+    except asyncio.CancelledError:
+        _cleanup_cancelled_ad_render(output_path, broadcast_path)
+        raise
     except Exception as e:
         logger.warning("Broadcast processing failed, using unprocessed ad: %s", e)
         return output_path
@@ -1106,7 +1645,18 @@ def _validate_dialogue_part(path: Path, *, line_number: int) -> None:
 
 def _unlink_many(paths: list[Path]) -> None:
     for path in paths:
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            # Cleanup is best-effort.  Never replace the synthesis failure or
+            # cancellation that selected this path with a filesystem error.
+            logger.warning("Could not remove TTS scratch file %s: %s", path, exc)
+
+
+def _unlink_speech_artifacts(paths: list[Path]) -> None:
+    """Remove final and raw speech outputs, tolerating duplicate paths."""
+    artifacts = {artifact for path in paths for artifact in (path, path.with_suffix(".raw.mp3"))}
+    _unlink_many(list(artifacts))
 
 
 async def synthesize_dialogue(
@@ -1132,8 +1682,8 @@ async def synthesize_dialogue(
     # For multi-line dialogue: skip per-line loudnorm (just re-encode to station format),
     # concat, then do one final loudnorm on the assembled segment. Reduces N passes → 1.
     # For single-line: one full loudnorm pass is correct and avoids an extra encode cycle.
-    parts = list(
-        await asyncio.gather(
+    try:
+        results = await _settle_owned(
             *(
                 synthesize(
                     line.text,
@@ -1154,7 +1704,19 @@ async def synthesize_dialogue(
                 for line, path in zip(dialogue_lines, paths, strict=True)
             )
         )
-    )
+    except BaseException:
+        _unlink_speech_artifacts(paths)
+        raise
+
+    failure = _prioritized_failure(results)
+    if failure is not None:
+        _unlink_speech_artifacts(paths)
+        raise failure
+
+    parts = [result for result in results if isinstance(result, Path)]
+    if len(parts) != len(paths):
+        _unlink_speech_artifacts(paths)
+        raise TTSUnavailableError("required dialogue voice produced no audio")
 
     if not multi_line:
         return parts[0]
@@ -1165,24 +1727,29 @@ async def synthesize_dialogue(
     # by the banter quality gate in the producer instead.
     loop = asyncio.get_running_loop()
     try:
-        await asyncio.gather(
+        validation_results = await _settle_owned(
             *(
                 loop.run_in_executor(None, partial(_validate_dialogue_part, part, line_number=idx))
                 for idx, part in enumerate(parts, start=1)
             )
         )
-    except Exception:
+        validation_failure = _prioritized_failure(validation_results)
+        if validation_failure is not None:
+            raise validation_failure
+    except BaseException:
         _unlink_many(parts)
         raise
 
     raw_path = tmp_dir / f"dialogue_raw_{uuid4().hex[:8]}.mp3"
     output_path = tmp_dir / f"dialogue_{uuid4().hex[:8]}.mp3"
     try:
-        await loop.run_in_executor(
-            None,
-            partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+        await _settle_executor(
+            loop.run_in_executor(
+                None,
+                partial(concat_files, parts, raw_path, 300, False, strict_duration=True),
+            )
         )
-    except Exception:
+    except BaseException:
         _unlink_many([*parts, raw_path])
         raise
     _unlink_many(parts)
@@ -1190,9 +1757,9 @@ async def synthesize_dialogue(
     # One loudnorm pass on the fully assembled dialogue
     async with _HEAVY_SEM:
         try:
-            await loop.run_in_executor(None, normalize, raw_path, output_path)
-        except Exception:
+            await _settle_executor(loop.run_in_executor(None, normalize, raw_path, output_path))
+        except BaseException:
             _unlink_many([raw_path, output_path])
             raise
-    raw_path.unlink(missing_ok=True)
+    _unlink_many([raw_path])
     return output_path

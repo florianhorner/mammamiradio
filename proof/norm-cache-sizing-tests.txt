@@ -1,0 +1,35 @@
+# Proof — norm cache sizing (PR 0)
+# Branch florianhorner/fix/norm-cache-sizing; regenerated 2026-07-25T09:08:01Z
+# after deslop pass + Copilot review fixes
+# Runtime under test: HA Green add-on reports FFmpeg 6.1.1 (read-only check, no restart)
+# Note: tests/media and mammamiradio/media are untracked foreign files in this
+#       worktree, excluded here; they are not part of this PR.
+
+=== pytest tests/ -q --ignore=tests/media ===
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5560 passed, 3 skipped, 21 deselected, 1 warning in 141.89s (0:02:21)
+
+=== ruff check . ===
+All checks passed!
+
+=== ruff format --check (changed files) ===
+7 files already formatted
+
+=== mypy (foreign media/ excluded) ===
+Success: no issues found in 295 source files
+
+=== ./scripts/validate-addon.sh (stable/edge option parity) ===
+
+=== Results ===
+[0;34mAll checks passed.[0m Safe to push.
+
+=== scripts/check-release-invariants.sh ===
+=======================================
+
+All invariants passed.
+
+=== scripts/check-changelog-lint.sh ===
+Changelog lint clean.
+
+=== shellcheck ha-addon/mammamiradio/rootfs/run.sh ===
+clean

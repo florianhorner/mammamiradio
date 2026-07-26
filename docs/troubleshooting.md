@@ -49,11 +49,11 @@ The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
 - A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means nothing started airing at all: a station bridging an empty queue on its packaged continuity clip is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that avoids the current/recent song when alternatives exist, then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat as the last audio source; after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
+When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means nothing started airing at all: a station bridging an empty queue on its packaged continuity clip is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that prefers a song the listener has not just heard, and only re-serves a recent one when the cache holds nothing else (a song from twenty minutes ago beats the station ident on a loop), then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat as the last audio source; after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds cap packaged recovery clips to one per empty-queue gap when cached music exists: Resume, idle wake-up, and an active-playback drain queue the short clip, then immediately queue one normalized cached song as runway. In logs, the fixed path looks like one `serving packaged recovery clip` entry followed by `rescuing with norm cache` or a queued `norm-cache bridge`, not the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. The packaged clip appears only when the cache has nothing eligible, and when it does queue with runway still expected but no cache music behind it, the miss reads `no cache music queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
 If the clip still repeats, check whether `cache/` has any `norm_*.mp3` files, and whether the ones that exist are eligible to air: files rejected by the audio quality gate and songs on the operator ban list are skipped by the rescue picker even though they sit on disk (a missing or corrupt metadata sidecar does NOT disqualify a file — it airs with a cleaned-up filename as the title). A fresh install with no cache and no bundled demo music may legitimately repeat the packaged clip because repeated station audio is still better than dead air.
 
@@ -115,6 +115,34 @@ Song-end transitions are validated before they reach TTS. Missing, malformed, sh
 
 Generated banter keeps lively interruptions only when the next emitted line belongs to a different host and answers or counters the cut-in. A terminal cut-off, same-speaker continuation, or stray one/two-word fragment rejects the generated exchange and uses the existing stock banter instead. This is script validation only: it does not change TTS, FFmpeg, streaming, or Home Assistant runtime behavior.
 
+## A host answered themselves, or a break sounded shorter than it should
+
+Individual written lines can be unusable and get dropped before air: a line that
+is only a stage direction (`[ride]`, `[applausi]`) sanitizes to nothing, a model
+sometimes repeats a line verbatim, and a guest-host cameo is dropped when the
+guest was not invited to that break. Dropping one used to shorten the exchange
+silently, and if the dropped line sat between the two hosts their surrounding
+lines welded onto one speaker.
+
+A drop is now only allowed to air when what remains still reads as a
+conversation. Fewer than two surviving lines, or a drop that removed the other
+host's line from between two lines by the same host, rejects the generated
+exchange and uses the complete stock banter instead. A model that simply wrote
+two lines for one host is left alone — that is a taste problem, not a hole, and
+trading it for stock copy would lose a serviceable break. The hosts are also
+asked in every banter prompt to keep stage directions out of spoken copy, so the
+sanitizer has less to remove.
+
+Check: grep the log for `Dropped empty banter line`, `Dropped duplicate banter
+line`, `Dropped gated guest-host banter line`, `Dropped malformed banter line`,
+and the summary line `Banter lost lines before air`. With Show Memory (the
+provenance ledger) enabled, the same counts land on the segment's Tier-2 row as
+`line_accounting` (`authored`, `aired`, and a per-reason breakdown); the field is
+present only when lines were actually lost, so its absence means a full exchange.
+Persistent losses usually mean the model is writing stage directions or repeating
+itself — worth checking before assuming a TTS or audio fault, since a per-line
+voice failure fails the whole segment rather than airing it short.
+
 The app tries Anthropic first, then falls back to OpenAI through the active
 quality profile if `OPENAI_API_KEY` is set (the role-specific catalog entry in
 `model_registry.toml`), then to stock lines. Check the registry—not Python or
@@ -168,8 +196,11 @@ Voice validation now runs at config load, not at synthesis time:
 
 - Every configured voice is checked against `mammamiradio/audio/voice_catalog.py` (OpenAI catalog for `engine = "openai"`, Italian edge-tts catalog for `engine = "edge"`, and the curated Azure catalog for known Azure Italian voices). Ad voices and sonic-brand sweepers can also carry their own `engine` plus `edge_fallback_voice`.
 - Invalid voices are logged once as a WARNING and replaced with `it-IT-DiegoNeural` before the first synthesis attempt, so you never see repeated `Invalid voice 'onyx'` errors per segment.
-- If OpenAI, Azure, or ElevenLabs is missing credentials or fails at runtime, the segment falls back to the configured Edge voice. If Edge synthesis still fails (endpoint down, throttle), the failing voice ID is memoized for the session and the next segment goes straight to the fallback voice — one attempt per voice per session, not one per segment.
-- When any voice was substituted at load, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
+- If OpenAI, Azure, or ElevenLabs is missing credentials or fails at runtime, the segment falls back to the configured Edge voice. Each cloud route carries a circuit breaker: when a route-wide failure lands (timeout, 5xx, revoked key), every waiting and later part skips straight to Edge — at most the one or two requests already in flight pay the timeout, and healthy concurrent voices on the same provider keep rendering in parallel (dialogue lines are never serialized behind each other). Transient route failures cool down for 30 seconds and then exactly one call probes the provider (a successful probe reopens the route for everyone); non-retryable credential errors stay sidelined until the route changes or the station restarts. A single bad voice ID (HTTP 400 or 404) only sidelines that one voice, not the whole provider route — other configured voices on the same Azure/ElevenLabs/OpenAI credential keep trying the cloud normally. If Edge synthesis also fails (endpoint down, throttle), the failing voice ID is memoized for the session and the next segment goes straight to the fallback voice — one attempt per voice per session, not one per segment.
+- Every runtime cloud fallback now emits a route record such as `TTS fallback provider=elevenlabs ... effective_provider=edge ... reason=...` followed by `Synthesized (Edge fallback): ...`. A plain `Synthesized: ...` line means the voice was intentionally configured for Edge, not that a cloud route silently failed. Ad lines also include the configured character name.
+- The admin runtime card uses those route records: `tts_provider.current_provider` becomes `edge` and `fallback_active` becomes `true` after a live cloud-to-Edge fallback, even when all provider keys are configured. This is runtime evidence, while `Mixed TTS` by itself remains a configuration summary. That runtime state is tracked per provider engine, not per voice: on a station with several voices on the same cloud engine, one voice's successful render clears the degraded state for that engine even if a different voice on the same engine is still falling back to Edge every segment. Grep logs for the specific character name in `Synthesized (Edge fallback)` lines to see which voice is actually degraded.
+- When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
+- If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
 ## Home Assistant references never show up
 

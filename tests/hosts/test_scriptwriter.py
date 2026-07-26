@@ -36,9 +36,17 @@ from mammamiradio.hosts.ad_creative import (
     AdVoice,
     CampaignSpine,
 )
+from mammamiradio.hosts.language_policy import (
+    NORMAL_MODE_ENGLISH_MAX,
+    NORMAL_MODE_ENGLISH_MIN,
+    NORMAL_MODE_ENGLISH_TARGET,
+    assess_language,
+)
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
+from mammamiradio.hosts.prompt_world import language_mode_rule
 from mammamiradio.hosts.scriptwriter import (
     _LOCAL_BALLOON_GUEST_HOST,
+    _NORMAL_MODE_LANGUAGE_REPAIR,
     CHAOS_MODE_BLOCK,
     ListenerRequestCommit,
     _banter_commit,
@@ -53,6 +61,7 @@ from mammamiradio.hosts.scriptwriter import (
     _personality_modifier,
     _plan_listener_request_block,
     _regular_hosts,
+    assess_spoken_texts,
     repair_banter_without_listener_context,
     write_ad,
     write_banter,
@@ -1258,6 +1267,137 @@ async def test_write_banter_normal_mode_retries_all_italian_response(config, sta
     assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
     assert list(state.running_jokes) == []
     assert state.pending_verbal_gag is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_normal_mode_keeps_all_lines_when_repair_is_english_heavy(config, state):
+    """An English-heavy repair is returned in full instead of collapsing to stock."""
+    config.super_italian_mode = False
+    regulars = _regular_hosts(config)
+    italian_response = {
+        "lines": [
+            {
+                "host": regulars[0].name,
+                "text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
+            },
+            {
+                "host": regulars[1].name,
+                "text": "Si, la casa respira piano e la musica continua senza nessuna fretta.",
+            },
+        ],
+        "new_joke": None,
+    }
+    repaired_texts = [
+        "The music is back, and we are here for the next song.",
+        "That is exactly right; the room is ready and the show keeps moving.",
+        "We have more music for you, and this track is very good.",
+        "Stay here with us because the next song is ready now.",
+        "Anyway, we are back on the radio and the music is still up.",
+        "Ciao amici, grazie; the show is here and we keep listening.",
+    ]
+    # Only the two-sided-band precondition is load-bearing here; pinning exact
+    # marker-bank hit counts would red-fail this floor test on unrelated
+    # vocabulary edits.  ``is_short`` guards the branch: a bank change that drops
+    # classified tokens below the short-copy limit would otherwise reroute this
+    # test through the short-copy rule and pass while testing nothing.
+    repaired_language = assess_language(repaired_texts)
+    assert repaired_language.is_short is False
+    assert repaired_language.italian_tokens > 0
+    assert repaired_language.english_share > NORMAL_MODE_ENGLISH_MAX
+    english_heavy_repair = {
+        "lines": [
+            {"host": regulars[index % len(regulars)].name, "text": text} for index, text in enumerate(repaired_texts)
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, english_heavy_repair],
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert len(result) == 6
+    assert [line.text for line in result] == repaired_texts
+    assert commit is None
+    assert mock_generate.await_count == 2
+    assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_normal_mode_accepts_english_heavy_first_response(config, state):
+    """English-heavy copy airs on the first attempt: no wasted repair round-trip."""
+    config.super_italian_mode = False
+    regulars = _regular_hosts(config)
+    texts = [
+        "The music is back, and we are here for the next song.",
+        "That is exactly right; the room is ready and the show keeps moving.",
+        "Ciao amici, grazie; the show is here and we keep listening.",
+    ]
+    language = assess_language(texts)
+    assert language.is_short is False
+    assert language.english_share > NORMAL_MODE_ENGLISH_MAX
+    response = {
+        "lines": [{"host": regulars[index % len(regulars)].name, "text": text} for index, text in enumerate(texts)],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=response,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [line.text for line in result] == texts
+    assert commit is None
+    assert mock_generate.await_count == 1
+
+
+def test_normal_mode_repair_prompt_still_asks_for_the_target_band(config):
+    """The guard stopped policing the ceiling; the prompt must not stop asking.
+
+    Nothing in code rejects English-only copy any more, so these strings are the
+    only thing keeping Italian in a Normal Mode break.  Pin them to the policy
+    constants so the numbers the host is told cannot drift from the band the
+    ledger reports against.
+    """
+    band = f"{round(NORMAL_MODE_ENGLISH_MIN * 100)}–{round(NORMAL_MODE_ENGLISH_MAX * 100)}%"
+    target = f"{round(NORMAL_MODE_ENGLISH_TARGET * 100)}%"
+
+    assert band in _NORMAL_MODE_LANGUAGE_REPAIR
+    assert band in language_mode_rule(False, "en")
+    assert target in _NORMAL_MODE_LANGUAGE_REPAIR
+    assert target in language_mode_rule(False, "en")
+    assert "Do not answer by dropping\nItalian altogether" in _NORMAL_MODE_LANGUAGE_REPAIR
+
+
+def test_assess_spoken_texts_separates_acceptance_from_the_preferred_band(config):
+    """English-only copy is accepted, and the ledger still records the drift.
+
+    ``accepted`` is now true for both a healthy 75/25 exchange and an all-English
+    one, so ``within_preferred_band`` is what keeps an English-only station
+    visible to the same provenance analysis that surfaced the original bug.
+    """
+    config.super_italian_mode = False
+    on_target = assess_spoken_texts(["The music is back and we stay with the song, ciao amici grazie"], config)
+    english_only = assess_spoken_texts(["The music is back and we stay with the song tonight"], config)
+
+    assert on_target["target_english_share"] == NORMAL_MODE_ENGLISH_TARGET
+    assert (on_target["accepted"], on_target["within_preferred_band"]) == (True, True)
+
+    assert english_only["english_share"] == 1.0
+    assert english_only["italian_tokens"] == 0
+    assert english_only["accepted"] is True
+    assert english_only["decision"] == "accepted"
+    assert english_only["within_preferred_band"] is False
 
 
 def test_normal_mode_language_guard_ignores_ambiguous_short_markers(config):

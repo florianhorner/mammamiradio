@@ -170,8 +170,16 @@ def test_broken_ledger_never_raises():
     _emit_stream_result(state, _segment({}), bytes_sent=10, was_skipped=False, listeners=1)
 
 
-def test_emit_stream_result_records_rescue_airplay_when_heard():
-    """A norm-cache rescue that reached a listener feeds the rotation cooldown."""
+def test_emit_stream_result_no_longer_owns_the_rotation_stamp():
+    """The rotation cooldown moved OUT of the end-of-segment recorder.
+
+    It is stamped in the send loop on the first chunk a listener queue accepted.
+    That predicate is strictly tighter than the one available here: ``bytes_sent``
+    counts bytes the loop wrote even when nobody took them, and ``listeners`` is
+    sampled at segment start, so an empty room could be credited. Stamping at EOF
+    also left a song looking unheard for its whole play, which is how a live
+    control came to re-reserve the song already on the air.
+    """
     state = StationState()
     path = Path("/cache/norm_bad_bunny_192k.mp3")
     seg = SimpleNamespace(
@@ -181,29 +189,10 @@ def test_emit_stream_result_records_rescue_airplay_when_heard():
         ephemeral=False,
     )
     _emit_stream_result(state, seg, bytes_sent=4000, was_skipped=False, listeners=1)
-    assert path in state.rescue_airplay
 
-
-def test_emit_stream_result_does_not_record_unheard_or_non_rescue():
-    """Selecting or opening a rescue that never truly airs — and any normally
-    rendered song — must not consume rotation."""
-    state = StationState()
-    path = Path("/cache/norm_bad_bunny_192k.mp3")
-
-    def _rescue() -> SimpleNamespace:
-        return SimpleNamespace(
-            metadata={"audio_source": "norm_cache"}, type=SegmentType.MUSIC, path=path, ephemeral=False
-        )
-
-    _emit_stream_result(state, _rescue(), bytes_sent=4000, was_skipped=False, listeners=0)  # empty room
     assert path not in state.rescue_airplay
-    _emit_stream_result(state, _rescue(), bytes_sent=0, was_skipped=False, listeners=1)  # no bytes heard
-    assert path not in state.rescue_airplay
-    _emit_stream_result(state, _rescue(), bytes_sent=4000, was_skipped=True, listeners=1)  # partial skip
-    assert path not in state.rescue_airplay
-    normal = SimpleNamespace(metadata={"audio_source": "youtube"}, type=SegmentType.MUSIC, path=path, ephemeral=False)
-    _emit_stream_result(state, normal, bytes_sent=4000, was_skipped=False, listeners=1)  # not a rescue
-    assert path not in state.rescue_airplay
+    # Still does its real job: the aired-outcome record.
+    assert state.stream_outcome_history[-1]["result"] == "fallback_rescue"
 
 
 @pytest.mark.asyncio

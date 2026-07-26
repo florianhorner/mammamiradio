@@ -25,6 +25,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
     normalized_track_key,
+    segment_track_key,
 )
 from mammamiradio.playlist.preferences import PREFERENCE_UP_WEIGHT
 
@@ -1504,7 +1505,7 @@ def test_record_bridge_fire_counts_total_by_type_and_event():
     state.record_bridge_fire("drain", "canned", timestamp=100.0)
 
     assert state.bridge_fires_total == 1
-    assert state.bridge_fires_by_type == {"drain": 1, "resume": 0, "idle": 0}
+    assert state.bridge_fires_by_type == {"drain": 1, "resume": 0, "idle": 0, "continuity": 0}
     assert list(state.bridge_events) == [{"bridge_type": "drain", "source": "canned", "timestamp": 100.0}]
 
 
@@ -1514,14 +1515,15 @@ def test_record_bridge_fire_accumulates_across_types():
     state.record_bridge_fire("resume", "norm_cache", timestamp=2.0)
     state.record_bridge_fire("idle", "canned", timestamp=3.0)
     state.record_bridge_fire("drain", "emergency_tone", timestamp=4.0)
+    state.record_bridge_fire("continuity", "norm_cache", timestamp=5.0)
 
-    assert state.bridge_fires_total == 4
-    assert state.bridge_fires_by_type == {"drain": 2, "resume": 1, "idle": 1}
+    assert state.bridge_fires_total == 5
+    assert state.bridge_fires_by_type == {"drain": 2, "resume": 1, "idle": 1, "continuity": 1}
     # last_fire is the deque tail
     assert state.bridge_events[-1] == {
-        "bridge_type": "drain",
-        "source": "emergency_tone",
-        "timestamp": 4.0,
+        "bridge_type": "continuity",
+        "source": "norm_cache",
+        "timestamp": 5.0,
     }
 
 
@@ -1553,7 +1555,7 @@ def test_record_bridge_fire_ignores_unknown_bridge_type_in_by_type():
     state.record_bridge_fire("mystery", "canned", timestamp=1.0)
 
     assert state.bridge_fires_total == 1
-    assert state.bridge_fires_by_type == {"drain": 0, "resume": 0, "idle": 0}
+    assert state.bridge_fires_by_type == {"drain": 0, "resume": 0, "idle": 0, "continuity": 0}
     assert state.bridge_events[-1]["bridge_type"] == "mystery"
 
 
@@ -1680,3 +1682,68 @@ def test_generation_waste_reason_string_values_are_stable():
     assert GenerationWasteReason.QUALITY_GATE_REJECT == "quality_gate_reject"
     assert GenerationWasteReason.STALE_PLAYLIST == "stale_playlist"
     assert GenerationWasteReason.STALE_SOURCE == "stale_source"
+
+
+# ---------------------------------------------------------------------------
+# segment_track_key — the segment-side mirror of normalized_track_key.
+# ---------------------------------------------------------------------------
+
+
+def test_segment_track_key_matches_normalized_track_key_for_the_same_song():
+    """The invariant the rotation-membership check rests on.
+
+    A rendered music Segment carries `artist` + `title_only` verbatim from its
+    Track, so the two identity functions must agree — otherwise a finished
+    render could be judged "no longer in the rotation" while its Track sits
+    right there in the pool.
+    """
+    track = Track(title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000, spotify_id="x")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/norm_x.mp3"),
+        metadata={"title": track.display, "title_only": track.title, "artist": track.artist},
+    )
+
+    assert segment_track_key(segment) == normalized_track_key(track)
+
+
+def test_segment_track_key_normalizes_case_and_whitespace_and_survives_junk():
+    """Same shape as Track.normalized_key, and it never raises on odd metadata."""
+    padded = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/x.mp3"),
+        metadata={"title_only": "  Dont Lose Your WAY ", "artist": " Fleece  "},
+    )
+    assert segment_track_key(padded) == ("fleece", "dont lose your way")
+
+    # Norm-cache bridges and rescue fills stamp only `title`.
+    title_only_fallback = Segment(
+        type=SegmentType.MUSIC, path=Path("/cache/x.mp3"), metadata={"title": "Io Vagabondo", "artist": "Nomadi"}
+    )
+    assert segment_track_key(title_only_fallback) == ("nomadi", "io vagabondo")
+
+    # Missing / non-dict metadata degrades to empty rather than raising into
+    # the audio path.
+    assert segment_track_key(Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={})) == ("", "")
+    bad = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"))
+    bad.metadata = "not a dict"  # type: ignore[assignment]
+    assert segment_track_key(bad) == ("", "")
+
+
+def test_segment_track_key_coalesces_an_explicit_none_artist():
+    """An explicit ``artist: None`` keys as "", never the string "none".
+
+    No site stamps a null artist today — every construction omits the key when
+    it is falsy — so this pins the contract rather than a live bug. It matters
+    because the hand-rolled copy in ``_apply_ban`` used ``.get("artist", "")``,
+    where a null artist becomes ``str(None)`` -> "none" and the segment stops
+    matching any ban. That copy now delegates here; this keeps the canonical
+    definition safe for whichever site stamps a null artist first.
+    """
+    nulled = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/x.mp3"),
+        metadata={"title_only": "Senza Nome", "artist": None},
+    )
+    assert segment_track_key(nulled) == ("", "senza nome")
+    assert "none" not in segment_track_key(nulled)

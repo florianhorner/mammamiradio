@@ -54,7 +54,7 @@ Charts / Jamendo / classic eras / local files / demo tracks
 
 1. Loads `radio.toml` and `.env` through `config.py`.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
-3. Purges suspect cache files (< 10KB, likely failed downloads) and evicts old cache entries.
+3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
 5. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
 6. Initializes the clip ring buffer for WTF clip sharing.
@@ -286,10 +286,18 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 | Inner bridge / drain-recovery rescue (direct enqueue) | yes | **no** — instant-audio: a fill must air regardless of source state | yes\* | **skipped (rescue)** | append | **yes** |
 | Prewarm (startup pre-roll) | yes | **yes — source_revision + chaos epoch, checked after render AND post-egress** | yes | yes | append | **yes** |
 
-- The **main-loop** stale gate compares `generation_revision` (captured once per loop
-  iteration) against `state.playlist_revision` (and `chaos_cutover_epoch` against
-  `generation_chaos_epoch`), and runs **pre-egress only** — those paths do not re-check
-  after the awaited egress pass, so a slow/enabled egress colour pass widens their window.
+- The **main-loop** stale gate checks `source_revision` on its own axis, then treats
+  `state.playlist_revision` as a cheap pre-filter: a bump only discards when
+  `_music_segment_left_rotation` confirms the rendered song is genuinely gone from
+  `state.playlist` (removed or banned). Ten of the thirteen sites that bump
+  `playlist_revision` are benign — add, shuffle, move, enrich, direction retag — and
+  a pool that merely grew leaves the render exactly as playable as when it started.
+  Speech and rescue fills are never bound to a rotation row, so no playlist edit
+  discards them. `chaos_cutover_epoch` and `continuity_epoch` are unchanged. The gate
+  runs **pre-egress only** — those paths do not re-check after the awaited egress
+  pass, so a slow/enabled egress colour pass widens their window. `_enqueue_stale_reason`
+  re-checks at admission with the *same* predicate; `test_epilogue_and_admission_stale_predicates_agree`
+  pins the two together so they cannot drift.
 - **Prewarm** keys on `source_revision` (bumped only by a true source switch via
   `switch_playlist`), not the broad `playlist_revision`, so a benign in-place edit
   (shuffle/add/move/enrich) keeps the on-source pre-roll. It also passes a **post-egress**
@@ -325,11 +333,15 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 Program-replacing controls — source switches, playlist purges, panic, and
 Chaos/Festival cutovers — rebuild the real playback queue and its Scaletta shadow
 in one synchronous operation. They reserve only audio already safe to play:
-the packaged continuity clip first, then eligible normalized-cache music, then
-the packaged `emergency_tone.mp3` when the clip and cache are unavailable. A
-normalized-cache candidate passes the same final blocklist rule as every other
-music admission, so a banned song cannot re-enter through this instant-audio
-path.
+eligible normalized-cache music first, then the packaged continuity clip when the
+cache has nothing eligible, then the packaged `emergency_tone.mp3` when both are
+unavailable. The clip is the rung below cached music, not a preamble in front of
+it: a real song is both the better listener experience and the faster one to first
+byte, because the cached payload takes its duration from the sidecar while the
+clip needs an ffprobe first. A normalized-cache candidate passes the same final
+blocklist rule as every other music admission, so a banned song cannot re-enter
+through this instant-audio path, and the song currently on air (or one heard in
+the last few segments) is skipped outright rather than reserved behind itself.
 
 Cache selection here shares the same rescue-rotation cooldown as the producer and
 playback-gap rescues (`audio/norm_cache.py`): a cached song that aired as a rescue
@@ -346,7 +358,10 @@ shadow projection therefore describe exactly the same final order. If no fresh
 reservation can be built, the control fails closed instead: it keeps the first
 immediately playable queued segment and any valid capacity-exempt slot, drops
 only the remaining queued work to reopen producer capacity, and never cuts the
-current segment into an empty runway. Every rebuild that drops queued work
+current segment into an empty runway. A companionship cue counts as immediately
+playable only while its listener-session epoch is current and its lifecycle state
+is `QUEUED`, matching the playback fence that runs before any bytes reach air.
+Every rebuild that drops queued work
 advances `continuity_epoch`, including this conservative fallback, so an
 in-flight render cannot refill the freed tail. An assetless control that cannot
 mutate the queue leaves the epoch unchanged. Producer work and startup prewarm
@@ -538,7 +553,7 @@ Once playback is running, the producer's recovery layers (packaged recovery clip
 
 Because every source above is re-fetched fresh on startup, an in-memory "remove" would reappear after a restart. The operator blocklist makes a ban durable. It persists to `cache_dir/blocklist.json` as `{serialized_key: {display, banned_by, banned_at}}`, keyed by the single canonical identity `normalized_track_key(track) = (artist.strip().lower(), title.strip().lower())` (the same key used for playlist dedup, so a ban holds across sources even when the per-source track id differs). The store is best-effort and corrupt-tolerant: a missing or malformed file loads as empty and never raises into the audio path; writes are atomic (`tmp` + `os.replace`).
 
-Enforcement is a single primitive, `playlist.filter_blocklisted(tracks, blocklist)`, applied at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and the external/listener download commit (`_commit_external_download`). The norm-cache **rescue** path is a separate doorway — it serves cached audio directly without passing through `state.playlist`, so `select_norm_cache_rescue` (in `audio/norm_cache.py`) drops blocklisted cache files itself, matching each file's `{title, artist}` sidecar against `state.blocklist`; a banned song never re-airs even when the queue starves and recovery kicks in (if every cache file is banned the rescue degrades to the next layer — canned clip / forced banter — never to a banned song). The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label, so it bans even a rescue-cache or one-off song that never entered `state.playlist`), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, empty-queue bridge to forced music, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge reads the post-purge queue depth and still force-bridges to music if the ban emptied the queue — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
+Enforcement is a single primitive, `playlist.filter_blocklisted(tracks, blocklist)`, applied at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and the external/listener download commit (`_commit_external_download`). The norm-cache **rescue** path is a separate doorway — it serves cached audio directly without passing through `state.playlist`, so `select_norm_cache_rescue` (in `audio/norm_cache.py`) drops blocklisted cache files itself, matching each file's `{title, artist}` sidecar against `state.blocklist`; a banned song never re-airs even when the queue starves and recovery kicks in (if every cache file is banned the rescue degrades to the next layer — canned clip / forced banter — never to a banned song). The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. Dropping a segment can expose a different queue tail; `_apply_ban` and manual `/api/queue/remove` both re-verify that newly exposed tail (`_reconcile_queue_tail_adjacency`) rather than trust it blindly, since only rescue/recycled music can safely re-anchor speech-bed adjacency — ordinary rendered music may carry an egress-processed path. A last-mile fence in the playback loop itself covers the remaining race, where a banned track was already pulled off the queue before a ban's synchronous purge reached it: playback discards that segment immediately, before any bytes reach air, and runs the same tail-adjacency reconciliation. Recovery paths carry a matching guard one level up: error recovery, the quality-gate circuit breaker's last-known-good recycling, and speech-bed adjacency selection all resolve their candidate through `_blocklist_safe_last_music`, which requires a durable `{artist, title}` identity and rejects it outright — even when unidentified — while any ban is active, so none of those paths can reintroduce an operator-banned song through a cached or adjacency-based route. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label, so it bans even a rescue-cache or one-off song that never entered `state.playlist`), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, a bridge to forced music whenever no immediately playable runway remains — not just an empty queue, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge sees the post-purge, playback-verified runway state and still force-bridges to music if nothing left in the queue can actually play — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
 
 ### Operator song preferences
 
@@ -562,10 +577,10 @@ just static parameters.
 
 **Azure Speech TTS**: requires `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Useful for official Italian voices and HD voices while keeping the existing Edge voice family as fallback.
 
-**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) remains the default for ads, sweepers, guest bits, and every host that has not explicitly opted in. Marco and Giulia use `eleven_v3` with a code-owned `delivery_profile`; V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
+**ElevenLabs TTS**: requires `ELEVENLABS_API_KEY` and operator-provided voice IDs. V2 (`eleven_multilingual_v2`) is the default for ads, sweepers, guest bits, and every host. The expressive `eleven_v3` delivery path (with a code-owned `delivery_profile`) is present in the code but disabled by default: Marco and Giulia currently ship on V2 after their V3 host-performance audition was rejected. When a host opts into `eleven_v3`, V3 accepts only `stability`, never V2-only similarity, style, or Speaker Boost controls.
 
-For selected normal host banter, the script carries one semantic cue beside —
-never inside — the clean spoken text. Marco may be `energetic`, `curious`, or
+For selected normal host banter on a V3 host, the script carries one semantic
+cue beside — never inside — the clean spoken text. Marco may be `energetic`, `curious`, or
 `playful`; Giulia may be `dry`, `curious`, or `playful`. Only the V3 TTS boundary
 maps those values to provider audio tags. Ads, news, IDs, sweepers, transitions,
 time checks, stock/fallback/repair lines, V2, and Edge receive no tag. The clean
@@ -573,7 +588,12 @@ line remains the sole input to transcript metadata, safety/language guards,
 memory, accounting, and any Edge fallback, so a failed V3 request cannot make a
 fallback voice read markup aloud.
 
-Fallback chain: cloud TTS failure or missing credentials → `edge_fallback_voice` (so the role falls back to its own Edge voice, not a stranger) → Edge runtime fallback/silence recovery.
+Fallback chain: cloud TTS failure or missing credentials →
+`edge_fallback_voice` (so the role falls back to its own Edge voice, not a
+stranger) → the house Edge fallback → `TTSUnavailableError`. The final failure
+deletes partial speech files and lets required voice reach the producer's
+music/continuity rescue ladder; it never substitutes generated silence for
+speech.
 
 A session's blended TTS estimate records a confirmed paid-provider response before local raw-file I/O or normalization. If that local processing later fails and the role falls back to Edge, the session still includes the paid request; missing credentials, provider errors, and Edge-only synthesis remain uncounted. This is a conservative session estimate, not invoice-level provider reconciliation.
 
@@ -642,6 +662,9 @@ If `[homeassistant].enabled = true` and `HA_TOKEN` is present:
 - the director's `home_fact_*` metadata is internal. `/status` receives only count-based `home_context_director` diagnostics; `/public-status`, queue projections, now-playing metadata, and stream logs remove it recursively.
 - weather-mood fusion allows hosts to connect outdoor conditions to indoor activity
 - the weather news flash grounds itself in the real Home Assistant forecast when available, then spins it into absurd local color; with no forecast (HA disconnected or unsupported) it falls back to the fully fictional meteo prompt, so the segment never goes silent. `NEWS_FLASH` shares the same HA-context refresh gate as banter/ad, so the flash reads a freshly refreshed forecast (bounded by the weather cache TTL plus one poll interval) rather than the startup snapshot. The arc follows the station language: Italian stations use `state.ha_weather_arc`, every other language uses `state.ha_weather_arc_en` — never the Italian arc — and the stock fallback line is localized too
+- **temperature normalization.** `home/temperature.py` is the single authority for turning a Home Assistant temperature into Celsius before it reaches a host prompt, the news flash, the Casa card, or the narrow privacy projection. `temperature_unit_of()` reads HA's two conventions (`temperature_unit` for `weather.*`, `unit_of_measurement` for `sensor.*`); `normalize_temperature()` converts °C/°F/K and returns `None` for anything else; `format_celsius()` rounds to one decimal so a converted value is speakable (70 °F airs as `21.1°C`, never `21.111111111111114`) and renders empty for a non-finite value so `inf`/`nan` can never be spoken. `is_plausible_celsius()` filters *physical nonsense only* (−273.15…1000 °C): a Pi's own `sensor.processor_temperature` at 78 °C and a boiler flow at 85 °C are legitimately `device_class: temperature`, and withholding them would delete the entity from `context.scored` entirely, not just drop the number. The narrower "is this a room" judgement stays with the subtractive authorities (`context_director` −90…70, `authorization` −80…60).
+- **the missing-unit policy.** `weather.*` publishes `temperature_unit` and `sensor.*` publishes `unit_of_measurement`, so every path reading one of those requires it: `require_unit=True` on the weather state line, both weather arcs, classified temperature sensors (in **both** `_format_state` and `DirectorObservation.from_home_assistant_state`, so the boundary is self-enforcing rather than relying on one module to filter for the other), and `authorization._temperature_c`. A unit is only ever defaulted to Celsius when it is absent or blank; an explicitly supplied non-string is malformed input and fails closed. **Fallback path:** an unresolvable unit withholds the number rather than assuming Celsius — a weather line keeps its condition, a climate line keeps its mode, and a unitless temperature sensor is dropped entirely. `climate.*` is the single genuine exception and the known gap: HA pre-converts climate values into the household's configured unit and publishes no unit attribute at all, so those keep the legacy Celsius assumption. Pinned by `test_format_state_climate_without_a_unit_attribute_reads_as_celsius` and stated plainly in the release notes rather than implied fixed.
+- **forecast unit lookup.** `weather/get_forecasts` carries no unit, so `fetch_weather_forecast` issues a concurrent `GET /api/states/weather.forecast_home` (`asyncio.gather(..., return_exceptions=True)`, bounded by `_WEATHER_UNIT_TIMEOUT`, well under the 5s optional-enrichment budget) and prefers any inline unit over it. A `CancelledError` from that enrichment deadline is re-raised rather than downgraded, so a cancelled fetch never goes on to mutate the cache globals. If the unit cannot be resolved the arc still airs its condition but without a temperature. **Cache TTL:** `_WEATHER_DEGRADED_CACHE_TTL` (5 min) instead of the full `_WEATHER_CACHE_TTL` (1 h) whenever a retry could plausibly recover the number — an unreadable unit, or any transient failure — so one blip costs one poll rather than an hour of weather. An *empty* forecast keeps the full hour: that is a stable property of the integration, and retrying it every 5 minutes would be a permanent double-request treadmill on the Pi. Losing the temperature logs one WARNING on transition (not per poll), because a mis-scoped token would otherwise strip it from every break forever with nothing above DEBUG to explain why.
 - numeric state passthrough in `ha_enrichment.diff_states()` ensures power sensors generate events
 - the listener dashboard shows a "Casa" card with mood, weather, recent events, and the "Live from your home" strip of recently aired home moments via `ha_moments` (incl. `recent`) in `/public-status`
 - the admin panel shows full HA details (mood, weather arc, events summary, pending directives, scored entities, and privacy filter counts) via `ha_details` in `/status`, plus the Moment Receipts trail via `moments_admin`
@@ -755,7 +778,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
-| `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
+| `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `rescue_rotation` cached-music cooldown telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and a render-ready `guided_setup.strip` payload |
 | `/api/setup/recheck` | POST | Admin | Re-run setup probes |
@@ -766,13 +789,13 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |
-| `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; never skips, purges, or mutates the blocklist |
+| `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; the Admin playlist sends the existing key target so a refreshed row cannot redirect the vote, while the index target remains compatible for existing API clients; never skips, purges, or mutates the blocklist |
 | `/api/track/preferences` | GET | Admin | List operator song preference rows and up/down counts |
 | `/api/purge` | POST | Admin | Remove queued segments |
 | `/api/queue/remove` | POST | Admin | Remove one queued segment by stable `id` (or legacy `index`) |
-| `/api/playlist/remove` | POST | Admin | Remove track by index |
-| `/api/playlist/move` | POST | Admin | Move track with `{from, to}` |
-| `/api/playlist/move_to_next` | POST | Admin | Move track to position 0 in upcoming |
+| `/api/playlist/remove` | POST | Admin | Durably ban one rendered rotation row with `{revision, index, id}`; success returns the new `playlist_revision` |
+| `/api/playlist/move` | POST | Admin | Reorder two rendered rotation rows with `{revision, from, from_id, to, to_id}`; success returns the new `playlist_revision` |
+| `/api/playlist/move_to_next` | POST | Admin | Pin one rendered rotation row as upcoming with `{revision, index, id}`; success returns the new `playlist_revision` |
 | `/api/playlist/add` | POST | Admin | Add a track to the playlist |
 | `/api/playlist/load` | POST | Admin | Load a playlist by URL |
 | `/api/hosts` | GET | Admin | List hosts with personality settings |
@@ -799,14 +822,26 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
-| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying its current `preference` score |
-| `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; returns `{results, external, total, has_more, external_has_more, …}` |
+| `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying an opaque row `id` and its current `preference` score |
+| `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; every response (including an empty query) returns the playlist `revision` captured with the local snapshot before any external lookup, and each local result carries its opaque row `id` |
 | `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`); no queue purge |
 | `/api/direction` | POST | Admin | Free-text alias for heading direction (`{"text": "sunday morning italian"}`); expands to song targets, searches metadata, and downloads targets in background |
 | `/api/heading/clear` | POST | Admin | Clear the active heading/direction and return to automatic rotation without removing blended tracks |
 | `/api/playlist/add-external` | POST | Admin | Add external track from search results; accepts optional `album_art` URL (http/https only, validated server-side) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
+
+Rotation-row mutations use optimistic identity checks rather than trusting a
+position by itself. The `id` fields above are opaque Admin row tokens, not song
+identity: callers must echo the revision, position, and token(s) from the same
+rendered snapshot. Missing or malformed fields return `422` with
+`reason: "invalid_target"`. If the revision or
+the token at either submitted position no longer matches, the server returns
+`409` with `reason: "stale_playlist"`; if a source/rotation update already owns
+the mutation boundary, it returns `409` with `reason: "rotation_updating"`.
+Neither conflict mutates the rotation. Search pagination similarly rejects
+mixing pages from different revisions in the Admin client, and late search
+responses are accepted only for the query generation that started them.
 
 ### Auth rules
 
@@ -832,13 +867,27 @@ change the legacy admin matrix for unrelated endpoints.
 
 ### Source switch concurrency
 
-`source_switch_lock` (asyncio.Lock on `app.state`) serializes `/api/playlist/load` so only one source change runs at a time. The endpoint attempts an immediate cutover: when a playable replacement runway is ready, the segment queue is purged and the current segment is skipped; otherwise the current segment finishes and the last safe runway remains in place. The producer uses a `playlist_revision` counter on `StationState` to detect and discard segments generated for a stale source. `/api/shuffle` also increments `playlist_revision` so any in-flight producer work targeting the old order is discarded and rebuilt against the new sequence.
+`source_switch_lock` (asyncio.Lock on `app.state`) serializes source imports and
+replacement. Admin row mutations make a bounded attempt to enter that same
+boundary: a busy lock returns the recoverable `rotation_updating` conflict;
+after admission, the route revalidates its revision, index, and opaque token(s)
+before mutating without another await. Source replacement requests immediate
+cutover only after fresh protected replacement audio is admitted: the current
+segment is skipped and playback begins from the new source. If the continuity
+fallback preserves an older queue head or slot, or no ready runway exists, the
+current segment finishes and the response reports `skipped: false`. The producer
+uses a `source_revision` counter on `StationState` to detect and discard segments
+generated for a stale source. `/api/shuffle` increments the broader
+`playlist_revision`, but that alone no longer discards in-flight producer work:
+reordering the pool does not make a rendered song unplayable, and the render is
+kept and queued against the new sequence.
 
 Source replacement also follows the protected-continuity reservation contract
-above. A successful replacement supersedes existing reservations and fallback
-slots. If no replacement audio is ready, the current segment is not cut and the
-last safe runway remains in place; the source revision still prevents a render
-begun for the prior source from being admitted after the switch.
+above. A successful fresh replacement supersedes existing reservations and
+fallback slots. If no fresh replacement audio is ready, the current segment is
+not cut and the last safe prior-source runway remains in place; the source
+revision still prevents a render begun for the prior source from being admitted
+after the switch.
 
 ## Failure model
 
@@ -847,14 +896,13 @@ This repo is biased toward "keep the station on air."
 - producer exceptions never crash the app or queue generated silence — a rescue ladder tries packaged recovery audio, then norm-cache music, then the last-known-good music file, then a bounded branded recovery sweeper, then an emergency tone as the final rung; packaged recovery clips are non-ephemeral package resources and every producer/playback segment-cleanup path guards `mammamiradio/assets/demo/` before unlinking; the segment carries `error_recovery: True` (classified as fallback/rescue audio by `core/segment_status.py`) and `rescue: True` (skips the egress FX pass so the rescue is instant); if even the tone fails to generate the producer logs and retries on the next loop iteration rather than queueing silence
 - script generation failures fall back to OpenAI when configured, then to stock copy; a temporary Anthropic overload or rate limit briefly benches its writer (respecting a bounded `Retry-After` when present) so affected later segments go straight to OpenAI, then retry Anthropic automatically after the short cooldown
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
+- required speech fails closed: if every configured provider and Edge fallback is unavailable, partial files are removed and `TTSUnavailableError` reaches the producer rescue ladder; owned dialogue, ID, time-check, and ad fan-outs settle before scratch cleanup, while optional promo tags may still be omitted
 - missing yt-dlp falls back to local files or demo tracks
 - missing Home Assistant context is ignored
 - missing ad brands disables ads rather than killing startup
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
 
 The rich path is richer, but the failure path still produces a stream.
-
-**Known residual risk (not covered by the producer rescue ladder above):** `mammamiradio/audio/tts.py`'s `synthesize()` still falls back to `generate_silence()` if every configured TTS backend (Edge, Azure, ElevenLabs) fails for a given voice — this embeds a short real-silence clip directly into an otherwise-successful segment rather than routing through the producer's `except Exception` rescue path, so it does not carry `error_recovery`/`rescue` metadata and is not classified as fallback audio. Closing that separate TTS path remains follow-up work.
 
 ## File map
 

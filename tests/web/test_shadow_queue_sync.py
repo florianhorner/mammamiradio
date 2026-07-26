@@ -15,6 +15,7 @@ the two produces misleading up-next displays.  These tests cover:
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
@@ -48,16 +49,20 @@ from mammamiradio.web.streamer import (
     GENERATION_WASTE_DEGRADED_SECONDS,
     GENERATION_WASTE_WINDOW_SECONDS,
     LiveStreamHub,
+    _apply_ban,
     _apply_loaded_source,
     _bridge_health_snapshot,
     _claim_continuity_slot,
     _continuity_reservation_segments,
+    _discard_unplayable_queue_prefix,
     _estimate_api_cost,
     _generation_waste_snapshot,
+    _playable_runway_available,
     _purge_queue_and_shadow,
     _reserve_continuity_runway,
     _runtime_health_snapshot,
     _runtime_status_snapshot,
+    _segment_is_immediately_playable,
     _sync_runtime_state,
     router,
 )
@@ -527,6 +532,31 @@ class TestRuntimeStatusSnapshot:
 
         assert snap["health_state"] == "degraded"
         assert snap["station_on_air"] is True
+
+    def test_tts_fallback_is_named_in_degraded_health_status(self):
+        app = _make_app()
+        state = app.state.station_state
+        state.update_runtime_provider(
+            "tts_provider",
+            current_provider="edge",
+            primary_provider="mixed_tts",
+            fallback_active=True,
+            reason="Runtime TTS fallback: azure=provider_error:TimeoutError",
+        )
+        req = _fake_request(app)
+
+        snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["health_explanation"] == "Fallback active: Edge TTS"
+        assert snap["providers"]["tts_provider"]["fallback_active"] is True
+        assert "cloud voice route had trouble" in snap["providers"]["tts_provider"]["switch_reason"].lower()
+        assert "TimeoutError" not in snap["providers"]["tts_provider"]["switch_reason"]
+        assert snap["failover_events"][0]["reason"] == snap["providers"]["tts_provider"]["switch_reason"]
+        assert "TimeoutError" not in snap["failover_events"][0]["reason"]
+        assert snap["failover_events"][0]["diagnostic_reason"] == (
+            "Runtime TTS fallback: azure=provider_error:TimeoutError"
+        )
 
     def test_station_on_air_false_when_silence_with_listeners(self):
         app = _make_app()
@@ -1117,7 +1147,7 @@ def test_bridge_health_snapshot_empty_is_healthy():
     assert bh["window_count"] == 0
     assert bh["unhealthy"] is False
     assert bh["last_fire"] is None
-    assert bh["by_type"] == {"drain": 0, "resume": 0, "idle": 0}
+    assert bh["by_type"] == {"drain": 0, "resume": 0, "idle": 0, "continuity": 0}
     assert bh["threshold"] == BRIDGE_HEALTH_THRESHOLD
     assert bh["window_seconds"] == BRIDGE_HEALTH_WINDOW_SECONDS
     assert isinstance(bh["queue_empty_elapsed_s"], float)
@@ -1230,7 +1260,7 @@ def test_bridge_health_snapshot_ignores_events_outside_window():
     assert bh["session_count"] == BRIDGE_HEALTH_THRESHOLD + 1  # lifetime, all fires
     assert bh["window_count"] == 1  # only the fresh one
     assert bh["unhealthy"] is False
-    assert bh["by_type"] == {"drain": 1, "resume": 0, "idle": BRIDGE_HEALTH_THRESHOLD}
+    assert bh["by_type"] == {"drain": 1, "resume": 0, "idle": BRIDGE_HEALTH_THRESHOLD, "continuity": 0}
 
 
 def test_runtime_status_snapshot_includes_bridge_health():
@@ -1263,12 +1293,15 @@ def test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air(
     assert rs["bridge_health"]["unhealthy"] is True
 
 
-def test_runtime_status_snapshot_includes_producer_headroom():
+def test_runtime_status_snapshot_includes_producer_headroom(tmp_path):
     app = _make_app()
     app.state.config.pacing.lookahead_segments = 4
     app.state.queue = asyncio.Queue(maxsize=6)
-    app.state.queue.put_nowait(_queue_segment("A", duration_sec=180.0))
-    app.state.queue.put_nowait(_queue_segment("B", duration_sec=180.0))
+    for title in ("A", "B"):
+        segment = _queue_segment(title, duration_sec=180.0)
+        segment.path = tmp_path / f"{title}.mp3"
+        segment.path.write_bytes(b"ready")
+        app.state.queue.put_nowait(segment)
     app.state.station_state.queued_segments = [
         {"type": "music"},
         {"type": "music"},
@@ -1288,12 +1321,15 @@ def test_runtime_status_snapshot_includes_producer_headroom():
     assert headroom["reason"] == "ready runway"
 
 
-def test_runtime_status_snapshot_producer_headroom_ready_runway():
+def test_runtime_status_snapshot_producer_headroom_ready_runway(tmp_path):
     app = _make_app()
     app.state.config.pacing.lookahead_segments = 4
     app.state.queue = asyncio.Queue(maxsize=6)
     for idx in range(4):
-        app.state.queue.put_nowait(_queue_segment(f"Track {idx}", duration_sec=180.0))
+        segment = _queue_segment(f"Track {idx}", duration_sec=180.0)
+        segment.path = tmp_path / f"track-{idx}.mp3"
+        segment.path.write_bytes(b"ready")
+        app.state.queue.put_nowait(segment)
     app.state.station_state.queued_segments = [
         {"type": "music"},
         {"type": "music"},
@@ -1310,6 +1346,48 @@ def test_runtime_status_snapshot_producer_headroom_ready_runway():
     assert headroom["buffered_audio_sec"] == 720.0
     assert headroom["headroom_ok"] is True
     assert headroom["reason"] == "ready runway"
+
+
+@pytest.mark.parametrize("rejection", ["missing", "zero-byte", "blocklisted", "stale-cue"])
+def test_producer_headroom_never_calls_rejected_runway_ready(tmp_path, rejection):
+    """Admin headroom and Skip use the same last-mile playability fence."""
+    app = _make_app()
+    state = app.state.station_state
+    app.state.queue = asyncio.Queue(maxsize=6)
+    path = tmp_path / f"{rejection}.mp3"
+    if rejection == "zero-byte":
+        path.touch()
+    elif rejection != "missing":
+        path.write_bytes(b"ready")
+    metadata = {"artist": "Artist", "title_only": "Song"}
+    segment_type = SegmentType.MUSIC
+    if rejection == "blocklisted":
+        state.blocklist = {("artist", "song"): {"display": "Artist - Song"}}
+    elif rejection == "stale-cue":
+        segment_type = SegmentType.BANTER
+        metadata = {
+            "listener_session_cue": "companionship",
+            "listener_session_epoch": state.listener_session.epoch + 1,
+        }
+    segment = Segment(
+        type=segment_type,
+        path=path,
+        duration_sec=300.0,
+        metadata=metadata,
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(segment)
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
+        req = _fake_request(app)
+        runtime_health = _runtime_health_snapshot(req)
+        rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
+
+    headroom = rs["producer_headroom"]
+    assert _playable_runway_available(app.state.queue, state) is False
+    assert headroom["buffered_audio_sec"] == 0.0
+    assert headroom["headroom_ok"] is False
+    assert headroom["reason"] == "building runway"
 
 
 def test_continuity_reservation_evicts_only_the_ordinary_tail():
@@ -1362,6 +1440,8 @@ def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_p
         metadata={"continuity_reservation": True, "queue_id": "replacement"},
         ephemeral=False,
     )
+    cue.path.write_bytes(b"ready companionship")
+    replacement.path.write_bytes(b"ready replacement")
     app.state.queue.put_nowait(cue)
     app.state.station_state.queued_segments = [{"id": "cue", "type": "banter"}]
 
@@ -1381,12 +1461,14 @@ def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_p
     assert app.state.queue._unfinished_tasks == 0
 
 
-def test_continuity_reservation_never_trades_long_ready_audio_for_short_clip():
+def test_continuity_reservation_never_trades_long_ready_audio_for_short_clip(tmp_path):
     """Count pressure cannot make listener runway shorter than it was before the guard."""
     app = _make_app()
     app.state.queue = asyncio.Queue(maxsize=3)
     originals = [_queue_segment(f"Long {index}", duration_sec=70.0) for index in range(3)]
-    for segment in originals:
+    for index, segment in enumerate(originals):
+        segment.path = tmp_path / f"long-{index}.mp3"
+        segment.path.write_bytes(b"ready long audio")
         app.state.queue.put_nowait(segment)
     app.state.station_state.queued_segments = [
         {"id": f"long-{index}", "label": segment.metadata["title"]} for index, segment in enumerate(originals)
@@ -1527,7 +1609,9 @@ def test_continuity_reservation_stops_cache_sidecar_reads_at_target(tmp_path):
         _reserve_continuity_runway(app.state, app.state.station_state, app.state.config)
 
     assert metadata_reads.call_count == 2
-    assert app.state.queue.qsize() == 3  # packaged clip + the two candidates needed for 240s
+    # Two cached songs cover the 240s floor on their own; the packaged clip is
+    # the rung below cached music, so it is not queued in front of them.
+    assert app.state.queue.qsize() == 2
 
 
 def test_continuity_reservation_bounds_and_prunes_blocklisted_cache_scan(tmp_path):
@@ -1691,26 +1775,32 @@ def test_runtime_status_projects_and_counts_capacity_exempt_continuity(tmp_path)
     assert rs["producer_headroom"]["headroom_ok"] is True
 
 
-def test_runtime_status_clears_missing_capacity_exempt_continuity(tmp_path):
-    """A deleted cache slot is not advertised or counted as ready audio."""
+def test_runtime_status_hides_missing_slot_without_clearing_it(tmp_path):
+    """A deleted cache slot is not advertised or counted as ready audio — but a
+    read-only /status poll must not clear the reservation itself. Self-heal is a
+    mutation-path responsibility, so a transient stat blip on a poll can't destroy
+    the reserved dead-air safety slot."""
     app = _make_app()
-    app.state.station_state.continuity_slot = Segment(
+    slot = Segment(
         type=SegmentType.MUSIC,
         path=tmp_path / "norm_missing_slot_128k.mp3",
         duration_sec=240.0,
         metadata={"continuity_reservation": True, "audio_source": "norm_cache"},
         ephemeral=False,
     )
+    app.state.station_state.continuity_slot = slot
 
     with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 240):
         req = _fake_request(app)
         runtime_health = _runtime_health_snapshot(req)
         rs = _runtime_status_snapshot(req, runtime_health=runtime_health)
 
+    # Not advertised, not counted as ready audio…
     assert rs["continuity_slot"] is None
     assert rs["producer_headroom"]["continuity_slot_sec"] == 0.0
     assert rs["producer_headroom"]["headroom_ok"] is False
-    assert app.state.station_state.continuity_slot is None
+    # …but the read did not mutate the reservation.
+    assert app.state.station_state.continuity_slot is slot
 
 
 def test_replace_continuity_reservation_supersedes_old_protected_runway_and_slot(tmp_path):
@@ -1799,6 +1889,55 @@ def test_replace_continuity_reservation_preserves_ready_head_and_slot_when_no_au
     assert app.state.station_state.last_enqueued_type is SegmentType.MUSIC
     assert app.state.station_state.continuity_epoch == 8
     assert len(app.state.station_state.queued_segments) == 1
+
+
+def test_failed_replacement_with_no_playable_queue_is_a_noop(tmp_path):
+    """An assetless replacement must not mutate an entirely unusable queue."""
+    app = _make_app()
+    invalid = [_queue_segment(f"Invalid {index}", duration_sec=180.0) for index in range(2)]
+    for index, segment in enumerate(invalid):
+        segment.path = tmp_path / f"invalid_{index}.mp3"
+        app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [{"label": segment.metadata["title"]} for segment in invalid]
+    app.state.station_state.last_enqueued_type = SegmentType.MUSIC
+    app.state.station_state.continuity_epoch = 23
+    before_shadow = copy.deepcopy(app.state.station_state.queued_segments)
+    before_tail_type = app.state.station_state.last_enqueued_type
+    before_discard_bookkeeping = (
+        app.state.station_state.discarded_segments_total,
+        app.state.station_state.discarded_duration_total_sec,
+        app.state.station_state.discarded_unproduced_segments_total,
+        dict(app.state.station_state.discard_by_reason),
+        dict(app.state.station_state.discard_by_type),
+        list(app.state.station_state.discard_events),
+        app.state.station_state.shadow_queue_corrections,
+        app.state.queue._unfinished_tasks,
+    )
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+        )
+
+    assert dropped == 0
+    assert list(app.state.queue._queue) == invalid
+    assert app.state.station_state.queued_segments == before_shadow
+    assert app.state.station_state.continuity_slot is None
+    assert app.state.station_state.continuity_epoch == 23
+    assert app.state.station_state.last_enqueued_type is before_tail_type
+    assert (
+        app.state.station_state.discarded_segments_total,
+        app.state.station_state.discarded_duration_total_sec,
+        app.state.station_state.discarded_unproduced_segments_total,
+        dict(app.state.station_state.discard_by_reason),
+        dict(app.state.station_state.discard_by_type),
+        list(app.state.station_state.discard_events),
+        app.state.station_state.shadow_queue_corrections,
+        app.state.queue._unfinished_tasks,
+    ) == before_discard_bookkeeping
 
 
 def test_failed_replacement_uses_valid_slot_as_only_runway_and_advances_epoch_only_for_queue_mutation(tmp_path):
@@ -1920,6 +2059,443 @@ def test_replace_continuity_reservation_promotes_first_playable_segment_past_mis
     assert list(app.state.queue._queue) == [playable]
     assert app.state.station_state.continuity_epoch == 12
     assert len(app.state.station_state.queued_segments) == 1
+
+
+def test_companionship_cue_is_playable_runway_only_while_current_and_queued(tmp_path):
+    """The cutover predicate must match the playback loop's cue fence."""
+    app = _make_app()
+    now = [0.0]
+    session = ListenerSession(monotonic=lambda: now[0])
+    session.observe_active_count(1, now=0.0)
+    now[0] = 1_800.0
+    claim = session.claim_companionship()
+    assert claim is not None
+    assert session.mark_companionship_queued(claim.epoch) is True
+    app.state.station_state.listener_session = session
+
+    cue_path = tmp_path / "companionship_runway.mp3"
+    cue_path.write_bytes(b"cue")
+    cue = Segment(
+        type=SegmentType.BANTER,
+        path=cue_path,
+        duration_sec=5.0,
+        metadata={
+            "listener_session_cue": "companionship",
+            "listener_session_epoch": claim.epoch,
+        },
+        ephemeral=False,
+    )
+
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is True
+
+    cue.metadata["listener_session_epoch"] = True
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is False
+    cue.metadata["listener_session_epoch"] = claim.epoch
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is True
+
+    assert session.mark_companionship_consumed(claim.epoch) is True
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is False
+
+    session.observe_active_count(0, now=1_800.0)
+    now[0] = 2_400.0
+    session.observe_active_count(1, now=2_400.0)
+
+    assert session.epoch == claim.epoch + 1
+    assert _segment_is_immediately_playable(app.state.station_state, cue) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason",
+    [GenerationWasteReason.OPERATOR_PURGE, GenerationWasteReason.OPERATOR_BAN],
+)
+async def test_discard_unplayable_non_cue_prefix_preserves_operator_reason(tmp_path, reason):
+    """Ordinary rejected audio keeps the Skip/Ban reason while exposing safe runway."""
+    app = _make_app()
+    state = app.state.station_state
+    blocked_path = tmp_path / "blocked-prefix.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "blocked-prefix",
+            "artist": "Blocked Artist",
+            "title_only": "Blocked Song",
+        },
+        ephemeral=False,
+    )
+    safe_path = tmp_path / "safe-survivor.mp3"
+    safe_path.write_bytes(b"safe")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-survivor",
+            "artist": "Safe Artist",
+            "title_only": "Safe Song",
+        },
+        ephemeral=False,
+    )
+    for segment in (blocked, safe):
+        app.state.queue.put_nowait(segment)
+    blocked_shadow = {"id": "blocked-prefix", "type": "music", "label": "Blocked Song"}
+    safe_shadow = {"id": "safe-survivor", "type": "music", "label": "Safe Song"}
+    state.queued_segments = [blocked_shadow, safe_shadow]
+    state.blocklist = {("blocked artist", "blocked song"): {"display": "Blocked Artist - Blocked Song"}}
+    state.continuity_epoch = 7
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=reason)
+
+    assert dropped == 1
+    assert list(app.state.queue._queue) == [safe]
+    assert state.queued_segments == [safe_shadow]
+    assert state.discard_by_reason[reason] == 1
+    assert state.discard_by_reason.get(GenerationWasteReason.LISTENER_SESSION_STALE, 0) == 0
+    assert state.continuity_epoch == 8
+    assert app.state.queue._unfinished_tasks == 1
+    assert app.state.queue.get_nowait() is safe
+    app.state.queue.task_done()
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+def test_discard_unplayable_prefix_clears_exposed_unplayable_music_tail(tmp_path):
+    """A surviving unplayable MUSIC tail must not stay a speech-bed source.
+
+    Trimming the leading unplayable prefix can leave a still-queued but
+    unplayable music segment as the new tail (a track banned or cache-evicted
+    while sitting mid-queue). _rebuild_queue_shadow only sets last_enqueued_type
+    naively, so the prefix-discard must fail closed the same way ban / arbitrary
+    removal do, or the next speech segment beds a stale/discarded song.
+    """
+    app = _make_app()
+    state = app.state.station_state
+    blocked_head_path = tmp_path / "blocked-head.mp3"
+    blocked_head_path.write_bytes(b"blocked-head")
+    blocked_head = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_head_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-head", "artist": "Head Artist", "title_only": "Head Song"},
+        ephemeral=False,
+    )
+    safe_path = tmp_path / "safe-survivor.mp3"
+    safe_path.write_bytes(b"safe")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "safe-survivor", "artist": "Safe Artist", "title_only": "Safe Song"},
+        ephemeral=False,
+    )
+    blocked_tail_path = tmp_path / "blocked-tail.mp3"
+    blocked_tail_path.write_bytes(b"blocked-tail")
+    blocked_tail = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_tail_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-tail", "artist": "Tail Artist", "title_only": "Tail Song"},
+        ephemeral=False,
+    )
+    for segment in (blocked_head, safe, blocked_tail):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "blocked-head", "type": "music", "label": "Head Song"},
+        {"id": "safe-survivor", "type": "music", "label": "Safe Song"},
+        {"id": "blocked-tail", "type": "music", "label": "Tail Song"},
+    ]
+    state.blocklist = {
+        ("head artist", "head song"): {"display": "Head Artist - Head Song"},
+        ("tail artist", "tail song"): {"display": "Tail Artist - Tail Song"},
+    }
+    # Simulate the naive tail bookkeeping the mutation would otherwise leave.
+    state.last_music_file = blocked_tail_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    # Only the leading unplayable head is dropped; the blocked tail survives
+    # in the queue but must not leave MUSIC adjacency behind it.
+    assert dropped == 1
+    assert list(app.state.queue._queue) == [safe, blocked_tail]
+    assert state.last_enqueued_type is None
+    assert _adjacent_music_source(state) is None
+
+
+def test_discard_unplayable_prefix_keeps_playable_tail_adjacency(tmp_path):
+    """An unchanged, playable surviving tail keeps its existing bed eligibility."""
+    app = _make_app()
+    state = app.state.station_state
+    stale_cue_path = tmp_path / "stale-cue.mp3"
+    stale_cue_path.write_bytes(b"cue")
+    stale_cue = Segment(
+        type=SegmentType.BANTER,
+        path=stale_cue_path,
+        duration_sec=12.0,
+        metadata={
+            "queue_id": "stale-cue",
+            "listener_session_cue": "companionship",
+            # An epoch that no longer matches the live session → unplayable.
+            "listener_session_epoch": 999,
+        },
+        ephemeral=False,
+    )
+    safe_path = tmp_path / "safe-tail.mp3"
+    safe_path.write_bytes(b"safe")
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "safe-tail", "artist": "Safe Artist", "title_only": "Safe Song"},
+        ephemeral=False,
+    )
+    for segment in (stale_cue, safe):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "stale-cue", "type": "banter", "label": "Companionship"},
+        {"id": "safe-tail", "type": "music", "label": "Safe Song"},
+    ]
+    assert _segment_is_immediately_playable(state, stale_cue) is False
+    state.last_music_file = safe_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert dropped == 1
+    assert list(app.state.queue._queue) == [safe]
+    # Tail unchanged and playable: its clean-bed bookkeeping stays authoritative.
+    assert state.last_enqueued_type is SegmentType.MUSIC
+    assert _adjacent_music_source(state) == safe_path
+
+
+def test_playable_runway_check_readonly_preserves_missing_slot(tmp_path):
+    """A read-only runway check must never clear the reserved continuity slot.
+
+    _public_status_payload evaluates skip_would_bridge on a listener GET; a
+    transient stat blip on the slot file must not let that poll clear the
+    reserved dead-air safety slot. The mutating callers keep the self-heal.
+    """
+    app = _make_app()
+    state = app.state.station_state
+    missing_slot_path = tmp_path / "vanished-slot.mp3"  # deliberately never created
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=missing_slot_path,
+        duration_sec=180.0,
+        metadata={"artist": "Slot Artist", "title_only": "Slot Song"},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    # Read-only: no runway, but the slot pointer must survive.
+    assert _playable_runway_available(app.state.queue, state, self_heal=False) is False
+    assert state.continuity_slot is slot
+
+    # Mutating default path still self-heals a genuinely dangling slot.
+    assert _playable_runway_available(app.state.queue, state) is False
+    assert state.continuity_slot is None
+
+
+def test_discard_unplayable_prefix_all_unplayable_clears_music_adjacency(tmp_path):
+    """Draining an entirely-unplayable queue (empty survivors) clears MUSIC adjacency."""
+    app = _make_app()
+    state = app.state.station_state
+    first_path = tmp_path / "blocked-a.mp3"
+    first_path.write_bytes(b"a")
+    second_path = tmp_path / "blocked-b.mp3"
+    second_path.write_bytes(b"b")
+    first = Segment(
+        type=SegmentType.MUSIC,
+        path=first_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-a", "artist": "A Artist", "title_only": "A Song"},
+        ephemeral=False,
+    )
+    second = Segment(
+        type=SegmentType.MUSIC,
+        path=second_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "blocked-b", "artist": "B Artist", "title_only": "B Song"},
+        ephemeral=False,
+    )
+    for segment in (first, second):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "blocked-a", "type": "music", "label": "A Song"},
+        {"id": "blocked-b", "type": "music", "label": "B Song"},
+    ]
+    state.blocklist = {
+        ("a artist", "a song"): {"display": "A Artist - A Song"},
+        ("b artist", "b song"): {"display": "B Artist - B Song"},
+    }
+    state.last_music_file = second_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert dropped == 2
+    assert list(app.state.queue._queue) == []
+    assert state.last_enqueued_type is None
+    assert _adjacent_music_source(state) is None
+
+
+def test_continuity_slot_status_readonly_preserves_missing_slot(tmp_path):
+    """The admin /status slot projection must not clear the reserved slot on a poll."""
+    from mammamiradio.web.streamer import _continuity_slot_status
+
+    app = _make_app()
+    state = app.state.station_state
+    missing_slot_path = tmp_path / "vanished-slot.mp3"  # deliberately never created
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=missing_slot_path,
+        duration_sec=180.0,
+        metadata={"artist": "Slot Artist", "title_only": "Slot Song"},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    status = _continuity_slot_status(state)
+
+    # A dead slot is hidden from the projection (not advertised as a phantom
+    # 0-duration entry), but the reservation itself is left intact for a mutation
+    # path to reconcile — a read never clears it.
+    assert status is None
+    assert state.continuity_slot is slot
+
+
+def test_apply_ban_clears_lone_blocked_tail_as_speech_bed(tmp_path):
+    """Purging the final queued song must sever its stale bed eligibility."""
+    app = _make_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    blocked_path = tmp_path / "blocked-tail.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={"artist": "Blocked Artist", "title_only": "Blocked Song"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(blocked)
+    state.last_music_file = blocked_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    result = _apply_ban(
+        state,
+        app.state.config,
+        [Track(title="Blocked Song", artist="Blocked Artist", duration_ms=180_000)],
+        queue=app.state.queue,
+    )
+
+    assert result["purged"] == 1
+    assert app.state.queue.empty()
+    assert state.last_enqueued_type is None
+    assert _adjacent_music_source(state) is None
+
+
+def test_apply_ban_fails_closed_on_exposed_ordinary_music_tail(tmp_path):
+    """An exposed ordinary (non-rescue, non-recycled) tail must not reanchor.
+
+    Ordinary rendered music may carry an egress-processed path, so the
+    adjacency gate in _reconcile_queue_tail_adjacency must fail closed even
+    though the newly exposed tail is itself playable and queue-resident.
+    """
+    app = _make_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    ordinary_path = tmp_path / "ordinary-survivor.mp3"
+    ordinary_path.write_bytes(b"ordinary")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={"artist": "Safe Artist", "title_only": "Safe Song"},
+        ephemeral=False,
+    )
+    blocked_path = tmp_path / "blocked-tail.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={"artist": "Blocked Artist", "title_only": "Blocked Song"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(ordinary)
+    app.state.queue.put_nowait(blocked)
+    state.last_music_file = blocked_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    with patch(
+        "mammamiradio.scheduling.producer.load_track_metadata",
+        return_value={"artist": "Safe Artist", "title": "Safe Song"},
+    ):
+        result = _apply_ban(
+            state,
+            app.state.config,
+            [Track(title="Blocked Song", artist="Blocked Artist", duration_ms=180_000)],
+            queue=app.state.queue,
+        )
+
+        assert result["purged"] == 1
+        assert list(app.state.queue._queue) == [ordinary]
+        assert state.last_enqueued_type is None
+        assert _adjacent_music_source(state) is None
+
+
+def test_apply_ban_reanchors_exposed_protected_music_tail(tmp_path):
+    """An exposed cache-rescue survivor remains a safe, known-clean bed source."""
+    app = _make_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    protected_path = tmp_path / "protected-survivor.mp3"
+    protected_path.write_bytes(b"protected")
+    protected = Segment(
+        type=SegmentType.MUSIC,
+        path=protected_path,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Safe Artist",
+            "title_only": "Safe Song",
+            "rescue": True,
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    blocked_path = tmp_path / "blocked-tail.mp3"
+    blocked_path.write_bytes(b"blocked")
+    blocked = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        duration_sec=180.0,
+        metadata={"artist": "Blocked Artist", "title_only": "Blocked Song"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(protected)
+    app.state.queue.put_nowait(blocked)
+    state.last_music_file = blocked_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    with patch(
+        "mammamiradio.scheduling.producer.load_track_metadata",
+        return_value={"artist": "Safe Artist", "title": "Safe Song"},
+    ):
+        result = _apply_ban(
+            state,
+            app.state.config,
+            [Track(title="Blocked Song", artist="Blocked Artist", duration_ms=180_000)],
+            queue=app.state.queue,
+        )
+
+        assert result["purged"] == 1
+        assert list(app.state.queue._queue) == [protected]
+        assert state.last_enqueued_type is SegmentType.MUSIC
+        assert state.last_music_file == protected_path
+        assert _adjacent_music_source(state) == protected_path
 
 
 @pytest.mark.parametrize("rejection", ["excluded", "blocklisted"])
@@ -2074,6 +2650,61 @@ def test_continuity_slot_claim_rejects_track_blocklisted_after_reservation(tmp_p
     assert state.continuity_slot is None
 
 
+def test_playable_runway_available_ignores_slot_when_queue_head_is_unplayable(tmp_path):
+    """A ready slot must not greenlight a cut the playback loop won't honor.
+
+    ``run_playback_loop`` consumes the capacity-exempt slot only when the real
+    queue is empty. With a present-but-unplayable head, the loop pulls that head
+    (not the slot), so cutting the current segment would break the illusion. The
+    gate must return False even though the slot itself is ready.
+    """
+    state = StationState()
+    ready_slot_path = tmp_path / "ready_slot.mp3"
+    ready_slot_path.write_bytes(b"slot")
+    state.continuity_slot = Segment(
+        type=SegmentType.BANTER,
+        path=ready_slot_path,
+        duration_sec=4.44,
+        metadata={"title": "Protected continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+
+    queue = asyncio.Queue()
+    unplayable_head = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "missing_head.mp3",  # never written to disk
+        duration_sec=180.0,
+        metadata={"title": "Missing head", "title_only": "Missing head", "artist": "Artist"},
+        ephemeral=False,
+    )
+    queue.put_nowait(unplayable_head)
+
+    assert _playable_runway_available(queue, state) is False
+
+    # Draining the unplayable head lets the ready slot bridge the cut.
+    queue.get_nowait()
+    assert _playable_runway_available(queue, state) is True
+
+
+def test_segment_is_immediately_playable_handles_pathless_segment():
+    """A segment with no path is not playable — it must never crash the gate.
+
+    ``_segment_is_immediately_playable`` runs on the no-await live-control hot
+    path; a raised AttributeError there would surface as a 500 on panic-cut or
+    source-switch instead of degrading to the recovery ladder.
+    """
+    state = StationState()
+    pathless = Segment(
+        type=SegmentType.MUSIC,
+        path=None,  # type: ignore[arg-type]
+        duration_sec=180.0,
+        metadata={"title": "No path", "title_only": "No path", "artist": "Artist"},
+        ephemeral=False,
+    )
+
+    assert _segment_is_immediately_playable(state, pathless) is False
+
+
 def test_continuity_reservation_uses_distinct_indexed_cache_tracks_to_reach_target(tmp_path):
     app = _make_app()
     first = tmp_path / "norm_first_128k.mp3"
@@ -2086,7 +2717,7 @@ def test_continuity_reservation_uses_distinct_indexed_cache_tracks_to_reach_targ
         _reserve_continuity_runway(app.state, app.state.station_state, app.state.config, replace_queue=True)
 
     queued = list(app.state.queue._queue)
-    assert [segment.path for segment in queued][1:] == [first, second]
+    assert [segment.path for segment in queued] == [first, second]
     assert sum(segment.duration_sec for segment in queued) >= 240
     assert app.state.station_state.last_enqueued_type == SegmentType.MUSIC
     assert app.state.station_state.last_music_file == second
@@ -2461,3 +3092,170 @@ def test_runtime_status_snapshot_includes_generation_waste():
 
     assert "generation_waste" in rs
     assert rs["generation_waste"]["total_segments"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Continuity telemetry must report what a LISTENER got, not what a control
+# reserved. Reservations are precautionary and mostly never air; counting them
+# trips BRIDGE_HEALTH_THRESHOLD (2 per 30 min) after two ordinary admin actions
+# and tells the operator the station is "running on rescue" while it plays fine.
+# ---------------------------------------------------------------------------
+
+
+def test_reserving_continuity_does_not_report_the_station_as_running_on_rescue(tmp_path):
+    """Three ordinary admin actions must leave Queue rescue health untouched."""
+    from mammamiradio.web.streamer import BRIDGE_HEALTH_THRESHOLD
+
+    app = _make_app()
+    state = app.state.station_state
+    for index in range(3):
+        path = tmp_path / f"norm_track_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        state.immediate_audio_index[path] = 180.0
+
+    for _ in range(BRIDGE_HEALTH_THRESHOLD + 1):
+        state.continuity_slot = None
+        _reserve_continuity_runway(app.state, state, app.state.config, replace_queue=True)
+
+    assert state.bridge_fires_total == 0, "a reservation is not a bridge fire — nothing aired yet"
+    assert state.bridge_fires_by_type["continuity"] == 0
+    assert _bridge_health_snapshot(state)["unhealthy"] is False
+
+
+def test_continuity_audio_reports_a_bridge_fire_once_it_actually_airs(tmp_path):
+    """The honest signal: reserved safety audio reaching a listener."""
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air
+
+    state = StationState()
+    cached = tmp_path / "norm_rescue_128k.mp3"
+    cached.write_bytes(b"cached")
+
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=cached,
+        metadata={"title": "Ordinary song", "audio_source": "youtube"},
+    )
+    _record_continuity_air(state, ordinary)
+    assert state.bridge_fires_total == 0, "normal rotation audio is not a bridge"
+
+    reserved = Segment(
+        type=SegmentType.MUSIC,
+        path=cached,
+        metadata={
+            "title": "Cached music",
+            "audio_source": "norm_cache",
+            _CONTINUITY_RESERVATION_FLAG: True,
+        },
+    )
+    _record_continuity_air(state, reserved)
+
+    assert state.bridge_fires_total == 1
+    assert state.bridge_fires_by_type["continuity"] == 1
+    assert state.bridge_events[-1]["source"] == "norm_cache"
+
+
+def test_one_control_reserving_several_tracks_reports_one_bridge_fire(tmp_path):
+    """One operator action is one bridge, however many segments it reserved.
+
+    A single live control can reserve two or three tracks under one
+    ``continuity_reservation_id``; they air back to back. Reporting each would
+    cross BRIDGE_HEALTH_THRESHOLD from a single admin action — the exact false
+    red `_record_continuity_air` was written to avoid. The dedupe that prevents
+    it had no test at all: every prior case left ``reservation_id`` empty, so the
+    branch never executed.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air
+
+    state = StationState()
+
+    def _reserved(name: str, reservation_id: str) -> Segment:
+        path = tmp_path / name
+        path.write_bytes(b"cached")
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=path,
+            metadata={
+                "title": name,
+                "audio_source": "norm_cache",
+                _CONTINUITY_RESERVATION_FLAG: True,
+                "continuity_reservation_id": reservation_id,
+            },
+        )
+
+    for name in ("norm_a_128k.mp3", "norm_b_128k.mp3", "norm_c_128k.mp3"):
+        _record_continuity_air(state, _reserved(name, "control-1"))
+
+    assert state.bridge_fires_total == 1, "three reserved tracks, one operator action, one bridge"
+    assert state.bridge_fires_by_type["continuity"] == 1
+    assert state.last_continuity_air_reservation_id == "control-1"
+
+    # A genuinely separate control is a separate bridge.
+    _record_continuity_air(state, _reserved("norm_d_128k.mp3", "control-2"))
+    assert state.bridge_fires_total == 2
+    assert state.bridge_fires_by_type["continuity"] == 2
+    assert state.last_continuity_air_reservation_id == "control-2"
+
+
+def test_continuity_fires_do_not_flip_the_rescue_health_card(tmp_path):
+    """Aired continuity audio stays out of the "running on rescue" alarm.
+
+    `_bridge_health_snapshot` windows bridge_events with no type filter, so every
+    new bridge type feeds the alarm by default. Continuity fires on ordinary
+    operator activity, not on the producer falling behind — counting it told the
+    operator a healthy station was in trouble after two admin actions. It stays
+    visible in session_count and by_type; only the alarm is scoped.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, BRIDGE_HEALTH_THRESHOLD, _record_continuity_air
+
+    state = StationState()
+    for index in range(BRIDGE_HEALTH_THRESHOLD + 2):
+        path = tmp_path / f"norm_control_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        _record_continuity_air(
+            state,
+            Segment(
+                type=SegmentType.MUSIC,
+                path=path,
+                metadata={
+                    "title": f"Control {index}",
+                    "audio_source": "norm_cache",
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": f"control-{index}",
+                },
+            ),
+        )
+
+    snapshot = _bridge_health_snapshot(state)
+    assert state.bridge_fires_by_type["continuity"] == BRIDGE_HEALTH_THRESHOLD + 2, "still counted honestly"
+    assert snapshot["session_count"] == BRIDGE_HEALTH_THRESHOLD + 2
+    assert snapshot["window_count"] == 0, "continuity must not feed the rolling alarm window"
+    assert snapshot["unhealthy"] is False
+    assert "bridge_frequency" not in snapshot["unhealthy_reasons"]
+
+    # A real producer bridge in the same window still trips it.
+    for _ in range(BRIDGE_HEALTH_THRESHOLD):
+        state.record_bridge_fire("drain", "norm_cache")
+    tripped = _bridge_health_snapshot(state)
+    assert tripped["window_count"] == BRIDGE_HEALTH_THRESHOLD
+    assert "bridge_frequency" in tripped["unhealthy_reasons"]
+
+
+def test_continuity_air_telemetry_never_raises_into_the_stream():
+    """Best-effort: a telemetry bug must never become an audio bug."""
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air
+
+    state = StationState()
+    broken = Segment(type=SegmentType.MUSIC, path=Path("/x.mp3"))
+    broken.metadata = "not a dict"  # type: ignore[assignment]
+    _record_continuity_air(state, broken)  # must not raise
+
+    class _Boom(StationState):
+        def record_bridge_fire(self, *_args, **_kwargs):
+            raise RuntimeError("telemetry backend gone")
+
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/x.mp3"),
+        metadata={"audio_source": "norm_cache", _CONTINUITY_RESERVATION_FLAG: True},
+    )
+    _record_continuity_air(_Boom(), seg)  # must not raise

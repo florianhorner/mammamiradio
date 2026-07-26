@@ -32,3 +32,7 @@ htmlcov/
 
 # Playwright QA scratch — ad-hoc visual-capture scripts + screenshots, regenerable, never committed.
 output/
+
+# Contract-window marker — created only by Florian to open a contract
+# maintenance window (see CONTRACT.md). Never committed.
+.contract-window

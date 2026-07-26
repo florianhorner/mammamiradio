@@ -129,6 +129,29 @@ HA Supervisor
         +-- tmp/     (rendered segments — ephemeral)
 ```
 
+## Backups and restores
+
+Home Assistant can back up the Mamma Mi Radio app while the station keeps
+playing.
+
+- **Keeps playing:** the app does not stop for a backup.
+- **Stays with you:** app settings, provider keys, station memory and state,
+  retained history, and files stored in `/data/music`.
+- **Builds again:** temporary renders, downloaded and normalized cache audio,
+  share clips, and restart handoff audio. The restored station may take a little
+  longer to refill these caches on its first run.
+
+Files in `/data/music` are kept as storage, but this app version does not use
+that folder as a local music library.
+
+A hot backup copies retained files while the station is active, so it is not a
+copy taken from one single exact moment. After a restore, confirm
+your settings and key presence without sharing the keys, then let the app
+rebuild its audio cache and wait for the station to become ready. If the app
+cannot start or its station memory is missing, keep that restored copy stopped
+and restore a known-good backup instead of repeatedly restarting it or editing
+its files by hand.
+
 ## Startup sequence
 
 1. `run.sh` reads `/data/options.json`, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
