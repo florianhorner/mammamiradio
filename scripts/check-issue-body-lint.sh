@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# PR-body editorial lint: applies the shared LINT_PATTERNS to a PR body file.
+# Issue-body editorial lint: applies the shared LINT_PATTERNS to an issue body file.
 #
-# Reuses the same patterns banned in public changelogs. Catches internal sprint
-# labels, AI tool provenance, planning vocabulary, contributor archaeology, and
-# process narrative in pull-request descriptions.
+# Same patterns banned in public changelogs and PR bodies. Issues on the public
+# tracker are product copy: internal sprint labels, agent tool provenance,
+# planning vocabulary, workspace archaeology, and process narrative belong in a
+# private durable system, never in a public issue.
 #
-# Run locally:    bash scripts/check-pr-body-lint.sh <body-file>
-# CI invocation:  see .github/workflows/pr-body-lint.yml
-# Local hook:     ~/.claude/hooks/verify-proof-block.sh chains this in when present
-#                 in the project's scripts/ directory at gh pr create time.
+# Scope: maintainer-authored issues only. Outside contributors' bug reports are
+# never linted (the CI workflow carries the author guard).
+#
+# Run locally:    bash scripts/check-issue-body-lint.sh <body-file>
+# CI invocation:  see .github/workflows/issue-body-lint.yml
+# Local hook:     ~/.claude/hooks/verify-issue-body.sh chains this in when present
+#                 in the project's scripts/ directory at gh issue create/edit time.
 
 set -euo pipefail
 
@@ -59,7 +63,7 @@ for PAT in "${LINT_PATTERNS[@]}"; do
     exit 2
   fi
   while IFS= read -r line; do
-    echo "FAIL: PR body: $line  [pattern: $PAT]"
+    echo "FAIL: issue body: $line  [pattern: $PAT]"
     HITS=$((HITS + 1))
   done <<< "$MATCHES"
   FAIL=1
@@ -67,12 +71,13 @@ done
 
 if [ "$FAIL" -ne 0 ]; then
   echo ""
-  echo "Found $HITS editorial violation(s). PR bodies must not contain internal"
-  echo "sprint labels, agent tool provenance, planning vocabulary, contributor"
-  echo "archaeology, or process narrative. Rewrite the body to describe"
-  echo "user-visible outcomes only. See CLAUDE.md \"Changelog editorial boundary\"."
+  echo "Found $HITS editorial violation(s). Public issues must not contain internal"
+  echo "sprint labels, agent tool provenance, planning vocabulary, workspace"
+  echo "archaeology, or process narrative. Describe the user-visible problem and"
+  echo "the desired outcome only; internal context goes to the private durable"
+  echo "system instead. See the project editorial boundary docs."
   exit 1
 fi
 
-echo "PR body lint clean."
+echo "Issue body lint clean."
 exit 0

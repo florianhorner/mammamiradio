@@ -1,0 +1,25 @@
+issue-body lint verification — 2026-07-26T10:45:25Z
+
+PASS: clean user-facing body clean
+PASS: missing arg exits 2
+PASS: missing body file exits 2
+PASS: git stash ref blocked
+PASS: local-only blocked
+PASS: maintainer machine reference blocked
+PASS: maintainer machine reference (typographic apostrophe) blocked
+PASS: abandoned-work narrative blocked
+PASS: review-squad lingo blocked
+PASS: findings tallies blocked
+PASS: untracked-code archaeology blocked
+PASS: principles vocabulary (plural) blocked
+PASS: shared sprint-label pattern blocked
+PASS: violation on later line blocked
+PASS: missing pattern source exits 2
+
+All issue-body lint cases passed.
+
+make check (full suite): exit 0 — 5636 passed, 3 skipped, 21 deselected; coverage 92.50% (floor 92.0%), all per-module floors held; ruff lint+format clean; mypy clean
+shellcheck scripts/*.sh and tests/workflows/test_issue_body_lint.sh: clean
+changelog lint on both real changelogs with extended patterns: clean
+pr-body lint exit-code smoke: violating fixture rc=1, clean fixture rc=0
+workflow actions pinned to immutable SHAs (checkout v7.0.0, github-script v9.0.0)
