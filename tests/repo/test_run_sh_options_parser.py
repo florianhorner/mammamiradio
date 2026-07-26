@@ -29,6 +29,16 @@ import threading
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+
+from mammamiradio.core.config import (
+    ADDON_MAX_CACHE_SIZE_MB,
+    MAX_MAX_CACHE_SIZE_MB,
+    MIN_MAX_CACHE_SIZE_MB,
+    _apply_addon_options,
+    _env_clamped_int,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_SH = REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh"
 STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
@@ -564,7 +574,7 @@ class _SupervisorStub(http.server.BaseHTTPRequestHandler):
     stored_options: ClassVar[dict] = {}
     seen_auth: ClassVar[list[str]] = []
 
-    def do_GET(self):
+    def do_GET(self):  # noqa: N802, RUF100 - BaseHTTPRequestHandler override
         type(self).seen_auth.append(self.headers.get("Authorization", ""))
         body = json.dumps({"result": "ok", "data": {"options": type(self).stored_options}}).encode()
         self.send_response(200)
@@ -742,6 +752,85 @@ def test_parser_cache_mb_invalid_value_defaults_to_addon_default():
         rc, stdout, _ = _run_parser({"norm_cache_mb": value})
         assert rc == 0, f"parser must not fail on norm_cache_mb={value!r}"
         assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
+
+
+_CACHE_MB_CONTRACT_MATRIX = [
+    ("zero", 0, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("negative-five", -5, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("negative-one", -1, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("one", 1, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("fifty", 50, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("one-hundred-ninety-nine", 199, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("minimum", 200, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("within-range", 2200, 2200, 2200, False),
+    ("above-maximum", 8001, MAX_MAX_CACHE_SIZE_MB, MAX_MAX_CACHE_SIZE_MB, False),
+    ("boolean-true", True, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("boolean-false", False, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("null", None, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("garbage-string", "garbage", ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    # Supervisor coerces and validates supported option values before boot, so
+    # these raw JSON types cannot reach either ingestion path in production.
+    ("numeric-string", "3000", 3000, ADDON_MAX_CACHE_SIZE_MB, True),
+    ("whitespace-numeric-string", "  2200  ", 2200, ADDON_MAX_CACHE_SIZE_MB, True),
+    ("float", 2000.5, 2000, ADDON_MAX_CACHE_SIZE_MB, True),
+]
+
+
+@pytest.mark.parametrize(
+    "_case_id, option_value, expected_run_sh, expected_direct, accepted_divergence",
+    _CACHE_MB_CONTRACT_MATRIX,
+    ids=[case[0] for case in _CACHE_MB_CONTRACT_MATRIX],
+)
+def test_cache_mb_ingestion_contract_matrix(
+    _case_id: str,
+    option_value: object,
+    expected_run_sh: int,
+    expected_direct: int,
+    accepted_divergence: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Pin effective parity and the accepted unsupported coercion differences."""
+    cache_env = "MAMMAMIRADIO_MAX_CACHE_MB"
+    options_path = tmp_path / "options.json"
+    secrets_path = tmp_path / "secrets.env"
+    os.environ.pop(cache_env, None)
+
+    try:
+        rc, stdout, _ = _run_parser({"norm_cache_mb": option_value})
+        assert rc == 0
+        os.environ[cache_env] = _parse_exports(stdout)[cache_env]
+        run_sh_effective = _env_clamped_int(
+            cache_env,
+            default=ADDON_MAX_CACHE_SIZE_MB,
+            minimum=MIN_MAX_CACHE_SIZE_MB,
+            maximum=MAX_MAX_CACHE_SIZE_MB,
+        )
+
+        os.environ.pop(cache_env, None)
+        options_path.write_text(json.dumps({"norm_cache_mb": option_value}))
+        secrets_path.write_text("")
+        path_fixtures = {
+            "/data/options.json": options_path,
+            "/config/secrets.env": secrets_path,
+        }
+        monkeypatch.setattr(
+            "mammamiradio.core.config.Path",
+            lambda path: path_fixtures[str(path)],
+        )
+        _apply_addon_options()
+        direct_effective = _env_clamped_int(
+            cache_env,
+            default=ADDON_MAX_CACHE_SIZE_MB,
+            minimum=MIN_MAX_CACHE_SIZE_MB,
+            maximum=MAX_MAX_CACHE_SIZE_MB,
+        )
+
+        assert run_sh_effective == expected_run_sh
+        assert direct_effective == expected_direct
+        assert (run_sh_effective != direct_effective) is accepted_divergence
+    finally:
+        os.environ.pop(cache_env, None)
 
 
 def test_parser_cache_mb_does_not_break_sibling_exports():
