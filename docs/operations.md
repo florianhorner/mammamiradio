@@ -79,8 +79,12 @@ hardware, so a small cache makes listeners wait more often.
 
 `MAMMAMIRADIO_MAX_CACHE_MB` sets the ceiling. Standalone defaults to 500 MB. The
 add-on defaults to 1500 MB and exposes the **Music cache size (MB)** option
-(`norm_cache_mb`). Values outside 200-8000 are clamped. A malformed value uses the
-default and logs a warning, so config loading can complete.
+(`norm_cache_mb`). Explicit environment values outside 200-8000 are clamped; a
+malformed environment value uses the applicable default. Either correction logs
+a warning so config loading can complete. Supervisor validates the add-on option
+as an integer in that range before the container starts. If unsupported
+non-positive add-on input nevertheless reaches an internal ingestion path, both
+`run.sh` and the direct fallback silently use the 1500 MB add-on default.
 
 Size the cache for the rotation. A 200-track Jamendo rotation needs about 1 GB.
 Below that, LRU eviction can remove tracks before the rotation returns, which
