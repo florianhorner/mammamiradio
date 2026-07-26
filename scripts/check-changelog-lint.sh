@@ -28,14 +28,22 @@ for FILE in "${CHANGELOGS[@]}"; do
     continue
   fi
   for PAT in "${LINT_PATTERNS[@]}"; do
-    if grep -nE "$PAT" "$FILE" 2>/dev/null | grep -q .; then
-      MATCHES=$(grep -nE "$PAT" "$FILE")
-      while IFS= read -r line; do
-        echo "FAIL: $FILE: $line  [pattern: $PAT]"
-        HITS=$((HITS + 1))
-      done <<< "$MATCHES"
-      FAIL=1
+    # grep exit codes: 0 = match, 1 = no match, >1 = error. Only 1 may pass
+    # silently — a pattern or read error must fail loudly, never read as clean.
+    GREP_RC=0
+    MATCHES=$(grep -nE "$PAT" "$FILE") || GREP_RC=$?
+    if [ "$GREP_RC" -eq 1 ]; then
+      continue
     fi
+    if [ "$GREP_RC" -gt 1 ]; then
+      echo "ERROR: pattern '$PAT' failed against '$FILE' (grep exit $GREP_RC)." >&2
+      exit 2
+    fi
+    while IFS= read -r line; do
+      echo "FAIL: $FILE: $line  [pattern: $PAT]"
+      HITS=$((HITS + 1))
+    done <<< "$MATCHES"
+    FAIL=1
   done
 done
 

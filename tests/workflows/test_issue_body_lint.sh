@@ -23,9 +23,12 @@ trap 'rm -rf "$TMPDIR_T"' EXIT
 BODY="$TMPDIR_T/body.md"
 
 expect_block() { # $1=case name, body already written
-  if bash "$SCRIPT" "$BODY" >/dev/null 2>&1; then
-    fail "$1: should be blocked, was allowed"
-  fi
+  # Exactly 1 — a usage error (2) or a broken checker must not count as blocked.
+  set +e
+  bash "$SCRIPT" "$BODY" >/dev/null 2>&1
+  rc=$?
+  set -e
+  (( rc == 1 )) || fail "$1: expected exit 1 (blocked), got ${rc}"
   pass "$1 blocked"
 }
 
@@ -70,6 +73,9 @@ expect_block "local-only"
 
 echo "everything sits on Florian's machine right now" > "$BODY"
 expect_block "maintainer machine reference"
+
+echo "everything sits on Florian’s machine right now" > "$BODY"
+expect_block "maintainer machine reference (typographic apostrophe)"
 
 echo 'this records an abandoned attempt at a safety layer' > "$BODY"
 expect_block "abandoned-work narrative"

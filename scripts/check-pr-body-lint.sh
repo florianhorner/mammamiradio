@@ -32,14 +32,22 @@ FAIL=0
 HITS=0
 
 for PAT in "${LINT_PATTERNS[@]}"; do
-  if grep -nE "$PAT" "$BODY_FILE" 2>/dev/null | grep -q .; then
-    MATCHES=$(grep -nE "$PAT" "$BODY_FILE")
-    while IFS= read -r line; do
-      echo "FAIL: PR body: $line  [pattern: $PAT]"
-      HITS=$((HITS + 1))
-    done <<< "$MATCHES"
-    FAIL=1
+  # grep exit codes: 0 = match, 1 = no match, >1 = error. Only 1 may pass
+  # silently — a pattern or read error must fail loudly, never read as clean.
+  GREP_RC=0
+  MATCHES=$(grep -nE "$PAT" "$BODY_FILE") || GREP_RC=$?
+  if [ "$GREP_RC" -eq 1 ]; then
+    continue
   fi
+  if [ "$GREP_RC" -gt 1 ]; then
+    echo "ERROR: pattern '$PAT' failed against '$BODY_FILE' (grep exit $GREP_RC)." >&2
+    exit 2
+  fi
+  while IFS= read -r line; do
+    echo "FAIL: PR body: $line  [pattern: $PAT]"
+    HITS=$((HITS + 1))
+  done <<< "$MATCHES"
+  FAIL=1
 done
 
 if [ "$FAIL" -ne 0 ]; then

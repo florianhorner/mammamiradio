@@ -69,7 +69,7 @@ LINT_PATTERNS=(
   # tracker: post-mortem material about local machine state and review runs)
   'stash@\{'                      # git stash refs (stash@{0})
   '\blocal-only\b'
-  "\\bFlorian'?s( local)? machine\\b"
+  "\\bFlorian['’]?s( local)? machine\\b"
   '\babandoned (attempt|stash|design|branch)'
   '\badversarial(ly)? verif'      # review-squad lingo (adversarially verified)
   '\bfindings (raised|confirmed|refuted)\b'
