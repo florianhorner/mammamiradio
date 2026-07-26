@@ -1,0 +1,21 @@
+issue-body lint self-test — 2026-07-26T01:58:05Z
+
+PASS: clean user-facing body clean
+PASS: missing arg exits 2
+PASS: missing body file exits 2
+PASS: git stash ref blocked
+PASS: local-only blocked
+PASS: maintainer machine reference blocked
+PASS: abandoned-work narrative blocked
+PASS: review-squad lingo blocked
+PASS: findings tallies blocked
+PASS: untracked-code archaeology blocked
+PASS: principles vocabulary (plural) blocked
+PASS: shared sprint-label pattern blocked
+PASS: violation on later line blocked
+
+All issue-body lint cases passed.
+
+make check (full suite): 5636 passed, 3 skipped, 21 deselected — coverage 92.50% (floor 92.0%), all module floors held, ruff lint+format clean, mypy clean
+shellcheck scripts/check-issue-body-lint.sh scripts/lint-patterns.sh tests/workflows/test_issue_body_lint.sh: clean
+changelog lint on existing changelogs with extended patterns: clean

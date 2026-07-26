@@ -1,0 +1,46 @@
+name: issue-body-lint
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: issue-body-lint-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint issue body for editorial violations
+    runs-on: ubuntu-latest
+
+    # The editorial boundary binds maintainer/agent-authored copy only.
+    # Outside contributors' bug reports are never linted.
+    if: github.event.issue.user.login == 'florianhorner'
+
+    steps:
+      # Issues are not branch-scoped; the lint always runs from the default branch.
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+
+      - name: Fetch issue body
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const body = context.payload.issue.body ?? "";
+            const fs = require("fs");
+            fs.writeFileSync("/tmp/issue-body.md", body, "utf8");
+            core.info(`Issue body length: ${body.length} chars`);
+
+      # Quiet failure by design: a red X in the Actions tab and the actor's own
+      # notification, nothing else. No bot comment, no label — publicly flagging
+      # an editorial violation would itself put process narrative on the tracker.
+      - name: Run issue-body editorial lint
+        run: |
+          if [ ! -x scripts/check-issue-body-lint.sh ]; then
+            echo "scripts/check-issue-body-lint.sh not present on default branch — skipping."
+            exit 0
+          fi
+          bash scripts/check-issue-body-lint.sh /tmp/issue-body.md
