@@ -5120,6 +5120,54 @@ async def test_bridge_never_repeats_the_on_air_song_back_to_back(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_bridge_repeats_the_on_air_song_rather_than_airing_the_tone(tmp_path):
+    """The mirror of the test above: with NO packaged clip, the repeat wins.
+
+    Same one-song warm cache, same song on air — but the packaged recovery clip
+    is missing, so the only rung left below this one is two seconds of emergency
+    tone. There the calculus inverts: a song the listener heard recently is
+    genuinely better radio than a tone, so the last cache attempt asks
+    PERMISSIVELY (``allow_recent_repeat=True``).
+
+    This is the rung the fix revived. Gating it on ``not music_runway`` made it
+    dead code and dropped a warm-cache station straight to the tone. Flipping
+    that flag back to ``False`` must fail HERE — the sibling test above pins the
+    strict rung, and only the pair together prove the ladder asks differently at
+    different depths.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    on_air = tmp_path / "norm_on_air_192k.mp3"
+    on_air.write_bytes(b"the song currently playing")
+    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    state.now_streaming = {
+        "type": "music",
+        "label": "Fleece – Dont Lose Your Way",
+        "metadata": {"title_only": "Dont Lose Your Way", "artist": "Fleece"},
+    }
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment) -> bool:
+        queued.append(segment)
+        return True
+
+    # No packaged clip: this is the empty-container / Scenario-2 shape, where the
+    # real add-on image ships only README stubs under assets/demo/banter/.
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
+        ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
+
+    assert ok is True
+    assert [seg.path for seg in queued] == [on_air], "a recent song beats the emergency tone at this depth"
+    assert queued[0].metadata.get("audio_source") != "emergency_tone"
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("drain", "norm_cache")
+
+
+@pytest.mark.asyncio
 async def test_drain_bridge_queues_only_canned_clip_when_cache_is_cold(tmp_path):
     """A cold cache preserves the single-clip drain bridge fallback."""
     from mammamiradio.scheduling import producer
@@ -5276,9 +5324,10 @@ async def test_continuity_bridge_falls_back_to_clip_when_cache_music_cannot_enqu
     assert state.bridge_fires_total == 1
     assert state.bridge_events[-1]["bridge_type"] == "resume"
     assert state.bridge_events[-1]["source"] == "canned"
-    assert any(
-        "no runway music segment available behind the canned clip" in record.message for record in caplog.records
-    )
+    # The log must NOT claim "nothing eligible": this test found an eligible
+    # candidate and had it refused at enqueue. Cause-neutral wording only.
+    assert any("no cache music queued behind the canned clip" in record.message for record in caplog.records)
+    assert not any("found nothing eligible" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------

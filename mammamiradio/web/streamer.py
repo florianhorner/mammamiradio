@@ -47,6 +47,9 @@ from mammamiradio.audio.norm_cache import (
 from mammamiradio.audio.norm_cache import (
     select_norm_cache_rescue as _select_norm_cache_rescue,
 )
+from mammamiradio.audio.norm_cache import (
+    sidecar_track_key as _sidecar_track_key,
+)
 from mammamiradio.audio.normalizer import (
     configure_broadcast_chain,
     humanize_norm_filename,
@@ -330,6 +333,12 @@ BRIDGE_HEALTH_WINDOW_SECONDS = 1800.0  # 30-minute rolling window
 BRIDGE_HEALTH_THRESHOLD = 2  # bridges within the window before "running on rescue"
 BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS = 600.0
 BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS = 60.0
+# Bridge types that are recorded but must NOT feed the "running on rescue" alarm.
+# "continuity" is a live control reserving safety audio that then aired - the
+# operator doing their job, not the producer falling behind. Every type added to
+# record_bridge_fire feeds the rolling window by default, so a new type belongs
+# here whenever it fires on ordinary operator activity rather than station failure.
+_NON_ALARMING_BRIDGE_TYPES = frozenset({"continuity"})
 # Generated segment waste (#397). Counts rendered audio discarded before broadcast.
 # The rolling window and thresholds flip the admin "Generated waste" row to degraded
 # so operators see frequent purges instead of a falsely-green diagnostics card.
@@ -794,10 +803,7 @@ def _continuity_reservation_segments(
             prune_paths.append(cached)
             continue
         metadata = load_track_metadata(cached) or {}
-        cache_key = (
-            str(metadata.get("artist") or "").strip().lower(),
-            str(metadata.get("title") or "").strip().lower(),
-        )
+        cache_key = _sidecar_track_key(metadata)
         if cache_key in blocked_keys:
             logger.info("Skipping blocklisted cached continuity track (%s - %s)", cache_key[0], cache_key[1])
             if cache_key in persistent_blocked_keys:
@@ -1438,15 +1444,11 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         state.playlist_revision += 1
 
     def _matches_blocklist(segment: Segment) -> bool:
-        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-        # Producer music carries `title_only` (bare title); norm-cache bridge and
-        # rescue fills stamp only `title`. Fall back so a banned song queued via
-        # either shape is still purged.
-        key = (
-            str(metadata.get("artist", "")).strip().lower(),
-            str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
-        )
-        return segment.type is SegmentType.MUSIC and key in banned_keys
+        # Shared definition, not a local copy. The hand-rolled tuple this
+        # replaced used `metadata.get("artist", "")`, so a segment carrying an
+        # explicit `artist: None` keyed as ("none", title) and slipped through
+        # the purge - the canonical helper coalesces falsy to "".
+        return segment.type is SegmentType.MUSIC and _segment_blocklist_key(segment) in banned_keys
 
     prior_tail = None
     if queue is not None:
@@ -2192,15 +2194,29 @@ def _producer_headroom_snapshot(request: Request, runtime_health: dict) -> dict:
 def _bridge_health_snapshot(state: StationState) -> dict:
     """Producer rescue-bridge health for the admin Runtime Status card (#547).
 
-    Windows ``state.bridge_events`` to count recent drain/resume/idle bridge
-    fires; ``unhealthy`` trips once either repeated bridge fires or sustained
-    queue-empty time indicate the station is "running on rescue". Session counts
-    and queue-empty elapsed ride along so the operator sees one honest readout
-    instead of a falsely-green card.
+    Windows ``state.bridge_events`` to count recent PRODUCER bridge fires
+    (drain/resume/idle); ``unhealthy`` trips once either repeated bridge fires or
+    sustained queue-empty time indicate the station is "running on rescue".
+    Session counts and queue-empty elapsed ride along so the operator sees one
+    honest readout instead of a falsely-green card.
+
+    ``continuity`` fires are deliberately EXCLUDED from the rolling window. They
+    are recorded by a live control reserving safety audio that then aired - an
+    operator action working exactly as designed, not the producer failing to keep
+    up. Counting them would trip ``BRIDGE_HEALTH_THRESHOLD`` (2 per 30 min) after
+    two ordinary admin actions and tell the operator a healthy station is
+    "running on rescue"; a false red is worse than the false green this card was
+    written to replace. They still ride along in ``session_count`` and
+    ``by_type``, so nothing is hidden - only the alarm is scoped to what it
+    actually diagnoses.
     """
     now = time.time()
     window = BRIDGE_HEALTH_WINDOW_SECONDS
-    recent = [e for e in state.bridge_events if now - float(e.get("timestamp") or 0.0) <= window]
+    recent = [
+        e
+        for e in state.bridge_events
+        if now - float(e.get("timestamp") or 0.0) <= window and e.get("bridge_type") not in _NON_ALARMING_BRIDGE_TYPES
+    ]
     last_fire = state.bridge_events[-1] if state.bridge_events else None
     # Compare on the RAW elapsed; round only for the payload. Rounding before the
     # threshold check let raw 59.95s round up to 60.0 and trip "queue_empty" ~0.05s
@@ -3088,6 +3104,13 @@ async def run_playback_loop(app) -> None:
                                     )
                                     or raw_sidecar_title
                                 )
+                                # `title` is the display label and packs the artist in;
+                                # `title_only` is the bare song title. Both are stamped
+                                # because `segment_track_key` prefers `title_only`, and
+                                # without it the ban fence below keys this segment as
+                                # ("artist", "artist - title") - a shape that can never
+                                # be in state.blocklist, silently disarming the fence.
+                                rescue_title_only: str | None = song_title
                                 if clean_artist:
                                     rescue_title = f"{clean_artist} – {song_title}"
                                     rescue_artist: str | None = clean_artist
@@ -3097,6 +3120,10 @@ async def run_playback_loop(app) -> None:
                             else:
                                 rescue_title = humanize_norm_filename(rescue.name)
                                 rescue_artist = None
+                                # No sidecar: the humanized filename is all we have, and
+                                # it is not a trustworthy bare title. Leave title_only
+                                # unset so the key falls back to `title` as before.
+                                rescue_title_only = None
                             duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
                             duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
                             segment = Segment(
@@ -3106,6 +3133,7 @@ async def run_playback_loop(app) -> None:
                                 metadata={
                                     "type": "music",
                                     "title": rescue_title,
+                                    **({"title_only": rescue_title_only} if rescue_title_only else {}),
                                     **({"artist": rescue_artist} if rescue_artist else {}),
                                     **duration_fields,
                                     "audio_source": "fallback_norm_cache",
@@ -3265,7 +3293,7 @@ async def run_playback_loop(app) -> None:
             send_completed_cleanly = False
             terminal_reason = "aborted"
             companionship_discard_recorded = False
-            rescue_airplay_stamped = False
+            air_start_stamped = False
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -3350,10 +3378,7 @@ async def run_playback_loop(app) -> None:
                         if not is_companionship_cue or accepted_listeners > 0:
                             bytes_sent += len(chunk)
 
-                        # `or 0` is deliberate: this bookkeeping line runs on every
-                        # chunk of every segment, and an exception here would kill
-                        # the playback loop outright — dead air for a rotation stat.
-                        if not rescue_airplay_stamped and (accepted_listeners or 0) > 0:
+                        if not air_start_stamped and (accepted_listeners or 0) > 0:
                             # First chunk a listener queue actually accepted. This is
                             # the single "truly heard" moment for both bookkeeping
                             # jobs below, and it is strictly more accurate than EOF:
@@ -3364,7 +3389,7 @@ async def run_playback_loop(app) -> None:
                             # nor reports a bridge. `or 0` is deliberate: this runs
                             # on every chunk and an exception here would kill the
                             # playback loop — dead air for a statistic.
-                            rescue_airplay_stamped = True
+                            air_start_stamped = True
                             _record_rescue_airplay(state, segment)
                             _record_continuity_air(state, segment)
 

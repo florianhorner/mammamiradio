@@ -3154,6 +3154,92 @@ def test_continuity_audio_reports_a_bridge_fire_once_it_actually_airs(tmp_path):
     assert state.bridge_events[-1]["source"] == "norm_cache"
 
 
+def test_one_control_reserving_several_tracks_reports_one_bridge_fire(tmp_path):
+    """One operator action is one bridge, however many segments it reserved.
+
+    A single live control can reserve two or three tracks under one
+    ``continuity_reservation_id``; they air back to back. Reporting each would
+    cross BRIDGE_HEALTH_THRESHOLD from a single admin action — the exact false
+    red `_record_continuity_air` was written to avoid. The dedupe that prevents
+    it had no test at all: every prior case left ``reservation_id`` empty, so the
+    branch never executed.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air
+
+    state = StationState()
+
+    def _reserved(name: str, reservation_id: str) -> Segment:
+        path = tmp_path / name
+        path.write_bytes(b"cached")
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=path,
+            metadata={
+                "title": name,
+                "audio_source": "norm_cache",
+                _CONTINUITY_RESERVATION_FLAG: True,
+                "continuity_reservation_id": reservation_id,
+            },
+        )
+
+    for name in ("norm_a_128k.mp3", "norm_b_128k.mp3", "norm_c_128k.mp3"):
+        _record_continuity_air(state, _reserved(name, "control-1"))
+
+    assert state.bridge_fires_total == 1, "three reserved tracks, one operator action, one bridge"
+    assert state.bridge_fires_by_type["continuity"] == 1
+    assert state.last_continuity_air_reservation_id == "control-1"
+
+    # A genuinely separate control is a separate bridge.
+    _record_continuity_air(state, _reserved("norm_d_128k.mp3", "control-2"))
+    assert state.bridge_fires_total == 2
+    assert state.bridge_fires_by_type["continuity"] == 2
+    assert state.last_continuity_air_reservation_id == "control-2"
+
+
+def test_continuity_fires_do_not_flip_the_rescue_health_card(tmp_path):
+    """Aired continuity audio stays out of the "running on rescue" alarm.
+
+    `_bridge_health_snapshot` windows bridge_events with no type filter, so every
+    new bridge type feeds the alarm by default. Continuity fires on ordinary
+    operator activity, not on the producer falling behind — counting it told the
+    operator a healthy station was in trouble after two admin actions. It stays
+    visible in session_count and by_type; only the alarm is scoped.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, BRIDGE_HEALTH_THRESHOLD, _record_continuity_air
+
+    state = StationState()
+    for index in range(BRIDGE_HEALTH_THRESHOLD + 2):
+        path = tmp_path / f"norm_control_{index}_128k.mp3"
+        path.write_bytes(b"cached")
+        _record_continuity_air(
+            state,
+            Segment(
+                type=SegmentType.MUSIC,
+                path=path,
+                metadata={
+                    "title": f"Control {index}",
+                    "audio_source": "norm_cache",
+                    _CONTINUITY_RESERVATION_FLAG: True,
+                    "continuity_reservation_id": f"control-{index}",
+                },
+            ),
+        )
+
+    snapshot = _bridge_health_snapshot(state)
+    assert state.bridge_fires_by_type["continuity"] == BRIDGE_HEALTH_THRESHOLD + 2, "still counted honestly"
+    assert snapshot["session_count"] == BRIDGE_HEALTH_THRESHOLD + 2
+    assert snapshot["window_count"] == 0, "continuity must not feed the rolling alarm window"
+    assert snapshot["unhealthy"] is False
+    assert "bridge_frequency" not in snapshot["unhealthy_reasons"]
+
+    # A real producer bridge in the same window still trips it.
+    for _ in range(BRIDGE_HEALTH_THRESHOLD):
+        state.record_bridge_fire("drain", "norm_cache")
+    tripped = _bridge_health_snapshot(state)
+    assert tripped["window_count"] == BRIDGE_HEALTH_THRESHOLD
+    assert "bridge_frequency" in tripped["unhealthy_reasons"]
+
+
 def test_continuity_air_telemetry_never_raises_into_the_stream():
     """Best-effort: a telemetry bug must never become an audio bug."""
     from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG, _record_continuity_air

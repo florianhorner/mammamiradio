@@ -1149,6 +1149,120 @@ async def test_air_start_stamp_needs_a_listener_to_accept_the_chunk(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_continuity_reservation_reports_a_bridge_fire_from_the_send_loop(tmp_path):
+    """Reserved safety audio reports a bridge ONLY once a listener has it.
+
+    The wiring, not the helper. `_record_continuity_air` had three unit tests
+    that all called it directly, so deleting its call site in the send loop left
+    the entire `tests/web` suite green — the one thing the function exists to do
+    was unguarded. This drives the real playback loop instead.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "norm_reserved_192k.mp3"
+    audio_path.write_bytes(b"x" * 65536)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={
+                "title": "Reserved Song",
+                "title_only": "Reserved Song",
+                "artist": "Cache Artist",
+                "audio_source": "norm_cache",
+                _CONTINUITY_RESERVATION_FLAG: True,
+                "continuity_reservation_id": "res-abc",
+            },
+            ephemeral=False,
+        )
+    )
+
+    reported = asyncio.Event()
+    real_broadcast = app.state.stream_hub.broadcast
+
+    async def _watch(chunk):
+        accepted = await real_broadcast(chunk)
+        if any(e.get("bridge_type") == "continuity" for e in state.bridge_events):
+            reported.set()
+        return accepted
+
+    app.state.stream_hub.broadcast = _watch
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(reported.wait(), timeout=3.0)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    continuity = [e for e in state.bridge_events if e.get("bridge_type") == "continuity"]
+    assert len(continuity) == 1
+    assert continuity[0]["source"] == "norm_cache"
+    assert state.last_continuity_air_reservation_id == "res-abc"
+
+
+@pytest.mark.asyncio
+async def test_continuity_reservation_reports_nothing_when_no_listener_accepts(tmp_path):
+    """Reserved audio nobody heard is not a bridge fire.
+
+    Most reservations are never heard — the real queue refills first. Counting
+    those would trip the 2-per-30-min "running on rescue" alarm after two
+    ordinary admin actions.
+    """
+    from mammamiradio.web.streamer import _CONTINUITY_RESERVATION_FLAG
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "norm_unheard_reservation_192k.mp3"
+    audio_path.write_bytes(b"x" * 65536)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={
+                "title": "Unheard Reservation",
+                "title_only": "Unheard Reservation",
+                "artist": "A",
+                "audio_source": "norm_cache",
+                _CONTINUITY_RESERVATION_FLAG: True,
+                "continuity_reservation_id": "res-unheard",
+            },
+            ephemeral=False,
+        )
+    )
+
+    chunks_dropped = 0
+
+    async def _drop_every_chunk(_chunk):
+        nonlocal chunks_dropped
+        chunks_dropped += 1
+        return 0  # no listener queue accepted it
+
+    app.state.stream_hub.broadcast = _drop_every_chunk
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.sleep(0.4)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert chunks_dropped > 1, "the loop must have sent several chunks for this to mean anything"
+    assert not [e for e in state.bridge_events if e.get("bridge_type") == "continuity"]
+    assert state.last_continuity_air_reservation_id == ""
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_records_cancellation_without_a_file_error(tmp_path):
     app = _make_test_app()
     app.state.stream_hub.subscribe()

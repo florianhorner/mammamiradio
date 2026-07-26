@@ -178,8 +178,17 @@ keeps playing, but it is rotation/canned fallback, not fresh content. The fields
   reservations would cross the 2-per-30-minutes threshold after two ordinary
   admin actions and report a perfectly healthy station as "running on rescue" —
   a false alarm is worse than the silence it replaced.
-- `window_count` — bridge fires inside the rolling window (`window_seconds`,
-  default 1800s / 30 min).
+- `window_count` — **producer** bridge fires inside the rolling window
+  (`window_seconds`, default 1800s / 30 min). `continuity` is deliberately
+  excluded here. Air-time counting alone was not enough to keep the false alarm
+  away: reserved audio does often air (it sits at the head of the queue right
+  after the control), so two skips or bans in half an hour would still have
+  flipped the row. A continuity fire means an operator acted and the safety net
+  worked, not that the producer fell behind — so it stays out of the alarm while
+  remaining fully visible in `session_count` and `by_type`. Any future bridge
+  type that fires on ordinary operator activity rather than station failure
+  belongs in `_NON_ALARMING_BRIDGE_TYPES` (`web/streamer.py`) for the same reason;
+  every new type feeds the window by default.
 - `last_fire` — the most recent bridge `{bridge_type, source, timestamp}`.
 - `queue_empty_elapsed_s` — how long the queue has been empty right now.
 - `unhealthy` — `true` once **either** signal trips: `window_count` reaches

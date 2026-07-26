@@ -856,10 +856,14 @@ async def _queue_continuity_bridge(
         if ok:
             _record_bridge_fire(state, bridge_type, "canned")
             if music_runway:
-                # The music-first attempt above already ran and found nothing
-                # eligible, so there is no second try to make here.
+                # Cause-neutral on purpose. The music-first attempt above already
+                # ran, but a False from it covers two different worlds: no
+                # eligible cache file at all, AND an eligible file that
+                # ``queue_segment`` then refused (bounded queue full, session
+                # stopped, blocklist gate). Naming one of them here would be a
+                # guess — the clip is queued either way and that is what matters.
                 logger.info(
-                    "%s bridge: no runway music segment available behind the canned clip",
+                    "%s bridge: no cache music queued behind the canned clip",
                     bridge_type.capitalize(),
                 )
         return ok

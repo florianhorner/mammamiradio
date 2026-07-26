@@ -144,6 +144,25 @@ def is_recent_music(path: Path, recent_keys: set[str], *, sidecar: dict | None =
     return any(_identity_matches(path_key, recent_key) for path_key in path_keys for recent_key in recent_keys)
 
 
+def sidecar_track_key(sidecar: dict) -> tuple[str, str]:
+    """Canonical station song identity carried by a norm-cache sidecar.
+
+    The sidecar-side sibling of :func:`core.models.segment_track_key` and
+    :func:`core.models.normalized_track_key`.  A sidecar is a plain dict, not a
+    ``Segment``, so it cannot use the segment helper — but it must agree with it
+    on what "the same song" means, or a ban enforced on one side leaks past the
+    other.  Sidecars store ``track.title``/``track.artist`` verbatim
+    (``save_track_metadata``), so the bare title is already the right half.
+
+    Shared by :func:`_is_blocklisted` here and the live-control continuity scan
+    in ``web/streamer.py``, which were maintained as separate copies.
+    """
+    return (
+        str(sidecar.get("artist") or "").strip().lower(),
+        str(sidecar.get("title") or "").strip().lower(),
+    )
+
+
 def _is_blocklisted(path: Path, blocklist: object) -> bool:
     """True if this cache file's ``(artist, title)`` is on the operator blocklist.
 
@@ -156,8 +175,7 @@ def _is_blocklisted(path: Path, blocklist: object) -> bool:
     sidecar = load_track_metadata(path)
     if not sidecar:
         return False
-    key = (str(sidecar.get("artist") or "").strip().lower(), str(sidecar.get("title") or "").strip().lower())
-    return key in blocklist
+    return sidecar_track_key(sidecar) in blocklist
 
 
 def _path_on_cooldown(airplay: dict[Path, float], path: Path, now: float) -> bool:
