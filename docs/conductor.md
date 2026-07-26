@@ -20,9 +20,11 @@ The pinned snapshot is sourced from:
 - `.config/commit-rules.json` and its SHA metadata — commit subjects, bodies,
   exemptions, and bypass policy.
 - `.github/workflows/commit-lint.yml` — validation of commits and the PR title.
-- `scripts/lint-patterns.sh`, `scripts/check-pr-body-lint.sh`, and
-  `.github/workflows/pr-body-lint.yml` — PR editorial bans (snapshotted at
-  repository commit `b4c3b6ccfbb76ed9ca124fc97df2190f306e4412`).
+- `scripts/lint-patterns.sh`, `scripts/check-pr-body-lint.sh`,
+  `scripts/check-issue-body-lint.sh`, `.github/workflows/pr-body-lint.yml`,
+  and `.github/workflows/issue-body-lint.yml` — PR and issue editorial bans
+  (snapshotted at repository commit
+  `94507d4cff9bd6d3f21dc6cdff38416857baa779`).
 - `.github/pull_request_template.md` — Summary, Test plan, and conditional
   Admin Panel Standards sections.
 - `.github/workflows/verify-claims.yml` — terminal `## Proof` validation.

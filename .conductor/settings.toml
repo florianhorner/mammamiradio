@@ -8,10 +8,11 @@
 #   1fe9a730a3779349ddcea67974f10050a7548a47 (schema 1.1.0)
 # - .github/workflows/commit-lint.yml, reusable workflow SHA
 #   502b48e0521350509f06cd3c6ad65a7c848f23af
-# - local PR-body sources at repository commit
-#   b4c3b6ccfbb76ed9ca124fc97df2190f306e4412: scripts/lint-patterns.sh,
-#   scripts/check-pr-body-lint.sh, .github/workflows/pr-body-lint.yml, and
-#   .github/pull_request_template.md
+# - local editorial-lint sources at repository commit
+#   94507d4cff9bd6d3f21dc6cdff38416857baa779: scripts/lint-patterns.sh,
+#   scripts/check-pr-body-lint.sh, scripts/check-issue-body-lint.sh,
+#   .github/workflows/pr-body-lint.yml, .github/workflows/issue-body-lint.yml,
+#   and .github/pull_request_template.md
 # - .github/workflows/verify-claims.yml, gh-workflows@v1.3
 #
 # Refresh this block deliberately when any of those sources change. Do not
