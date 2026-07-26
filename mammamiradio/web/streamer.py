@@ -334,10 +334,10 @@ BRIDGE_HEALTH_THRESHOLD = 2  # bridges within the window before "running on resc
 BRIDGE_HEALTH_QUEUE_EMPTY_WINDOW_SECONDS = 600.0
 BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS = 60.0
 # Bridge types that are recorded but must NOT feed the "running on rescue" alarm.
-# "continuity" is a live control reserving safety audio that then aired - the
-# operator doing their job, not the producer falling behind. Every type added to
-# record_bridge_fire feeds the rolling window by default, so a new type belongs
-# here whenever it fires on ordinary operator activity rather than station failure.
+# "continuity" is a live control reserving safety audio that then aired, which
+# reflects operator activity rather than the producer falling behind. Every type
+# added to record_bridge_fire feeds the rolling window by default, so a new type
+# belongs here whenever it fires on ordinary operator activity.
 _NON_ALARMING_BRIDGE_TYPES = frozenset({"continuity"})
 # Generated segment waste (#397). Counts rendered audio discarded before broadcast.
 # The rolling window and thresholds flip the admin "Generated waste" row to degraded
@@ -2200,15 +2200,12 @@ def _bridge_health_snapshot(state: StationState) -> dict:
     Session counts and queue-empty elapsed ride along so the operator sees one
     honest readout instead of a falsely-green card.
 
-    ``continuity`` fires are deliberately EXCLUDED from the rolling window. They
-    are recorded by a live control reserving safety audio that then aired - an
-    operator action working exactly as designed, not the producer failing to keep
-    up. Counting them would trip ``BRIDGE_HEALTH_THRESHOLD`` (2 per 30 min) after
-    two ordinary admin actions and tell the operator a healthy station is
-    "running on rescue"; a false red is worse than the false green this card was
-    written to replace. They still ride along in ``session_count`` and
-    ``by_type``, so nothing is hidden - only the alarm is scoped to what it
-    actually diagnoses.
+    ``continuity`` fires stay out of the rolling window. A live control reserved
+    safety audio and it aired, which is the safety net covering an operator
+    action rather than the producer falling behind. Counting them would trip
+    ``BRIDGE_HEALTH_THRESHOLD`` (2 per 30 min) after two ordinary admin actions
+    and tell the operator a healthy station is "running on rescue". They still
+    ride along in ``session_count`` and ``by_type``; only the alarm is scoped.
     """
     now = time.time()
     window = BRIDGE_HEALTH_WINDOW_SECONDS
@@ -3071,20 +3068,19 @@ async def run_playback_loop(app) -> None:
                 if not segment_ready:
                     rescued_from_norm = False
                     if elapsed >= FIRST_BYTE_GRACE_SECONDS:
-                        # Permissive, and the honest reason is that nothing real
-                        # sits below this rung. The bundled-demo-music rung does
-                        # not ship (``assets/demo/music/`` is not in the package),
-                        # and the packaged-clip branch below sets ``segment_ready``,
-                        # which makes the 60s forced-banter escape unreachable. So
-                        # the true alternative here is the same 4.4s canned line on
+                        # Permissive because nothing real sits below this rung.
+                        # The bundled-demo-music rung does not ship
+                        # (``assets/demo/music/`` is absent from the package), and
+                        # the packaged-clip branch below sets ``segment_ready``,
+                        # which makes the 60s forced-banter escape unreachable.
+                        # The alternative here is the same 4.4s canned line on
                         # repeat, with a playable song sitting in the cache.
                         #
-                        # Permissive is not "repeat freely": select_norm_cache_rescue
-                        # still prefers a non-recent candidate and only returns a
-                        # recent one when the cache holds nothing else. The strict
-                        # answer belongs to the producer's drain/resume/idle bridge,
-                        # which really does have the packaged clip and the emergency
-                        # tone beneath it.
+                        # Permissive still prefers a non-recent candidate:
+                        # select_norm_cache_rescue returns a recent one only when
+                        # the cache holds nothing else. The strict answer belongs
+                        # to the producer's drain/resume/idle bridge, which has the
+                        # packaged clip and the emergency tone beneath it.
                         rescue = _select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=True)
                         if rescue:
                             logger.warning(
@@ -3387,11 +3383,11 @@ async def run_playback_loop(app) -> None:
                         if not is_companionship_cue or accepted_listeners > 0:
                             bytes_sent += len(chunk)
 
-                        # `or 0` is load-bearing, not noise: the sibling check above
-                        # short-circuits on `not is_companionship_cue`, so for an
-                        # ordinary segment this is the FIRST place the value is
-                        # compared, and a hub whose broadcast returns None would
-                        # raise TypeError here and kill the playback loop.
+                        # Keep the `or 0`. The sibling check above short-circuits
+                        # on `not is_companionship_cue`, so for an ordinary segment
+                        # this is the first place the value is compared, and a hub
+                        # whose broadcast returns None would raise TypeError here
+                        # and kill the playback loop.
                         if not air_start_stamped and (accepted_listeners or 0) > 0:
                             # First chunk a listener queue actually accepted. This is
                             # the single "truly heard" moment for both bookkeeping

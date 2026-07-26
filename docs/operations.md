@@ -207,20 +207,19 @@ keeps playing, but it is rotation/canned fallback, not fresh content. The fields
   because that path used to be completely silent on success: the station could
   bridge on it repeatedly while this row still read "Healthy", which is how a
   repeated song reached a listener before it reached an operator. It counts at
-  **air** time, not reservation time, and that distinction is load-bearing: every
-  live control reserves safety audio before it mutates the queue, and most of
-  that audio is never heard because the real queue refills first. Counting
-  reservations would cross the 2-per-30-minutes threshold after two ordinary
-  admin actions and report a perfectly healthy station as "running on rescue" —
-  a false alarm is worse than the silence it replaced.
+  **air** time rather than reservation time. Every live control reserves safety
+  audio before it mutates the queue, and most of that audio is never heard
+  because the real queue refills first, so counting reservations would cross the
+  2-per-30-minutes threshold after two ordinary admin actions and report a
+  healthy station as "running on rescue".
 - `window_count` — **producer** bridge fires inside the rolling window
-  (`window_seconds`, default 1800s / 30 min). `continuity` is deliberately
-  excluded here. Air-time counting alone was not enough to keep the false alarm
-  away: reserved audio does often air (it sits at the head of the queue right
-  after the control), so two skips or bans in half an hour would still have
-  flipped the row. A continuity fire means an operator acted and the safety net
-  worked, not that the producer fell behind — so it stays out of the alarm while
-  remaining fully visible in `session_count` and `by_type`. Any future bridge
+  (`window_seconds`, default 1800s / 30 min). `continuity` is excluded here.
+  Air-time counting alone did not keep the false alarm away: reserved audio does
+  often air, since it sits at the head of the queue right after the control, so
+  two skips or bans in half an hour would still have flipped the row. A
+  continuity fire records an operator action that the safety net covered, so it
+  stays out of the alarm while remaining visible in `session_count` and
+  `by_type`. Any future bridge
   type that fires on ordinary operator activity rather than station failure
   belongs in `_NON_ALARMING_BRIDGE_TYPES` (`web/streamer.py`) for the same reason;
   every new type feeds the window by default.
@@ -268,7 +267,7 @@ cannot disagree about what is currently playing.
 
 Whether a caller may re-serve a recent song is now an explicit parameter
 (`allow_recent_repeat`) rather than a property of where the code happens to live.
-Each caller answers one question honestly: what is below me?
+Each caller declares what sits below it on the ladder.
 
 - `False` — the producer's music-first bridge rung (`_queue_continuity_bridge`,
   `producer.py:826`). It has the packaged continuity clip and then the emergency
@@ -279,7 +278,7 @@ Each caller answers one question honestly: what is below me?
   this flag.
 - `True` — the producer's last cache retry when there is no packaged clip
   (`producer.py:882`), `_producer_error_recovery_segment` (`producer.py:977`),
-  and the playback-gap rescue in the send loop (`streamer.py:3088`). Below the
+  and the playback-gap rescue in the send loop (`streamer.py:3084`). Below the
   first sits two seconds of emergency tone; below the second sits
   `_blocklist_safe_last_music`, which recycles the last-known-good song and is
   therefore a guaranteed repeat. The third has nothing real below it at all:
@@ -287,14 +286,13 @@ Each caller answers one question honestly: what is below me?
   every shipped container, and the packaged-clip branch sets `segment_ready`,
   which makes the 60-second forced-banter escape unreachable. A strict ask there
   means the same 4.4-second station ident on a loop while a playable song sits in
-  the cache. At all three depths a song the listener heard recently genuinely is
-  the better radio, so they ask permissively.
+  the cache. At all three depths a song the listener heard recently is the better
+  radio, so they ask permissively.
 
-Permissive does not mean "repeat freely". `select_norm_cache_rescue` still
-prefers a non-recent candidate and only returns a recent one when the cache holds
-nothing else, which is exactly what the pre-existing behaviour did. The flag only
-decides what happens once every candidate is recent: decline and fall through, or
-serve the best available repeat.
+Permissive still prefers a non-recent candidate. `select_norm_cache_rescue`
+returns a recent one only when the cache holds nothing else, matching the
+pre-existing behaviour. The flag decides what happens once every candidate is
+recent: decline and fall through, or serve the best available repeat.
 
 That parameter is not cosmetic. Reaching for cached music first (above) made the
 loose fallback reachable in a place it had never been: on a one-song warm cache a
