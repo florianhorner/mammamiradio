@@ -29,8 +29,23 @@ if [ ! -f "$BODY_FILE" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A broken pattern source is a gate error (exit 2) — never a violation (1),
+# never clean (0). The readability check must come first: bash aborts a
+# non-interactive shell outright when source targets a missing file, so an
+# if-guard alone can never catch that case.
+if [ ! -r "$SCRIPT_DIR/lint-patterns.sh" ]; then
+  echo "ERROR: pattern source '$SCRIPT_DIR/lint-patterns.sh' is missing or unreadable." >&2
+  exit 2
+fi
 # shellcheck source=scripts/lint-patterns.sh
-source "$SCRIPT_DIR/lint-patterns.sh"
+if ! source "$SCRIPT_DIR/lint-patterns.sh"; then
+  echo "ERROR: could not load '$SCRIPT_DIR/lint-patterns.sh'." >&2
+  exit 2
+fi
+if [ "${#LINT_PATTERNS[@]}" -eq 0 ]; then
+  echo "ERROR: LINT_PATTERNS is empty — nothing would be linted." >&2
+  exit 2
+fi
 
 FAIL=0
 HITS=0

@@ -106,5 +106,17 @@ Context: reproduced during a soak window on the bench unit.
 EOF
 expect_block "violation on later line"
 
+# Case 14: a missing pattern source is a gate error (exit 2), never a
+# violation — a copy of the script in a directory without lint-patterns.sh
+# must refuse to lint rather than masquerade as a block or a pass
+cp "$SCRIPT" "$TMPDIR_T/orphan-lint.sh"
+echo 'anything at all' > "$BODY"
+set +e
+bash "$TMPDIR_T/orphan-lint.sh" "$BODY" >/dev/null 2>&1
+rc=$?
+set -e
+(( rc == 2 )) || fail "missing pattern source should exit 2, got ${rc}"
+pass "missing pattern source exits 2"
+
 echo
 echo "All issue-body lint cases passed."
