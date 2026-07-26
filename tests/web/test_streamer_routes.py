@@ -28,10 +28,17 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from mammamiradio.audio.norm_cache import select_norm_cache_rescue
+from mammamiradio.audio.norm_cache import recent_music_identity_keys, select_norm_cache_rescue
 from mammamiradio.core.config import load_config
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
-from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    GenerationWasteReason,
+    Segment,
+    SegmentLogEntry,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
@@ -1046,6 +1053,91 @@ async def test_run_playback_loop_partial_banter_send_does_not_schedule_memory(tm
     assert isinstance(result[0], RuntimeError)
     assert app.state.station_state.stream_outcome_history[-1]["terminal_reason"] == "aborted"
     schedule.assert_not_called()
+
+
+def test_playback_gap_rescue_asks_permissively_because_nothing_real_is_below_it():
+    """The gap rescue must not decline a song in favour of a looping canned clip.
+
+    Audio-delivery Scenario 2 (empty fallback), pinned at the call site. The
+    rungs this site's earlier comment named as "below" it do not exist: there is
+    no ``assets/demo/music/`` in the package, and the packaged-clip branch sets
+    ``segment_ready``, which makes the 60s forced-banter escape unreachable. So a
+    strict ask here means the same 4.4s clip on repeat while a playable song sits
+    in the cache — a worse illusion break than the repeat it was avoiding.
+
+    Two assertions, because the fix is only correct if BOTH hold: the packaged
+    demo-music rung really is absent, and the call site really is permissive.
+    """
+    import inspect
+
+    from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
+
+    assert not (DEMO_ASSETS_DIR / "music").exists(), (
+        "assets/demo/music/ now ships — re-evaluate whether this rung can ask strictly again"
+    )
+
+    source = inspect.getsource(run_playback_loop)
+    gap_call = next(
+        (line for line in source.splitlines() if "_select_norm_cache_rescue(" in line),
+        None,
+    )
+    assert gap_call is not None, "playback-gap rescue call site disappeared"
+    assert "allow_recent_repeat=True" in gap_call, (
+        "the playback-gap rescue must ask permissively while nothing real sits below it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_playback_gap_rescue_airs_a_recent_song_rather_than_looping_the_clip(tmp_path):
+    """Recent-only warm cache: a real song airs, not the packaged clip on repeat.
+
+    The behavioural half of the test above. `origin/main` always returned a song
+    when the cache was non-empty; a strict ask here returned None and dropped the
+    listener onto a 4.4s canned line that then repeated, because the rungs below
+    were empty. This drives the real playback loop to prove a song wins.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    # The ONLY cached song is one that just aired, so every candidate is "recent"
+    # and a strict ask declines all of them. Seed the recency through stream_log,
+    # not now_streaming: the loop clears now_streaming before it reaches the
+    # rescue, which would leave recent_keys empty and make this test vacuous.
+    on_air = tmp_path / "norm_only_song_192k.mp3"
+    on_air.write_bytes(b"x" * 65536)
+    (tmp_path / "norm_only_song_192k.mp3.json").write_text('{"title": "Only Song", "artist": "Solo"}')
+    state.stream_log.append(
+        SegmentLogEntry(
+            type="music",
+            label="Solo – Only Song",
+            metadata={"title_only": "Only Song", "artist": "Solo"},
+        )
+    )
+    assert recent_music_identity_keys(state), "test setup failed to make the cached song look recent"
+
+    aired_source = None
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            meta = (state.now_streaming or {}).get("metadata", {})
+            source = meta.get("audio_source")
+            if source:
+                aired_source = source
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert aired_source == "fallback_norm_cache", (
+        f"a recent-only warm cache must still air its song, got {aired_source!r} "
+        "(a strict ask here returns None and drops the listener onto the looping canned clip)"
+    )
 
 
 @pytest.mark.asyncio

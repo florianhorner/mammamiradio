@@ -270,12 +270,21 @@ Whether a caller may re-serve a recent song is now an explicit parameter
 (`allow_recent_repeat`) rather than a property of where the code happens to live.
 Each caller answers one question honestly: what is below me?
 
-- The playback-gap rescue is the near-last rung before a gap, so it passes `True`
-  — with a one-song cache it re-serves that song rather than falling silent.
-- The live-control continuity reservation and the producer's music-first bridge
-  pass `False`. They have the packaged clip, the emergency tone, and that whole
-  ladder underneath them, so re-airing the song currently on air is never their
-  best option; they fall through to the rung below instead.
+- `False` — the producer's music-first bridge rung
+  (`_queue_continuity_bridge`, `producer.py:826`) and the playback-gap rescue in
+  the send loop (`streamer.py:3079`). Both have real audio underneath them (the
+  packaged clip and the emergency tone for the first; bundled demo music and
+  forced banter for the second), so re-airing the song currently on air is never
+  their best option and they fall through to the rung below instead. The
+  live-control continuity reservation reaches the same answer by a different
+  route: it skips on-air and recently-heard cache files outright
+  (`_is_recent_music`) rather than passing this flag.
+- `True` — the producer's last cache retry when there is no packaged clip
+  (`producer.py:882`) and `_producer_error_recovery_segment` (`producer.py:977`).
+  Below the first sits two seconds of emergency tone; below the second sits
+  `_blocklist_safe_last_music`, which recycles the last-known-good song and is
+  therefore a guaranteed repeat. At that depth a song the listener heard recently
+  genuinely is the better radio, so these two ask permissively.
 
 That parameter is not cosmetic. Reaching for cached music first (above) made the
 loose fallback reachable in a place it had never been: on a one-song warm cache a

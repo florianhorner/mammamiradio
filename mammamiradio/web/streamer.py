@@ -3071,12 +3071,21 @@ async def run_playback_loop(app) -> None:
                 if not segment_ready:
                     rescued_from_norm = False
                     if elapsed >= FIRST_BYTE_GRACE_SECONDS:
-                        # Strict: bundled demo music and forced banter sit below
-                        # this rung, so this is NOT the last thing between the
-                        # listener and silence. Passing the permissive value here
-                        # reproduced the original incident exactly on a small warm
-                        # cache: song, canned clip, same song again.
-                        rescue = _select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=False)
+                        # Permissive, and the honest reason is that nothing real
+                        # sits below this rung. The bundled-demo-music rung does
+                        # not ship (``assets/demo/music/`` is not in the package),
+                        # and the packaged-clip branch below sets ``segment_ready``,
+                        # which makes the 60s forced-banter escape unreachable. So
+                        # the true alternative here is the same 4.4s canned line on
+                        # repeat, with a playable song sitting in the cache.
+                        #
+                        # Permissive is not "repeat freely": select_norm_cache_rescue
+                        # still prefers a non-recent candidate and only returns a
+                        # recent one when the cache holds nothing else. The strict
+                        # answer belongs to the producer's drain/resume/idle bridge,
+                        # which really does have the packaged clip and the emergency
+                        # tone beneath it.
+                        rescue = _select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=True)
                         if rescue:
                             logger.warning(
                                 "Queue empty %ds - rescuing with norm cache: %s",
@@ -3378,6 +3387,11 @@ async def run_playback_loop(app) -> None:
                         if not is_companionship_cue or accepted_listeners > 0:
                             bytes_sent += len(chunk)
 
+                        # `or 0` is load-bearing, not noise: the sibling check above
+                        # short-circuits on `not is_companionship_cue`, so for an
+                        # ordinary segment this is the FIRST place the value is
+                        # compared, and a hub whose broadcast returns None would
+                        # raise TypeError here and kill the playback loop.
                         if not air_start_stamped and (accepted_listeners or 0) > 0:
                             # First chunk a listener queue actually accepted. This is
                             # the single "truly heard" moment for both bookkeeping
@@ -3386,9 +3400,13 @@ async def run_playback_loop(app) -> None:
                             # play would otherwise see the on-air song as never
                             # heard and re-reserve it. Audio that never reaches a
                             # listener never gets here, so neither consumes rotation
-                            # nor reports a bridge. `or 0` is deliberate: this runs
-                            # on every chunk and an exception here would kill the
-                            # playback loop — dead air for a statistic.
+                            # nor reports a bridge.
+                            #
+                            # Both callees are cheap, bounded, and self-guarded. Keep
+                            # them that way: this is the hottest loop in the product
+                            # and anything that blocks here is dead air, so no
+                            # filesystem, network, or unbounded work may move behind
+                            # this once-per-segment flag.
                             air_start_stamped = True
                             _record_rescue_airplay(state, segment)
                             _record_continuity_air(state, segment)

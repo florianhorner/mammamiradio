@@ -135,8 +135,9 @@ def recent_music_identity_keys(state: StationState) -> set[str]:
 def is_recent_music(path: Path, recent_keys: set[str], *, sidecar: dict | None = None) -> bool:
     """True when a cache file IS the song on air now (or one that just aired).
 
-    Pure in-memory comparison against :func:`recent_music_identity_keys`.  Pass
-    ``sidecar`` when the caller already read it to avoid a second read.
+    Compared in memory against :func:`recent_music_identity_keys`.  Pass
+    ``sidecar`` when the caller already read it; without one this reads the
+    file's sidecar from disk, so it is not free on a hot path.
     """
     if not recent_keys:
         return False
@@ -232,10 +233,14 @@ def _choose_rescue_candidate(paths: list[Path], state: StationState | None = Non
 def record_rescue_airplay(state: StationState, segment: Segment) -> None:
     """Stamp a norm-cache rescue segment as heard so it cools down before re-airing.
 
-    Called from the playback loop's outcome recorder only when the segment truly
-    aired to a listener (bytes sent, listeners present) — selecting or opening a
-    rescue that never reaches a listener does not consume rotation. Best-effort:
-    a bookkeeping error must never affect what plays (leadership principle #1).
+    Called from the playback loop's SEND loop on the first chunk a listener queue
+    actually accepted (once per segment, guarded by ``air_start_stamped``) —
+    selecting or opening a rescue that never reaches a listener does not consume
+    rotation. First-accepted-chunk rather than end-of-segment is the whole point:
+    stamping at EOF left a song mid-play looking as though it had never aired, so
+    a live control firing two minutes into a three-and-a-half-minute track could
+    reserve the song already on the air. Best-effort: a bookkeeping error must
+    never affect what plays.
     """
     try:
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
@@ -300,7 +305,7 @@ def select_norm_cache_rescue(
     re-air the song already on the air. A safety policy that can be acquired by
     forgetting is not a policy; every ladder now has to say what it is.
 
-    * ``True`` (default) — the caller is a near-last rung and the alternative to a
+    * ``True`` — the caller is a near-last rung and the alternative to a
       repeat is a gap. A one-song warm cache re-serves that song rather than
       falling silent.
     * ``False`` — the caller has real audio beneath it (the packaged clip, the

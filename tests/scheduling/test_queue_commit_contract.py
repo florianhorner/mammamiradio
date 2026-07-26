@@ -320,6 +320,15 @@ def test_epilogue_and_admission_stale_predicates_agree():
     for name, (segment, expected) in cases.items():
         assert producer._music_segment_left_rotation(state, segment) is expected, name
 
+    # An empty pool means "no rotation right now", not "this song was removed".
+    # Reading it as removal bins every finished render during any clear-then-
+    # repopulate window (a source switch mid-flight, startup before the first
+    # fetch) — minutes of Pi CPU discarded, and it opens the very starvation gap
+    # the rescue ladder then has to cover. Deleting that guard leaves the matrix
+    # above entirely green, so it needs its own case.
+    empty_pool = StationState(playlist=[])
+    assert producer._music_segment_left_rotation(empty_pool, _music("Sparita", "Artista")) is False, "empty_pool"
+
     # Deciding the same way is not enough — BOTH gates must actually consult the
     # shared predicate. Without this the matrix above passes happily while one
     # site quietly grows its own copy, which is exactly how the original bug

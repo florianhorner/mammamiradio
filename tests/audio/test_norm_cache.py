@@ -444,9 +444,10 @@ def test_strict_mode_refuses_the_on_air_song_and_permissive_mode_serves_it(tmp_p
 def test_every_ladder_declares_its_repeat_policy_explicitly():
     """Each caller must state its policy, and match its real rung position.
 
-    Both defects that reached this branch were callers inheriting the permissive
-    value while having real audio beneath them. Grepping the call sites is the
-    only check that scales to the next ladder someone adds.
+    A caller may inherit the wrong policy in either direction: permissive while
+    real audio sits beneath it (a needless repeat), or strict while nothing real
+    does (a looping ident with a playable song in the cache). Both shipped on this
+    branch. Grepping the call sites is the check that scales to the next ladder.
     """
     import inspect
 
@@ -465,10 +466,16 @@ def test_every_ladder_declares_its_repeat_policy_explicitly():
         source = inspect.getsource(func)
         assert expected in source, f"{func.__name__} must declare {expected}"
 
-    # The playback gap has bundled demo music and forced banter below it, so it
-    # must be strict — passing the permissive value there reproduced the incident.
+    # The playback gap asks PERMISSIVELY, and the honest reason is that the rungs
+    # once claimed to sit below it do not. `assets/demo/music/` is not packaged,
+    # and the packaged-clip branch sets `segment_ready`, which makes the 60s
+    # forced-banter escape unreachable — so a strict ask there means the same
+    # 4.4s ident looping while a playable song sits in the cache. Permissive is
+    # not "repeat freely": the selector still prefers a non-recent candidate.
+    # The packaging half of that reasoning is asserted in
+    # tests/web/test_streamer_routes.py, so this fails loudly if demo music ships.
     playback = inspect.getsource(streamer.run_playback_loop)
-    assert "allow_recent_repeat=False" in playback, "playback-gap rescue must be strict"
+    assert "allow_recent_repeat=True" in playback, "playback-gap rescue must ask permissively"
 
     # No caller anywhere may omit the policy.
     for module in (producer, streamer):

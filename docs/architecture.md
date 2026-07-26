@@ -325,11 +325,15 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 Program-replacing controls — source switches, playlist purges, panic, and
 Chaos/Festival cutovers — rebuild the real playback queue and its Scaletta shadow
 in one synchronous operation. They reserve only audio already safe to play:
-the packaged continuity clip first, then eligible normalized-cache music, then
-the packaged `emergency_tone.mp3` when the clip and cache are unavailable. A
-normalized-cache candidate passes the same final blocklist rule as every other
-music admission, so a banned song cannot re-enter through this instant-audio
-path.
+eligible normalized-cache music first, then the packaged continuity clip when the
+cache has nothing eligible, then the packaged `emergency_tone.mp3` when both are
+unavailable. The clip is the rung below cached music, not a preamble in front of
+it: a real song is both the better listener experience and the faster one to first
+byte, because the cached payload takes its duration from the sidecar while the
+clip needs an ffprobe first. A normalized-cache candidate passes the same final
+blocklist rule as every other music admission, so a banned song cannot re-enter
+through this instant-audio path, and the song currently on air (or one heard in
+the last few segments) is skipped outright rather than reserved behind itself.
 
 Cache selection here shares the same rescue-rotation cooldown as the producer and
 playback-gap rescues (`audio/norm_cache.py`): a cached song that aired as a rescue
