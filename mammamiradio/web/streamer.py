@@ -3344,14 +3344,17 @@ def _first_listen_bootstrap_tasks(app_state) -> tuple[asyncio.Future, ...]:
 
 def _first_listen_bootstrap_ready(app_state) -> bool:
     """Report whether First Listen origin and receipt state is authoritative."""
+    if bool(getattr(app_state, "first_listen_bootstrap_snapshot_authoritative", False)):
+        # Small embedded/test apps may inject both facts synchronously.  This
+        # opt-in is deliberately separate from task wiring so an empty task
+        # tuple can never become ready through all([]).
+        return True
     if not bool(getattr(app_state, "first_listen_bootstrap_wired", False)):
         return False
     origin_task = getattr(app_state, "first_listen_origin_task", None)
     receipt_task = getattr(app_state, "first_listen_receipt_task", None)
     origin_future = origin_task if isinstance(origin_task, asyncio.Future) else None
     receipt_future = receipt_task if isinstance(receipt_task, asyncio.Future) else None
-    if origin_future is None and receipt_future is None:
-        return True
     if origin_future is None or receipt_future is None:
         return False
     return origin_future.done() and receipt_future.done()

@@ -45,6 +45,7 @@ async (page) => {
     recovery = 'cover_only',
     onboardingRequired = true,
     fresh = true,
+    installOrigin = '',
     bootstrapReady = true,
     sources = true,
     llmKeys = [],
@@ -55,6 +56,7 @@ async (page) => {
   } = {}) => {
     const rows = sources ? sourceRows({ primary, recovery }) : [];
     const healthy = ['playable', 'on_air'].includes(primary);
+    const resolvedInstallOrigin = String(installOrigin || (fresh ? 'fresh' : 'existing'));
     const acceptedAttemptId = durableAttemptId || (audio ? 'browser-attempt-server' : '');
     const selectedEntityId = durableEntityId || (audio ? 'media_player.mac_lab_speaker' : '');
     return {
@@ -82,7 +84,7 @@ async (page) => {
       guided_setup: {
         strip: { items: [], attention_required: onboardingRequired },
         first_listen: {
-          install_origin: fresh ? 'fresh' : 'existing',
+          install_origin: resolvedInstallOrigin,
           fresh_install: fresh,
           bootstrap_ready: bootstrapReady,
           audio_complete: audio,
@@ -92,7 +94,7 @@ async (page) => {
           selected_entity_id: selectedEntityId,
           heard_at: audio ? 101 : null,
           privacy_reviewed_at: privacy ? 102 : null,
-          show_ai: !fresh || (audio && privacy),
+          show_ai: resolvedInstallOrigin === 'existing' || (audio && privacy),
           receipt_recovery: {
             available: Boolean(receiptRecoveryEntity),
             entity_id: receiptRecoveryEntity,
@@ -750,6 +752,43 @@ async (page) => {
     'existing install',
   );
 
+  const unknownInstall = setupProjection({
+    fresh: false,
+    installOrigin: 'unknown',
+    onboardingRequired: true,
+  });
+  await page.evaluate((projection) => {
+    Object.assign(_firstListenUi, {
+      projection: null,
+      selectedEntityId: '',
+      selectedName: '',
+      selectionDirty: false,
+      attemptId: '',
+      dispatch: 'ready',
+      verification: 'awaiting',
+      privacyChoice: null,
+      privacyReceiptChoice: null,
+      repairOpen: false,
+      busy: false,
+    });
+    _firstListenLandingResolved = false;
+    _adminTabUserInteracted = false;
+    document.body.dataset.firstListenEntry = 'pending';
+    showAdminTab('scaletta', { render: false, persist: false });
+    _lastSetupJson = null;
+    renderSetup(projection);
+  }, unknownInstall);
+  assert(
+    await page.locator('#tab-setup').getAttribute('aria-selected') === 'true',
+    'unknown install skipped required First Listen',
+  );
+  assert(
+    await page.evaluate(() => document.body.dataset.firstListenEntry) === 'required',
+    'unknown install was marked complete without audible proof',
+  );
+  await assertCurrentStep('firstListenSpeakerStep');
+  assert(await page.locator('#firstListenQuickFindPlayersBtn').isEnabled(), 'unknown install lost its speaker-check path');
+
   const existingRequestCounts = {
     players: playerRequests.length,
     plays: playRequests.length,
@@ -776,6 +815,12 @@ async (page) => {
   );
   assert(await page.locator('#firstListenKeepOffBtn').isEnabled(), 'existing install cannot review privacy');
   assert(await page.locator('#firstListenKeepOffBtn').isVisible(), 'existing-install privacy controls stayed hidden');
+  assert(
+    await page.locator('#firstListenPrivacyStep > .first-listen-body').evaluate((element) => (
+      !element.hidden && element.getAttribute('aria-hidden') === 'false' && !element.inert
+    )),
+    'existing-install privacy body stayed inert',
+  );
   await page.locator('#firstListenKeepOffBtn').click();
   await page.waitForFunction(() => _firstListenUi.privacyChoice === false && !_firstListenUi.privacySaving);
   assert(playerRequests.length === existingRequestCounts.players, 'existing privacy review discovered speakers');
@@ -805,7 +850,9 @@ async (page) => {
   await page.waitForFunction(() => _firstListenUi.dispatch === 'receipt_failed' && !_firstListenUi.busy);
   assert(playRequests.length === receiptPlayBaseline + 1, 'receipt failure did not make exactly one explicit play request');
   await assertCurrentStep('firstListenVerifyStep');
+  assert(await page.evaluate(() => _firstListenUi.repairOpen === true), 'receipt failure did not open persistence-only repair state');
   assert(await page.locator('#firstListenReceiptRepair').isVisible(), 'unsaved accepted attempt hid its recovery panel');
+  assert(await page.locator('#firstListenSaveAttemptBtn').isEnabled(), 'receipt failure exposed no usable save action');
   const receiptRepairCopy = await page.locator('#firstListenReceiptRepair').innerText();
   assert(receiptRepairCopy.includes('Home Assistant accepted the show.'), 'receipt recovery lost accepted-play truth');
   assert(receiptRepairCopy.includes('Only this listening check still needs saving.'), 'receipt recovery lost persistence-only guidance');
@@ -822,6 +869,7 @@ async (page) => {
   assert(receiptRetryRequests.length === receiptRetryBaseline + 1, 'first persistence-only retry was not sent');
   assert(playRequests.length === receiptPlayBaseline + 1, 'failed receipt save replayed the station');
   assert(await page.locator('#firstListenReceiptRepair').isVisible(), 'failed receipt save removed its recovery path');
+  assert(await page.locator('#firstListenSaveAttemptBtn').isEnabled(), 'failed receipt save disabled its only recovery action');
   assert(!(await page.locator('#firstListenVerifyActions').isVisible()), 'failed receipt save restored competing listening answers');
   assert(await page.locator('#firstListenHeardBtn').isDisabled(), 'failed receipt save unlocked verification');
   await page.locator('#firstListenSaveAttemptBtn').click();

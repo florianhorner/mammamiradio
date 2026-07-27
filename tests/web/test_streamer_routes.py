@@ -169,9 +169,9 @@ def _make_test_app(
     # Most route tests model a proven pre-feature install. Individual First
     # Listen tests opt into fresh/unknown explicitly to exercise the gate.
     app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.EXISTING)
-    # This minimal app injects authoritative setup state directly rather than
-    # scheduling the two production bootstrap tasks.
-    app.state.first_listen_bootstrap_wired = True
+    # This minimal app injects authoritative setup state directly.  It must
+    # opt in explicitly rather than relying on a taskless bootstrap tuple.
+    app.state.first_listen_bootstrap_snapshot_authoritative = True
     # Drive run_playback_loop integration tests with a real-time pacer (no
     # send-ahead lead) so their queue/rescue timing assertions stay
     # deterministic. The 500 ms delivery cushion itself is covered directly by
@@ -5215,7 +5215,8 @@ async def test_admin_first_paint_selects_first_listen_only_for_fresh_unfinished_
 async def test_admin_first_paint_stays_pending_before_bootstrap_tasks_are_wired():
     """An empty task tuple during partial construction is not authoritative."""
     app = _make_test_app()
-    app.state.first_listen_bootstrap_wired = False
+    app.state.first_listen_bootstrap_snapshot_authoritative = False
+    app.state.first_listen_bootstrap_wired = True
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -7487,14 +7488,14 @@ async def test_first_listen_receipt_retry_does_not_invent_acceptance_for_other_e
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("receipt_persisted", "attempt_id"),
-    [(None, None), (True, None)],
+    [(False, None), (True, None)],
 )
 async def test_first_listen_play_requires_explicit_durable_attempt_truth(
     tmp_path,
     receipt_persisted,
     attempt_id,
 ):
-    """Unknown persistence truth and missing IDs never unlock verification."""
+    """Unsaved attempts and missing IDs never unlock verification."""
     from mammamiradio.home.ha_playback import HAPlayResult
 
     app = _make_test_app()

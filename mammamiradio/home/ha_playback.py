@@ -140,7 +140,7 @@ class HAPlayResult:
     entity_id: str
     accepted: bool
     station_resumed: bool
-    receipt_persisted: bool | None
+    receipt_persisted: bool
     attempt_id: str | None = None
     reason: HAPlaybackReason | None = None
 
@@ -444,7 +444,7 @@ class HAPlaybackService:
                     results = await self._run_commands(
                         ws,
                         commands,
-                        timeout=self._timeouts.discovery_total,
+                        timeout_budget=self._timeouts.discovery_total,
                     )
         except HAPlaybackError:
             raise
@@ -517,12 +517,10 @@ class HAPlaybackService:
         self._remember_pending_acceptance(access, entity_id, station_resumed)
 
         if self._persist_accepted_attempt is None:
-            return HAPlayResult(
-                entity_id=entity_id,
-                accepted=True,
-                station_resumed=station_resumed,
-                receipt_persisted=None,
-            )
+            # An accepted HA side effect without a persistence callback is
+            # explicitly unsaved.  Do not expose a third "unknown" state that
+            # a First Listen caller could mistake for durable verification.
+            return _receipt_failure_result(entity_id, station_resumed)
 
         try:
             # HA has already accepted an external side effect.  Receipt storage
@@ -616,7 +614,11 @@ class HAPlaybackService:
                 try:
                     async with self._connect(access) as ws:
                         await self._authenticate(ws, access.ha_token)
-                        await self._run_commands(ws, command)
+                        await self._run_commands(
+                            ws,
+                            command,
+                            timeout_budget=self._timeouts.command,
+                        )
                         accepted = True
                 except HAPlaybackError:
                     if accepted:
@@ -660,14 +662,14 @@ class HAPlaybackService:
         ws: _WebSocket,
         commands: Sequence[tuple[int, Mapping[str, object], HAPlaybackReason]],
         *,
-        timeout: float | None = None,
+        timeout_budget: float,
     ) -> dict[int, object]:
+        """Run one command batch inside one explicit shared timeout budget."""
         expected = {message_id: failure_reason for message_id, _, failure_reason in commands}
         results: dict[int, object] = {}
         seen_messages = 0
-        command_timeout = self._timeouts.command if timeout is None else timeout
 
-        async with asyncio.timeout(command_timeout):
+        async with asyncio.timeout(timeout_budget):
             for _, payload, _ in commands:
                 await ws.send(json.dumps(payload, separators=(",", ":")))
 

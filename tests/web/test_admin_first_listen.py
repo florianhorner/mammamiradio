@@ -88,10 +88,15 @@ def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
     mount = _function("initFirstListenPanelMount", "initTabs")
     assert "mount.append(details)" in mount
 
+    origin_gate = _function("firstListenInstallNeedsOnboarding", "firstListenEntryRequired")
+    assert "first?.install_origin||'unknown'" in origin_gate
+    assert ".trim().toLowerCase()" in origin_gate
+    assert "first?.fresh_install===true" in origin_gate
+    assert "origin==='fresh'||origin==='unknown'" in origin_gate
+
     required = _function("firstListenEntryRequired", "resolveFirstListenLanding")
     assert "first.bootstrap_ready===true" in required
-    assert "first.fresh_install===true" in required
-    assert "origin==='unknown'" in required
+    assert "firstListenInstallNeedsOnboarding(first)" in required
     assert "first.audio_complete&&first.privacy_complete" in required
     assert "onboarding_steps" not in required
 
@@ -187,11 +192,12 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
 
     assert "const priorInstall=projection.legacy||projection.first.install_origin==='existing'" in progress
-    assert "const listenAccepted=projection.accepted||priorInstall" in progress
+    assert "const listenAccepted=projection.accepted||priorInstall||receiptRepairRequired" in progress
     assert "const listenComplete=projection.heard||priorInstall" in progress
+    assert "const existingPrivacyReview=priorInstall&&!projection.privacyReviewed" in progress
     assert "listenAccepted?'complete':'current'" in progress
     assert "listenComplete?'complete':'current'" in progress
-    assert "privacyMilestone?'complete':listenComplete?'current'" in progress
+    assert "privacyMilestone?'complete':existingPrivacyReview?'current'" in progress
     assert "sourceKnown?'complete':priorInstall?'available':'current'" in progress
     assert "priorInstall?'complete':!sourceKnown?'locked'" in progress
     assert "firstListenSetStep('firstListenAiStep',privacyMilestone?'current':'locked')" in progress
@@ -309,8 +315,12 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "if(accepted&&resp?.receipt_persisted===false)" in start
     assert "_firstListenUi.attemptId=''" in start
     assert "_firstListenUi.dispatch='receipt_failed'" in start
-    assert "verifyActions.hidden=_firstListenUi.dispatch==='receipt_failed'" in progress
+    assert "_firstListenUi.repairOpen=true" in start
+    assert "const receiptRepairRequired=_firstListenUi.dispatch==='receipt_failed'" in progress
+    assert "receiptRepairRequired?'current'" in progress
+    assert "verifyActions.hidden=receiptRepairRequired" in progress
     assert ".first-listen-actions[hidden]{display:none}" in html
+    assert "_firstListenUi.repairOpen=true" in save
     assert "_firstListenUi.receiptSaving=true" in save
     assert "_firstListenUi.receiptSaving=false" in save
     assert "api('POST','/api/setup/first-listen/receipt/retry',{entity_id:entityId})" in save
@@ -320,8 +330,8 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "code==='receipt_recovery_missing'" in save
     assert "_firstListenUi.dispatch='ready'" in save
     assert "focusTarget='firstListenPlayBtn'" in save
-    assert "receiptRepair.hidden=_firstListenUi.dispatch!=='receipt_failed'" in progress
-    assert "_firstListenUi.dispatch!=='receipt_failed'" in progress
+    assert "receiptRepair.hidden=!receiptRepairRequired" in progress
+    assert "repair.hidden=!_firstListenUi.repairOpen||receiptRepairRequired" in progress
     assert "_firstListenUi.receiptSaving" in progress
     save_disabled = next(line for line in progress.splitlines() if "saveAttemptBtn.disabled=" in line)
     assert "_firstListenUi.players" not in save_disabled
@@ -332,6 +342,7 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "_firstListenUi.attemptId=''" in hydrate
     assert "_firstListenUi.selectedEntityId=entityId" in hydrate
     assert "_firstListenUi.dispatch='receipt_failed'" in hydrate
+    assert "_firstListenUi.repairOpen=true" in hydrate
     assert "startFirstListen(" not in hydrate
     assert "pendingRecoveryEntityId" in players
     assert "current===pendingRecovery" in players

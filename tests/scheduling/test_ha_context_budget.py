@@ -825,10 +825,49 @@ async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_normal_completion_rechecks_generation_after_observer_before_publish(tmp_path):
+    config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
+    prior = _snapshot("private prior", age=0.02)
+    state = StationState()
+    candidate = _snapshot("private completed candidate")
+    outcome = _HomeContextFetchOutcome(
+        kind="fresh",
+        context=candidate,
+        snapshot_timestamp=candidate.timestamp,
+        attempt_started_at=candidate.timestamp,
+        attempt_finished_at=candidate.timestamp,
+        duration_seconds=0.001,
+        observed_entity_ids=frozenset({"sensor.private_room"}),
+    )
+
+    async def _completed_fetch(**_kwargs):
+        return outcome
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(producer, "_fetch_home_context_outcome", _completed_fetch),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        observer = MagicMock(side_effect=lambda _entity_ids: coordinator.suspend())
+        state.home_entity_ids_observer = observer
+        coordinator._start_attempt()
+        task = coordinator.in_flight_task
+        assert task is not None
+        await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+
+        assert await coordinator._drain_completed_result() is None
+
+        observer.assert_called_once_with(frozenset({"sensor.private_room"}))
+        publish.assert_not_called()
+        assert coordinator.current_context is None
+        await coordinator.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("source", "preserved"),
     [
-        ("timer", False),
         ("ha", False),
         ("ha:sensor.private_room", False),
         ("", False),
@@ -856,6 +895,24 @@ async def test_suspend_clears_home_owned_directives_and_preserves_explicit_sourc
         assert state.ha_pending_directive == ""
         assert state.ha_pending_directive_moment_id == ""
         assert state.ha_pending_directive_source == ""
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_suspend_clears_timer_directive_as_home_owned(tmp_path):
+    config = _config(tmp_path)
+    state = StationState(
+        ha_pending_directive="the pasta timer is done",
+        ha_pending_directive_moment_id="timer-moment",
+        ha_pending_directive_source="timer",
+    )
+    coordinator = _HAContextRefreshCoordinator(config, state)
+
+    coordinator.suspend()
+
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
     await coordinator.close()
 
 

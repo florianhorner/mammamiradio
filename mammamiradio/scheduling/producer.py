@@ -371,6 +371,10 @@ _HA_CONTEXT_COLD_LOAD_TIMEOUT = 20.0
 # prompt boundary, but never a segment already being rendered or queued.
 _HA_CONTEXT_BACKGROUND_TIMEOUT = 30.0
 _HA_CONTEXT_MIN_STALE_SECONDS = 120.0
+# These directives are created outside Home context and may survive a Home
+# privacy cutover. Every other source, including timer, HA entity, blank, and
+# unknown legacy values, fails closed as Home-owned.
+_PRIVACY_INDEPENDENT_DIRECTIVE_SOURCES = frozenset({"operator", "skip_bit"})
 
 
 def _home_context_generation_is_current(
@@ -3367,6 +3371,15 @@ class _HAContextRefreshCoordinator:
             return
         self._state.set_ha_context_refresh_stage(stage)
 
+    def _refresh_generation_is_active(self, generation: int | None) -> bool:
+        """Whether a refresh still belongs to the publishable privacy era."""
+        return (
+            generation is not None
+            and not self._closed
+            and not self._suspended
+            and generation == self._attempt_generation
+        )
+
     def _is_configured(self) -> bool:
         return bool(
             self._config.homeassistant.enabled
@@ -3615,7 +3628,7 @@ class _HAContextRefreshCoordinator:
         task_generation = self._task_generation
         self._task = None
         self._task_generation = None
-        if self._closed or self._suspended or task_generation is None or task_generation != self._attempt_generation:
+        if not self._refresh_generation_is_active(task_generation):
             # A privacy cutover invalidates even a request that completed just
             # before suspend(). Consume its terminal state without adopting any
             # context, observer side effect, or module-level event baselines.
@@ -3673,7 +3686,7 @@ class _HAContextRefreshCoordinator:
         # adoption side effect. The method has no await below this point, but
         # these checks also fail closed if a synchronous policy callback ever
         # introduces a re-entrant cutover.
-        if self._suspended or self._closed or task_generation != self._attempt_generation:
+        if not self._refresh_generation_is_active(task_generation):
             return None
 
         observer = self._state.home_entity_ids_observer
@@ -3691,7 +3704,7 @@ class _HAContextRefreshCoordinator:
         was_stale_gap = self._attempt_started_after_stale_gap
         accepted_outcome = revalidate_home_context_outcome_mutes(outcome, self._config.cache_dir)
         adopted = accepted_outcome.context
-        if self._suspended or self._closed or task_generation != self._attempt_generation:
+        if not self._refresh_generation_is_active(task_generation):
             return None
         stale_at_adoption = self._is_stale(adopted)
         if was_stale_gap or stale_at_adoption:
@@ -3705,9 +3718,11 @@ class _HAContextRefreshCoordinator:
 
         # Publish both the accepted snapshot and its event-matcher baselines as
         # one producer-owned handoff.  No background-task callback can do this.
+        if not self._refresh_generation_is_active(task_generation):
+            return None
         if not _uses_injected_legacy_fetch():
             _publish_home_context_outcome(replace(accepted_outcome, context=adopted))
-        if self._suspended or self._closed or task_generation != self._attempt_generation:
+        if not self._refresh_generation_is_active(task_generation):
             return None
         self._context = adopted
         self._record_terminal_result(
@@ -3800,9 +3815,7 @@ class _HAContextRefreshCoordinator:
     def _clear_revoked_handoffs(self) -> None:
         """Clear producer-owned prompt handoffs that can carry Home details."""
         source = str(self._state.ha_pending_directive_source or "")
-        # Only these two sources have explicit non-Home ownership. Timer, HA,
-        # blank, and unknown legacy sources fail closed at privacy revocation.
-        if source not in {"operator", "skip_bit"}:
+        if source not in _PRIVACY_INDEPENDENT_DIRECTIVE_SOURCES:
             self._state.ha_pending_directive = ""
             self._state.ha_pending_directive_moment_id = ""
             self._state.ha_pending_directive_source = ""

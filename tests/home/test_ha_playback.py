@@ -219,12 +219,14 @@ async def test_discovery_timeout_is_bounded_and_safe() -> None:
 
 
 async def test_discovery_commands_share_the_total_envelope_instead_of_the_single_command_timeout() -> None:
-    """A large HA registry may answer slowly without exhausting a 6s per-command budget."""
+    """Discovery uses its total budget even when a reply exceeds the command budget."""
 
-    async def modest_command_delay(_message: dict[str, object]) -> None:
-        await asyncio.sleep(0.02)
+    response_delay = 0.02
 
-    server = _FakeHAServer(before_command=modest_command_delay)
+    async def delayed_discovery_response(_message: dict[str, object]) -> None:
+        await asyncio.sleep(response_delay)
+
+    server = _FakeHAServer(before_command=delayed_discovery_response)
     service = _service(
         server,
         timeouts=HAPlaybackTimeouts(
@@ -239,6 +241,7 @@ async def test_discovery_commands_share_the_total_envelope_instead_of_the_single
 
     result = await service.discover()
 
+    assert service._timeouts.command < response_delay < service._timeouts.discovery_total
     assert [candidate.entity_id for candidate in result.candidates] == ["media_player.kitchen"]
     assert len([message for message in server.sent if message.get("type") != "auth"]) == 6
 
@@ -493,6 +496,19 @@ async def test_accepted_dispatch_returns_partial_truth_when_receipt_persistence_
         raise OSError("private disk path")
 
     result = await _service(server, persist_accepted_attempt=fail_persistence).play("media_player.kitchen")
+
+    assert result.accepted is True
+    assert result.receipt_persisted is False
+    assert result.reason is HAPlaybackReason.RECEIPT_UNAVAILABLE
+    assert result.attempt_id is None
+    assert sum(message.get("type") == "call_service" for message in server.sent) == 1
+
+
+async def test_accepted_dispatch_without_receipt_callback_is_explicitly_unsaved() -> None:
+    """Missing persistence wiring is failure truth, never an ambiguous None."""
+    server = _FakeHAServer()
+
+    result = await _service(server).play("media_player.kitchen")
 
     assert result.accepted is True
     assert result.receipt_persisted is False

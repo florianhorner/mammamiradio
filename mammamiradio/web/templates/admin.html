@@ -3986,10 +3986,13 @@ function openSetupPanel(){
     else summary?.focus({preventScroll:true});
   },50);
 }
+function firstListenInstallNeedsOnboarding(first){
+  const origin=String(first?.install_origin||'unknown').trim().toLowerCase();
+  return first?.fresh_install===true||origin==='fresh'||origin==='unknown';
+}
 function firstListenEntryRequired(setup){
   const first=setup?.guided_setup?.first_listen||{};
-  const origin=String(first.install_origin||'');
-  const needsOnboarding=first.fresh_install===true||origin==='unknown';
+  const needsOnboarding=firstListenInstallNeedsOnboarding(first);
   return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete);
 }
 function resolveFirstListenLanding(setup){
@@ -4184,7 +4187,7 @@ function hydrateFirstListenReceiptRecovery(payload){
   _firstListenUi.selectedName=entityId;
   _firstListenUi.dispatch='receipt_failed';
   _firstListenUi.verification='awaiting';
-  _firstListenUi.repairOpen=false;
+  _firstListenUi.repairOpen=true;
   return entityId;
 }
 function renderFirstListenPlayers(players,savedEntityId='',pendingRecoveryEntityId=''){
@@ -4280,14 +4283,16 @@ function renderFirstListenProgress(){
   renderFirstListenSources(source);
 
   const priorInstall=projection.legacy||projection.first.install_origin==='existing';
-  const listenAccepted=projection.accepted||priorInstall;
+  const receiptRepairRequired=_firstListenUi.dispatch==='receipt_failed';
+  const listenAccepted=projection.accepted||priorInstall||receiptRepairRequired;
   const listenComplete=projection.heard||priorInstall;
+  const existingPrivacyReview=priorInstall&&!projection.privacyReviewed;
   renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,recoveryAvailable,priorInstall});
   firstListenSetStep('firstListenSourceStep',sourceKnown?'complete':priorInstall?'available':'current');
   firstListenSetStep('firstListenSpeakerStep',priorInstall?'complete':!sourceKnown?'locked':listenAccepted?'complete':'current');
-  firstListenSetStep('firstListenVerifyStep',!listenAccepted?'locked':listenComplete?'complete':'current');
+  firstListenSetStep('firstListenVerifyStep',receiptRepairRequired?'current':!listenAccepted?'locked':listenComplete?'complete':'current');
   const privacyMilestone=projection.privacyReviewed&&(projection.heard||priorInstall);
-  firstListenSetStep('firstListenPrivacyStep',privacyMilestone?'complete':listenComplete?'current':projection.privacyUnlocked?'available':'locked');
+  firstListenSetStep('firstListenPrivacyStep',privacyMilestone?'complete':existingPrivacyReview?'current':listenComplete?'current':projection.privacyUnlocked?'available':'locked');
   firstListenSetStep('firstListenAiStep',privacyMilestone?'current':'locked');
 
   const sourceSummary=document.getElementById('firstListenSourceSummary');
@@ -4347,7 +4352,7 @@ function renderFirstListenProgress(){
   }
   if(retryBtn)retryBtn.disabled=!deliberateRetry||!_firstListenUi.selectedEntityId||speakerBusy;
   if(saveAttemptBtn){
-    saveAttemptBtn.disabled=_firstListenUi.dispatch!=='receipt_failed'||!_firstListenUi.selectedEntityId||_firstListenUi.busy||_firstListenUi.receiptSaving;
+    saveAttemptBtn.disabled=!receiptRepairRequired||!_firstListenUi.selectedEntityId||_firstListenUi.busy||_firstListenUi.receiptSaving;
     saveAttemptBtn.textContent=_firstListenUi.receiptSaving?'Saving listening check…':'Save this listening check';
   }
   const speakerStep=document.getElementById('firstListenSpeakerStep');
@@ -4371,17 +4376,17 @@ function renderFirstListenProgress(){
     firstListenSetChip('firstListenSpeakerChip','idle','Waiting');
   }
 
-  const canVerify=projection.accepted&&Boolean(_firstListenUi.attemptId||projection.first.accepted_attempt_id||projection.verification.attempt_id)&&_firstListenUi.dispatch!=='receipt_failed';
+  const canVerify=projection.accepted&&Boolean(_firstListenUi.attemptId||projection.first.accepted_attempt_id||projection.verification.attempt_id)&&!receiptRepairRequired;
   const verifyActions=document.getElementById('firstListenVerifyActions');
   const heardBtn=document.getElementById('firstListenHeardBtn');
   const notYetBtn=document.getElementById('firstListenNotYetBtn');
-  if(verifyActions)verifyActions.hidden=_firstListenUi.dispatch==='receipt_failed';
+  if(verifyActions)verifyActions.hidden=receiptRepairRequired;
   if(heardBtn)heardBtn.disabled=!canVerify||_firstListenUi.busy||_firstListenUi.receiptSaving||projection.heard;
   if(notYetBtn)notYetBtn.disabled=!canVerify||_firstListenUi.busy||_firstListenUi.receiptSaving||projection.heard;
   const receiptRepair=document.getElementById('firstListenReceiptRepair');
-  if(receiptRepair)receiptRepair.hidden=_firstListenUi.dispatch!=='receipt_failed';
+  if(receiptRepair)receiptRepair.hidden=!receiptRepairRequired;
   const repair=document.getElementById('firstListenRepair');
-  if(repair)repair.hidden=!_firstListenUi.repairOpen||_firstListenUi.dispatch==='receipt_failed';
+  if(repair)repair.hidden=!_firstListenUi.repairOpen||receiptRepairRequired;
   const verifyStep=document.getElementById('firstListenVerifyStep');
   if(verifyStep)verifyStep.setAttribute('aria-busy',_firstListenUi.receiptSaving?'true':'false');
   const verifySummary=document.getElementById('firstListenVerifySummary');
@@ -4392,7 +4397,7 @@ function renderFirstListenProgress(){
     firstListenSetChip('firstListenVerifyChip','ready','Heard');
     if(verifySummary)verifySummary.textContent=healthy?'Bella — Mamma Mi Radio is in the room.':recoveryOnAir?'The station is in the room. Recovery audio follows the opening while music needs attention.':recoveryAvailable?'The station is in the room. Recovery cover is available, but primary music still needs attention.':'The opening reached the room; the live music rotation still needs attention.';
     firstListenSetStatus('firstListenVerifyStatus',`First listen achieved on ${_firstListenUi.selectedName||_firstListenUi.selectedEntityId||'your speaker'}.`,'ready');
-  }else if(_firstListenUi.dispatch==='receipt_failed'){
+  }else if(receiptRepairRequired){
     firstListenSetChip('firstListenVerifyChip','degraded','Save check');
     if(verifySummary)verifySummary.textContent='Home Assistant accepted the show. Only this listening check still needs saving before you confirm what reached the room.';
   }else if(projection.accepted){
@@ -4693,7 +4698,7 @@ async function startFirstListen(el){
       _firstListenUi.attemptId='';
       _firstListenUi.dispatch='receipt_failed';
       _firstListenUi.verification='awaiting';
-      _firstListenUi.repairOpen=false;
+      _firstListenUi.repairOpen=true;
       firstListenSetStatus('firstListenSpeakerStatus',firstListenErrorMessage({error:{code:'receipt_unavailable'}}),'degraded');
       firstListenSetStatus('firstListenVerifyStatus','The show is already accepted. Save this listening check before confirming sound; saving does not play it again.','degraded');
       return;
@@ -4717,6 +4722,7 @@ async function startFirstListen(el){
 async function saveFirstListenAttempt(el){
   const entityId=_firstListenUi.selectedEntityId;
   if(!entityId||_firstListenUi.busy||_firstListenUi.receiptSaving||_firstListenUi.dispatch!=='receipt_failed')return;
+  _firstListenUi.repairOpen=true;
   _firstListenUi.receiptSaving=true;
   renderFirstListenProgress();
   if(el)el.setAttribute('aria-busy','true');

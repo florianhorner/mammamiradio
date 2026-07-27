@@ -793,6 +793,8 @@ def load_explicit_source(
         source.kind == "url" and urlparse(source.url or "").scheme == "classic"
     )
     if is_classic_request:
+        # Record the attempt before loading so both success and failure keep
+        # explicit evidence for this advanced source.
         evidence.set_current_rotation("classic", source.label or "Classic Italian")
         evidence.mark_attempted("classic")
         era = _classic_era_from_source(source)
