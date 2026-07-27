@@ -1070,13 +1070,18 @@ async def test_home_context_preview_maps_auth_failure_without_stale_fallback(tmp
 
 
 @pytest.mark.asyncio
-async def test_home_context_preview_rejects_oversized_response_before_projection(tmp_path):
+@pytest.mark.parametrize("invalid_length", ["not-a-size", "-1", "oversized"])
+async def test_home_context_preview_rejects_invalid_response_size_before_projection(tmp_path, invalid_length):
     import mammamiradio.home.ha_context as ha_context
+
+    content_length = (
+        str(ha_context._HA_PREVIEW_RESPONSE_MAX_BYTES + 1) if invalid_length == "oversized" else invalid_length
+    )
 
     def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            headers={"content-length": str(ha_context._HA_PREVIEW_RESPONSE_MAX_BYTES + 1)},
+            headers={"content-length": content_length},
             content=b"[]",
             request=request,
         )

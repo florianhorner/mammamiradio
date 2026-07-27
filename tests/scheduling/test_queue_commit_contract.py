@@ -387,7 +387,7 @@ async def test_unavailable_music_render_closes_its_timing(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_path):
-    """A stale render cannot undo the terminal source truth written by a ban."""
+    """The blocklist fence cannot let a retired render undo source readiness."""
     track = Track(
         title="Canzone Uno",
         artist="Artista",
@@ -429,7 +429,7 @@ async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_p
             assert _source_readiness_status(config, state)["sources"]["local"]["status"] == "unavailable"
 
             finish_render.set()
-            await _wait_for(lambda: state.discard_by_reason.get(GenerationWasteReason.STALE_PLAYLIST, 0) >= 1)
+            await _wait_for(lambda: state.discard_by_reason.get(GenerationWasteReason.BLOCKLIST_GATE, 0) >= 1)
         finally:
             await _cancel(task)
 
