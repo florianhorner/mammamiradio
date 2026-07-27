@@ -4984,7 +4984,7 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
 
     Persist FIRST, mutate SECOND (matches the super-italian / chaos / quality /
     broadcast-chain toggles): every present pacing key is written in ONE atomic
-    store — /data/options.json on HA addons, .env on standalone — before any
+    store — Supervisor options on HA addons, .env on standalone — before any
     live mutation. If the write fails we return 500 and leave both live config
     and durable config untouched, so a failed save can never leave the two
     disagreeing after a restart. The admin UI reverts the slider and shows a
@@ -5023,7 +5023,7 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
             old_values = {attr: getattr(config.pacing, attr) for attr in clamped}
             # Persist FIRST as one atomic multi-key write. On failure leave live
             # config AND durable config untouched — no partial drift. `clamped` is
-            # already {attr: int}, the exact /data/options.json keys.
+            # already {attr: int}, the exact Supervisor option keys.
             try:
                 if config.is_addon:
                     await loop.run_in_executor(None, _save_addon_option_batch, clamped)
@@ -5038,9 +5038,9 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
             for attr, value in clamped.items():
                 setattr(config.pacing, attr, value)
             # No os.environ write: config.pacing is the live source of truth and
-            # the persisted .env / options.json is the restart source (dotenv and
-            # run.sh repopulate the env at boot). Setting it live would only leak
-            # MAMMAMIRADIO_PACING_* into any later in-process config reload.
+            # the persisted .env / Supervisor option store is the restart source
+            # (dotenv and run.sh repopulate the env at boot). Setting it live would
+            # only leak MAMMAMIRADIO_PACING_* into a later in-process config reload.
         for attr, new_value in clamped.items():
             if new_value != old_values[attr]:
                 _record_operator_action(request, f"pacing_{attr}", old_values[attr], new_value)
@@ -5065,7 +5065,7 @@ _chaos_lock = asyncio.Lock()
 
 
 def _save_super_italian_addon_options(value: bool) -> None:
-    """Persist super_italian_mode into /data/options.json for HA addons."""
+    """Persist super_italian_mode through Supervisor for HA addons."""
     _save_addon_option("super_italian_mode", value)
 
 
@@ -5158,8 +5158,8 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
     banter generation uses the new directive without a restart.
 
     Persistence: writes `MAMMAMIRADIO_SUPER_ITALIAN` to `.env` on standalone
-    deploys, and `super_italian_mode` to `/data/options.json` on HA addons —
-    so the value survives container restarts in both modes.
+    deploys, and `super_italian_mode` to Supervisor's durable option store on
+    HA addons, so the value survives container restarts in both modes.
     """
     config = request.app.state.config
     body, error = await read_json_object(request)
@@ -5218,8 +5218,9 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
     the live stream without breaking the current track.
 
     Persistence: writes ``MAMMAMIRADIO_BROADCAST_CHAIN`` to ``.env`` on standalone
-    deploys, and the ``broadcast_chain`` option to ``/data/options.json`` on HA
-    addons (the same key ``run.sh`` reads back), so the choice survives a restart.
+    deploys, and the ``broadcast_chain`` option through Supervisor on HA addons
+    (the same key ``run.sh`` reads from the generated startup projection), so the
+    choice survives a restart.
     """
     config = request.app.state.config
     body, error = await read_json_object(request)
@@ -5287,7 +5288,7 @@ async def set_quality(request: Request, _: None = Depends(require_admin_access))
     break the illusion mid-segment.
 
     Persistence mirrors super_italian: MAMMAMIRADIO_QUALITY to `.env` (standalone)
-    or quality_profile to /data/options.json (addon).
+    or quality_profile through Supervisor's option store (addon).
     """
     config = request.app.state.config
     body, error = await read_json_object(request)
@@ -5477,7 +5478,7 @@ async def get_party(request: Request, _: None = Depends(require_admin_access)):
 
 
 def _save_festival_addon_options(enabled: bool) -> None:
-    """Persist festival_mode into /data/options.json for HA addons."""
+    """Persist festival_mode through Supervisor for HA addons."""
     _save_addon_option("festival_mode", enabled)
 
 
@@ -5488,7 +5489,8 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
     POST {"action": "enable", "mode": "festival"} to start festival mode.
     POST {"action": "disable"} to return to normal.
 
-    Idempotent — double-enable or double-disable returns ok without side-effects.
+    Idempotent — double-enable or double-disable returns ok without live
+    side-effects. Add-on requests still confirm the selected value with Supervisor.
     """
     config = request.app.state.config
     state = request.app.state.station_state
@@ -5507,7 +5509,8 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
     loop = asyncio.get_running_loop()
 
     async with _party_lock:
-        if config.party_mode == target_mode:
+        unchanged = config.party_mode == target_mode
+        if unchanged and not config.is_addon:
             return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
         val = "true" if target_mode == "festival" else "false"
         # Persist FIRST. The enable path may replace the live lookahead queue and
@@ -5525,6 +5528,8 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
                 status_code=500,
                 content={"ok": False, "error": "failed to persist festival mode"},
             )
+        if unchanged:
+            return {"ok": True, "active": config.party_mode is not None, "mode": config.party_mode}
         old_on = config.party_mode == "festival"
         config.party_mode = target_mode
         os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] = val

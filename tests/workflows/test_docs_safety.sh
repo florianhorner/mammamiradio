@@ -60,6 +60,23 @@ expect_unsafe_at_line() {
   fi
 }
 
+expect_durability_at_line() {
+  local label=$1
+  local file=$2
+  local expected_line=$3
+  local output
+
+  if output=$(bash "$CHECK" "$file" 2>&1); then
+    echo "FAIL: $label unexpectedly passed"
+    exit 1
+  fi
+  if ! grep -Fq "$file:$expected_line  [direct options.json durability claim]" <<< "$output"; then
+    echo "FAIL: $label reported the wrong source line"
+    echo "$output"
+    exit 1
+  fi
+}
+
 expect_default_install_guard() {
   local label=$1
   local guarded_file=$2
@@ -75,10 +92,13 @@ expect_default_install_guard() {
   cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
 
   for file in \
+    CLAUDE.md \
     README.md \
     CONTRIBUTING.md \
     ha-addon/README.md \
     ha-addon/mammamiradio/DOCS.md \
+    docs/architecture.md \
+    docs/festival-mode.md \
     docs/troubleshooting.md \
     docs/operations.md \
     docs/runbooks/ha-addon.md; do
@@ -127,6 +147,46 @@ expect_success "Home Assistant UI restart without SSH" "$TMP/safe-ha-ui-restart.
 # shellcheck disable=SC2016  # literal Markdown code span in the fixture
 printf '# Safe diagnosis\n\nFor diagnosis, `docker exec addon cat /data/options.json` is read-only.\n' > "$TMP/safe-docker-exec.md"
 expect_success "read-only docker exec" "$TMP/safe-docker-exec.md"
+
+# shellcheck disable=SC2016  # literal Markdown code spans in the fixture
+printf '# Safe authority\n\nSupervisor stores the durable app options. `/data/options.json` is a Supervisor-generated, read-only startup projection.\n' > "$TMP/safe-options-projection.md"
+expect_success "generated options projection" "$TMP/safe-options-projection.md"
+
+# shellcheck disable=SC2016  # literal Markdown code spans in the fixture
+printf '# Safe startup\n\nAt startup, `run.sh` reads `/data/options.json` and exports the selected values. Runtime code never writes that file directly.\n' > "$TMP/safe-options-startup-read.md"
+expect_success "options startup read" "$TMP/safe-options-startup-read.md"
+
+# shellcheck disable=SC2016  # literal Markdown code span in the fixture
+printf '# Safe warning\n\nNever persist admin controls to `/data/options.json`; save them through Supervisor.\n' > "$TMP/safe-options-never-write.md"
+expect_success "never persist options directly" "$TMP/safe-options-never-write.md"
+
+# shellcheck disable=SC2016  # literal Markdown code span in the fixture
+printf '# Safe table\n\n| Deployment | Startup input |\n|---|---|\n| Add-on | Supervisor-generated, read-only `/data/options.json` projection |\n' > "$TMP/safe-options-table.md"
+expect_success "generated options table cell" "$TMP/safe-options-table.md"
+
+# shellcheck disable=SC2016  # literal Markdown code fence in the fixture
+printf '# Historical example\n\n```\nAdmin controls persisted to /data/options.json.\n```\n' > "$TMP/safe-options-code-fence.md"
+expect_success "options durability in code fence" "$TMP/safe-options-code-fence.md"
+
+# shellcheck disable=SC2016  # literal Markdown code span in the fixture
+printf '# Unsafe durability\n\nAdmin controls persist to `/data/options.json` across restarts.\n' > "$TMP/unsafe-options-persist.md"
+expect_durability_at_line "direct options persistence" "$TMP/unsafe-options-persist.md" 3
+
+# shellcheck disable=SC2016  # literal Markdown code span in the fixture
+printf '# Unsafe authority\n\n`/data/options.json` is the durable source of truth for add-on settings.\n' > "$TMP/unsafe-options-authority.md"
+expect_durability_at_line "direct options authority" "$TMP/unsafe-options-authority.md" 3
+
+# shellcheck disable=SC2016  # literal Markdown code span in the fixture
+printf '# Unsafe table\n\n| Deployment | Storage |\n|---|---|\n| Add-on | `/data/options.json` stores settings across restarts |\n' > "$TMP/unsafe-options-table.md"
+expect_durability_at_line "table-cell options durability" "$TMP/unsafe-options-table.md" 5
+
+# shellcheck disable=SC2016  # literal Markdown code span in the fixture
+printf '# Unsafe split table\n\n| File | Purpose |\n|---|---|\n| `/data/options.json` | Durable settings that survive restarts |\n' > "$TMP/unsafe-options-split-table.md"
+expect_durability_at_line "cross-cell options durability" "$TMP/unsafe-options-split-table.md" 5
+
+# shellcheck disable=SC2016  # literal Markdown code span in the fixture
+printf '# Historical release notes\n\nThe old release persisted controls to `/data/options.json`.\n' > "$TMP/CHANGELOG.md"
+expect_success "historical changelog exclusion" "$TMP/CHANGELOG.md"
 
 printf '# Retired\n\nGo to Settings > Add-ons > Add-on Store.\n' > "$TMP/retired.md"
 expect_failure "retired install path" "retired Home Assistant install wording" "$TMP/retired.md"

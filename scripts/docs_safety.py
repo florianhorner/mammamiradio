@@ -3,7 +3,8 @@
 
 The shell entrypoint owns the shared editorial regexes. This helper handles the
 parts that need Markdown-aware state: recovery instructions that span lines and
-relative links whose destinations or fragments need real parsing.
+relative links whose destinations or fragments need real parsing, and prose
+that must distinguish Supervisor-owned options from generated startup material.
 """
 
 from __future__ import annotations
@@ -71,6 +72,59 @@ _REFERENCE_DEFINITION = re.compile(r"^\s{0,3}\[([^]]+)\]:\s*(.*)$")
 _REFERENCE_USAGE = re.compile(r"!?\[([^]]+)]\[([^]]*)]")
 _HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 _HTML_ANCHOR = re.compile(r"\b(?:id|name)\s*=\s*(['\"])(.*?)\1", re.IGNORECASE)
+_OPTIONS_JSON = re.compile(r"(?<![\w.-])(?:/data/)?options\.json\b", re.IGNORECASE)
+_DURABILITY_WORD = re.compile(
+    r"\b(?:"
+    r"persist(?:s|ed|ing|ence|ent|ently)?|"
+    r"durab(?:le|ility|ly)|"
+    r"surviv(?:e|es|ed|ing|al)|"
+    r"authorit(?:y|ative)|"
+    r"source[- ]of[- ]truth|"
+    r"stor(?:e|es|ed|age)|"
+    r"sav(?:e|es|ed|ing)"
+    r")\b",
+    re.IGNORECASE,
+)
+_SAFE_OPTIONS_PROJECTION = re.compile(
+    r"(?:"
+    r"(?:/data/)?options\.json.{0,140}\b(?:"
+    r"Supervisor[- ]generated|generated(?:,?\s+read[- ]only)?(?:\s+startup)?\s+projection|"
+    r"read[- ]only\s+(?:generated\s+)?startup\s+(?:file|input|material|projection)|"
+    r"(?:is|remains)\s+not\s+(?:the\s+)?(?:durable|persistent|authoritative|source[- ]of[- ]truth)"
+    r")\b|"
+    r"\b(?:Supervisor[- ]generated|generated(?:,?\s+read[- ]only)?(?:\s+startup)?\s+projection|"
+    r"read[- ]only\s+(?:generated\s+)?startup\s+(?:file|input|material|projection))"
+    r".{0,140}(?:/data/)?options\.json"
+    r")",
+    re.IGNORECASE,
+)
+_SAFE_OPTIONS_PROHIBITION = re.compile(
+    r"\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid)\b"
+    r".{0,100}\b(?:write|edit|save|persist|treat)\b"
+    r".{0,140}(?:/data/)?options\.json",
+    re.IGNORECASE,
+)
+_DIRECT_OPTIONS_AUTHORITY = (
+    re.compile(
+        r"(?:/data/)?options\.json.{0,100}\b(?:"
+        r"(?:is|acts?\s+as|remains?|becomes?)\s+(?:the\s+)?"
+        r"(?:durable|persistent|authoritative|source[- ]of[- ]truth)|"
+        r"(?:persist|store|save)s?\s+(?:the\s+)?(?:state|settings?|values?|controls?)|"
+        r"(?:survives?|persists?)\s+(?:a\s+)?(?:restart|update|reboot)"
+        r")\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:state|settings?|values?|controls?)\b.{0,100}"
+        r"\b(?:survives?|persists?|is\s+durable)\b.{0,120}(?:/data/)?options\.json",
+        re.IGNORECASE,
+    ),
+)
+_DIRECT_OPTIONS_WRITE = re.compile(
+    r"\b(?:persist|save|store)(?:s|d|ing)?\b.{0,100}"
+    r"\b(?:in|to|inside|under|through|via)\b.{0,80}(?:/data/)?options\.json",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -96,6 +150,12 @@ class Block:
 class Link:
     line: int
     target: str
+
+
+@dataclass(frozen=True)
+class ProseUnit:
+    line: int
+    text: str
 
 
 def _read(path: Path) -> str:
@@ -221,6 +281,143 @@ def live_surgery_issues(path: Path, text: str) -> list[Issue]:
                 )
             )
             break
+    return issues
+
+
+def _table_cells(line: str) -> list[str]:
+    """Split a Markdown table row without treating escaped/code pipes as cells."""
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    code_ticks = 0
+    cursor = 0
+    while cursor < len(line):
+        char = line[cursor]
+        if escaped:
+            current.append(char)
+            escaped = False
+            cursor += 1
+            continue
+        if char == "\\":
+            current.append(char)
+            escaped = True
+            cursor += 1
+            continue
+        if char == "`":
+            run_end = cursor
+            while run_end < len(line) and line[run_end] == "`":
+                run_end += 1
+            run_length = run_end - cursor
+            current.extend(line[cursor:run_end])
+            code_ticks = 0 if code_ticks == run_length else run_length
+            cursor = run_end
+            continue
+        if char == "|" and code_ticks == 0:
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+        cursor += 1
+    cells.append("".join(current).strip())
+    if line.lstrip().startswith("|"):
+        cells = cells[1:]
+    if line.rstrip().endswith("|"):
+        cells = cells[:-1]
+    return cells
+
+
+def _is_table_separator(cells: list[str]) -> bool:
+    return bool(cells) and all(not cell or bool(re.fullmatch(r":?-{3,}:?", re.sub(r"\s+", "", cell))) for cell in cells)
+
+
+def markdown_prose_units(text: str) -> list[ProseUnit]:
+    """Return paragraphs/list items and complete table rows, excluding code."""
+    units: list[ProseUnit] = []
+    paragraph: list[str] = []
+    paragraph_line = 1
+    in_fence = False
+    fence_marker = ""
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        if paragraph:
+            units.append(
+                ProseUnit(
+                    paragraph_line,
+                    " ".join(re.sub(r"\s+", " ", part.strip()) for part in paragraph),
+                )
+            )
+            paragraph = []
+
+    for line_number, line in enumerate(text.splitlines(), 1):
+        stripped = line.lstrip()
+        fence = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence:
+            flush_paragraph()
+            marker = fence.group(1)[0]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif marker == fence_marker:
+                in_fence = False
+                fence_marker = ""
+            continue
+        if in_fence:
+            continue
+        if not stripped:
+            flush_paragraph()
+            continue
+
+        cells = _table_cells(line)
+        is_table = len(cells) > 1 and (stripped.startswith("|") or stripped.endswith("|") or line.count("|") >= 2)
+        if is_table:
+            flush_paragraph()
+            if not _is_table_separator(cells):
+                row = " | ".join(cell for cell in cells if cell)
+                if row:
+                    units.append(ProseUnit(line_number, row))
+            continue
+
+        starts_new_unit = bool(re.match(r"\s{0,3}(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+|>\s*)", line))
+        if starts_new_unit:
+            flush_paragraph()
+        if not paragraph:
+            paragraph_line = line_number
+        paragraph.append(line)
+
+    flush_paragraph()
+    return units
+
+
+def options_json_durability_issues(path: Path, text: str) -> list[Issue]:
+    """Reject prose that treats generated options.json as durable authority."""
+    if path.name.casefold() == "changelog.md":
+        return []
+
+    issues: list[Issue] = []
+    for unit in markdown_prose_units(text):
+        normalized = re.sub(r"\s+", " ", unit.text)
+        if not _OPTIONS_JSON.search(normalized) or not _DURABILITY_WORD.search(normalized):
+            continue
+
+        authority_claim = any(pattern.search(normalized) for pattern in _DIRECT_OPTIONS_AUTHORITY)
+        direct_write = bool(_DIRECT_OPTIONS_WRITE.search(normalized))
+        safe_projection = bool(_SAFE_OPTIONS_PROJECTION.search(normalized))
+        safe_prohibition = bool(_SAFE_OPTIONS_PROHIBITION.search(normalized))
+        if not authority_claim:
+            if safe_prohibition:
+                continue
+            if safe_projection and not direct_write:
+                continue
+
+        issues.append(
+            Issue(
+                path,
+                unit.line,
+                "direct options.json durability claim",
+                normalized,
+            )
+        )
     return issues
 
 
@@ -429,6 +626,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--copy", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--links", nargs="*", default=[], metavar="FILE")
+    parser.add_argument("--persistence", nargs="*", default=[], metavar="FILE")
     return parser.parse_args()
 
 
@@ -437,7 +635,7 @@ def main() -> int:
     issues: list[Issue] = []
     cache: dict[Path, str] = {}
 
-    for raw_path in dict.fromkeys([*args.copy, *args.links]):
+    for raw_path in dict.fromkeys([*args.copy, *args.links, *args.persistence]):
         path = Path(raw_path)
         try:
             cache[path] = _read(path)
@@ -452,6 +650,10 @@ def main() -> int:
         path = Path(raw_path)
         if path in cache:
             issues.extend(relative_link_issues(path, cache[path]))
+    for raw_path in args.persistence:
+        path = Path(raw_path)
+        if path in cache:
+            issues.extend(options_json_durability_issues(path, cache[path]))
 
     for issue in issues:
         print(issue.render())

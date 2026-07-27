@@ -61,6 +61,14 @@ AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder
 
 `/config/secrets.env` is a plaintext file in the add-on config storage, not Home Assistant's `/config/secrets.yaml`. Anyone with host/add-on config access can read it; it exists to keep provider credentials out of Supervisor options and diagnostics.
 
+Supervisor's stored app options are the durable authority for Super Italian,
+Chaos, Festival, AI Quality, On-Air Sound, and pacing. Changes from the control
+room save there before the running station changes. `/data/options.json` is a
+Supervisor-generated, read-only startup projection; the app reads it when
+starting and never writes it directly. A selection held only in memory by an
+older build cannot be recovered after an update rematerializes an older
+Supervisor value.
+
 The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 
 ### Playing on speakers

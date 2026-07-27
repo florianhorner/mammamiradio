@@ -1134,11 +1134,12 @@ def _apply_addon_options() -> None:
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
-    # Pacing (mirrors the toggles above): map persisted /data/options.json values
-    # to env for the non-run.sh add-on boot path. run.sh normally exports these
-    # first, and the `not os.getenv` guard keeps that export authoritative; the
-    # load-time override loop clamps to range, so no clamp is needed here. bool is
-    # excluded because it is an int subclass.
+    # Pacing (mirrors the toggles above): map Supervisor's generated
+    # /data/options.json startup projection to env for the non-run.sh add-on boot
+    # path. run.sh normally exports these first, and the `not os.getenv` guard
+    # keeps that export authoritative; the load-time override loop clamps to
+    # range, so no clamp is needed here. bool is excluded because it is an int
+    # subclass.
     for opt_key, env_key in (
         ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
         ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),

@@ -18,7 +18,7 @@ Code change
   → User clicks "Update" in HA
   → HA pulls image from GHCR
   → Container starts with /run.sh
-  → run.sh reads /data/options.json + /config/secrets.env → sets env vars
+  → Supervisor materializes /data/options.json; run.sh reads it + /config/secrets.env → sets env vars
   → config.py reads env vars + radio.toml → builds StationConfig
   → main.py starts producer + streamer
 ```
@@ -141,19 +141,37 @@ Current config options:
 
 Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
 
+**Admin option durability.** Supervisor's stored app options are the sole
+durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
+and pacing. Admin routes commit the selected value through Supervisor before
+changing live state: they authenticate to `GET /addons/self/info`, merge the
+requested fields into every active-schema option, and send one complete
+replacement to `POST /addons/self/options`. `/data/options.json` is a
+Supervisor-generated, read-only startup projection; `run.sh` and startup
+loaders may read it, but application code must never write it directly or use
+it as a persistence fallback.
+
+An upgrade cannot reconstruct a pre-fix selection that existed only in the
+running process after Supervisor rematerializes an older stored value. Before
+the first fixed Edge update, compare the running admin values with
+`ha addons info` and mirror any intentional mismatch through the Home Assistant
+Configuration surface.
+
 **Provider secrets.** The five AI/TTS provider credentials live in `/config/secrets.env` in add-on
 mode: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
 `ELEVENLABS_API_KEY`. They are no longer add-on schema fields at all (unlike `JAMENDO_CLIENT_ID`,
 which stays as an advanced optional Supervisor option), so a fresh install never exposes them to
-`ha addons info`. Upgraded installs keep their keys through a one-time boot recovery: Supervisor
-strips schema-removed keys from `/data/options.json` when it starts the add-on, so `run.sh` fetches
-the values still held in Supervisor's stored settings via the Supervisor API
+`ha addons info`. Upgraded installs keep their keys through a one-time boot recovery: schema-removed
+keys are absent from the Supervisor-generated, read-only `/data/options.json` startup projection, so
+`run.sh` fetches the values still held in Supervisor's stored settings via the Supervisor API
 (`GET $SUPERVISOR_API/addons/self/info`, token-authenticated, 5s timeout, best-effort) and persists
 them into `secrets.env` — every later boot is file-first. The stored copies remain visible to
-`ha addons info` until the operator opens the add-on Configuration tab and saves once (which
-replaces stored settings with only the current fields). `JAMENDO_CLIENT_ID` and `ADMIN_TOKEN`
-remain Supervisor options. `/config/secrets.env` is plaintext in the add-on config storage, not
-Home Assistant `/config/secrets.yaml`; anyone with host/add-on config access can read it.
+`ha addons info` until a successful admin mode/pacing save or a later add-on Configuration save
+replaces stored settings with only current-schema fields. A Configuration save cannot invoke the
+app's credential migration: on an upgraded install, wait for successful startup recovery (or use a
+successful admin mode/pacing save) before changing Configuration. `JAMENDO_CLIENT_ID` and
+`ADMIN_TOKEN` remain Supervisor options. `/config/secrets.env` is plaintext in the add-on config
+storage, not Home Assistant `/config/secrets.yaml`; anyone with host/add-on config access can read it.
 
 `secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,
 whitespace around keys or values, single or double quoted values, values containing `=`, UTF-8 BOM,
@@ -165,12 +183,14 @@ replaced the old `claude_model` dropdown. The operator picks *intent*, not a mod
 snapshot, and `run.sh` maps it to `MAMMAMIRADIO_QUALITY` (a missing/blank value
 defaults to `balanced`). Creative work uses Opus/large in `premium`, Sonnet/small
 in `balanced`, and Haiku/small in `economy`; latency-sensitive `fast` work stays
-on Haiku/small in every profile. If an existing
-`/data/options.json` still contains the removed `claude_model` key, `run.sh` also
-exports it as the legacy `CLAUDE_MODEL` fast-role override until the operator saves
-`quality_profile`. The canonical model IDs, OpenAI TTS selection, and
-script-token prices live in the root `model_registry.toml` (see "Dynamic LLM
-routing" in the root `CLAUDE.md`).
+on Haiku/small in every profile. If the Supervisor-generated, read-only
+`/data/options.json` startup projection still contains the removed
+`claude_model` key, `run.sh` also
+exports it as the legacy `CLAUDE_MODEL` fast-role override while no
+`quality_profile` exists. A successful Supervisor-backed admin save removes the
+legacy field once `quality_profile` is present. The canonical model IDs, OpenAI
+TTS selection, and script-token prices live in the root `model_registry.toml`
+(see "Dynamic LLM routing" in the root `CLAUDE.md`).
 **To add or swap a model:** update the relevant registry catalog entry and its
 matching `[pricing.catalog.<provider>]` key in the same change—no code or schema
 change. The add-on image copies this canonical root file; do not create an
@@ -178,7 +198,7 @@ add-on-specific registry copy. An unknown experimental `--models` candidate in
 the evaluator uses the registry's conservative fallback price and is marked
 unpriced in its JSONL output.
 
-The option extraction in run.sh uses a single guarded Python script that reads keys from `/data/options.json` and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
+The option extraction in run.sh uses a single guarded Python script that reads keys from Supervisor's generated, read-only `/data/options.json` startup projection and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
 
 1. Add to `schema:` in `config.yaml`; also add to `options:` in the same relative order only if it should be visible by default
 2. Add a translation entry in `translations/en.yaml`
@@ -308,11 +328,13 @@ Supervisor out of high-churn, rebuildable audio:
 - direct generated audio and sidecars under `/data/cache`
 - `.part`, `.ytdl`, and `.tmp` files at any depth
 
-The backup retains `/data/options.json`, `/config/secrets.env`,
-`/data/cache/mammamiradio.db`, durable JSON state and flags, and provenance
-ledger `.jsonl` / `.jsonl.gz` files. Those are the station's settings, provider
-keys, memory, and retained history. Generated downloads, normalization outputs,
-renders, and clips warm again after restore.
+The backup retains the Supervisor-generated `/data/options.json` startup
+projection, `/config/secrets.env`, `/data/cache/mammamiradio.db`, durable JSON
+state and flags, and provenance ledger `.jsonl` / `.jsonl.gz` files. Supervisor's
+stored app options—not the projection—remain the durable settings authority;
+the other retained files hold provider keys, station memory, and history.
+Generated downloads, normalization outputs, renders, and clips warm again after
+restore.
 
 `/data/music` is deliberately retained, but it is storage-only today. The
 current app runs from `/app` and resolves its local `music/` source there; it is

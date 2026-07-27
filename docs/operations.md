@@ -621,7 +621,24 @@ The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The cont
 
 The `ha-addon/` directory contains a complete Home Assistant app scaffold. Users add the repo URL in **Settings > Apps > App store > Repositories**, then install "Mamma Mi Radio" from the Apps catalog.
 
-The add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) maps Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, reads add-on options from `/data/options.json`, overlays AI/TTS provider secrets from `/config/secrets.env`, and starts uvicorn. Provider secrets in `/config/secrets.env` win over legacy option values per key (the provider fields are no longer in the add-on schema; keys saved by older installs are recovered once from Supervisor's stored settings via the Supervisor API and persisted into `secrets.env` at first boot); `ADMIN_TOKEN` and `JAMENDO_CLIENT_ID` remain add-on options. It binds `0.0.0.0` with no admin credential by default and trusts its own LAN for admin access (see **Admin access model**); set `admin_token` in the add-on options to require a credential.
+Supervisor's stored app options are the sole durable authority for add-on admin
+modes and pacing. Admin saves commit there before live state changes.
+`/data/options.json` is a Supervisor-generated, read-only startup projection:
+the add-on entrypoint (`ha-addon/mammamiradio/rootfs/run.sh`) reads it, maps the
+Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, overlays AI/TTS provider
+secrets from `/config/secrets.env`, and starts uvicorn. Runtime code never writes
+the projection directly.
+
+Provider secrets in `/config/secrets.env` win over legacy option values per key
+(the provider fields are no longer in the add-on schema; keys saved by older
+installs are recovered once from Supervisor's stored settings via the
+Supervisor API and persisted into `secrets.env` at first boot);
+`ADMIN_TOKEN` and `JAMENDO_CLIENT_ID` remain add-on options. A mode or pacing
+selection held only in memory by a pre-fix build cannot be reconstructed after
+an update rematerializes an older Supervisor value. The add-on binds `0.0.0.0`
+with no admin credential by default and trusts its own LAN for admin access (see
+**Admin access model**); set `admin_token` in the add-on options to require a
+credential.
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow starts with Demo Radio playback, then asks for one AI host key, then exposes the Home context preview. The stream URL can be played on any HA media player.
 

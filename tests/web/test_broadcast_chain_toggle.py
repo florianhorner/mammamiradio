@@ -10,7 +10,6 @@ hot-apply, not just a config field flip.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 from pathlib import Path
@@ -117,17 +116,17 @@ async def test_post_broadcast_chain_persists_standalone():
 
 
 @pytest.mark.asyncio
-async def test_post_broadcast_chain_addon_writes_options_json(tmp_path):
+async def test_post_broadcast_chain_addon_uses_supervisor_persistence():
     app = _make_test_app(is_addon=True)
-    options_file = tmp_path / "options.json"
-    options_file.write_text(json.dumps({"existing": "value"}))
-    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+    ):
         async with _client(app) as client:
             resp = await client.post("/api/broadcast-chain", json={"broadcast_chain": False})
     assert resp.status_code == 200
-    options = json.loads(options_file.read_text())
-    assert options["broadcast_chain"] is False  # same key run.sh reads back
-    assert options["existing"] == "value"  # single-key patch, didn't clobber
+    save_addon_option.assert_called_once_with("broadcast_chain", False)
+    save_dotenv.assert_not_called()
 
 
 @pytest.mark.asyncio
