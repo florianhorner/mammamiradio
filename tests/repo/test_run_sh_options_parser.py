@@ -31,6 +31,7 @@ from typing import ClassVar
 
 import pytest
 
+from mammamiradio.core import config as config_module
 from mammamiradio.core.config import (
     ADDON_MAX_CACHE_SIZE_MB,
     MAX_MAX_CACHE_SIZE_MB,
@@ -62,7 +63,7 @@ def _extract_python_snippet(
     # The shell uses $OPTIONS_FILE, $SECRETS_FILE, $SUPERVISOR_API, and
     # $RECOVERY_MARKER_FILE inside the script — substitute them. The default
     # API target is a closed local port so a test that accidentally reaches
-    # recovery fails fast and soft. The default marker path lives beside
+    # recovery fails fast and soft. The versioned marker path lives beside
     # options.json and does not exist by default, so recovery is attempted
     # unless a test deliberately points at a pre-existing marker.
     raw = raw.replace("$OPTIONS_FILE", str(options_file))
@@ -283,6 +284,92 @@ def test_parser_malformed_secrets_env_warning_does_not_leak_secret_values():
     assert "secrets.env line 1 ignored: invalid quoting" in stderr
     assert "secrets.env line 2 ignored: unsupported key" in stderr
     assert "ANTHROPIC_API_KEY=legacy-safe-value\n" in stdout
+
+
+@pytest.mark.parametrize(
+    ("secrets_env", "expected", "secret_canaries"),
+    [
+        (
+            "\n".join(
+                [
+                    "ANTHROPIC_API_KEY=sk-ant",
+                    "OPENAI_API_KEY=sk-openai",
+                    "AZURE_SPEECH_KEY=sk-azure",
+                    "AZURE_SPEECH_REGION=westeurope",
+                    "ELEVENLABS_API_KEY=sk-eleven",
+                ]
+            ),
+            {
+                "ANTHROPIC_API_KEY": "sk-ant",
+                "OPENAI_API_KEY": "sk-openai",
+                "AZURE_SPEECH_KEY": "sk-azure",
+                "AZURE_SPEECH_REGION": "westeurope",
+                "ELEVENLABS_API_KEY": "sk-eleven",
+            },
+            (),
+        ),
+        (
+            "\ufeffexport OPENAI_API_KEY = \"sk value=with=equals\"\r\nAZURE_SPEECH_REGION = 'west europe'\r\n",
+            {
+                "OPENAI_API_KEY": "sk value=with=equals",
+                "AZURE_SPEECH_REGION": "west europe",
+            },
+            (),
+        ),
+        (
+            "ANTHROPIC_API_KEY=sk#literal\nELEVENLABS_API_KEY = 'eleven#literal'\n  # ignored full-line comment\n",
+            {
+                "ANTHROPIC_API_KEY": "sk#literal",
+                "ELEVENLABS_API_KEY": "eleven#literal",
+            },
+            (),
+        ),
+        (
+            "ANTHROPIC_API_KEY=\n"
+            "missing-equals-secret-canary\n"
+            "NOT_ALLOWED=unsupported-secret-canary\n"
+            'OPENAI_API_KEY="unterminated-secret-canary\n'
+            "AZURE_SPEECH_KEY='two values' trailing-secret-canary\n",
+            {},
+            (
+                "missing-equals-secret-canary",
+                "unsupported-secret-canary",
+                "unterminated-secret-canary",
+                "trailing-secret-canary",
+            ),
+        ),
+    ],
+)
+def test_provider_secret_catalog_and_grammar_stay_in_parity(
+    tmp_path,
+    caplog,
+    secrets_env,
+    expected,
+    secret_canaries,
+):
+    """The runtime writer, direct loader, and boot parser share one tested contract."""
+    secrets_path = tmp_path / "secrets.env"
+    _write_provider_fixture(secrets_path, secrets_env)
+
+    provider_pairs = tuple(
+        (option_key, env_key) for option_key, (env_key, _config_attr) in persistence._CREDENTIAL_FIELDS.items()
+    )
+    assert provider_pairs == config_module._ADDON_PROVIDER_OPTIONS
+
+    _lines, persistence_values = persistence._read_secret_file(secrets_path)
+    config_values = config_module._read_addon_provider_secrets(secrets_path)
+    rc, stdout, stderr = _run_parser({}, secrets_env)
+    assert rc == 0, stderr
+    run_sh_values = {
+        key: value for key, value in _parse_exports(stdout).items() if key in persistence._CREDENTIAL_ENV_TO_FIELD
+    }
+
+    assert persistence_values == expected
+    assert config_values == expected
+    assert run_sh_values == expected
+    combined_output = stdout + stderr + caplog.text
+    for canary in secret_canaries:
+        assert canary not in combined_output
 
 
 def test_parser_skips_empty_keys():
@@ -856,6 +943,7 @@ def test_parser_recovered_secret_read_back_failure_leaves_marker_absent():
 
             assert result.returncode == 0, result.stderr
             assert "could not persist recovered provider keys to secrets.env" in result.stdout
+            assert not secrets_path.exists(), "pre-commit verification failure must leave no replacement"
             assert not marker.exists(), "unverified credentials must remain recoverable"
     finally:
         server.shutdown()
@@ -863,7 +951,7 @@ def test_parser_recovered_secret_read_back_failure_leaves_marker_absent():
 
 
 def test_parser_recovered_secret_directory_fsync_failure_leaves_marker_absent():
-    """The recovery marker must wait for the atomic rename to be durable."""
+    """Use a committed recovery now, but keep retry armed until it is durable."""
     server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-store"})
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -893,7 +981,9 @@ def test_parser_recovered_secret_directory_fsync_failure_leaves_marker_absent():
             )
 
             assert result.returncode == 0, result.stderr
-            assert "could not persist recovered provider keys to secrets.env" in result.stdout
+            assert "could not confirm crash durability" in result.stdout
+            assert _parse_exports(result.stdout)["ANTHROPIC_API_KEY"] == "sk-ant-store"
+            assert "ANTHROPIC_API_KEY=sk-ant-store" in secrets_path.read_text()
             assert not marker.exists(), "the marker must not outrun directory durability"
     finally:
         server.shutdown()
@@ -937,6 +1027,33 @@ def test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing():
             assert rc2 == 0
             assert "could not check Supervisor" not in stdout2
             assert len(_SupervisorStub.seen_auth) == 1, "second boot must not re-hit Supervisor"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_retries_recovery_after_the_pre_v2_marker():
+    """A pre-v2 marker cannot suppress the tightened durable-secret recovery."""
+    server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-store"})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            legacy_marker = base / "recovery-marker"
+            legacy_marker.write_text("checked\n")
+            current_marker = base / "recovery-marker-v2"
+
+            rc, stdout, stderr = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=current_marker,
+            )
+
+            assert rc == 0, stderr
+            assert _parse_exports(stdout)["ANTHROPIC_API_KEY"] == "sk-ant-store"
+            assert current_marker.read_text() == "checked\n"
+            assert len(_SupervisorStub.seen_auth) == 1
     finally:
         server.shutdown()
         server.server_close()

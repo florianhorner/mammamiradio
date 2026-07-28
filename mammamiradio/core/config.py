@@ -1162,6 +1162,47 @@ def _apply_addon_options() -> None:
         os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] = str(cache_mb)
 
 
+def _parse_secret_env_lines(lines: list[str], known_keys) -> tuple[dict[str, str], list[tuple[int, str]]]:
+    """Parse KEY=VALUE env-file lines shared by the add-on secrets.env readers.
+
+    Grammar: optional BOM on line 1, `#`-comment/blank skip, optional `export ` prefix,
+    split on the first `=`, and `shlex`-aware quote handling requiring exactly one token.
+    Returns the recognized {key: value} assignments plus (line_no, reason) for every
+    skipped line, so callers can decide whether/how to warn about them.
+    """
+    values: dict[str, str] = {}
+    skipped: list[tuple[int, str]] = []
+    for line_no, raw_line in enumerate(lines, 1):
+        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].lstrip()
+        if "=" not in stripped:
+            skipped.append((line_no, "missing KEY=VALUE"))
+            continue
+        key, raw_value = stripped.split("=", 1)
+        key = key.strip()
+        if key not in known_keys:
+            skipped.append((line_no, "unsupported key"))
+            continue
+        value = raw_value.strip()
+        if value[:1] in ('"', "'"):
+            try:
+                parts = shlex.split(value, comments=False, posix=True)
+            except ValueError:
+                skipped.append((line_no, "invalid quoting"))
+                continue
+            if len(parts) != 1:
+                skipped.append((line_no, "invalid quoted value"))
+                continue
+            value = parts[0].strip()
+        if value:
+            values[key] = value
+    return values, skipped
+
+
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     """Parse /config/secrets.env without logging raw secret file contents."""
     if not path.exists():
@@ -1176,35 +1217,9 @@ def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
         log.warning("Could not read /config/secrets.env")
         return {}
 
-    values: dict[str, str] = {}
-    for line_no, raw_line in enumerate(lines, 1):
-        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("export "):
-            stripped = stripped[7:].lstrip()
-        if "=" not in stripped:
-            log.warning("Ignoring /config/secrets.env line %s: missing KEY=VALUE", line_no)
-            continue
-        key, raw_value = stripped.split("=", 1)
-        key = key.strip()
-        if key not in _ADDON_PROVIDER_ENV_KEYS:
-            log.warning("Ignoring /config/secrets.env line %s: unsupported key", line_no)
-            continue
-        value = raw_value.strip()
-        if value[:1] in ('"', "'"):
-            try:
-                parts = shlex.split(value, comments=False, posix=True)
-            except ValueError:
-                log.warning("Ignoring /config/secrets.env line %s: invalid quoting", line_no)
-                continue
-            if len(parts) != 1:
-                log.warning("Ignoring /config/secrets.env line %s: invalid quoted value", line_no)
-                continue
-            value = parts[0].strip()
-        if value:
-            values[key] = value
+    values, skipped = _parse_secret_env_lines(lines, _ADDON_PROVIDER_ENV_KEYS)
+    for line_no, reason in skipped:
+        log.warning("Ignoring /config/secrets.env line %s: %s", line_no, reason)
     return values
 
 

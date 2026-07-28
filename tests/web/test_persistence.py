@@ -173,7 +173,7 @@ def test_save_addon_options_writes_only_env_keys_to_secrets_env(monkeypatch, tmp
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text('# keep this\nOPENAI_API_KEY="old"\n')
     monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", secrets_file)
-    persistence._save_addon_options(
+    outcome = persistence._save_addon_options(
         {
             "ANTHROPIC_API_KEY": "sk-test\nEVIL=1",
             "OPENAI_API_KEY": "oa-test",
@@ -182,6 +182,7 @@ def test_save_addon_options_writes_only_env_keys_to_secrets_env(monkeypatch, tmp
             "ELEVENLABS_API_KEY": "el-test",
         }
     )
+    assert outcome == persistence._SECRET_WRITE_DURABLE
     written = secrets_file.read_text()
     assert "# keep this" in written
     assert "ANTHROPIC_API_KEY=sk-testEVIL=1" in written
@@ -235,6 +236,43 @@ def test_save_addon_options_hardens_a_stale_world_readable_temp_file(monkeypatch
 
     persistence._save_addon_options({"ANTHROPIC_API_KEY": "sk-x"})
 
+    assert (secrets_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_save_addon_options_rejects_unverified_temp_mode_before_replace(monkeypatch, tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    original = "OPENAI_API_KEY=existing\n"
+    secrets_file.write_text(original)
+    monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", secrets_file)
+    real_write = persistence._write_owner_only_text
+
+    def write_world_readable_temp(path, text):
+        real_write(path, text)
+        path.chmod(0o644)
+
+    monkeypatch.setattr(persistence, "_write_owner_only_text", write_world_readable_temp)
+
+    with pytest.raises(persistence._AddonPersistenceError, match="Unable to verify"):
+        persistence._save_addon_options({"ANTHROPIC_API_KEY": "replacement"})
+
+    assert secrets_file.read_text() == original
+    assert not (tmp_path / "secrets.env.tmp").exists()
+
+
+def test_save_addon_options_reports_committed_when_directory_fsync_is_unconfirmed(monkeypatch, tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("ANTHROPIC_API_KEY=old\n")
+    monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", secrets_file)
+    monkeypatch.setattr(
+        persistence,
+        "_fsync_parent_directory",
+        lambda _path: (_ for _ in ()).throw(OSError("private fsync detail")),
+    )
+
+    outcome = persistence._save_addon_options({"ANTHROPIC_API_KEY": "new"})
+
+    assert outcome == persistence._SECRET_WRITE_COMMITTED_UNCONFIRMED
+    assert secrets_file.read_text() == "ANTHROPIC_API_KEY=new\n"
     assert (secrets_file.stat().st_mode & 0o777) == 0o600
 
 
@@ -294,6 +332,42 @@ def test_supervisor_save_migrates_retired_credentials_and_existing_nonempty_wins
     assert fake.options["jamendo_client_id"] == "jamendo-canary"
 
 
+def test_supervisor_noop_still_posts_when_retired_credentials_need_pruning(monkeypatch, tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", secrets_file)
+    fake = _FakeSupervisor({**_default_options(), "anthropic_api_key": "legacy-ant"})
+    _install_fake_supervisor(monkeypatch, fake)
+
+    persistence._save_addon_option("broadcast_chain", False)
+
+    assert fake.get_count == 1
+    assert fake.post_count == 1
+    assert fake.options["broadcast_chain"] is False
+    assert "anthropic_api_key" not in fake.options
+    assert _read_addon_provider_secrets(secrets_file)["ANTHROPIC_API_KEY"] == "legacy-ant"
+
+
+def test_unconfirmed_credential_migration_aborts_before_supervisor_prune(monkeypatch, tmp_path):
+    secrets_file = tmp_path / "secrets.env"
+    monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", secrets_file)
+    fake = _FakeSupervisor({**_default_options(), "anthropic_api_key": "legacy-ant"})
+    _install_fake_supervisor(monkeypatch, fake)
+    monkeypatch.setattr(
+        persistence,
+        "_fsync_parent_directory",
+        lambda _path: (_ for _ in ()).throw(OSError("private fsync detail")),
+    )
+
+    with pytest.raises(persistence._AddonPersistenceError, match="Unable to confirm migrated"):
+        persistence._save_addon_option("broadcast_chain", True)
+
+    assert fake.get_count == 1
+    assert fake.post_count == 0
+    assert fake.options["anthropic_api_key"] == "legacy-ant"
+    assert fake.options["broadcast_chain"] is False
+    assert _read_addon_provider_secrets(secrets_file)["ANTHROPIC_API_KEY"] == "legacy-ant"
+
+
 def test_supervisor_save_rejects_multiline_retired_credential_before_post(monkeypatch, tmp_path):
     monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", tmp_path / "secrets.env")
     fake = _FakeSupervisor({**_default_options(), "anthropic_api_key": "\r\n"})
@@ -337,6 +411,16 @@ def test_supervisor_save_preserves_provider_key_still_in_active_schema(monkeypat
     assert not secrets_file.exists()
 
 
+def test_supervisor_exact_noop_performs_get_without_post(monkeypatch):
+    fake = _FakeSupervisor(_default_options())
+    _install_fake_supervisor(monkeypatch, fake)
+
+    persistence._save_addon_option("broadcast_chain", False)
+
+    assert fake.get_count == 1
+    assert fake.post_count == 0
+
+
 def test_supervisor_save_preserves_complete_schema_known_options(monkeypatch, tmp_path):
     original = _default_options()
     fake = _FakeSupervisor(original)
@@ -364,8 +448,8 @@ def test_supervisor_save_preserves_complete_schema_known_options(monkeypatch, tm
     assert client["follow_redirects"] is False
     assert client["timeout"].connect == 1.0
     assert client["timeout"].pool == 1.0
-    assert client["timeout"].read == 5.0
-    assert client["timeout"].write == 5.0
+    assert client["timeout"].read == 3.0
+    assert client["timeout"].write == 3.0
 
 
 def test_supervisor_token_precedence_and_hassio_fallback(monkeypatch):
@@ -398,6 +482,7 @@ def test_supervisor_ignores_ha_token(monkeypatch):
         ({"result": "ok", "data": []}, "invalid add-on option response"),
         ({"result": "ok", "data": {"options": [], "schema": []}}, "invalid add-on option response"),
         ({"result": "ok", "data": {"options": {}, "schema": {}}}, "invalid add-on option schema"),
+        ({"result": "ok", "data": {"options": {}, "schema": None}}, "invalid add-on option schema"),
         (
             {"result": "ok", "data": {"options": {}, "schema": [{"name": "x"}, {"name": "x"}]}},
             "invalid add-on option schema",
@@ -459,20 +544,21 @@ def test_supervisor_rejects_requested_and_stored_unknown_keys(monkeypatch):
     assert fake.post_count == 0
 
 
-def test_retired_claude_model_requires_quality_profile(monkeypatch):
+def test_retired_claude_model_does_not_block_unrelated_saves(monkeypatch):
+    """A legacy claude_model with no quality_profile saved yet must not 500 every toggle."""
     options = _default_options()
     options.pop("quality_profile")
     options["claude_model"] = "claude-retired"
     fake = _FakeSupervisor(options)
     _install_fake_supervisor(monkeypatch, fake)
 
-    with pytest.raises(persistence._AddonPersistenceError, match="unsupported retired"):
-        persistence._save_addon_option("chaos_mode_active", True)
-    assert fake.post_count == 0
-
-    persistence._save_addon_option_batch({"chaos_mode_active": True, "quality_profile": "balanced"})
+    persistence._save_addon_option("chaos_mode_active", True)
     assert fake.post_count == 1
     assert "claude_model" not in fake.options
+    assert fake.options["chaos_mode_active"] is True
+
+    persistence._save_addon_option_batch({"quality_profile": "balanced"})
+    assert fake.post_count == 2
     assert fake.options["quality_profile"] == "balanced"
 
 
@@ -587,23 +673,23 @@ def test_credential_unreadable_file_aborts_before_supervisor_post(monkeypatch, t
 
 def test_credential_read_back_failure_aborts_before_supervisor_post(monkeypatch, tmp_path):
     secrets_file = tmp_path / "secrets.env"
+    original = "# preserve this file\n"
+    secrets_file.write_text(original)
     monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", secrets_file)
     fake = _FakeSupervisor({**_default_options(), "anthropic_api_key": "private-provider-key"})
     _install_fake_supervisor(monkeypatch, fake)
     real_read = persistence._read_secret_file
-    read_count = 0
 
-    def fail_second_read(path):
-        nonlocal read_count
-        read_count += 1
-        if read_count == 2:
+    def fail_candidate_read(path):
+        if path == tmp_path / "secrets.env.tmp":
             raise persistence._AddonPersistenceError("Unable to persist add-on credentials")
         return real_read(path)
 
-    monkeypatch.setattr(persistence, "_read_secret_file", fail_second_read)
+    monkeypatch.setattr(persistence, "_read_secret_file", fail_candidate_read)
     with pytest.raises(persistence._AddonPersistenceError, match="Unable to persist add-on credentials"):
         persistence._save_addon_option("broadcast_chain", True)
-    assert read_count == 2
+    assert secrets_file.read_text() == original
+    assert not (tmp_path / "secrets.env.tmp").exists()
     assert fake.post_count == 0
 
 

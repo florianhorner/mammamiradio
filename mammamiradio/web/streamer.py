@@ -155,6 +155,8 @@ from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
 from mammamiradio.web.persistence import (
     _CREDENTIAL_ENV_TO_FIELD,
     _CREDENTIAL_FIELDS,
+    _SECRET_WRITE_DURABLE,
+    _AddonPersistenceError,
     _apply_live_credentials,
     _sanitize_credential_value,
     _save_addon_option,
@@ -208,6 +210,26 @@ atexit.register(_search_executor.shutdown, wait=False, cancel_futures=True)
 # interactive /api/search on the shared pool.
 _direction_search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="direction-search")
 atexit.register(_direction_search_executor.shutdown, wait=False, cancel_futures=True)
+
+# Supervisor option writes are serialized by persistence._ADDON_OPTIONS_LOCK and
+# may hold that lock across slow network I/O. Keep both the active request and
+# any callers queued behind it out of asyncio's default executor, which also
+# carries latency-sensitive audio normalization and TTS work.
+_addon_persistence_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="addon-persistence",
+)
+atexit.register(_addon_persistence_executor.shutdown, wait=False, cancel_futures=True)
+
+
+async def _run_addon_persistence(operation: Callable[..., Any], /, *args: Any) -> Any:
+    """Run one blocking HA add-on persistence operation on its isolated worker."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _addon_persistence_executor,
+        functools.partial(operation, *args),
+    )
+
 
 router = APIRouter()
 
@@ -4169,7 +4191,11 @@ async def save_keys(request: Request):
     if not updates:
         return {"ok": False, "error": "No keys provided"}
 
-    await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    try:
+        await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    except _AddonPersistenceError:
+        logger.error("Failed to persist add-on credentials", exc_info=True)
+        return JSONResponse(status_code=500, content={"ok": False, "error": "failed to save credentials"})
 
     return {"ok": True, "saved": list(updates.keys())}
 
@@ -4201,7 +4227,9 @@ async def _persist_and_apply_credentials(request: Request, updates: dict[str, st
     config = request.app.state.config
     loop = asyncio.get_running_loop()
     if use_addon_options and config.is_addon:
-        await loop.run_in_executor(None, _save_addon_options, updates)
+        outcome = await _run_addon_persistence(_save_addon_options, updates)
+        if outcome != _SECRET_WRITE_DURABLE:
+            raise _AddonPersistenceError("Unable to confirm the add-on credential save")
     else:
         await loop.run_in_executor(None, _save_dotenv, updates)
 
@@ -5026,7 +5054,7 @@ async def update_pacing(request: Request, _: None = Depends(require_admin_access
             # already {attr: int}, the exact Supervisor option keys.
             try:
                 if config.is_addon:
-                    await loop.run_in_executor(None, _save_addon_option_batch, clamped)
+                    await _run_addon_persistence(_save_addon_option_batch, clamped)
                 else:
                     await loop.run_in_executor(None, _save_dotenv, env_updates)
             except Exception:
@@ -5103,7 +5131,7 @@ async def set_chaos(request: Request, _: None = Depends(require_admin_access)):
     async with _chaos_lock:
         try:
             if config.is_addon:
-                await loop.run_in_executor(None, _save_addon_option, "chaos_mode_active", value)
+                await _run_addon_persistence(_save_addon_option, "chaos_mode_active", value)
             else:
                 await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_CHAOS_MODE": env_value})
         except Exception:
@@ -5181,7 +5209,7 @@ async def set_super_italian(request: Request, _: None = Depends(require_admin_ac
         # persisted change.
         try:
             if config.is_addon:
-                await loop.run_in_executor(None, _save_addon_option, "super_italian_mode", value)
+                await _run_addon_persistence(_save_addon_option, "super_italian_mode", value)
             else:
                 await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_SUPER_ITALIAN": env_value})
         except Exception:
@@ -5239,7 +5267,7 @@ async def set_broadcast_chain(request: Request, _: None = Depends(require_admin_
         # live setting never drifts from what survives a restart.
         try:
             if config.is_addon:
-                await loop.run_in_executor(None, _save_addon_option, "broadcast_chain", value)
+                await _run_addon_persistence(_save_addon_option, "broadcast_chain", value)
             else:
                 await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_BROADCAST_CHAIN": env_value})
         except Exception:
@@ -5303,7 +5331,7 @@ async def set_quality(request: Request, _: None = Depends(require_admin_access))
     async with _quality_lock:
         try:
             if config.is_addon:
-                await loop.run_in_executor(None, _save_addon_option, "quality_profile", profile)
+                await _run_addon_persistence(_save_addon_option, "quality_profile", profile)
             else:
                 await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_QUALITY": profile})
         except Exception as exc:
@@ -5519,7 +5547,7 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
         # reported as failed. Persisting first means a failed write changes nothing.
         try:
             if config.is_addon:
-                await loop.run_in_executor(None, _save_festival_addon_options, target_mode == "festival")
+                await _run_addon_persistence(_save_festival_addon_options, target_mode == "festival")
             else:
                 await loop.run_in_executor(None, _save_dotenv, {"MAMMAMIRADIO_FESTIVAL_MODE": val})
         except Exception:
@@ -5560,7 +5588,11 @@ async def save_credentials(request: Request, _: None = Depends(require_admin_acc
     if not updates:
         return {"ok": False, "error": "No recognised credential fields in request"}
 
-    await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    try:
+        await _persist_and_apply_credentials(request, updates, use_addon_options=True)
+    except _AddonPersistenceError:
+        logger.error("Failed to persist add-on credentials", exc_info=True)
+        return JSONResponse(status_code=500, content={"ok": False, "error": "failed to save credentials"})
 
     target = "add-on secrets.env" if request.app.state.config.is_addon else ".env"
     logger.info("Credentials saved to %s: %s", target, ", ".join(updates.keys()))

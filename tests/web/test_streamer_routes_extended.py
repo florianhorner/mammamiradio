@@ -4502,6 +4502,9 @@ async def test_credentials_addon_mode_saves_to_secrets_env_not_dotenv():
                 new=AsyncMock(return_value={"ok": True, "providers": {}}),
             ),
         ):
+            from mammamiradio.web import persistence
+
+            save_addon_options.return_value = persistence._SECRET_WRITE_DURABLE
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-addon"})
         assert resp.status_code == 200

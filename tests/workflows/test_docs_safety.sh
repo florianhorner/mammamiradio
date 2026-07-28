@@ -128,6 +128,49 @@ expect_default_install_guard() {
   fi
 }
 
+expect_default_persistence_guard() {
+  local label=$1
+  local guarded_file=$2
+  local fixture_root="$TMP/default-persistence-$label"
+  local output
+
+  mkdir -p \
+    "$fixture_root/scripts" \
+    "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/docs/runbooks"
+  cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
+  cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
+  cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+
+  for file in \
+    CLAUDE.md \
+    README.md \
+    CONTRIBUTING.md \
+    ha-addon/README.md \
+    ha-addon/mammamiradio/DOCS.md \
+    docs/architecture.md \
+    docs/festival-mode.md \
+    docs/troubleshooting.md \
+    docs/operations.md \
+    docs/runbooks/ha-addon.md; do
+    printf '# Safe\n' > "$fixture_root/$file"
+  done
+
+  # shellcheck disable=SC2016  # literal Markdown code span in the fixture
+  printf '# Unsafe durability\n\nAdmin controls persist to `/data/options.json` across restarts.\n' \
+    > "$fixture_root/$guarded_file"
+
+  if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
+    echo "FAIL: default persistence scope omitted $guarded_file"
+    exit 1
+  fi
+  if ! grep -Fq "$guarded_file" <<< "$output" || ! grep -Fq "[direct options.json durability claim]" <<< "$output"; then
+    echo "FAIL: default persistence scope returned the wrong failure for $guarded_file"
+    echo "$output"
+    exit 1
+  fi
+}
+
 printf '# Guide\n' > "$TMP/guide.md"
 printf '# Safe\n\nPlease do not SSH in to edit container or runtime files, delete live cache, or restart as an experiment.\n\n[Guide](guide.md)\n' > "$TMP/safe.md"
 expect_success "directly negated warning" "$TMP/safe.md"
@@ -259,6 +302,14 @@ expect_failure "stale Edge release promise" "incorrect Edge release wording" "$T
 
 expect_default_install_guard "operations" "docs/operations.md"
 expect_default_install_guard "addon-runbook" "docs/runbooks/ha-addon.md"
+
+expect_default_persistence_guard "claude" "CLAUDE.md"
+expect_default_persistence_guard "addon-readme" "ha-addon/README.md"
+expect_default_persistence_guard "addon-docs" "ha-addon/mammamiradio/DOCS.md"
+expect_default_persistence_guard "architecture" "docs/architecture.md"
+expect_default_persistence_guard "festival-mode" "docs/festival-mode.md"
+expect_default_persistence_guard "operations" "docs/operations.md"
+expect_default_persistence_guard "addon-runbook" "docs/runbooks/ha-addon.md"
 
 expect_failure "missing documentation file" "documentation file is missing" "$TMP/missing.md"
 

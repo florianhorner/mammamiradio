@@ -10,7 +10,9 @@ echo "[mammamiradio] Starting add-on..."
 OPTIONS_FILE="/data/options.json"
 SECRETS_FILE="/config/secrets.env"
 SUPERVISOR_API="${SUPERVISOR_API:-http://supervisor}"
-RECOVERY_MARKER_FILE="${RECOVERY_MARKER_FILE:-/data/.provider_recovery_checked}"
+# Version 2 deliberately supersedes the old marker: older builds could write
+# /data/.provider_recovery_checked before recovered secrets were durable.
+RECOVERY_MARKER_FILE="${RECOVERY_MARKER_FILE:-/data/.provider_recovery_checked_v2}"
 if [ -f "$OPTIONS_FILE" ] || [ -f "$SECRETS_FILE" ]; then
     OPTS_LOG="/tmp/opts-parse.log"
     if ! OPTS_EXPORT=$(python3 -c "
@@ -159,14 +161,8 @@ if recovered:
                 tmp_file.write('\n'.join(new_lines) + '\n')
                 tmp_file.flush()
                 os.fsync(tmp_file.fileno())
-            os.replace(tmp_name, '$SECRETS_FILE')
-            dir_fd = os.open(secrets_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
             verified_recovered = {}
-            with open('$SECRETS_FILE', encoding='utf-8') as persisted_secret_file:
+            with open(tmp_name, encoding='utf-8') as persisted_secret_file:
                 for line_no, raw_line in enumerate(persisted_secret_file, 1):
                     line = raw_line.rstrip('\n').rstrip('\r')
                     if line_no == 1:
@@ -187,11 +183,24 @@ if recovered:
                         verified_recovered[key] = value
             if any(verified_recovered.get(key) != value for key, value in recovered.items()):
                 raise OSError('recovered secret verification failed')
-            if os.stat('$SECRETS_FILE').st_mode & 0o777 != 0o600:
+            if os.stat(tmp_name).st_mode & 0o777 != 0o600:
                 raise OSError('recovered secret permissions are unsafe')
+            os.replace(tmp_name, '$SECRETS_FILE')
             provider_values.update(recovered)
-            recovered_secrets_persisted = True
-            warning('moved legacy provider keys from the old add-on options into /config/secrets.env')
+            try:
+                dir_fd = os.open(secrets_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                warning(
+                    'moved legacy provider keys into /config/secrets.env, '
+                    'but could not confirm crash durability; recovery remains armed'
+                )
+            else:
+                recovered_secrets_persisted = True
+                warning('moved legacy provider keys from the old add-on options into /config/secrets.env')
         except Exception:
             try:
                 os.unlink(tmp_name)
