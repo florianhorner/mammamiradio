@@ -1213,7 +1213,7 @@ def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     log = logging.getLogger(__name__)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         log.warning("Could not read /config/secrets.env")
         return {}
 

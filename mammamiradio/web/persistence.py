@@ -49,8 +49,14 @@ _SECRET_WRITE_COMMITTED_UNCONFIRMED: _SecretWriteOutcome = "committed_unconfirme
 
 
 def _sanitize_credential_value(value: str) -> str:
-    """Strip env-breaking characters before persistence or live application."""
-    return value.replace("\n", "").replace("\r", "")
+    """Strip env-breaking characters before persistence or live application.
+
+    Also strips surrounding whitespace: the read-back parser (`_read_secret_file`
+    / `_parse_secret_env_lines`) always strips a parsed value, so a write that
+    didn't normalize to that same fixed point could write the requested bytes
+    correctly and still fail its own post-write verification.
+    """
+    return value.replace("\n", "").replace("\r", "").strip()
 
 
 def _env_assignment(key: str, value: str) -> str:

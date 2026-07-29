@@ -139,7 +139,10 @@ if missing_keys and supervisor_token and not os.path.exists(RECOVERY_MARKER):
                     value = str(val)
                     if '\n' in value or '\r' in value:
                         raise ValueError('invalid legacy provider credential')
-                    candidate_recovered[env_key] = value
+                    # Strip to the read-back parser's fixed point (parse_secret_value
+                    # always strips) so a legacy value with surrounding whitespace
+                    # doesn't fail its own post-write verification below.
+                    candidate_recovered[env_key] = value.strip()
         recovered = candidate_recovered
         supervisor_check_succeeded = True
     except Exception as exc:

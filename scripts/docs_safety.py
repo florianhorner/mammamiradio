@@ -337,6 +337,7 @@ def markdown_prose_units(text: str) -> list[ProseUnit]:
     paragraph_line = 1
     in_fence = False
     fence_marker = ""
+    fence_length = 0
 
     def flush_paragraph() -> None:
         nonlocal paragraph
@@ -355,12 +356,15 @@ def markdown_prose_units(text: str) -> list[ProseUnit]:
         if fence:
             flush_paragraph()
             marker = fence.group(1)[0]
+            length = len(fence.group(1))
             if not in_fence:
                 in_fence = True
                 fence_marker = marker
-            elif marker == fence_marker:
+                fence_length = length
+            elif marker == fence_marker and length >= fence_length:
                 in_fence = False
                 fence_marker = ""
+                fence_length = 0
             continue
         if in_fence:
             continue
@@ -506,17 +510,21 @@ def markdown_links(text: str) -> tuple[list[Link], list[tuple[int, str]]]:
     definitions: set[str] = set()
     in_fence = False
     fence_marker = ""
+    fence_length = 0
     for line_number, line in enumerate(text.splitlines(), 1):
         stripped = line.lstrip()
         fence = re.match(r"(`{3,}|~{3,})", stripped)
         if fence:
             marker = fence.group(1)[0]
+            length = len(fence.group(1))
             if not in_fence:
                 in_fence = True
                 fence_marker = marker
-            elif marker == fence_marker:
+                fence_length = length
+            elif marker == fence_marker and length >= fence_length:
                 in_fence = False
                 fence_marker = ""
+                fence_length = 0
             continue
         if in_fence:
             continue

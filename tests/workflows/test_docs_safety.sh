@@ -211,6 +211,13 @@ expect_success "generated options table cell" "$TMP/safe-options-table.md"
 printf '# Historical example\n\n```\nAdmin controls persisted to /data/options.json.\n```\n' > "$TMP/safe-options-code-fence.md"
 expect_success "options durability in code fence" "$TMP/safe-options-code-fence.md"
 
+# A shorter nested fence (```) of the same marker character must not close a
+# longer outer fence (````) early — regression for a fence-length bug where
+# only the marker character was tracked, not its length.
+# shellcheck disable=SC2016  # literal Markdown code fences in the fixture
+printf '# Nested fence example\n\n````\nExample nested fence:\n```\nAdmin controls persist to /data/options.json across restarts.\n```\n````\n' > "$TMP/safe-options-nested-fence.md"
+expect_success "options durability inside a nested code fence" "$TMP/safe-options-nested-fence.md"
+
 # shellcheck disable=SC2016  # literal Markdown code span in the fixture
 printf '# Unsafe durability\n\nAdmin controls persist to `/data/options.json` across restarts.\n' > "$TMP/unsafe-options-persist.md"
 expect_durability_at_line "direct options persistence" "$TMP/unsafe-options-persist.md" 3

@@ -4521,6 +4521,25 @@ async def test_credentials_addon_mode_saves_to_secrets_env_not_dotenv():
 
 
 @pytest.mark.asyncio
+async def test_credentials_reports_structured_500_on_addon_persistence_failure():
+    """An unconfirmed/failed add-on credential save via /api/credentials must not silently 200."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._save_addon_options") as save_addon_options:
+        from mammamiradio.web import persistence
+
+        save_addon_options.side_effect = persistence._AddonPersistenceError("Unable to persist add-on credentials")
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-addon"})
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert "failed to save credentials" in body["error"]
+
+
+@pytest.mark.asyncio
 async def test_credentials_bad_key_surfaces_rejected(tmp_path):
     """A bogus key saved via /api/credentials must read as rejected without a restart."""
     app = _make_test_app()
