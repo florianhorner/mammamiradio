@@ -39,8 +39,9 @@ def _no_real_dotenv_writes():
     PATCH now reaches ``_save_dotenv`` and would write a real .env. No-op it by
     default. Tests that assert ON persistence (the pacing-persistence tests, the
     credentials tests) nest their own ``with patch(...)`` which shadows this.
-    Only ``_save_dotenv`` is guarded — ``_save_addon_option`` is left real so the
-    add-on-mode tests that exercise its file write still work.
+    Only ``_save_dotenv`` is guarded globally. Add-on route tests patch the
+    Supervisor persistence helpers explicitly so an isolated test never reaches
+    the real Supervisor network.
     """
     with patch("mammamiradio.web.streamer._save_dotenv"):
         yield
@@ -4350,10 +4351,10 @@ async def test_patch_pacing_persists_standalone_all_keys_atomically():
 
 @pytest.mark.asyncio
 async def test_patch_pacing_persists_addon_one_atomic_batch_write():
-    """Addon: pacing persists to /data/options.json via ONE batch write, not .env.
+    """Addon: pacing persists through Supervisor via ONE batch write, not .env.
 
     The single grouped write is what prevents partial-persist drift — three
-    single-key writes could half-update options.json if one failed midway.
+    single-key writes could otherwise expose a partially updated durable store.
     """
     app = _make_test_app(is_addon=True)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -4425,7 +4426,7 @@ async def test_patch_pacing_persist_failure_standalone_leaves_live_untouched():
 
 @pytest.mark.asyncio
 async def test_patch_pacing_persist_failure_addon_leaves_live_untouched():
-    """Addon persist failure -> 500 and live config unchanged (no options.json drift)."""
+    """Addon persist failure -> 500 and live config unchanged."""
     app = _make_test_app(is_addon=True)
     app.state.config.pacing.ad_spots_per_break = 3
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -4501,6 +4502,9 @@ async def test_credentials_addon_mode_saves_to_secrets_env_not_dotenv():
                 new=AsyncMock(return_value={"ok": True, "providers": {}}),
             ),
         ):
+            from mammamiradio.web import persistence
+
+            save_addon_options.return_value = persistence._SECRET_WRITE_DURABLE
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-addon"})
         assert resp.status_code == 200
@@ -4514,6 +4518,25 @@ async def test_credentials_addon_mode_saves_to_secrets_env_not_dotenv():
             os.environ.pop("ANTHROPIC_API_KEY", None)
         else:
             os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+@pytest.mark.asyncio
+async def test_credentials_reports_structured_500_on_addon_persistence_failure():
+    """An unconfirmed/failed add-on credential save via /api/credentials must not silently 200."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._save_addon_options") as save_addon_options:
+        from mammamiradio.web import persistence
+
+        save_addon_options.side_effect = persistence._AddonPersistenceError("Unable to persist add-on credentials")
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-addon"})
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert "failed to save credentials" in body["error"]
 
 
 @pytest.mark.asyncio
@@ -4691,73 +4714,35 @@ async def test_post_super_italian_rejects_non_dict_body():
 
 
 @pytest.mark.asyncio
-async def test_post_super_italian_addon_mode_writes_options(tmp_path, monkeypatch):
-    """In addon mode, the toggle additionally writes to /data/options.json."""
+async def test_post_super_italian_addon_mode_uses_supervisor_persistence(monkeypatch):
+    """In addon mode, the toggle persists through the Supervisor helper."""
     app = _make_test_app(is_addon=True)
     app.state.config.super_italian_mode = False
     monkeypatch.delenv("MAMMAMIRADIO_SUPER_ITALIAN", raising=False)
-    options_file = tmp_path / "options.json"
-    options_file.write_text('{"existing": "value"}')
     try:
         with (
-            patch("mammamiradio.web.streamer._save_dotenv"),
-            patch("mammamiradio.web.persistence.Path") as mock_path,
+            patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+            patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
         ):
-            mock_path.return_value = options_file
             transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/super-italian", json={"super_italian_mode": True})
 
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
-        import json as _json
-
-        options = _json.loads(options_file.read_text())
-        assert options["super_italian_mode"] is True
-        assert options["existing"] == "value"  # preserved
+        save_addon_option.assert_called_once_with("super_italian_mode", True)
+        save_dotenv.assert_not_called()
     finally:
         os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
 
 
-def test_save_super_italian_addon_options_handles_corrupt_file(tmp_path):
-    """Corrupt /data/options.json is treated as empty — write proceeds."""
+def test_save_super_italian_addon_options_delegates_to_supervisor_helper():
     from mammamiradio.web.streamer import _save_super_italian_addon_options
 
-    options_file = tmp_path / "options.json"
-    options_file.write_text("not valid json {{{")
-
-    with patch("mammamiradio.web.persistence.Path") as mock_path:
-        mock_path.return_value = options_file
+    with patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option:
         _save_super_italian_addon_options(True)
 
-    import json as _json
-
-    options = _json.loads(options_file.read_text())
-    assert options == {"super_italian_mode": True}
-
-
-def test_save_addon_option_batch_preserves_other_keys_and_writes_all(tmp_path):
-    """The atomic batch write lands every pacing key in one pass AND leaves
-    unrelated options intact — the property that prevents partial-persist drift.
-    (The route test mocks the helper, so this is the only check of the real write.)"""
-    from mammamiradio.web.persistence import _save_addon_option_batch
-
-    options_file = tmp_path / "options.json"
-    options_file.write_text('{"super_italian_mode": true, "quality_profile": "premium"}')
-
-    with patch("mammamiradio.web.persistence.Path") as mock_path:
-        mock_path.return_value = options_file
-        _save_addon_option_batch({"songs_between_banter": 5, "songs_between_ads": 9, "ad_spots_per_break": 3})
-
-    import json as _json
-
-    options = _json.loads(options_file.read_text())
-    assert options["songs_between_banter"] == 5
-    assert options["songs_between_ads"] == 9
-    assert options["ad_spots_per_break"] == 3
-    # Pre-existing unrelated options survived the write.
-    assert options["super_italian_mode"] is True
-    assert options["quality_profile"] == "premium"
+    save_addon_option.assert_called_once_with("super_italian_mode", True)
 
 
 # ---------------------------------------------------------------------------

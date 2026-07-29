@@ -44,9 +44,11 @@ updated add-on starts.
 
 Because provider keys are no longer add-on options, a fresh install never puts them where
 `ha addons info <slug>` can print them. An install upgraded from an older version may still carry
-previously saved key values in Home Assistant's stored add-on settings; opening the add-on's
-Configuration tab and pressing Save once replaces the stored settings with only the current fields,
-clearing the old key values. When sharing diagnostics, redact the options block:
+previously saved key values in Home Assistant's stored add-on settings. The first successful start of
+the updated add-on recovers those values into `/config/secrets.env`; a successful admin mode/pacing
+save can perform the same migration before it replaces the stored settings with only current fields.
+A Configuration-tab save cannot run the app's migration, so on an upgraded install wait for successful
+startup recovery before changing Configuration. When sharing diagnostics, redact the options block:
 `ha addons info <slug> --raw-json | jq 'del(.data.options)'`.
 
 `secrets.env` accepts `KEY=VALUE` lines, optional `export KEY=VALUE`, whitespace around keys or
@@ -70,6 +72,9 @@ Without an AI key, the station runs in Demo Mode: host writing falls back to sto
 ```
 HA Supervisor
   |
+  +-- stored app options (durable admin modes and pacing)
+  |     +-- materializes /data/options.json for startup
+  |
   +-- nginx ingress proxy (strips /api/hassio_ingress/<token>/ prefix)
   |     |
   |     +-- uvicorn :8000 (mammamiradio FastAPI app)
@@ -81,6 +86,13 @@ HA Supervisor
         +-- cache/   (downloaded track audio — survives restarts)
         +-- tmp/     (rendered segments — ephemeral)
 ```
+
+Supervisor's stored app options are the sole durable authority for Super
+Italian, Chaos, Festival, AI Quality, On-Air Sound, and pacing. Control-room
+saves commit there before the running station changes. `/data/options.json` is
+a Supervisor-generated, read-only startup projection; the app never writes it
+directly. A selection held only in memory by a pre-fix build cannot be
+reconstructed after an update rematerializes an older Supervisor value.
 
 ## Backups and restores
 
@@ -107,7 +119,7 @@ its files by hand.
 
 ## Startup sequence
 
-1. `run.sh` reads `/data/options.json`, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
+1. Supervisor materializes the read-only `/data/options.json` startup projection; `run.sh` reads it, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
 2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, maps **Enable Home Assistant Integration** to `HA_ENABLED`, and maps the separate Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`.
 3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`) and starts uvicorn.
 4. `mammamiradio/main.py` loads `radio.toml` and validates config.
@@ -201,41 +213,29 @@ If you configured a custom `admin_token` in the add-on options, direct `/admin` 
 ## Env var flow
 
 ```
-/config/secrets.env (provider secrets, preferred)
+Inputs to run.sh
   |
-  +-- run.sh reads KEY=VALUE lines, exports non-empty values
+  +-- Supervisor stored app options (durable authority)
+  |     +-- /data/options.json (generated, read-only startup projection)
+  |           STATION_NAME, MAMMAMIRADIO_QUALITY, ADMIN_TOKEN, HA_ENABLED,
+  |           MAMMAMIRADIO_HA_CONTEXT_ENABLED,
+  |           MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL,
+  |           MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH,
+  |           MAMMAMIRADIO_SUPER_ITALIAN, MAMMAMIRADIO_CHAOS_MODE,
+  |           MAMMAMIRADIO_FESTIVAL_MODE, MAMMAMIRADIO_BROADCAST_CHAIN,
+  |           MAMMAMIRADIO_GUEST_HOST, pacing variables, JAMENDO_CLIENT_ID
+  |
+  +-- /config/secrets.env (provider secrets, preferred)
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
   |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY
+  |     Legacy schema-removed values are recovered once from
+  |     Supervisor /addons/self/info and persisted here.
   |
-  +-- /data/options.json (HA UI options; provider fields are not in the schema anymore)
-  |     Supervisor drops schema-removed keys from this file on start; provider keys
-  |     saved by older versions are recovered once via the Supervisor API
-  |     (/addons/self/info) and persisted into /config/secrets.env at first boot.
-  |     STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
-  |     ADMIN_TOKEN (blank => LAN-trusted, no token required),
-  |     HA_ENABLED (from enable_home_assistant; master HA integration switch),
-  |     MAMMAMIRADIO_HA_CONTEXT_ENABLED (from ha_context_enabled;
-  |       turn off to stop AI prompt-context polling while keeping HA integration),
-  |     MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL (default 300 seconds),
-  |     MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH, MAMMAMIRADIO_SUPER_ITALIAN,
-  |     MAMMAMIRADIO_CHAOS_MODE, MAMMAMIRADIO_FESTIVAL_MODE,
-  |     MAMMAMIRADIO_BROADCAST_CHAIN, MAMMAMIRADIO_GUEST_HOST,
-  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER,
-  |     MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS,
-  |     MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK,
-  |     JAMENDO_CLIENT_ID
-  |
-  +-- run.sh maps Supervisor token
-  |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
-  |
-  +-- run.sh sets addon defaults
-  |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
-  |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
-  |     MAMMAMIRADIO_ALLOW_YTDLP=true
-  |
-  +-- config.py reads env vars, applies addon overrides
-        homeassistant.url -> http://supervisor/core
-        ha_token <- SUPERVISOR_TOKEN (addon mode overrides HA_TOKEN)
+  +-- SUPERVISOR_TOKEN
+        |
+        +-- run.sh maps HA_TOKEN + HA_URL=http://supervisor/core
+        +-- run.sh sets bind/cache/tmp/yt-dlp add-on defaults
+        +-- config.py reads the exported environment and applies overrides
 ```
 
 ## Ingress URL flow

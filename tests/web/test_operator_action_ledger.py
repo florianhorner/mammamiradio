@@ -66,14 +66,14 @@ class _FakeLedger:
         self.rows.append(row)
 
 
-def _make_app(ledger: _FakeLedger | None) -> FastAPI:
+def _make_app(ledger: _FakeLedger | None, *, is_addon: bool = False) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
 
     config = load_config(TOML_PATH)
     config.admin_password = ""  # local/dev: no auth required
     config.admin_token = ""
-    config.is_addon = False
+    config.is_addon = is_addon
     config.cache_dir = Path("/tmp/mammamiradio-test-cache")
     config.cache_dir.mkdir(parents=True, exist_ok=True)
     # Normalize the toggle baseline so a test is independent of ambient MAMMAMIRADIO_*
@@ -186,9 +186,7 @@ async def test_failing_ledger_never_breaks_toggle():
 
 @pytest.mark.asyncio
 async def test_festival_noop_records_no_row():
-    """Festival has an idempotent early-return BEFORE _record_operator_action, so
-    pressing 'Festival on' while already on must record nothing — a debrief should
-    never see a phantom 'festival on -> on' row."""
+    """A standalone Festival no-op records no phantom 'on -> on' row."""
     ledger = _FakeLedger(enabled=True)
     app = _make_app(ledger)
     app.state.config.party_mode = "festival"  # already on
@@ -198,6 +196,218 @@ async def test_festival_noop_records_no_row():
             resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
     assert resp.status_code == 200
     assert _operator_rows(ledger) == []
+
+
+@pytest.mark.asyncio
+async def test_festival_addon_noop_confirms_supervisor_without_ledger_row():
+    ledger = _FakeLedger(enabled=True)
+    app = _make_app(ledger, is_addon=True)
+    app.state.config.party_mode = "festival"
+    transport = httpx.ASGITransport(app=app)
+
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
+
+    assert resp.status_code == 200
+    save_addon_option.assert_called_once_with("festival_mode", True)
+    save_dotenv.assert_not_called()
+    assert _operator_rows(ledger) == []
+
+
+_ADDON_ROUTE_CASES = [
+    (
+        "super-italian",
+        "post",
+        "/api/super-italian",
+        {"super_italian_mode": True},
+        ("super_italian_mode", True),
+        None,
+        lambda app: app.state.config.super_italian_mode is True,
+        "MAMMAMIRADIO_SUPER_ITALIAN",
+        "true",
+    ),
+    (
+        "chaos",
+        "post",
+        "/api/chaos",
+        {"enabled": True},
+        ("chaos_mode_active", True),
+        None,
+        lambda app: (
+            app.state.station_state.chaos_mode_active is True and app.state.station_state.chaos_pending is not None
+        ),
+        "MAMMAMIRADIO_CHAOS_MODE",
+        "true",
+    ),
+    (
+        "festival",
+        "post",
+        "/api/party",
+        {"action": "enable", "mode": "festival"},
+        ("festival_mode", True),
+        None,
+        lambda app: app.state.config.party_mode == "festival" and app.state.station_state.force_next is not None,
+        "MAMMAMIRADIO_FESTIVAL_MODE",
+        "true",
+    ),
+    (
+        "quality",
+        "post",
+        "/api/quality",
+        {"quality_profile": "premium"},
+        ("quality_profile", "premium"),
+        None,
+        lambda app: app.state.config.models.active_profile == "premium",
+        "MAMMAMIRADIO_QUALITY",
+        "premium",
+    ),
+    (
+        "broadcast-chain",
+        "post",
+        "/api/broadcast-chain",
+        {"broadcast_chain": True},
+        ("broadcast_chain", True),
+        None,
+        lambda app: app.state.config.audio.broadcast_chain is True,
+        "MAMMAMIRADIO_BROADCAST_CHAIN",
+        "true",
+    ),
+    (
+        "pacing",
+        "patch",
+        "/api/pacing",
+        {"songs_between_ads": 8},
+        None,
+        {"songs_between_ads": 8},
+        lambda app: app.state.config.pacing.songs_between_ads == 8,
+        None,
+        None,
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "_name,method,path,payload,one_update,batch_update,live_probe,env_key,env_value",
+    _ADDON_ROUTE_CASES,
+    ids=[case[0] for case in _ADDON_ROUTE_CASES],
+)
+async def test_addon_routes_persist_exact_value_before_live_mutation(
+    _name,
+    method,
+    path,
+    payload,
+    one_update,
+    batch_update,
+    live_probe,
+    env_key,
+    env_value,
+):
+    ledger = _FakeLedger(enabled=True)
+    app = _make_app(ledger, is_addon=True)
+    transport = httpx.ASGITransport(app=app)
+
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option") as save_one,
+        patch("mammamiradio.web.streamer._save_addon_option_batch") as save_batch,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+        patch("mammamiradio.web.streamer.configure_broadcast_chain"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await getattr(client, method)(path, json=payload)
+
+    assert resp.status_code == 200
+    assert live_probe(app)
+    assert len(_operator_rows(ledger)) == 1
+    save_dotenv.assert_not_called()
+    if one_update is not None:
+        save_one.assert_called_once_with(*one_update)
+        save_batch.assert_not_called()
+        actual_value = save_one.call_args.args[1]
+        assert type(actual_value) is type(one_update[1])
+    else:
+        save_batch.assert_called_once_with(batch_update)
+        save_one.assert_not_called()
+        assert all(type(save_batch.call_args.args[0][key]) is type(value) for key, value in batch_update.items())
+    if env_key is not None:
+        assert os.environ[env_key] == env_value
+
+
+def _addon_runtime_snapshot(app: FastAPI) -> dict:
+    state = app.state.station_state
+    config = app.state.config
+    return {
+        "super_italian": config.super_italian_mode,
+        "chaos_active": state.chaos_mode_active,
+        "chaos_pending": state.chaos_pending,
+        "chaos_epoch": state.chaos_cutover_epoch,
+        "party_mode": config.party_mode,
+        "force_next": state.force_next,
+        "playlist_revision": state.playlist_revision,
+        "quality": config.models.active_profile,
+        "broadcast_chain": config.audio.broadcast_chain,
+        "pacing": (
+            config.pacing.songs_between_banter,
+            config.pacing.songs_between_ads,
+            config.pacing.ad_spots_per_break,
+        ),
+        "queue_size": app.state.queue.qsize(),
+        "queued_segments": list(state.queued_segments),
+        "environment": {key: os.environ.get(key) for key in _TOGGLE_ENV_KEYS},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "_name,method,path,payload,one_update,batch_update,_live_probe,_env_key,_env_value",
+    _ADDON_ROUTE_CASES,
+    ids=[case[0] for case in _ADDON_ROUTE_CASES],
+)
+async def test_addon_persistence_failure_changes_no_runtime_queue_environment_or_ledger(
+    _name,
+    method,
+    path,
+    payload,
+    one_update,
+    batch_update,
+    _live_probe,
+    _env_key,
+    _env_value,
+):
+    ledger = _FakeLedger(enabled=True)
+    app = _make_app(ledger, is_addon=True)
+    app.state.queue.put_nowait(object())
+    app.state.station_state.queued_segments = [{"type": "music", "label": "Keep"}]
+    before = _addon_runtime_snapshot(app)
+    transport = httpx.ASGITransport(app=app)
+
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option", side_effect=OSError("unavailable")) as save_one,
+        patch(
+            "mammamiradio.web.streamer._save_addon_option_batch",
+            side_effect=OSError("unavailable"),
+        ) as save_batch,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+        patch("mammamiradio.web.streamer.configure_broadcast_chain") as configure_chain,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await getattr(client, method)(path, json=payload)
+
+    assert resp.status_code == 500
+    assert _addon_runtime_snapshot(app) == before
+    assert _operator_rows(ledger) == []
+    save_dotenv.assert_not_called()
+    configure_chain.assert_not_called()
+    if one_update is not None:
+        save_one.assert_called_once_with(*one_update)
+        save_batch.assert_not_called()
+    else:
+        save_batch.assert_called_once_with(batch_update)
+        save_one.assert_not_called()
 
 
 # (path, payload, mutate-state, expected old_value, expected new_value) — each toggle

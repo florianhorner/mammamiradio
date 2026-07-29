@@ -4,7 +4,8 @@
 # Guards the current install/operator entry points against:
 #   - live-surgery recovery instructions,
 #   - retired Home Assistant install navigation, and
-#   - stale Edge release promises, and
+#   - stale Edge release promises,
+#   - direct durability claims about Supervisor-generated options.json, and
 #   - relative Markdown links whose target or fragment does not exist.
 #
 # Run locally: bash scripts/check-docs-safety.sh
@@ -44,14 +45,26 @@ DEFAULT_LINK_FILES=(
   docs/troubleshooting.md
 )
 
+DEFAULT_PERSISTENCE_FILES=(
+  CLAUDE.md
+  ha-addon/README.md
+  ha-addon/mammamiradio/DOCS.md
+  docs/architecture.md
+  docs/festival-mode.md
+  docs/operations.md
+  docs/runbooks/ha-addon.md
+)
+
 if [ "$#" -gt 0 ]; then
   COPY_FILES=("$@")
   INSTALL_FILES=("$@")
   LINK_FILES=("$@")
+  PERSISTENCE_FILES=("$@")
 else
   COPY_FILES=("${DEFAULT_COPY_FILES[@]}")
   INSTALL_FILES=("${DEFAULT_INSTALL_FILES[@]}")
   LINK_FILES=("${DEFAULT_LINK_FILES[@]}")
+  PERSISTENCE_FILES=("${DEFAULT_PERSISTENCE_FILES[@]}")
 fi
 
 cd "$REPO_ROOT"
@@ -60,6 +73,7 @@ FAIL=0
 HITS=0
 EXISTING_COPY_FILES=()
 EXISTING_LINK_FILES=()
+EXISTING_PERSISTENCE_FILES=()
 MISSING_FILES=()
 
 record_missing_file() {
@@ -121,10 +135,19 @@ for FILE in "${LINK_FILES[@]}"; do
   EXISTING_LINK_FILES+=("$FILE")
 done
 
+for FILE in "${PERSISTENCE_FILES[@]}"; do
+  if [ ! -f "$FILE" ]; then
+    record_missing_file "$FILE"
+    continue
+  fi
+  EXISTING_PERSISTENCE_FILES+=("$FILE")
+done
+
 STRUCTURAL_OUTPUT=""
 if ! STRUCTURAL_OUTPUT=$(python3 "$SCRIPT_DIR/docs_safety.py" \
   --copy "${EXISTING_COPY_FILES[@]+"${EXISTING_COPY_FILES[@]}"}" \
-  --links "${EXISTING_LINK_FILES[@]+"${EXISTING_LINK_FILES[@]}"}" 2>&1); then
+  --links "${EXISTING_LINK_FILES[@]+"${EXISTING_LINK_FILES[@]}"}" \
+  --persistence "${EXISTING_PERSISTENCE_FILES[@]+"${EXISTING_PERSISTENCE_FILES[@]}"}" 2>&1); then
   printf '%s\n' "$STRUCTURAL_OUTPUT"
   STRUCTURAL_HITS=$(printf '%s\n' "$STRUCTURAL_OUTPUT" | grep -c '^FAIL:' || true)
   if [ "$STRUCTURAL_HITS" -eq 0 ]; then

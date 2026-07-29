@@ -4024,6 +4024,9 @@ async def test_setup_save_keys_in_addon_mode_uses_addon_secret_file():
                 new=AsyncMock(return_value=_probe_payload(anthropic="ok")),
             ),
         ):
+            from mammamiradio.web import persistence
+
+            save_addon_options.return_value = persistence._SECRET_WRITE_DURABLE
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-addon"})
 
@@ -4036,6 +4039,25 @@ async def test_setup_save_keys_in_addon_mode_uses_addon_secret_file():
             os.environ.pop("ANTHROPIC_API_KEY", None)
         else:
             os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+@pytest.mark.asyncio
+async def test_setup_save_keys_reports_structured_500_on_addon_persistence_failure():
+    """An unconfirmed/failed add-on credential save must not silently 200."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._save_addon_options") as save_addon_options:
+        from mammamiradio.web import persistence
+
+        save_addon_options.side_effect = persistence._AddonPersistenceError("Unable to persist add-on credentials")
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/setup/save-keys", json={"ANTHROPIC_API_KEY": "sk-addon"})
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert "failed to save credentials" in body["error"]
 
 
 @pytest.mark.asyncio
