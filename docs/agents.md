@@ -14,6 +14,11 @@ This file supplements the global instructions for the `mammamiradio` repository.
   `build`, `perf`, and `revert`.
 - Dependency commits use `chore(deps): ...`; `deps:` is not a commit type.
 - Never modify `.context/` runtime state
+- Before opening any PR (ANY runtime — Claude, Codex, Cursor): run the pre-ship
+  review squad, then `scripts/emit-review-evidence.sh`, and commit
+  `proof/preship-review.json`. CI (`preship-evidence.yml`) verifies it against the
+  PR head, report-only. The Claude-side hook cannot fire in other runtimes; the
+  committed artifact is what makes the squad auditable everywhere.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take

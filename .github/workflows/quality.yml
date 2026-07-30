@@ -138,6 +138,9 @@ jobs:
       - name: Pre-ship squad gate self-test
         run: bash tests/workflows/test_preship_squad_gate.sh
 
+      - name: Pre-ship evidence self-test
+        run: bash tests/workflows/test_preship_evidence.sh
+
       - name: Landing wrapper self-test
         run: bash tests/workflows/test_land_pr.sh
 
