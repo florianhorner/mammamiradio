@@ -6,6 +6,16 @@ on:
 
 jobs:
   verify:
-    uses: florianhorner/gh-workflows/.github/workflows/verify-claims.yml@v1.3
+    # A called workflow's permissions can only be maintained or reduced relative
+    # to the caller, never elevated — and GitHub refuses an attempted elevation
+    # before anything runs (startup_failure, no logs, no annotation). Newer
+    # revisions of the reusable workflow declare `actions: read` so they can read
+    # the run's referenced_workflows[] and resolve CI-run proof URLs, so the
+    # caller must grant at least that much. Without this, bumping the pin below
+    # to any post-v1.3 revision breaks the check with no diagnosable output.
+    permissions:
+      contents: read
+      actions: read
+    uses: florianhorner/gh-workflows/.github/workflows/verify-claims.yml@f93889a64ff7b501182e5c988b992672ca857ea9 # v1.3
     with:
       owned_repos: "florianhorner/mammamiradio"
