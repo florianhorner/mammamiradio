@@ -12,7 +12,7 @@ Disconnects targeted (findings from UI audit):
  - Stop: clears queue (both real and shadow), sets session_stopped, writes
    now_streaming type="stopped" — all in one atomic response
  - Resume: clears session_stopped and removes the stopped now_streaming sentinel
-   in the same response so status polls cannot say ON AIR and stopped at once
+   only after immediately playable runway exists; a rejected resume stays stopped
  - Purge: clears both real queue and shadow list, reports count
  - Capabilities: reports BOTH key presence (`anthropic_key`) AND runtime auth
    health (`anthropic_degraded`, `anthropic_retry_after_s`). The admin UI
@@ -67,6 +67,19 @@ def _make_seg(title: str = "Track") -> Segment:
         path=Path(f"/tmp/ui_test_{title}.mp3"),
         metadata={"title": title},
     )
+
+
+def _queue_playable_resume_runway(app: FastAPI, tmp_path: Path) -> Segment:
+    path = tmp_path / "resume-runway.mp3"
+    path.write_bytes(b"ID3")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=path,
+        duration_sec=30.0,
+        metadata={"title": "Resume runway", "audio_source": "norm_cache"},
+    )
+    app.state.queue.put_nowait(segment)
+    return segment
 
 
 def _make_app(
@@ -142,6 +155,7 @@ class TestSkipEndpoint:
                 "metadata": {"youtube_id": "yt-a"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         persist_started = asyncio.Event()
         release_persist = asyncio.Event()
 
@@ -229,8 +243,8 @@ class TestSkipEndpoint:
         assert not app.state.queue.empty()
 
     @pytest.mark.asyncio
-    async def test_skip_records_skip_outcome_for_music_segment(self):
-        """Listener profile records the skip so host avoids the track."""
+    async def test_skip_does_not_record_unheard_music_as_listener_outcome(self):
+        """A readable selection is not listener history until a chunk was accepted."""
         app = _make_app(
             now_streaming={
                 "type": "music",
@@ -243,9 +257,26 @@ class TestSkipEndpoint:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/skip", headers=AUTH)
 
-        # songs_skipped counter on the listener profile should be incremented
         profile = app.state.station_state.listener
-        assert profile.songs_skipped >= 1
+        assert profile.songs_skipped == 0
+
+    @pytest.mark.asyncio
+    async def test_skip_records_audible_music_as_listener_outcome(self):
+        """Once a listener accepted audio, Skip becomes durable taste history."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Unwanted Track",
+                "started": time.time() - 10,
+                "metadata": {},
+            }
+        )
+        app.state.station_state.current_stream_audible = True
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            await c.post("/api/skip", headers=AUTH)
+
+        assert app.state.station_state.listener.songs_skipped == 1
 
     @pytest.mark.asyncio
     async def test_stop_wins_while_skip_persistence_is_in_flight(self, monkeypatch):
@@ -258,6 +289,7 @@ class TestSkipEndpoint:
                 "metadata": {"youtube_id": "yt-song-a"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         persistence_entered = asyncio.Event()
         release_persistence = asyncio.Event()
 
@@ -345,6 +377,7 @@ class TestBanNowPlayingEndpoint:
                 },
             }
         )
+        app.state.station_state.current_stream_audible = True
         app.state.config.cache_dir = tmp_path
         persistence_entered = asyncio.Event()
         release_persistence = asyncio.Event()
@@ -383,6 +416,7 @@ class TestBanNowPlayingEndpoint:
                 },
             }
         )
+        app.state.station_state.current_stream_audible = True
         monkeypatch.setattr("mammamiradio.web.streamer.save_blocklist", lambda *_args, **_kwargs: True)
         persist = AsyncMock(side_effect=OSError("skip history unavailable"))
         monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", persist)
@@ -578,14 +612,15 @@ class TestStopEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Resume endpoint — documents the "resume gap"
+# Resume endpoint — continuity-gated state transition
 # ---------------------------------------------------------------------------
 
 
 class TestResumeEndpoint:
     @pytest.mark.asyncio
-    async def test_resume_clears_session_stopped(self):
+    async def test_resume_clears_session_stopped(self, tmp_path):
         app = _make_app(session_stopped=True)
+        _queue_playable_resume_runway(app, tmp_path)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/resume", headers=AUTH)
@@ -594,10 +629,11 @@ class TestResumeEndpoint:
         assert app.state.station_state.session_stopped is False
 
     @pytest.mark.asyncio
-    async def test_resume_clears_stopped_now_streaming_sentinel(self):
+    async def test_resume_clears_stopped_now_streaming_sentinel(self, tmp_path):
         """Resume clears the stopped sentinel before the next status poll."""
         stopped_state = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
         app = _make_app(session_stopped=True, now_streaming=stopped_state)
+        _queue_playable_resume_runway(app, tmp_path)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/resume", headers=AUTH)
@@ -626,23 +662,23 @@ class TestResumeEndpoint:
         assert app.state.station_state.now_streaming == live_state
 
     @pytest.mark.asyncio
-    async def test_resume_does_not_re_populate_queue(self):
-        """Resume does NOT restore the queue that was cleared by stop.
-
-        The producer loop must restart producing segments organically.
-        If the producer is stuck (e.g., all workers timed out), resume
-        will clear the stopped flag but the queue stays empty and nothing plays.
-        """
+    async def test_resume_without_playable_runway_stays_stopped(self, tmp_path):
+        """Resume fails closed until audio is ready, preserving the paused UI truth."""
         app = _make_app(session_stopped=True, shadow=[], queue_items=0)
+        app.state.config.cache_dir = tmp_path
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            await c.post("/api/resume", headers=AUTH)
+        with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-assets"):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                resp = await c.post("/api/resume", headers=AUTH)
 
+        assert resp.status_code == 503
+        assert resp.json()["ok"] is False
+        assert app.state.station_state.session_stopped is True
         assert app.state.station_state.queued_segments == []
         assert app.state.queue.empty()
 
     @pytest.mark.asyncio
-    async def test_resume_does_not_clear_force_next(self):
+    async def test_resume_does_not_clear_force_next(self, tmp_path):
         """force_next set before stop survives resume unchanged.
 
         This can cause the wrong segment type to play after resume if a
@@ -650,6 +686,7 @@ class TestResumeEndpoint:
         """
         app = _make_app(session_stopped=True)
         app.state.station_state.force_next = SegmentType.AD
+        _queue_playable_resume_runway(app, tmp_path)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/resume", headers=AUTH)
@@ -657,10 +694,11 @@ class TestResumeEndpoint:
         assert app.state.station_state.force_next == SegmentType.AD
 
     @pytest.mark.asyncio
-    async def test_resume_bumps_last_state_change_at(self):
+    async def test_resume_bumps_last_state_change_at(self, tmp_path):
         """Integration-contract ETag invalidation depends on this timestamp moving forward."""
         app = _make_app(session_stopped=True)
         app.state.station_state.last_state_change_at = 0.0
+        _queue_playable_resume_runway(app, tmp_path)
         before = time.time()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:

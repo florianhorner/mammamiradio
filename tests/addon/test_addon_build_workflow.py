@@ -149,6 +149,9 @@ def test_ci_trigger_paths_cover_version_bump_files():
         "pyproject.toml",
         "radio.toml",
         "model_registry.toml",
+        "scripts/ha-green-launch-smoke.py",
+        "scripts/ha-green-perf-smoke.py",
+        ".github/workflows/addon-build.yml",
     ]
 
     missing = [p for p in required_trigger_patterns if p not in trigger_block]
@@ -237,6 +240,18 @@ def test_ci_stages_and_verifies_the_canonical_model_registry():
     assert "sha256sum model_registry.toml" in registry_smoke_block
     assert "/app/model_registry.toml" in registry_smoke_block
     assert "does not match the canonical root registry" in registry_smoke_block
+
+
+def test_ci_runs_listener_byte_smoke_against_exact_built_image():
+    """The built image must prove warm and packaged-only audio, not health alone."""
+    workflow_text = _workflow_text()
+    smoke_block = _extract_step_block(workflow_text, "Run built-image launch smoke")
+
+    assert "IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}" in smoke_block
+    assert 'python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"' in smoke_block
+    assert "steps.pull_amd64.outcome == 'success'" in smoke_block
+    assert "sleep 40" not in smoke_block
+    assert "docker run -d --name mamma-smoke" not in smoke_block
 
 
 def test_ci_publishes_short_sha_edge_tag():

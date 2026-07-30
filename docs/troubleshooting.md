@@ -39,7 +39,7 @@ curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/readyz
 ```
 
-`/healthz` answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue or when active listeners have hit prolonged silence.
+`/healthz` answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue or when active listeners have hit prolonged silence. An intentional operator pause is distinct: `/healthz` normally stays `200`, while `/readyz` returns HTTP `503` with `status: "stopped"` until explicit Resume.
 
 ## The app starts but there is no real music
 
@@ -49,7 +49,7 @@ The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
 - A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means nothing started airing at all: a station bridging an empty queue on its packaged continuity clip is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that prefers a song the listener has not just heard, and only re-serves a recent one when the cache holds nothing else (a song from twenty minutes ago beats the station ident on a loop), then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat as the last audio source; after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
+When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means no listener queue accepted audio, not merely that a file was selected. A station bridging an empty queue on `continuity_1.mp3` is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that prefers a song the listener has not just heard, and only re-serves a recent one when the cache holds nothing else (a song from twenty minutes ago beats the station ident on a loop), then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat; the neutral two-second `emergency_tone.mp3` remains the final packaged rung when ordinary recovery cannot supply audio. After 60 seconds without any bridge asset the station requests forced banter so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth. Connecting or reconnecting to `/stream` does not clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
@@ -62,6 +62,42 @@ The app persists the last selected source to `cache/playlist_source.json` and re
 ## Air Next or Next track says the station is paused
 
 Air Next only queues an operator pick, and Next track only cuts the current programme, while the station is running. Press **Start** or **Resume** first, then use the control again; a paused station does not keep a hidden pick or skip waiting for later.
+
+## Stop or Resume returns 503
+
+Stop writes `cache_dir/session_stopped.flag` before touching live playback. If
+that write fails, the response says nothing changed; fix cache-directory
+permissions or free disk space and try Stop again. Do not assume the station
+paused merely because the button was pressed.
+
+Resume first reserves readable immediate audio, preferring a warm norm-cache
+song, then `continuity_1.mp3`, then `emergency_tone.mp3`. It stays paused if no
+runway is readable or if the persisted marker cannot be removed. Check:
+
+```bash
+ls -l cache/session_stopped.flag
+ls -lh mammamiradio/assets/demo/recovery/continuity_1.mp3 \
+  mammamiradio/assets/demo/recovery/emergency_tone.mp3
+bash scripts/check-release-invariants.sh
+```
+
+For the add-on, inspect the equivalent paths read-only in the installed image;
+do not patch or restart the live container as a test. A healthy Resume log names
+`runway_source` and the current `continuity_epoch`. Stop advances that epoch
+before it purges, so a later `stale_continuity` discard is expected proof that
+pre-Stop work was fenced, not a new audio failure.
+
+Setup can remain **Ready** while playback is paused. That is intentional:
+`/api/setup/status` reports configuration/source readiness, while `/readyz` and
+authenticated runtime status report transport state. Setup recheck, key repair,
+and Home context preview remain available during the pause.
+
+If status appears to name a segment but the control room does not say **On Air**,
+look for the two log boundaries. `Selected readable ...` means the file opened
+and yielded bytes; it is not listener proof. `Listener-audible segment committed
+... accepted_listeners=N` means at least one listener queue accepted the first
+chunk. Provider, rescue-rotation, and continuity-air receipts update only at the
+second boundary.
 
 ## A chart entry sounded like a podcast or audiobook
 

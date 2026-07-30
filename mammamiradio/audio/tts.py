@@ -405,7 +405,7 @@ def _record_tts_runtime_state(
     if state is None or engine == "edge":
         return
     try:
-        state.update_runtime_provider(
+        state.observe_runtime_provider(
             f"tts:{engine}",
             current_provider=current_provider,
             primary_provider=engine,
@@ -423,7 +423,7 @@ def _record_tts_runtime_state(
             if aggregate_active
             else "Cloud TTS route rendered successfully"
         )
-        state.update_runtime_provider(
+        state.observe_runtime_provider(
             "tts_provider",
             current_provider="edge" if aggregate_active else current_provider,
             primary_provider="mixed_tts",

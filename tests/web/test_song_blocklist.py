@@ -281,6 +281,7 @@ async def test_ban_reports_not_persisted_when_disk_write_fails(tmp_path):
 
 def _airing_music(state, *, artist="Modugno", title_only="Volare", label=None):
     """Stamp now_streaming as a music segment the way the playback loop does."""
+    state.current_stream_audible = True
     state.now_streaming = {
         "type": "music",
         "label": label if label is not None else f"{artist} — {title_only}",

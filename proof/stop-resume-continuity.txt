@@ -1,0 +1,37 @@
+commit : 043a5c860d1478571801c0e4400cf6eb6cc7b0a7
+captured: 2026-07-30T10:54:46+0200
+ffmpeg : ffmpeg version 8.1.1 Copyright (c) 2000-2026 the FFmpeg developers
+
+--- Scenario 3: the station booted with a stopped marker from a prior run ---
+[1] marker present on disk           : True
+    session_stopped                  : True
+[2] /readyz while paused             : HTTP 503, status='stopped'
+[3] POST /api/resume                 : 200 {'ok': True} in 0.002s
+    marker removed                   : True
+[4] listener first byte after Resume : 0.001s
+    VERDICT: PASS against the 2.000s instant-audio budget
+
+--- Live Stop -> Resume cycle on the running station ---
+[5] baseline listener first byte     : 0.128s
+[6] POST /api/stop                   : 200 {'ok': True, 'purged': 1} in 0.001s
+    marker written before mutation   : True
+    session_stopped                  : True
+    now_streaming.type               : 'stopped'
+    station_on_air                   : False
+[7] POST /api/resume                 : 200 {'ok': True} in 0.001s
+[8] listener first byte after Resume : 0.124s
+    VERDICT: PASS against the 2.000s instant-audio budget
+
+--- Provider rows: current selection and switch history are separate facts ---
+  audio_source
+    current_provider : 'norm_cache'
+    current_reason   : 'Fallback audio is currently on air'
+    switch_reason    : 'Fallback audio is currently on air'
+  script_provider
+    current_provider : 'anthropic'
+    current_reason   : 'Anthropic is the active script provider'
+    switch_reason    : ''
+  tts_provider
+    current_provider : 'mixed_tts'
+    current_reason   : 'Mixed TTS voice providers are configured'
+    switch_reason    : ''

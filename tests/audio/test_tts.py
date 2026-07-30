@@ -708,6 +708,8 @@ async def test_synthesize_cloud_fallback_records_route_provenance(_mock_all, tmp
     assert state.runtime_provider_state["tts_provider"]["current_provider"] == "edge"
     assert state.runtime_provider_state["tts_provider"]["fallback_active"] is True
     assert "missing_credentials" in state.runtime_provider_state["tts_provider"]["reason"]
+    assert state.runtime_provider_state["tts_provider"]["last_switch_timestamp"] is None
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio

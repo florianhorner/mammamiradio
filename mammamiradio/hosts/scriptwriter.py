@@ -817,22 +817,13 @@ async def _generate_json_response(
                                 caller,
                             )
                         _warn_budget_pressure(_anthropic_out, current_max_tokens, caller)
-                        provider_event = state.update_runtime_provider(
+                        state.observe_runtime_provider(
                             "script_provider",
                             current_provider="anthropic",
                             primary_provider="anthropic",
                             fallback_active=False,
                             reason="Anthropic is the active script provider",
                         )
-                        if provider_event is not None:
-                            logger.info(
-                                "provider_switch_event",
-                                extra={
-                                    **provider_event.to_dict(),
-                                    "model": model,
-                                    "caller": caller,
-                                },
-                            )
                         _emit_llm_call(
                             state=state,
                             config=config,
@@ -1167,22 +1158,13 @@ async def _generate_json_response(
         },
     )
     if fallback_reason != "anthropic_absent":
-        provider_event = state.update_runtime_provider(
+        state.observe_runtime_provider(
             "script_provider",
             current_provider="openai",
             primary_provider="anthropic",
             fallback_active=True,
             reason=fallback_reason,
         )
-        if provider_event is not None:
-            logger.info(
-                "provider_switch_event",
-                extra={
-                    **provider_event.to_dict(),
-                    "model": openai_model,
-                    "caller": caller,
-                },
-            )
     _emit_llm_call(
         state=state,
         config=config,

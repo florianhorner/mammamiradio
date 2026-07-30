@@ -1,0 +1,24 @@
+commit: 043a5c860d1478571801c0e4400cf6eb6cc7b0a7
+captured: 2026-07-30T09:00:24Z
+
+=== pytest tests/ ===
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5841 passed, 3 skipped, 1 warning in 244.93s (0:04:04)
+=== pytest -m requires_ffmpeg ===
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+21 passed, 5823 deselected, 1 warning in 16.48s
+=== ruff check ===
+All checks passed!
+=== ruff format --check ===
+327 files already formatted
+=== mypy ===
+Success: no issues found in 298 source files
+=== check-release-invariants.sh ===
+=======================================
+
+All invariants passed.
+=== check-changelog-lint.sh ===
+Changelog lint clean.
+=== validate-addon.sh ===
+=== Results ===
+[0;34mAll checks passed.[0m Safe to push.

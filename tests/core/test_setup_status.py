@@ -467,21 +467,22 @@ def test_guided_setup_addon_blocked_copy_does_not_show_standalone_env_vars():
         ("last_music_file", Path("cache/song.mp3")),
     ],
 )
-def test_stream_status_playable_runtime_wins_over_blocking_golden_path(field, value):
+def test_stream_status_golden_path_wins_over_transient_runtime_state(field, value):
     config = load_config()
     config.allow_ytdlp = False
     state = StationState()
     setattr(state, field, value)
 
-    assert _stream_status(config, state, golden_path={"blocking": True}) == "ready"
+    assert _stream_status(config, state, golden_path={"blocking": True}) == "blocked"
 
 
-def test_guided_setup_stream_stopped_and_no_source_states():
+def test_guided_setup_stream_pause_is_separate_from_source_readiness():
     config = load_config()
     state = StationState()
     state.session_stopped = True
 
-    assert build_guided_setup(config, state)["stream"]["status"] == "stopped"
+    assert build_guided_setup(config, state, golden_path={"blocking": False})["stream"]["status"] == "ready"
+    assert build_guided_setup(config, state, golden_path={"blocking": True})["stream"]["status"] == "blocked"
 
     state.session_stopped = False
     config.allow_ytdlp = True

@@ -96,6 +96,7 @@ def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():
         "result": "aired",
         "bytes_sent": 4096,
         "starting_listener_count": 1,
+        "accepted_listener_count": 1,
         "terminal_reason": "eof",
     }
 

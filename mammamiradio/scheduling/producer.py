@@ -62,6 +62,7 @@ from mammamiradio.core.models import (
     GenerationWasteReason,
     HostPersonality,
     InterruptSpec,
+    RuntimeProviderObservation,
     Segment,
     SegmentType,
     StationState,
@@ -794,8 +795,51 @@ def _pick_recovery_clip(state: StationState) -> Path | None:
     return None
 
 
+_AUDIBLE_PROVIDER_CLASSES = ("script_provider", "tts_provider")
+
+
+def _runtime_provider_observation_revisions(state: StationState) -> dict[str, int]:
+    """Capture provider observations at the start of one render attempt."""
+    revisions: dict[str, int] = {}
+    for provider_class in _AUDIBLE_PROVIDER_CLASSES:
+        try:
+            revisions[provider_class] = int(
+                state.runtime_provider_state.get(provider_class, {}).get("observation_revision") or 0
+            )
+        except (TypeError, ValueError):
+            revisions[provider_class] = 0
+    return revisions
+
+
+def _attach_runtime_provider_observations(
+    segment: Segment,
+    state: StationState,
+    starting_revisions: dict[str, int],
+) -> None:
+    """Carry render-time provider truth to the listener-audible commit."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("rescue") or metadata.get("error"):
+        return
+    observations: dict[str, RuntimeProviderObservation] = {}
+    for provider_class, starting_revision in starting_revisions.items():
+        provider_state = state.runtime_provider_state.get(provider_class, {})
+        try:
+            current_revision = int(provider_state.get("observation_revision") or 0)
+        except (TypeError, ValueError):
+            current_revision = 0
+        if current_revision <= starting_revision:
+            continue
+        observations[provider_class] = RuntimeProviderObservation(
+            current_provider=str(provider_state.get("current_provider") or ""),
+            primary_provider=str(provider_state.get("primary_provider") or ""),
+            fallback_active=bool(provider_state.get("fallback_active")),
+            current_reason=str(provider_state.get("current_reason") or provider_state.get("reason") or ""),
+        )
+    segment.runtime_provider_observations = observations
+
+
 async def _queue_continuity_bridge(
-    queue_segment: Callable[[Segment], Awaitable[bool]],
+    queue_segment: Callable[..., Awaitable[bool]],
     state: StationState,
     config: StationConfig,
     *,
@@ -813,6 +857,24 @@ async def _queue_continuity_bridge(
     while the packaged clip pays an ffprobe in a worker thread before it can be
     queued. The clip stays as the rung below, for a cold cache.
     """
+    bridge_continuity_epoch = state.continuity_epoch
+
+    def _bridge_stale_reason() -> str | None:
+        if state.continuity_epoch == bridge_continuity_epoch:
+            return None
+        logger.warning(
+            "%s bridge discarded after continuity epoch changed captured_epoch=%d current_epoch=%d",
+            bridge_type.capitalize(),
+            bridge_continuity_epoch,
+            state.continuity_epoch,
+            extra={
+                "bridge_type": bridge_type,
+                "captured_continuity_epoch": bridge_continuity_epoch,
+                "continuity_epoch": state.continuity_epoch,
+            },
+        )
+        return GenerationWasteReason.STALE_CONTINUITY
+
     if music_runway and await _queue_norm_cache_bridge_segment(
         queue_segment,
         state,
@@ -824,6 +886,7 @@ async def _queue_continuity_bridge(
         # Without this a one-song warm cache queued that song back-to-back with
         # nothing in between — a worse repeat than the one this fix exists for.
         allow_recent_repeat=False,
+        stale_check=_bridge_stale_reason,
     ):
         _record_bridge_fire(state, bridge_type, "norm_cache")
         return True
@@ -851,7 +914,8 @@ async def _queue_continuity_bridge(
                 duration_sec=duration_sec,
                 metadata=metadata,
                 ephemeral=False,
-            )
+            ),
+            stale_check=_bridge_stale_reason,
         )
         if ok:
             _record_bridge_fire(state, bridge_type, "canned")
@@ -880,6 +944,7 @@ async def _queue_continuity_bridge(
         bridge_type=bridge_type,
         bridge_flag=bridge_flag,
         allow_recent_repeat=True,
+        stale_check=_bridge_stale_reason,
     )
     if ok:
         _record_bridge_fire(state, bridge_type, "norm_cache")
@@ -907,7 +972,8 @@ async def _queue_continuity_bridge(
                 "audio_source": "emergency_tone",
             },
             ephemeral=False,
-        )
+        ),
+        stale_check=_bridge_stale_reason,
     )
     if ok:
         _record_bridge_fire(state, bridge_type, "emergency_tone")
@@ -915,13 +981,14 @@ async def _queue_continuity_bridge(
 
 
 async def _queue_norm_cache_bridge_segment(
-    queue_segment: Callable[[Segment], Awaitable[bool]],
+    queue_segment: Callable[..., Awaitable[bool]],
     state: StationState,
     config: StationConfig,
     *,
     bridge_type: str,
     bridge_flag: str,
     allow_recent_repeat: bool,
+    stale_check: Callable[[], bool | str | None] | None = None,
 ) -> bool:
     norm_path = select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=allow_recent_repeat)
     if not norm_path:
@@ -944,7 +1011,8 @@ async def _queue_norm_cache_bridge_segment(
             duration_sec=_duration_sec_from_metadata(metadata),
             metadata=metadata,
             ephemeral=False,
-        )
+        ),
+        stale_check=stale_check,
     )
 
 
@@ -1059,7 +1127,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
 
 
 async def _queue_drain_recovery_bridge(
-    queue_segment: Callable[[Segment], Awaitable[bool]],
+    queue_segment: Callable[..., Awaitable[bool]],
     state: StationState,
     config: StationConfig,
 ) -> bool:
@@ -2790,7 +2858,11 @@ async def prewarm_first_segment(
                 norm_path.unlink(missing_ok=True)
             return False
         if generation_continuity_epoch != state.continuity_epoch:
-            logger.info("Discarding stale prewarm segment after a live continuity reservation")
+            logger.info(
+                "Discarding stale prewarm segment after continuity epoch changed captured_epoch=%d current_epoch=%d",
+                generation_continuity_epoch,
+                state.continuity_epoch,
+            )
             prewarm_segment = Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
@@ -4303,6 +4375,7 @@ async def _run_producer_inner(
         # A completed render from before that change must never refill the queue
         # after the reservation has made its safety promise.
         generation_continuity_epoch = state.continuity_epoch
+        generation_provider_revisions = _runtime_provider_observation_revisions(state)
 
         success_callback: Callable[[], None] | None = None
         banter_commit = None
@@ -6234,6 +6307,7 @@ async def _run_producer_inner(
             raise
 
         if segment:
+            _attach_runtime_provider_observations(segment, state, generation_provider_revisions)
             actual_seg_type = _adjacency_type_for(segment)
             if (
                 prev_seg_type is not None
@@ -6318,7 +6392,12 @@ async def _run_producer_inner(
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             if generation_continuity_epoch != state.continuity_epoch:
-                logger.info("Discarding stale %s segment after a live continuity reservation", seg_type.value)
+                logger.info(
+                    "Discarding stale %s segment after continuity epoch changed captured_epoch=%d current_epoch=%d",
+                    seg_type.value,
+                    generation_continuity_epoch,
+                    state.continuity_epoch,
+                )
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CONTINUITY)
                 _drop_segment_moment_receipts(
                     state, segment, GenerationWasteReason.STALE_CONTINUITY, "continuity-discard"

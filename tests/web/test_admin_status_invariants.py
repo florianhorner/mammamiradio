@@ -205,10 +205,30 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         "statusChip('degraded','Anthropic')",
         "statusChip('ready','Anthropic')",
         "statusChip('blocked','Anthropic')",
-        "statusChip('ready','Stream')",
         "statusChip('idle','HA: off')",
     ):
         assert expected in block
+    assert "statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail)" in block
+    assert "statusChip('ready','Stream')" not in block
+
+
+def test_pipeline_stream_status_is_driven_by_fast_runtime_truth() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "pipelineStreamStatus")
+    refresh = _function_block(html, "refreshFast")
+
+    assert "const runtime=st?.runtime_status||{}" in block
+    assert "const fastGoldenPath=st?.golden_path" in block
+    assert "const goldenPath=fastGoldenPath||caps?.golden_path||{}" in block
+    assert "st?.session_stopped===true" in block
+    assert "runtime.health_state==='blocked'" in block
+    assert "runtime.station_on_air===true" in block
+    assert "goldenPath.blocking===true" in block
+    assert "activeListenerCount(st)>0" in block
+    assert "guidedStream.status==='ready'||fastGoldenPath?.blocking===false" in block
+    for state in ("'idle'", "'blocked'", "'degraded'", "'ready'", "'working'"):
+        assert state in block
+    assert "updatePipelineStatus(_caps,_st)" in refresh
 
 
 def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
@@ -223,9 +243,10 @@ def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:
     block = _function_block(_read_admin_html(), "updateRuntimeStatus")
 
     assert "const stationOnAir=rs.station_on_air===true" in block
+    assert "const sessionStopped=st?.session_stopped===true" in block
     assert "const taskBlocked=rs.health_state==='blocked'" in block
-    assert "const headerState=taskBlocked?'blocked':stationOnAir?'ready':'degraded'" in block
-    assert "const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':'Paused'" in block
+    assert "const headerState=taskBlocked?'blocked':stationOnAir?'ready':sessionStopped?'ready':'working'" in block
+    assert "const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':sessionStopped?'Paused':'Ready'" in block
     assert "const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel" in block
     assert "header.className='status-dot '+headerState" in block
     assert "header.setAttribute('aria-label',headerDetail)" in block
@@ -283,7 +304,9 @@ def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> 
 
 
 def test_runtime_provider_row_handles_recovery_mode() -> None:
-    block = _function_block(_read_admin_html(), "runtimeProviderRow")
+    html = _read_admin_html()
+    block = _function_block(html, "runtimeProviderRow")
+    runtime = _function_block(html, "updateRuntimeStatus")
 
     assert "item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'" in block
     assert "state='degraded'" in block
@@ -291,11 +314,111 @@ def test_runtime_provider_row_handles_recovery_mode() -> None:
     assert "item?.recovery_mode==='transient'" in block
     assert "state='working'" in block
     assert "label='Auto-recovering'" in block
-    assert "const reasonLine=item?.action_guidance||item?.switch_reason||''" in block
+    assert "const observationLabel=stationOnAir?'Current':'Last observed'" in block
+    assert "const currentReason=item?.current_reason||''" in block
+    assert "const guidanceLine=item?.action_guidance||''" in block
+    assert "action_guidance||item?.switch_reason" not in block
     assert "const retrySeconds=Math.max(0,Number(item?.retry_in_seconds)||0)" in block
     assert "retrySeconds<60?retrySeconds+' sec':Math.ceil(retrySeconds/60)+' min'" in block
-    assert "reasonLine" in block
+    assert "const switchLine=item?.last_switch_timestamp" in block
+    assert "'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp)" in block
+    assert "item?.switch_reason||''" in block
+    assert "currentReason" in block
+    assert "guidanceLine" in block
     assert "retryLine" in block
+    for title in ("Audio source", "Script provider", "TTS provider"):
+        assert f"runtimeProviderRow('{title}',providers." in runtime
+    assert runtime.count(",stationOnAir)") == 3
+
+
+def test_stop_and_resume_require_http_and_json_success_then_refresh() -> None:
+    html = _read_admin_html()
+    response_helper = _function_block(html, "apiResponse")
+
+    assert "const response=await fetch(_base+p,options)" in response_helper
+    assert "payload=await response.json()" in response_helper
+    assert "return {response,payload}" in response_helper
+
+    for name, endpoint, success_copy, failure_constant in (
+        ("doStop", "/api/stop", "Station paused", "STOP_FAILURE_COPY"),
+        ("doResume", "/api/resume", "Station resumed", "RESUME_FAILURE_COPY"),
+    ):
+        block = _function_block(html, name)
+        assert f"apiResponse('POST','{endpoint}')" in block
+        assert "response.ok&&payload?.ok===true" in block
+        assert f"toast('{success_copy}')" in block
+        # A refusal shows the station's own reason; the generic line is only the
+        # fallback, and the transport-error catch has nothing better to offer.
+        assert f"toast(transportFailureCopy(payload,{failure_constant}))" in block
+        assert block.count(f"toast({failure_constant})") == 1
+        assert "}finally{" in block
+        assert "await refreshFast()" in block
+        assert "updateStopState(" not in block
+
+    assert "Give the studio a few seconds, then press Stop again." in html
+    assert "Give the studio a few seconds, then press Start again." in html
+
+
+def test_failover_line_names_providers_in_words() -> None:
+    """The failover line is operator copy, not a dump of provider keys.
+
+    It used to render "audio_source: charts → norm_cache"; raw snake_case keys
+    are machine words and belong in logs.
+    """
+
+    html = _read_admin_html()
+    assert "lastFailover.provider_class_label||'Provider'" in html
+    assert "lastFailover.from_provider_label||'—'" in html
+    assert "lastFailover.to_provider_label||'—'" in html
+    assert "lastFailover.provider_class||" not in html
+    assert "lastFailover.from_provider||" not in html
+    assert "lastFailover.to_provider||" not in html
+
+
+def test_transport_failures_prefer_the_stations_own_reason() -> None:
+    """The backend names the exact way out; the admin must not overwrite it."""
+
+    html = _read_admin_html()
+    helper = _function_block(html, "transportFailureCopy")
+
+    assert "typeof payload?.error==='string'" in helper
+    assert "payload.error.trim()" in helper
+    assert "return reported||fallback" in helper
+
+
+def test_failed_fast_refresh_marks_last_snapshot_stale_and_success_clears_it() -> None:
+    html = _read_admin_html()
+    stale = _function_block(html, "markFastStatusStale")
+    fresh = _function_block(html, "markFastStatusFresh")
+    refresh = _function_block(html, "refreshFast")
+
+    assert 'id="statusFreshness" role="status" aria-live="polite" aria-atomic="true" hidden' in html
+    assert 'id="statusFreshnessText"' in html
+    assert "let _lastFastStatusSuccessAt=null" in html
+    assert "String(part).padStart(2,'0')" in html
+    assert "?formatFastStatusSuccessAt(_lastFastStatusSuccessAt)" in stale
+    # Names the problem AND the next step ("still trying" = wait, don't go hunting),
+    # and never prints a placeholder where a timestamp belongs.
+    assert "'Status may be out of date — still trying. Last updated '+lastUpdated" in stale
+    assert "'Status may be out of date — still trying.'" in stale
+    assert "'unknown'" not in stale
+    assert "freshness.hidden=false" in stale
+    assert "_lastFastStatusSuccessAt=Date.now()" in fresh
+    assert "freshness.hidden=true" in fresh
+    assert "markFastStatusStale()" in refresh
+    assert "_st=nextStatus;\n  markFastStatusFresh();" in refresh
+
+    failure_start = refresh.index("}catch(e){", refresh.index("nextStatus=await"))
+    failure_end = refresh.index("\n  }\n\n  if(generation!==_fastPollGeneration)return;", failure_start)
+    failure_block = refresh[failure_start:failure_end]
+    assert "_st=" not in failure_block, "a failed poll must retain the last authoritative snapshot"
+
+
+def test_fast_poll_cadence_remains_three_seconds() -> None:
+    html = _read_admin_html()
+
+    assert "const FAST_POLL_INTERVAL_MS=3000" in html
+    assert "setInterval(refreshFast,FAST_POLL_INTERVAL_MS)" in html
 
 
 def test_segment_labels_use_canonical_status_surfaces() -> None:
@@ -406,6 +529,8 @@ def test_system_health_rows_use_canonical_status_helpers() -> None:
     assert "musicState='ready'" in update_systems
     assert "musicState='working'" in update_systems
     assert "musicState='blocked'" in update_systems
+    assert "const gp=st?.golden_path||caps?.golden_path||{}" in update_systems
+    assert "const gp=caps?.golden_path||st?.golden_path||{}" not in update_systems
     assert "const needsMusicSource=gp.stage==='needs_music_source'" in update_systems
     assert "const hasMusicSource=!needsMusicSource&&!!(st?.current_source||st?.playlist_source)" in update_systems
     assert "if(needsMusicSource||!hasMusicSource)" in update_systems

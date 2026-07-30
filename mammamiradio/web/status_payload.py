@@ -70,7 +70,6 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         allow_ytdlp,
         getattr(state, "playlist_revision", 0),
         getattr(state, "source_revision", 0),
-        bool(getattr(state, "session_stopped", False)),
     )
     if (
         not force_refresh

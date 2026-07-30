@@ -1184,6 +1184,36 @@ async def test_prewarm_discards_on_continuity_reservation_during_render(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_prewarm_discards_after_stop_resume_aba_during_render(tmp_path):
+    """A final running boolean cannot revalidate work captured before Stop."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    captured_epoch = state.continuity_epoch
+
+    async def _stop_then_resume(*_args, **_kwargs):
+        state.session_stopped = True
+        state.continuity_epoch += 1
+        state.session_stopped = False
+        return tmp_path / "fake.mp3"
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_stop_then_resume),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert state.session_stopped is False
+    assert state.continuity_epoch != captured_epoch
+    assert result is False
+    assert queue.empty()
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY) == 1
+
+
+@pytest.mark.asyncio
 async def test_prewarm_discards_on_continuity_reservation_during_egress(tmp_path):
     """The post-egress prewarm stale gate also honors a live continuity reservation."""
     state = _make_state()

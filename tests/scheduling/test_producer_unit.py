@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,8 +46,10 @@ from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
     _apply_radio_event_matches,
     _apply_ritual_recipe_matches,
+    _attach_runtime_provider_observations,
     _listener_truth_guard,
     _pick_canned_clip,
+    _runtime_provider_observation_revisions,
     run_producer,
 )
 
@@ -102,6 +105,64 @@ def _make_config():
     config.homeassistant.enabled = False
     config.tmp_dir = Path("/tmp/mammamiradio_test")
     return config
+
+
+def test_segment_carries_only_provider_observations_created_during_its_render():
+    state = _make_state()
+    state.observe_runtime_provider(
+        "script_provider",
+        current_provider="anthropic",
+        primary_provider="anthropic",
+        fallback_active=False,
+        reason="Anthropic active",
+    )
+    starting = _runtime_provider_observation_revisions(state)
+    state.observe_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_exception",
+    )
+    state.observe_runtime_provider(
+        "tts_provider",
+        current_provider="edge",
+        primary_provider="mixed_tts",
+        fallback_active=True,
+        reason="Cloud TTS unavailable",
+    )
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/provider-carry.mp3"),
+        metadata={"title": "Rendered banter"},
+    )
+
+    _attach_runtime_provider_observations(segment, state, starting)
+
+    assert set(segment.runtime_provider_observations) == {"script_provider", "tts_provider"}
+    assert segment.runtime_provider_observations["script_provider"].current_provider == "openai"
+    assert segment.runtime_provider_observations["tts_provider"].current_provider == "edge"
+
+
+def test_recovery_segment_does_not_inherit_failed_render_provider_observations():
+    state = _make_state()
+    starting = _runtime_provider_observation_revisions(state)
+    state.observe_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_exception",
+    )
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/provider-recovery.mp3"),
+        metadata={"title": "Recovery", "rescue": True},
+    )
+
+    _attach_runtime_provider_observations(segment, state, starting)
+
+    assert segment.runtime_provider_observations == {}
 
 
 def _manifest_recovery_clip(root: Path, name: str, payload: bytes, *, kind: str = "speech") -> Path:
@@ -4999,7 +5060,7 @@ async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invarian
     canned_clip.write_bytes(b"fake audio" * 256)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -5040,6 +5101,69 @@ async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invarian
 
 
 @pytest.mark.asyncio
+async def test_continuity_bridge_probe_spanning_stop_resume_is_discarded_by_epoch(tmp_path, caplog):
+    """A blocked recovery probe cannot enqueue across a Stop→Resume ABA cycle."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+    queued: list[Segment] = []
+
+    def _blocked_probe(*_args, **_kwargs) -> float:
+        probe_started.set()
+        if not release_probe.wait(timeout=5):
+            raise TimeoutError("test did not release the recovery probe")
+        return 6.2
+
+    async def _capture(segment: Segment, *, stale_check=None, **_kwargs) -> bool:
+        verdict = stale_check() if stale_check is not None else None
+        if verdict:
+            state.record_discard(segment, reason=str(verdict))
+            return False
+        queued.append(segment)
+        return True
+
+    caplog.set_level(logging.WARNING, logger=PRODUCER_MODULE)
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_blocked_probe),
+    ):
+        bridge_task = asyncio.create_task(
+            producer._queue_continuity_bridge(
+                _capture,
+                state,
+                config,
+                bridge_type="resume",
+                bridge_flag="resume_bridge",
+                canned_title="Resume bridge",
+            )
+        )
+        assert await asyncio.to_thread(probe_started.wait, 2)
+
+        # Model a fast Stop→Resume cycle while the old bridge still appears busy.
+        state.session_stopped = True
+        state.continuity_epoch += 1
+        state.session_stopped = False
+        release_probe.set()
+        ok = await asyncio.wait_for(bridge_task, timeout=2)
+
+    assert ok is False
+    assert queued == []
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    assert list(state.bridge_events) == []
+    assert any(
+        "bridge discarded after continuity epoch changed captured_epoch=0 current_epoch=1" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
     """A warm cache means a mid-playback drain airs a real song, with no clip in front."""
     from mammamiradio.scheduling import producer
@@ -5055,7 +5179,7 @@ async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
     save_track_metadata(norm_file, title="Runway Song", artist="Cache Artist", duration_ms=180_000)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -5104,7 +5228,7 @@ async def test_bridge_never_repeats_the_on_air_song_back_to_back(tmp_path):
     }
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -5151,7 +5275,7 @@ async def test_bridge_repeats_the_on_air_song_rather_than_airing_the_tone(tmp_pa
     }
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -5180,7 +5304,7 @@ async def test_drain_bridge_queues_only_canned_clip_when_cache_is_cold(tmp_path)
     canned_clip.write_bytes(b"fake audio" * 256)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -5210,7 +5334,7 @@ async def test_resume_bridge_music_runway_queues_only_canned_clip_when_cache_col
     canned_clip.write_bytes(b"fake audio" * 256)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -5248,7 +5372,7 @@ async def test_idle_bridge_music_runway_queues_only_canned_clip_when_cache_cold(
     canned_clip.write_bytes(b"fake audio" * 256)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -5295,7 +5419,7 @@ async def test_continuity_bridge_falls_back_to_clip_when_cache_music_cannot_enqu
     queued: list[Segment] = []
     rejected: list[Segment] = []
 
-    async def _reject_music(segment: Segment) -> bool:
+    async def _reject_music(segment: Segment, **_kwargs) -> bool:
         if segment.type is SegmentType.MUSIC:
             rejected.append(segment)
             return False

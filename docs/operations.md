@@ -9,7 +9,7 @@ This repo supports three deployment models: Docker container, Home Assistant add
 - writable `tmp/` and `cache/` directories
 - outbound network access for Apple Music charts API, Anthropic/OpenAI, and optional Home Assistant
 
-Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from one packaged recovery clip per empty-queue gap, then the norm cache, then bundled demo music assets when present; only if no eligible music exists anywhere (quality-rejected and operator-banned cache files sit on disk but never air) does it repeat the packaged clip, and after 60 seconds without any bridge asset it requests forced banter from the producer so the queue recovers without crashing or stalling on silence. The `/healthz` - `/readyz` silence gate keys on nothing airing at all, not on the queue being empty — a station bridging on the packaged clip is on air, so the add-on watchdog is not invited to restart it mid-recovery. Packaged recovery clips under `mammamiradio/assets/demo/` are durable package resources, not temp renders: producer and playback cleanup paths guard that tree before unlinking any segment marked ephemeral. A connecting listener does not wait long for that rescue: on an empty queue the rescue ladder opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Resume, idle, and active-playback drain bridges reach for a cached song first and fall back to the short branded continuity clip only when the cache has nothing eligible — a real song is both the better listener experience and the faster one to first byte (the cached payload takes its duration from the sidecar, while the packaged clip needs an ffprobe first). Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The cold-launch first-byte path is guarded by `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`), which boots a real station on temp dirs and asserts first byte within 2s. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
+Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from the packaged `continuity_1.mp3` clip once per empty-queue gap, then the norm cache, then bundled demo music assets when present; only if no eligible music exists anywhere (quality-rejected and operator-banned cache files sit on disk but never air) does it repeat the packaged clip, and after 60 seconds without any bridge asset it requests forced banter from the producer so the queue recovers without crashing or stalling on silence. The `/healthz` - `/readyz` silence gate keys on nothing airing at all, not on the queue being empty — a station bridging on the packaged clip is on air, so the add-on watchdog is not invited to restart it mid-recovery. The required recovery files under `mammamiradio/assets/demo/recovery/` are durable package resources, not temp renders: `continuity_1.mp3` is the normal branded bridge and `emergency_tone.mp3` is the neutral two-second cold-cache last rung. Producer and playback cleanup paths guard that tree before unlinking any segment marked ephemeral. A connecting listener does not wait long for that rescue: on an empty queue the rescue ladder opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Resume, idle, and active-playback drain bridges reach for a cached song first and fall back to the short branded continuity clip, then the emergency tone, only when the cache has nothing eligible — a real song is both the better listener experience and the faster one to first byte (the cached payload takes its duration from the sidecar while packaged audio is already manifest/hash approved). Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The launch gate is `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`): with non-loopback networking denied, it boots one station with a warm norm cache and one with an empty cache/package-only recovery, requiring first byte within 2s in both. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
 
 Acquisition failures from yt-dlp or a direct source create a small `_failed_<cache-key>.mp3` marker rather than synthesized silence. That marker deliberately fails `validate_download` before FFprobe or normalization; the producer deny-lists the source key for the current process, while the marker prevents another acquisition attempt until startup purges it for a fresh retry. A newly synced raw, legacy, local, or bundled-demo file can receive one fresh admission attempt; if it fails, the marker refreshes so that same corrupt file cannot loop. A later explicit external download clears the stale marker and session denial only after it is admitted to rotation. If all music candidates are unavailable, the producer enters its bounded recovery ladder so the sweeper and emergency-tone rungs can keep the station audible. Downloads that otherwise fail `validate_download` (missing file, too-short duration, corrupt) follow the same purge-and-denylist path so the same track is not re-selected endlessly. The main producer loop and prewarm use a bounded retry around `select_next_track`; prefetch filters denied candidates from its non-mutating lookahead. The denylist clears on restart. Music quality-gate rejections (silence, post-normalization artifacts) do NOT denylist the source track — they remove the cached normalization, including on the circuit-breaker path, and use the same producer recovery ladder when direct recovery media is exhausted. Log signatures:
 
@@ -120,6 +120,44 @@ The intended local startup path is:
 
 That script launches uvicorn with `--reload`, `*.toml` reload support, and `LOG_LEVEL` from the environment.
 
+## Operator Stop and Resume
+
+The admin Stop button pauses the station session; it does not stop the Home
+Assistant add-on process. The durable authority is
+`cache_dir/session_stopped.flag`, which survives an add-on or watchdog restart.
+A listener opening `/stream` cannot clear it.
+
+Stop is persistence-first:
+
+1. Write the stop marker. If that fails, return `503` and leave live playback,
+   queue, and reservations unchanged.
+2. Mark the runtime stopped, clear listener-audible truth, and advance
+   `continuity_epoch` so work already rendering for the old timeline cannot be
+   admitted.
+3. Cut real media, purge queued work, clear pending interrupt/forced/continuity
+   slots, and publish the stopped sentinel. Cleanup warnings after step 1 do not
+   undo the durable pause.
+
+Resume remains paused while it prepares the handoff:
+
+1. Reserve readable immediate audio: eligible norm-cache music, then
+   `continuity_1.mp3`, then `emergency_tone.mp3`.
+2. If no playable runway exists, return `503` and keep the marker.
+3. Remove the marker. If removal fails, return `503` and stay paused.
+4. Clear the runtime stop state and wake producer/playback.
+
+`/healthz` remains a process-liveness probe during an intentional pause.
+`/readyz` returns HTTP `503` with `status: "stopped"` even when tasks are alive
+and queued audio exists; this prevents routing new listeners to a deliberately
+paused station. After explicit Resume it returns `starting` until its ordinary
+readiness conditions hold, then `ready`.
+
+Setup and runtime pause are separate truth surfaces. `/api/setup/status` and
+setup recovery endpoints continue to describe and repair configuration while
+the transport is paused; a configured source stays setup-ready. Runtime status
+and `/readyz` carry the pause. Do not treat `setup=ready` as proof the station is
+currently on air, or a runtime pause as missing setup.
+
 ## Conductor
 
 Shared Conductor lifecycle is defined by `scripts/conductor-*.sh`. The committed
@@ -187,12 +225,22 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 `GET /status` returns a `runtime_status` object under the top-level response. It contains:
 
-- `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, and the session is not stopped.
+- `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, the session is not stopped, and at least one listener queue accepted a chunk from the current segment.
 - `health_state` — backward-compatible runtime health state for blocked tasks, listener-facing silence, paused sessions, and provider fallback summaries.
-- `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary_provider`, `current_provider`, `fallback_active`, `recovery_mode`, `retry_in_seconds`, and `action_guidance` fields per provider. `script_provider` populates the recovery fields so transient Anthropic errors read differently from circuit-breaker and `action_required` fallback; non-script providers keep those fields empty unless future recovery metadata is added.
+- `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary_provider`, `current_provider`, `fallback_active`, `recovery_mode`, `retry_in_seconds`, `action_guidance`, `current_reason`, and `switch_reason` fields per provider. `current_reason` says why the provider shown in *this* snapshot is selected right now; `switch_reason` and `last_switch_timestamp` describe the last listener-audible switch and are historical facts a fresh observation never rewrites. Both are operator copy — raw provider codes are translated before they reach the payload. `script_provider` populates the recovery fields so transient Anthropic errors read differently from circuit-breaker and `action_required` fallback; non-script providers keep those fields empty unless future recovery metadata is added.
 - `recent_events` — last 10 provider switch/failover events with timestamps, reasons, and whether a fallback was active.
 - `last_switch` — most recent provider change event, or `null` if no switches have occurred this session.
 - `failover_events` — last 10 events where `fallback_active` was true.
+
+`now_streaming` and `playback_epoch` are selected/readable truth: the file opened
+and produced a non-empty chunk. They are intentionally published before delivery
+so the timeline has a current selection, but they do not prove a listener heard
+it. Listener-audible truth commits only when the stream hub accepts the first
+chunk into at least one listener queue. That second boundary sets
+`current_stream_audible`, updates `last_air_monotonic` and provider state, and
+records rescue/continuity airplay. During the selected-but-not-audible window,
+provider rows retain the last listener-audible source and `station_on_air` stays
+false.
 
 The Engine Room card in `/admin` renders this as two tiers: station health ("On Air" / "Paused" / "Error") and provider health ("Primary" / "Auto-recovering" / "Backup active"). Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 

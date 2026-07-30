@@ -225,6 +225,16 @@ class RuntimeProviderEvent:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class RuntimeProviderObservation:
+    """Provider route observed while preparing one future audio segment."""
+
+    current_provider: str
+    primary_provider: str
+    fallback_active: bool
+    current_reason: str
+
+
 @dataclass
 class PlaylistSource:
     """The user-visible source backing the currently loaded playlist."""
@@ -349,6 +359,10 @@ class Segment:
     duration_sec: float = 0.0
     metadata: dict = field(default_factory=dict)
     ephemeral: bool = True
+    runtime_provider_observations: dict[str, RuntimeProviderObservation] = field(
+        default_factory=dict,
+        repr=False,
+    )
 
 
 def segment_track_key(segment: Segment) -> tuple[str, str]:
@@ -597,6 +611,12 @@ class StationState:
     heading_announced_id: str = ""
     # What the listener is hearing RIGHT NOW
     now_streaming: dict = field(default_factory=dict)
+    # Selection and delivery are deliberately separate commits. A readable
+    # segment becomes ``now_streaming`` before broadcast, but it is not
+    # listener-audible until one listener queue accepts a chunk.
+    current_stream_audible: bool = False
+    audible_playback_epoch: int = 0
+    _last_audible_stream: dict = field(default_factory=dict, repr=False)
     # Pre-produced segments waiting to play (shadow of asyncio.Queue for UI display)
     queued_segments: list[dict] = field(default_factory=list)
     # Every live control-plane change that can invalidate queued/in-flight audio
@@ -864,12 +884,12 @@ class StationState:
     slow_listener_last_drop_at: float = 0.0
     _slow_listener_drop_events: deque[tuple[float, int]] = field(default_factory=lambda: deque(maxlen=900), repr=False)
     queue_empty_since: float | None = None
-    # Monotonic stamp of the last segment the playback loop started airing —
-    # including continuity clips and rescue fills. The /healthz - /readyz
-    # silence gate needs "is anything reaching listeners", not "is the queue
-    # empty": queue_empty_since keeps running across clip serves (so the
-    # rescue ladder can escalate), but a station audibly airing bridge clips
-    # is not silent and must not trip the watchdog.
+    # Monotonic stamp of the last segment whose chunk was accepted by at least
+    # one listener — including continuity clips and rescue fills. The
+    # /healthz - /readyz silence gate needs "is anything reaching listeners",
+    # not "did a file open": queue_empty_since keeps running across clip serves
+    # (so the rescue ladder can escalate), but listener-audible bridge clips
+    # must not trip the watchdog.
     last_air_monotonic: float | None = None
     # Runtime integrity counters for long-lived sessions
     runtime_sync_events: int = 0
@@ -1033,6 +1053,7 @@ class StationState:
         bytes_sent: int,
         starting_listener_count: int,
         terminal_reason: str,
+        accepted_listener_count: int = 0,
         timestamp: float | None = None,
     ) -> None:
         """Append one anonymous completed-send result to the bounded history."""
@@ -1048,6 +1069,7 @@ class StationState:
                 "result": str(result or "not_streamed"),
                 "bytes_sent": max(0, int(bytes_sent)),
                 "starting_listener_count": max(0, int(starting_listener_count)),
+                "accepted_listener_count": max(0, int(accepted_listener_count)),
                 "terminal_reason": reason,
             }
         )
@@ -1350,6 +1372,122 @@ class StationState:
         except Exception:
             logger.debug("Render timing event failed", exc_info=True)
 
+    def observe_runtime_provider(
+        self,
+        provider_class: str,
+        *,
+        current_provider: str,
+        primary_provider: str,
+        fallback_active: bool,
+        reason: str,
+        timestamp: float | None = None,
+    ) -> RuntimeProviderObservation:
+        """Update current provider truth without claiming that audio was heard."""
+        now = time.time() if timestamp is None else timestamp
+        previous = self.runtime_provider_state.get(provider_class, {})
+        previous_switch_timestamp = previous.get("last_switch_timestamp")
+        previous_switch_reason = previous.get("last_switch_reason")
+        if previous_switch_reason is None and previous_switch_timestamp is not None:
+            # In-memory compatibility for state populated before the split
+            # between current observation and historical transition reason.
+            previous_switch_reason = previous.get("reason")
+        last_audible_provider = previous.get("last_audible_provider")
+        last_audible_primary = previous.get("last_audible_primary_provider")
+        last_audible_fallback = previous.get("last_audible_fallback_active")
+        last_audible_reason = previous.get("last_audible_reason")
+        if last_audible_provider is None and previous_switch_timestamp is not None:
+            # State created before the two-phase provider boundary had only
+            # current-provider fields. Its timestamp proves that provider was
+            # already committed, so preserve it as the audible baseline instead
+            # of fabricating a duplicate switch on the next observation.
+            last_audible_provider = previous.get("current_provider")
+            last_audible_primary = previous.get("primary_provider")
+            last_audible_fallback = previous.get("fallback_active")
+            last_audible_reason = previous_switch_reason or previous.get("reason")
+        try:
+            observation_revision = int(previous.get("observation_revision") or 0) + 1
+        except (TypeError, ValueError):
+            observation_revision = 1
+        self.runtime_provider_state[provider_class] = {
+            "current_provider": current_provider,
+            "primary_provider": primary_provider,
+            "fallback_active": fallback_active,
+            # ``reason`` remains the compatibility name for consumers that
+            # need the latest observation. Transition history has its own
+            # immutable-until-switch fields below.
+            "reason": reason,
+            "current_reason": reason,
+            "last_observed": now,
+            "observation_revision": observation_revision,
+            "last_audible_provider": last_audible_provider,
+            "last_audible_primary_provider": last_audible_primary,
+            "last_audible_fallback_active": last_audible_fallback,
+            "last_audible_reason": last_audible_reason,
+            "last_switch_timestamp": previous_switch_timestamp,
+            "last_switch_reason": previous_switch_reason,
+        }
+        return RuntimeProviderObservation(
+            current_provider=current_provider,
+            primary_provider=primary_provider,
+            fallback_active=fallback_active,
+            current_reason=reason,
+        )
+
+    def commit_runtime_provider_audible(
+        self,
+        provider_class: str,
+        observation: RuntimeProviderObservation,
+        *,
+        event: str = "provider_switch_event",
+        timestamp: float | None = None,
+    ) -> RuntimeProviderEvent | None:
+        """Commit provider switch history only when its segment reaches a listener."""
+        now = time.time() if timestamp is None else timestamp
+        previous = self.runtime_provider_state.get(provider_class, {})
+        if not previous:
+            self.observe_runtime_provider(
+                provider_class,
+                current_provider=observation.current_provider,
+                primary_provider=observation.primary_provider,
+                fallback_active=observation.fallback_active,
+                reason=observation.current_reason,
+                timestamp=now,
+            )
+            previous = self.runtime_provider_state[provider_class]
+
+        previous_provider = str(previous.get("last_audible_provider") or "")
+        previous_fallback_value = previous.get("last_audible_fallback_active")
+        previous_fallback = bool(previous_fallback_value) if previous_fallback_value is not None else False
+        changed = (
+            previous_provider != observation.current_provider or previous_fallback != observation.fallback_active
+            if previous_provider
+            else observation.fallback_active or observation.current_provider != observation.primary_provider
+        )
+
+        updated = dict(previous)
+        updated["last_audible_provider"] = observation.current_provider
+        updated["last_audible_primary_provider"] = observation.primary_provider
+        updated["last_audible_fallback_active"] = observation.fallback_active
+        updated["last_audible_reason"] = observation.current_reason
+        if changed:
+            updated["last_switch_timestamp"] = now
+            updated["last_switch_reason"] = observation.current_reason
+        self.runtime_provider_state[provider_class] = updated
+        if not changed:
+            return None
+
+        entry = RuntimeProviderEvent(
+            event=event,
+            provider_class=provider_class,
+            from_provider=previous_provider or observation.primary_provider,
+            to_provider=observation.current_provider,
+            reason=observation.current_reason,
+            fallback_active=observation.fallback_active,
+            timestamp=now,
+        )
+        self.runtime_events.append(entry)
+        return entry
+
     def update_runtime_provider(
         self,
         provider_class: str,
@@ -1361,40 +1499,21 @@ class StationState:
         event: str = "provider_switch_event",
         timestamp: float | None = None,
     ) -> RuntimeProviderEvent | None:
-        """Record a bounded provider transition when runtime truth changes."""
-        now = time.time() if timestamp is None else timestamp
-        previous = self.runtime_provider_state.get(provider_class, {})
-        previous_provider = str(previous.get("current_provider") or "")
-        previous_fallback = bool(previous.get("fallback_active", False))
-        previous_switch_timestamp = previous.get("last_switch_timestamp")
-        changed = (
-            previous_provider != current_provider or previous_fallback != fallback_active
-            if previous
-            else fallback_active or current_provider != primary_provider
-        )
-
-        self.runtime_provider_state[provider_class] = {
-            "current_provider": current_provider,
-            "primary_provider": primary_provider,
-            "fallback_active": fallback_active,
-            "reason": reason,
-            "last_observed": now,
-            "last_switch_timestamp": now if changed else previous_switch_timestamp,
-        }
-        if not changed:
-            return None
-
-        entry = RuntimeProviderEvent(
-            event=event,
-            provider_class=provider_class,
-            from_provider=previous_provider or primary_provider,
-            to_provider=current_provider,
-            reason=reason,
+        """Compatibility helper for boundaries that are already listener-audible."""
+        observation = self.observe_runtime_provider(
+            provider_class,
+            current_provider=current_provider,
+            primary_provider=primary_provider,
             fallback_active=fallback_active,
-            timestamp=now,
+            reason=reason,
+            timestamp=timestamp,
         )
-        self.runtime_events.append(entry)
-        return entry
+        return self.commit_runtime_provider_audible(
+            provider_class,
+            observation,
+            event=event,
+            timestamp=timestamp,
+        )
 
     def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
         """Replace the active playlist and bump revision counter.
@@ -1482,108 +1601,17 @@ class StationState:
             )
         )
 
-    def on_stream_segment(self, segment: Segment) -> None:
-        """Called by the streamer when it starts sending a segment to the listener."""
+    def on_stream_segment_selected(self, segment: Segment) -> int:
+        """Commit a readable segment as the current playback selection.
+
+        This boundary contains no claims about listener delivery. The playback
+        loop calls it only after opening the file and reading a non-empty chunk.
+        """
         now = time.time()
-        try:
-            director = self.home_context_director
-            metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-            home_fact_id = str(metadata.get("home_fact_id") or "")
-            # Only a home-fact segment holds a reservation; gate on its id so an
-            # ordinary segment can never activate an unrelated fact's cooldown.
-            if director is not None and home_fact_id:
-                director.activate(str(metadata.get("queue_id") or ""), fact_id=home_fact_id)
-        except Exception:
-            logging.getLogger("mammamiradio.home_context_director").debug(
-                "Home context director activation failed", exc_info=True
-            )
         self.playback_epoch += 1
         seg_type = segment.type.value
         label = segment.metadata.get("title", segment.metadata.get("brand", seg_type))
-        # Record previous music segment as completed (not skipped) in listener profile
-        prev = self.now_streaming
-        if prev.get("type") == "music" and prev.get("started"):
-            self.listener.record_outcome(
-                skipped=False,
-                listen_sec=now - prev["started"],
-                track_display=prev.get("label", ""),
-            )
-            self.listener.segments_since_taste_mirror += 1
-        # Track only ordinary canned banter at stream time. Packaged recovery
-        # speech is operational safety audio, never shareware trial content.
-        if segment.type == SegmentType.BANTER and segment.metadata.get("canned") and not segment.metadata.get("rescue"):
-            self.canned_clips_streamed += 1
-        raw_audio_source = str(segment.metadata.get("audio_source") or "")
-        fallback_active = is_fallback_active(segment.metadata)
-        if raw_audio_source or segment.metadata.get("fallback") or fallback_active or segment.type == SegmentType.MUSIC:
-            audio_source = raw_audio_source
-            if not audio_source and fallback_active:
-                audio_source = "canned"
-            elif (
-                segment.type == SegmentType.MUSIC
-                and self.playlist_source is not None
-                and (not audio_source or (not fallback_active and audio_source == "download"))
-            ):
-                audio_source = self.playlist_source.kind
-            self.update_runtime_provider(
-                "audio_source",
-                current_provider=audio_source or "stream",
-                primary_provider=self.playlist_source.kind if self.playlist_source is not None else "stream",
-                fallback_active=fallback_active,
-                reason=(
-                    str(segment.metadata.get("fallback_reason") or "Fallback audio is currently on air")
-                    if fallback_active
-                    else "Primary audio source is on air"
-                ),
-                timestamp=now,
-            )
-        # Moment Receipts: a home-triggered segment just started streaming.
-        # Provisional (send-start, not delivery proof) — the playback loop's
-        # finally records the true outcome via classify_stream_outcome. Rescue
-        # and fallback fills never carry a real moment, and must never mint a
-        # receipt even if their metadata leaks a stale id.
-        if self.moment_store is not None and not fallback_active and not segment.metadata.get("rescue"):
-            try:
-                for _moment_key in ("ritual_moment_id", "gag_moment_id"):
-                    _moment_id = segment.metadata.get(_moment_key)
-                    if _moment_id:
-                        self.moment_store.mark_airing(str(_moment_id), now=now)
-            except Exception:  # pragma: no cover - receipts must never break audio
-                logging.getLogger("mammamiradio.moment_receipts").debug(
-                    "Moment receipt airing mark failed", exc_info=True
-                )
-        # Only add to studio-bleed pool once banter truly starts streaming.
-        if segment.type == SegmentType.BANTER and not segment.metadata.get("canned"):
-            self.recent_banter_paths.append(segment.path)
-        if segment.type == SegmentType.MUSIC:
-            title = str(segment.metadata.get("title_only") or segment.metadata.get("title") or "")
-            artist = str(segment.metadata.get("artist") or "")
-            if " – " in title and not artist:
-                artist, title = title.split(" – ", 1)
-            duration_ms = segment.metadata.get("duration_ms")
-            if not isinstance(duration_ms, int):
-                duration_ms = int(max(segment.duration_sec, 0.0) * 1000)
-            title_key = title.strip().lower()
-            label_key = str(label).strip().lower()
-            placeholder_titles = {"", "music", "unknown", "unknown title", "untitled", "none"}
-            has_real_title = title_key not in placeholder_titles and not (
-                title_key == label_key and label_key in placeholder_titles
-            )
-            if not segment.metadata.get("error") and not fallback_active and duration_ms > 0 and has_real_title:
-                self.played_track_log.append(
-                    PlayedEntry(
-                        track=Track(
-                            title=title,
-                            artist=artist,
-                            duration_ms=duration_ms,
-                            spotify_id=str(segment.metadata.get("spotify_id") or ""),
-                            youtube_id=str(segment.metadata.get("youtube_id") or ""),
-                            album_art=str(segment.metadata.get("album_art") or ""),
-                            source=segment.metadata.get("source_kind") or "youtube",
-                        ),
-                        played_at=time.monotonic(),
-                    )
-                )
+        self.current_stream_audible = False
         self.now_streaming = {
             "type": seg_type,
             "label": label,
@@ -1602,6 +1630,140 @@ class StationState:
                 duration_sec=segment.duration_sec,
             )
         )
+        return self.playback_epoch
+
+    def on_stream_segment_audible(self, segment: Segment) -> bool:
+        """Commit listener-facing state once for the selected segment.
+
+        Returns ``True`` only for the first accepted-listener commit in the
+        current playback epoch. All work here is bounded and in-memory.
+        """
+        selected_epoch = self.now_streaming.get("epoch") if isinstance(self.now_streaming, dict) else None
+        if selected_epoch != self.playback_epoch or self.audible_playback_epoch == self.playback_epoch:
+            return False
+
+        self.audible_playback_epoch = self.playback_epoch
+        self.current_stream_audible = True
+        now = time.time()
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        try:
+            director = self.home_context_director
+            home_fact_id = str(metadata.get("home_fact_id") or "")
+            # Only a home-fact segment holds a reservation; gate on its id so an
+            # ordinary segment can never activate an unrelated fact's cooldown.
+            if director is not None and home_fact_id:
+                director.activate(str(metadata.get("queue_id") or ""), fact_id=home_fact_id)
+        except Exception:
+            logging.getLogger("mammamiradio.home_context_director").debug(
+                "Home context director activation failed", exc_info=True
+            )
+        seg_type = segment.type.value
+        label = metadata.get("title", metadata.get("brand", seg_type))
+        # Record only the previous listener-audible music segment as completed.
+        # Readable selections that never reached a listener are deliberately
+        # absent from this history.
+        prev = self._last_audible_stream
+        if prev.get("type") == "music" and prev.get("started"):
+            self.listener.record_outcome(
+                skipped=False,
+                listen_sec=now - prev["started"],
+                track_display=prev.get("label", ""),
+            )
+            self.listener.segments_since_taste_mirror += 1
+        # Track only ordinary canned banter at stream time. Packaged recovery
+        # speech is operational safety audio, never shareware trial content.
+        if segment.type == SegmentType.BANTER and metadata.get("canned") and not metadata.get("rescue"):
+            self.canned_clips_streamed += 1
+        for provider_class, observation in segment.runtime_provider_observations.items():
+            self.commit_runtime_provider_audible(
+                provider_class,
+                observation,
+                timestamp=now,
+            )
+        raw_audio_source = str(metadata.get("audio_source") or "")
+        if raw_audio_source == "fallback_norm_cache":
+            raw_audio_source = "norm_cache"
+        fallback_active = is_fallback_active(metadata)
+        if raw_audio_source or metadata.get("fallback") or fallback_active or segment.type == SegmentType.MUSIC:
+            audio_source = raw_audio_source
+            if not audio_source and fallback_active:
+                audio_source = "canned"
+            elif (
+                segment.type == SegmentType.MUSIC
+                and self.playlist_source is not None
+                and (not audio_source or (not fallback_active and audio_source == "download"))
+            ):
+                audio_source = self.playlist_source.kind
+            self.update_runtime_provider(
+                "audio_source",
+                current_provider=audio_source or "stream",
+                primary_provider=self.playlist_source.kind if self.playlist_source is not None else "stream",
+                fallback_active=fallback_active,
+                reason=(
+                    str(metadata.get("fallback_reason") or "Fallback audio is currently on air")
+                    if fallback_active
+                    else "Primary audio source is on air"
+                ),
+                timestamp=now,
+            )
+        # Moment Receipts: a home-triggered segment reached a listener. The
+        # playback loop's final result still records its complete outcome.
+        # Rescue and fallback fills never carry a real moment, and must never
+        # mint a receipt even if their metadata leaks a stale id.
+        if self.moment_store is not None and not fallback_active and not metadata.get("rescue"):
+            try:
+                for _moment_key in ("ritual_moment_id", "gag_moment_id"):
+                    _moment_id = metadata.get(_moment_key)
+                    if _moment_id:
+                        self.moment_store.mark_airing(str(_moment_id), now=now)
+            except Exception:  # pragma: no cover - receipts must never break audio
+                logging.getLogger("mammamiradio.moment_receipts").debug(
+                    "Moment receipt airing mark failed", exc_info=True
+                )
+        # Only add to studio-bleed pool once banter truly starts streaming.
+        if segment.type == SegmentType.BANTER and not metadata.get("canned"):
+            self.recent_banter_paths.append(segment.path)
+        if segment.type == SegmentType.MUSIC:
+            title = str(metadata.get("title_only") or metadata.get("title") or "")
+            artist = str(metadata.get("artist") or "")
+            if " – " in title and not artist:
+                artist, title = title.split(" – ", 1)
+            duration_ms = metadata.get("duration_ms")
+            if not isinstance(duration_ms, int):
+                duration_ms = int(max(segment.duration_sec, 0.0) * 1000)
+            title_key = title.strip().lower()
+            label_key = str(label).strip().lower()
+            placeholder_titles = {"", "music", "unknown", "unknown title", "untitled", "none"}
+            has_real_title = title_key not in placeholder_titles and not (
+                title_key == label_key and label_key in placeholder_titles
+            )
+            if not metadata.get("error") and not fallback_active and duration_ms > 0 and has_real_title:
+                self.played_track_log.append(
+                    PlayedEntry(
+                        track=Track(
+                            title=title,
+                            artist=artist,
+                            duration_ms=duration_ms,
+                            spotify_id=str(metadata.get("spotify_id") or ""),
+                            youtube_id=str(metadata.get("youtube_id") or ""),
+                            album_art=str(metadata.get("album_art") or ""),
+                            source=metadata.get("source_kind") or "youtube",
+                        ),
+                        played_at=time.monotonic(),
+                    )
+                )
+        self._last_audible_stream = dict(self.now_streaming)
+        self.last_state_change_at = now
+        return True
+
+    def on_stream_segment(self, segment: Segment) -> None:
+        """Compatibility helper that commits both selection and audibility.
+
+        Runtime playback uses the explicit two-stage methods above. Direct
+        callers retain the historical one-call behavior.
+        """
+        self.on_stream_segment_selected(segment)
+        self.on_stream_segment_audible(segment)
 
     def reserve_next_track(self) -> Track:
         """Legacy round-robin rotation — use select_next_track() for weighted shuffle."""

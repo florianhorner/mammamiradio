@@ -16,9 +16,11 @@ CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
+ADDON_BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "addon-build.yml"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
 HA_GREEN_PERF_SMOKE = ROOT / "scripts" / "ha-green-perf-smoke.py"
 HA_GREEN_LAUNCH_SMOKE = ROOT / "scripts" / "ha-green-launch-smoke.py"
+REQUIRED_RECOVERY_ASSETS = ("continuity_1.mp3", "emergency_tone.mp3")
 
 
 def _run(cmd: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -61,7 +63,8 @@ def _write_release_check_repo(
     )
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
     _write(tmp_path / "mammamiradio/scheduling/producer.py", "# producer recovery ladder\n")
-    _write(tmp_path / "mammamiradio/assets/demo/recovery/continuity.mp3", "x" * 2048)
+    _write(tmp_path / "mammamiradio/assets/demo/recovery/continuity_1.mp3", "x" * 2048)
+    _write(tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3", "x" * 2048)
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -374,20 +377,42 @@ def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     assert "/stream" in body
 
 
-def test_ha_green_launch_smoke_is_cold_start_strict() -> None:
+def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
     body = HA_GREEN_LAUNCH_SMOKE.read_text()
 
     # Launches a real process (the perf smoke does not) ...
     assert "uvicorn" in body
     assert "mammamiradio.main:app" in body
-    # ... on throwaway temp cache/tmp so no warm state leaks in ...
+    # ... on throwaway state, once with warm norm-cache music and once with
+    # only packaged recovery audio ...
     assert "TemporaryDirectory" in body
     assert "MAMMAMIRADIO_CACHE_DIR" in body
+    assert "warm norm-cache" in body
+    assert "cold packaged-only" in body
+    assert "_seed_warm_norm_cache" in body
+    # ... while every external network-backed source is disabled and a child
+    # process socket guard enforces that contract.
+    assert "_write_network_guard" in body
+    assert "external network disabled by launch smoke" in body
+    assert '"MAMMAMIRADIO_ALLOW_YTDLP": "false"' in body
+    assert '"JAMENDO_CLIENT_ID": ""' in body
+    assert '"HA_ENABLED": "false"' in body
     # ... and asserts a STRICT first-byte bound (default 2s, not the perf
     # smoke's 8s already-running budget).
     assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
     assert '"2.0"' in body
     assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+    # CI can exercise the exact pulled image without overlaying repository
+    # source: isolated /data volumes, the image's default /run.sh command,
+    # Docker-level network denial, and listener-byte checks over loopback.
+    assert "--image" in body
+    assert '"--network"' in body
+    assert '"none"' in body
+    assert '"volume"' in body
+    assert "_image_launch_command" in body
+    assert "_image_perf_command" in body
+    assert "docker" in body
+    assert "/public-status" in body
 
 
 @pytest.mark.parametrize(
@@ -420,6 +445,132 @@ def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match=r"ffmpeg is required for scripts/ha-green-launch-smoke\.py"):
         smoke._seed_warm_norm_cache(str(tmp_path))
+
+
+def test_ha_green_launch_smoke_env_clears_network_sources(tmp_path: Path) -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    env = smoke._launch_env(
+        port=8123,
+        cache_dir=str(tmp_path / "cache"),
+        tmp_dir=str(tmp_path / "tmp"),
+        guard_dir=str(tmp_path / "guard"),
+    )
+
+    assert env["MAMMAMIRADIO_ALLOW_YTDLP"] == "false"
+    assert env["JAMENDO_CLIENT_ID"] == ""
+    assert env["ANTHROPIC_API_KEY"] == ""
+    assert env["OPENAI_API_KEY"] == ""
+    assert env["AZURE_SPEECH_KEY"] == ""
+    assert env["ELEVENLABS_API_KEY"] == ""
+    assert env["HA_ENABLED"] == "false"
+    assert env["HA_TOKEN"] == ""
+    assert env["NO_PROXY"] == "127.0.0.1,localhost,::1"
+    assert env["PYTHONPATH"].split(os.pathsep)[:2] == [str(tmp_path / "guard"), str(ROOT)]
+
+
+def test_ha_green_launch_smoke_builds_isolated_exact_image_commands() -> None:
+    smoke = _load_ha_green_launch_smoke()
+    image = "ghcr.io/example/mammamiradio-addon-amd64:sha"
+    volume = "mmr-launch-volume"
+    container = "mmr-launch-container"
+
+    warm_seed = smoke._image_seed_command(image, volume, seed_warm_cache=True)
+    cold_seed = smoke._image_seed_command(image, volume, seed_warm_cache=False)
+    launch = smoke._image_launch_command(image, volume, container)
+    perf = smoke._image_perf_command(container)
+
+    assert warm_seed[:5] == ["run", "--rm", "--network", "none", "--volume"]
+    assert f"{volume}:/data" in warm_seed
+    assert "MAMMAMIRADIO_SMOKE_WARM=1" in warm_seed
+    assert "MAMMAMIRADIO_SMOKE_WARM=0" in cold_seed
+    assert warm_seed[-4:-2] == [image, "python3"]
+
+    assert launch[:4] == ["run", "--detach", "--name", container]
+    assert launch[-1] == image
+    assert launch[4:6] == ["--network", "none"]
+    assert f"{volume}:/data" in launch
+    assert "SUPERVISOR_TOKEN=smoke-ci" in launch
+    assert not any(arg.startswith("-p") or arg == "--publish" for arg in launch)
+    # The image reference is last: Docker executes its baked default /run.sh,
+    # not a repository-mounted or caller-supplied app command.
+    assert launch.count(image) == 1
+
+    assert perf[:2] == ["exec", "--interactive"]
+    assert container in perf
+    assert perf[-2:] == ["python3", "-"]
+    assert f"MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S={smoke.FIRST_BYTE_S}" in perf
+
+
+def test_ha_green_launch_smoke_image_scenario_cleans_exact_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_ha_green_launch_smoke()
+    docker_calls: list[list[str]] = []
+
+    def fake_docker(
+        args: list[str],
+        *,
+        input_text: str | None = None,
+        capture_output: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        del input_text, capture_output
+        command = list(args)
+        docker_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(smoke, "_run_docker", fake_docker)
+    monkeypatch.setattr(smoke, "_seed_image_volume", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(smoke, "_wait_for_image_server", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(smoke, "_run_image_perf_smoke", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(smoke, "_image_current_audio_source", lambda *_args, **_kwargs: ("norm_cache", {}))
+
+    assert smoke._run_image_launch_scenario(
+        "example/image:sha",
+        "warm norm-cache",
+        seed_warm_cache=True,
+        expected_sources=frozenset({"norm_cache"}),
+    )
+
+    volume_create = next(call for call in docker_calls if call[:2] == ["volume", "create"])
+    launch = next(call for call in docker_calls if call[:2] == ["run", "--detach"])
+    container_remove = next(call for call in docker_calls if call[:2] == ["rm", "--force"])
+    volume_remove = next(call for call in docker_calls if call[:3] == ["volume", "rm", "--force"])
+
+    volume_name = volume_create[-1]
+    container_name = launch[launch.index("--name") + 1]
+    assert f"{volume_name}:/data" in launch
+    assert launch[-1] == "example/image:sha"
+    assert container_remove[-1] == container_name
+    assert volume_remove[-1] == volume_name
+
+
+def test_ha_green_launch_smoke_network_guard_blocks_external_dns(tmp_path: Path) -> None:
+    smoke = _load_ha_green_launch_smoke()
+    smoke._write_network_guard(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path)
+
+    result = _run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import socket\n"
+                "socket.getaddrinfo('127.0.0.1', 8000)\n"
+                "try:\n"
+                "    socket.getaddrinfo('example.com', 443)\n"
+                "except OSError as exc:\n"
+                "    assert 'external network disabled by launch smoke' in str(exc)\n"
+                "else:\n"
+                "    raise SystemExit('external lookup was not blocked')\n"
+            ),
+        ],
+        cwd=tmp_path,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_makefile_has_launch_smoke_target() -> None:
@@ -458,6 +609,12 @@ def test_ha_green_perf_smoke_rejects_unexpected_readyz_500() -> None:
 def test_release_invariants_guard_ha_green_perf_budget() -> None:
     release_body = (ROOT / "scripts" / "check-release-invariants.sh").read_text()
     pre_release_body = (ROOT / "scripts" / "pre-release-check.sh").read_text()
+
+    assert "REQUIRED_RECOVERY_ASSETS=(" in release_body
+    assert '"continuity_1.mp3"' in release_body
+    assert '"emergency_tone.mp3"' in release_body
+    assert "is_approved_packaged_audio_asset" in release_body
+    assert "ffprobe" in release_body
 
     for body in (release_body, pre_release_body):
         assert "QUEUE_FALLBACK_WAIT_SECONDS" in body
@@ -1098,6 +1255,35 @@ def test_validate_addon_build_passes_home_assistant_label_args() -> None:
 
     assert '--build-arg BUILD_VERSION="$ADDON_VER"' in validator
     assert '--build-arg BUILD_ARCH="$BUILD_ARCH"' in validator
+
+
+@pytest.mark.parametrize(
+    ("validator_path", "start_marker", "end_marker"),
+    [
+        (VALIDATE_ADDON, "assert_image_recovery_assets() {", "assert_image_model_registry() {"),
+        (
+            ADDON_BUILD_WORKFLOW,
+            "- name: Assert installed recovery assets",
+            "- name: Assert installed model registry",
+        ),
+    ],
+)
+def test_addon_image_validator_checks_every_required_recovery_asset(
+    validator_path: Path,
+    start_marker: str,
+    end_marker: str,
+) -> None:
+    """Image gates must inspect the full required subset, not accept the first good clip."""
+    body = validator_path.read_text()
+    recovery_block = body.split(start_marker, 1)[1].split(end_marker, 1)[0]
+
+    for asset_name in REQUIRED_RECOVERY_ASSETS:
+        assert asset_name in recovery_block, f"{validator_path} does not require {asset_name}"
+    assert "resources.files" in recovery_block
+    assert "> 1024" in recovery_block or "<= 1024" in recovery_block
+    assert "is_approved_packaged_audio_asset" in recovery_block or "validate_spoken_asset_manifest" in recovery_block
+    assert "ffprobe" in recovery_block
+    assert "raise SystemExit(0)" not in recovery_block
 
 
 def test_validate_addon_rejects_dockerfile_missing_hass_labels(tmp_path: Path) -> None:
