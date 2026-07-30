@@ -1786,6 +1786,21 @@ def _now_streaming_is_real_media(state: StationState) -> bool:
     return str(now_streaming.get("type") or "") in {segment_type.value for segment_type in SegmentType}
 
 
+def _skip_is_in_flight(state: StationState) -> bool:
+    """Return whether a skip has been requested but not yet landed.
+
+    `_request_skip` publishes a `skipping` sentinel and returns; the sentinel
+    only clears once the playback loop pulls and opens the next segment, which
+    on an empty queue is the first-byte grace window plus the rescue ladder.
+    Audio is still audibly playing throughout, so this state is neither "real
+    media" nor "nothing is streaming" — it needs its own answer.
+    """
+    now_streaming = state.now_streaming
+    if not isinstance(now_streaming, dict):
+        return False
+    return str(now_streaming.get("type") or "") == "skipping"
+
+
 def _clear_session_stopped(state: StationState) -> None:
     """Publish running state after the persisted stop marker is gone."""
     state.session_stopped = False
@@ -5036,6 +5051,11 @@ async def _request_skip(
             listen_sec=skipped_music_listen_sec,
             track_display=now_seg.get("label", ""),
         )
+        # This cut already settled the audible track as skipped. Clearing its
+        # snapshot prevents the next accepted segment from also settling it as
+        # completed. A selected-but-unheard segment must leave the prior audible
+        # snapshot alone so that prior song can still complete honestly.
+        state._last_audible_stream = {}
 
     bridged = False
     if not _playable_runway_available(app_state.queue, state):
@@ -5081,8 +5101,13 @@ async def skip_track(request: Request, _: None = Depends(require_admin_access)):
             "ok": False,
             "error": "The station is paused. Press Start before skipping to the next track.",
         }
+    if _skip_is_in_flight(state):
+        return {
+            "ok": False,
+            "error": "That skip is already on its way — the next track is cueing up. Give it a second.",
+        }
     if not _now_streaming_is_real_media(state):
-        return {"ok": False, "error": "Nothing is currently streaming"}
+        return {"ok": False, "error": "Nothing is on air right now. Press Start to bring the station up."}
     bridged = await _request_skip(request.app.state, state, request.app.state.config, source="admin_skip")
     return {"ok": True, "bridged": bridged}
 
@@ -5127,11 +5152,25 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
     # iteration and cannot invalidate a segment that captured the old epoch.
     if state.continuity_epoch == epoch_before:
         state.continuity_epoch += 1
+        # The reservation stamped its survivors against the pre-bump epoch, so
+        # re-bless them here or the loop discards the runway this panic just
+        # protected — the assetless path is exactly when there is least to spare.
+        _stamp_continuity_runway_epoch(request.app.state.queue, state)
     skipped = False
-    if _now_streaming_is_real_media(state) and _playable_runway_available(request.app.state.queue, state):
+    # A skip already in flight still has audio on air, so panic must be able to
+    # cut it. Treating that window as "nothing streaming" made Panic silently
+    # withhold skip_event with no log line at all.
+    cut_target_on_air = _now_streaming_is_real_media(state) or _skip_is_in_flight(state)
+    if cut_target_on_air and _playable_runway_available(request.app.state.queue, state):
         request.app.state.skip_event.set()
         skipped = True
-    elif _now_streaming_is_real_media(state):
+        if state.current_stream_audible:
+            # Panic is not a taste signal, but a committed cut must still settle
+            # snapshot ownership: the next segment cannot report the cut track
+            # as a clean completion. A withheld cut leaves it intact because the
+            # current audio is allowed to finish.
+            state._last_audible_stream = {}
+    elif cut_target_on_air:
         logger.warning("Panic cut withheld because no playable runway is ready; current audio will finish")
     # force_next is set AFTER skip_event to avoid the producer consuming it
     # before the current segment has been cut.

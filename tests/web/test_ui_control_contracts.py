@@ -163,7 +163,10 @@ class TestSkipEndpoint:
             persist_started.set()
             await release_persist.wait()
 
-        with patch("mammamiradio.web.streamer._persist_skipped_music", new=AsyncMock(side_effect=_slow_persist)):
+        with patch(
+            "mammamiradio.web.streamer._persist_skipped_music",
+            new=AsyncMock(side_effect=_slow_persist),
+        ) as persist:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
                 request_task = asyncio.create_task(c.post("/api/skip", headers=AUTH))
                 try:
@@ -171,6 +174,12 @@ class TestSkipEndpoint:
                     assert app.state.skip_event.is_set()
                     assert app.state.station_state.now_streaming["type"] == "skipping"
                     assert not request_task.done()
+                    duplicate = await c.post("/api/skip", headers=AUTH)
+                    assert duplicate.json()["ok"] is False
+                    assert "already on its way" in duplicate.json()["error"]
+                    assert app.state.station_state.listener.songs_played == 1
+                    assert app.state.station_state.listener.songs_skipped == 1
+                    persist.assert_awaited_once()
                 finally:
                     # Always unblock the persistence task so a failed assertion
                     # can't leave a pending ASGI task dangling during teardown.
@@ -271,12 +280,58 @@ class TestSkipEndpoint:
                 "metadata": {},
             }
         )
-        app.state.station_state.current_stream_audible = True
+        state = app.state.station_state
+        state.current_stream_audible = True
+        state._last_audible_stream = dict(state.now_streaming)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/skip", headers=AUTH)
 
-        assert app.state.station_state.listener.songs_skipped == 1
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=Path("/tmp/after-skip.mp3"),
+                metadata={"title": "After skip"},
+            )
+        )
+        assert state.listener.songs_played == 1
+        assert state.listener.songs_skipped == 1
+
+    @pytest.mark.asyncio
+    async def test_skip_of_unheard_selection_preserves_previous_audible_completion(self):
+        """Skipping unread media must not erase the prior heard song."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Selected but unheard",
+                "started": time.time(),
+                "metadata": {},
+            }
+        )
+        state = app.state.station_state
+        previous = {
+            "type": "music",
+            "label": "Previous heard song",
+            "started": time.time() - 180,
+            "metadata": {},
+        }
+        state._last_audible_stream = previous
+        state.current_stream_audible = False
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            response = await c.post("/api/skip", headers=AUTH)
+
+        assert response.json()["ok"] is True
+        assert state._last_audible_stream == previous
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=Path("/tmp/after-unheard-skip.mp3"),
+                metadata={"title": "After unheard skip"},
+            )
+        )
+        assert state.listener.songs_played == 1
+        assert state.listener.songs_skipped == 0
 
     @pytest.mark.asyncio
     async def test_stop_wins_while_skip_persistence_is_in_flight(self, monkeypatch):
@@ -317,6 +372,49 @@ class TestSkipEndpoint:
         assert app.state.station_state.session_stopped is True
         assert app.state.station_state.now_streaming["type"] == "stopped"
         assert app.state.station_state.force_next is None
+
+    @pytest.mark.asyncio
+    async def test_panic_during_skip_persistence_keeps_exactly_once_history(self, monkeypatch):
+        """Panic may supersede transport while Skip persists, never its history."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Song A",
+                "started": time.time() - 10,
+                "metadata": {"youtube_id": "yt-song-a"},
+            }
+        )
+        state = app.state.station_state
+        state.current_stream_audible = True
+        state._last_audible_stream = dict(state.now_streaming)
+        persistence_entered = asyncio.Event()
+        release_persistence = asyncio.Event()
+
+        async def delayed_persistence(*_args, **_kwargs):
+            persistence_entered.set()
+            await release_persistence.wait()
+
+        persist = AsyncMock(side_effect=delayed_persistence)
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", persist)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            skip_task = asyncio.create_task(c.post("/api/skip", headers=AUTH))
+            await asyncio.wait_for(persistence_entered.wait(), timeout=2)
+
+            try:
+                panic_response = await c.post("/api/panic", headers=AUTH)
+            finally:
+                release_persistence.set()
+            skip_response = await asyncio.wait_for(skip_task, timeout=2)
+
+        assert skip_response.json()["ok"] is True
+        assert panic_response.json()["ok"] is True
+        assert panic_response.json()["skipped"] is True
+        assert state.force_next is SegmentType.MUSIC
+        assert state.listener.songs_played == 1
+        assert state.listener.songs_skipped == 1
+        assert state._last_audible_stream == {}
+        persist.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_skip_does_not_record_outcome_for_non_music_segment(self):

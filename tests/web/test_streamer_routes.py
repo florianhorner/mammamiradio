@@ -5320,6 +5320,8 @@ async def test_panic_cut_while_streaming():
     app = _make_test_app()
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.current_stream_audible = True
+    state._last_audible_stream = dict(state.now_streaming)
     # Pre-populate shadow queue so we can verify it is cleared
     state.queued_segments.append({"type": "banter"})  # type: ignore[attr-defined]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -5336,6 +5338,7 @@ async def test_panic_cut_while_streaming():
     assert state.force_next == SegmentType.MUSIC
     # session_stopped must NOT be set — stream stays live
     assert state.session_stopped is False
+    assert state._last_audible_stream == {}
     # Stale rows are replaced by an audible protected reservation.
     assert len(state.queued_segments) == app.state.queue.qsize() == 1
     assert state.queued_segments[0]["reason"] == "Protected continuity audio."
@@ -5347,6 +5350,8 @@ async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.current_stream_audible = True
+    state._last_audible_stream = dict(state.now_streaming)
     state.continuity_epoch = 5
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
@@ -5359,6 +5364,7 @@ async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
     assert not app.state.skip_event.is_set()
     assert state.force_next is SegmentType.MUSIC
     assert state.continuity_epoch == 6
+    assert state._last_audible_stream["label"] == "Test"
 
     # A render that captured the old epoch before Panic must now fail the same
     # admission gate used by the producer, even though the queue was untouched.

@@ -399,6 +399,15 @@ removes the marker; a removal failure also returns `503` and leaves the session
 stopped. Only then does it clear `session_stopped` and wake producer/playback.
 A stream connection never clears the marker; only explicit Resume does.
 
+Skip publishes a `skipping` transport sentinel before any best-effort history
+write, so a second Skip is rejected while the first cut is still landing.
+Listener history is settled exactly once: an audible music cut is recorded as
+skipped and relinquishes its audible snapshot, while a selected-but-unheard
+segment leaves the preceding heard track eligible for its eventual completion.
+Panic may supersede an in-flight Skip when protected runway is ready; it clears
+the audible snapshot only when the cut commits, and preserves it when the cut is
+withheld so current audio can finish honestly.
+
 `continuity_epoch` is the stale-work fence across this transaction. Stop always
 advances it before queue cleanup. A Resume reservation uses the same continuity
 rebuild path and advances it whenever that path mutates the queue or protected
