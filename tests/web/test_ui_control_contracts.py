@@ -1678,6 +1678,23 @@ class TestRuntimeProviderTransparencyUI:
         assert "header.setAttribute('aria-label',headerDetail)" in html
 
 
+class TestListenerHeroStats:
+    def test_tracks_stat_uses_loaded_rotation_count(self):
+        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        start = js.find("function renderHeroStats")
+        end = js.find("function renderPalinsesto", start)
+        assert start != -1 and end != -1, "could not locate renderHeroStats() in listener.js"
+        block = js[start:end]
+        stat_start = block.index("const stat2")
+        stat_end = block.index("const stat3", stat_start)
+        stat_logic = block[stat_start:stat_end]
+
+        assert "status.current_source.track_count" in stat_logic
+        assert "'—'" in stat_logic
+        assert "tracks_played" not in stat_logic
+        assert "upcoming" not in stat_logic
+
+
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
 
 

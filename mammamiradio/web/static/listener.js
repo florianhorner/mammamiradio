@@ -484,10 +484,13 @@
     }
     const stat2 = $('stat-tracks');
     if (stat2) {
-      const played = status && typeof status.tracks_played === 'number' ? status.tracks_played : null;
-      const queued = status && status.upcoming ? status.upcoming.length : 0;
-      const value = played !== null ? played : queued;
-      stat2.textContent = value > 0 ? value : '—';
+      const sourceTrackCount = status
+        && status.current_source
+        && Number.isInteger(status.current_source.track_count)
+        && status.current_source.track_count >= 0
+        ? status.current_source.track_count
+        : null;
+      stat2.textContent = sourceTrackCount === null ? '—' : sourceTrackCount;
     }
     const stat3 = $('stat-hosts');
     if (stat3 && caps && caps.hosts && caps.hosts.length) {

@@ -9,6 +9,13 @@ async (page) => {
   let streamScenario = 'audio';
   let sessionStopped = false;
   let casaScenario = 'recent';
+  let tracksPlayed = 5;
+  let upcomingTracks = [];
+  let currentSource = {
+    kind: 'charts',
+    label: 'Italian charts',
+    track_count: 84,
+  };
   const casaReceipts = {
     recent: [
       { label: 'One minute ritual', ago_min: 1, status: 'aired' },
@@ -84,11 +91,12 @@ async (page) => {
         capabilities: { ha: true },
         session_stopped: sessionStopped,
         uptime_sec: 90,
-        tracks_played: 1,
+        tracks_played: tracksPlayed,
+        current_source: currentSource,
         now_streaming: sessionStopped
           ? { type: 'stopped', label: 'Session stopped', metadata: {} }
           : { type: 'music', label: 'Mina — Città vuota', metadata: {} },
-        upcoming: [],
+        upcoming: upcomingTracks,
         upcoming_mode: 'building',
         current_progress_sec: 3,
         current_duration_sec: 180,
@@ -152,7 +160,102 @@ async (page) => {
     await waitForLivePage();
   }
 
+  async function waitForRotationStat(expected, message) {
+    await page.waitForFunction(
+      (value) => (document.getElementById('stat-tracks')?.textContent || '').trim() === value,
+      expected,
+      { timeout: 5000 },
+    );
+    assert(
+      (await page.locator('#stat-tracks').textContent()).trim() === expected,
+      message,
+    );
+  }
+
+  async function waitForNextRotationRender(expected, message, generations = 1) {
+    const renderCount = await page.evaluate(() => window.__rotationStatRenders);
+    await page.waitForFunction(
+      ({ previous, requiredGenerations, value }) => (
+        window.__rotationStatRenders >= previous + requiredGenerations
+        && (document.getElementById('stat-tracks')?.textContent || '').trim() === value
+      ),
+      { previous: renderCount, requiredGenerations: generations, value: expected },
+      { timeout: 10000 },
+    );
+    assert(
+      (await page.locator('#stat-tracks').textContent()).trim() === expected,
+      message,
+    );
+  }
+
   await loadFreshPage();
+
+  await waitForRotationStat(
+    '84',
+    'Tracks in Rotation ignored loaded source size',
+  );
+  await page.evaluate(() => {
+    window.__rotationStatRenders = 0;
+    window.__rotationStatObserver?.disconnect();
+    const stat = document.getElementById('stat-tracks');
+    if (!stat) throw new Error('missing Tracks in Rotation stat');
+    window.__rotationStatObserver = new MutationObserver(() => {
+      window.__rotationStatRenders += 1;
+    });
+    window.__rotationStatObserver.observe(stat, { childList: true, characterData: true, subtree: true });
+  });
+  tracksPlayed = 9;
+  await waitForNextRotationRender(
+    '84',
+    'Tracks in Rotation changed with played history',
+    2,
+  );
+  currentSource = {
+    kind: 'local',
+    label: 'Local music',
+    track_count: 27,
+  };
+  await waitForNextRotationRender(
+    '27',
+    'Tracks in Rotation did not update with source switch',
+  );
+  tracksPlayed = 12;
+  upcomingTracks = [
+    { type: 'music', label: 'Track one', metadata: {} },
+    { type: 'music', label: 'Track two', metadata: {} },
+  ];
+  currentSource = {
+    kind: 'local',
+    label: 'Empty source',
+    track_count: 0,
+  };
+  await waitForNextRotationRender('0', 'Known empty rotation did not render zero');
+  currentSource = null;
+  await waitForNextRotationRender('—', 'Missing rotation count used played or queue fallback');
+  currentSource = {
+    kind: 'local',
+    label: 'Source without a count',
+  };
+  await waitForNextRotationRender('—', 'Source without rotation count did not render unavailable');
+  currentSource = {
+    kind: 'local',
+    label: 'Invalid source',
+    track_count: -1,
+  };
+  await waitForNextRotationRender('—', 'Negative rotation count did not render unavailable');
+  currentSource = {
+    kind: 'local',
+    label: 'Invalid source',
+    track_count: '84',
+  };
+  await waitForNextRotationRender('—', 'String rotation count did not render unavailable');
+  await page.evaluate(() => window.__rotationStatObserver?.disconnect());
+  currentSource = {
+    kind: 'local',
+    label: 'Local music',
+    track_count: 27,
+  };
+  upcomingTracks = [];
 
   const identityState = await page.evaluate(() => ({
     title: document.title.trim(),
@@ -488,7 +591,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 18,
+    checks: 26,
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),
