@@ -80,7 +80,7 @@ rematerializes an older Supervisor value.
 
 - The manifest ships disabled/absent by default — no file, or `enabled = false`, means the feature is a complete no-op and nothing changes. `scripts/validate-release-beat.py` validates its schema and listener-safe copy in CI (see `docs/runbooks/ha-addon.md` → "Release invariants gate").
 - When enabled, `ReleaseCampaign` (loaded once at startup, persisted to `cache/release_campaign_ledger.json`) offers the scriptwriter a release-beat prompt block on the first eligible banter break; `hosts/scriptwriter.py` decides whether it actually made it into the spoken lines (`release_beat_used`).
-- Delivery is only counted once the segment actually airs to a real, connected listener (`_emit_release_campaign_result` in `web/streamer.py`, reading the same Tier-3 stream-result hook the provenance ledger uses) — a queued-but-discarded or skipped segment does not spend one of the campaign's `max_airings`.
+- Delivery is only counted once a listener queue actually accepts audio (`_emit_release_campaign_result` in `web/streamer.py`, reading the same Tier-3 stream-result hook the provenance ledger uses). This accepted-listener boundary also covers someone joining after the segment-start sample; a connected listener that rejects every chunk, a queued-but-discarded segment, and a skipped or partial-read segment do not spend one of the campaign's `max_airings`.
 - The campaign self-retires on its own budget (`max_airings`, default 5) or time window (`campaign_window_seconds`, default 72h), independent of whether Show Memory (the provenance ledger) is enabled.
 
 ### Heading overlay

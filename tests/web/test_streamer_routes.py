@@ -1258,8 +1258,69 @@ async def test_air_start_stamp_needs_a_listener_to_accept_the_chunk(tmp_path):
     assert list(state.played_track_log) == []
     outcome = state.stream_outcome_history[0]
     assert outcome["result"] == "not_streamed"
-    assert outcome["bytes_sent"] == 0
+    # `bytes_sent` counts bytes the loop WROTE; `accepted_listener_count` carries
+    # the audible truth. Keeping them separate is what lets an empty room report
+    # `no_listeners` rather than `not_streamed`, which names a file error. Here a
+    # listener was connected and rejected every chunk, so bytes were written and
+    # none landed — `not_streamed` is right, and the two counters say why.
+    assert outcome["bytes_sent"] > 0
     assert outcome["accepted_listener_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_rejected_banter_never_commits_audible_truth(tmp_path):
+    """One rejected send stays unheard across every post-air consumer."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.moment_store = MagicMock()
+    state.release_campaign = MagicMock()
+
+    audio_path = tmp_path / "rejected-banter.mp3"
+    audio_path.write_bytes(b"x" * 4096)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=audio_path,
+        metadata={
+            "title": "Unheard banter",
+            "ritual_moment_id": "moment-unheard",
+            "release_beat_id": "beat-unheard",
+            "memory_extraction": {"script_lines": [{"host": "Marco", "text": "unheard"}]},
+        },
+        runtime_provider_observations={
+            "script_provider": RuntimeProviderObservation(
+                current_provider="openai",
+                primary_provider="anthropic",
+                fallback_active=True,
+                current_reason="anthropic_exception",
+            )
+        },
+    )
+    app.state.queue.put_nowait(segment)
+    app.state.stream_hub.broadcast = AsyncMock(return_value=0)
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    schedule.assert_not_called()
+    state.moment_store.mark_airing.assert_not_called()
+    state.moment_store.finalize.assert_called_once_with("moment-unheard", "not_streamed")
+    state.release_campaign.record_stream_result.assert_called_once_with(
+        segment.metadata,
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=1,
+        accepted_listeners=0,
+    )
+    assert state.runtime_provider_state == {}
+    assert state.current_stream_audible is False
+    assert list(state.recent_banter_paths) == []
 
 
 @pytest.mark.asyncio
@@ -1567,6 +1628,8 @@ async def test_run_playback_loop_skips_mid_read_oserror_and_survives(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.stream_hub.subscribe()
+    app.state.station_state.moment_store = MagicMock()
+    app.state.station_state.release_campaign = MagicMock()
 
     flaky_path = tmp_path / "flaky.mp3"
     flaky_path.write_bytes(b"x" * (4096 * 3))
@@ -1575,7 +1638,13 @@ async def test_run_playback_loop_skips_mid_read_oserror_and_survives(tmp_path):
     flaky = Segment(
         type=SegmentType.MUSIC,
         path=flaky_path,
-        metadata={"title": "Flaky", "title_only": "Flaky", "artist": "Artist"},
+        metadata={
+            "title": "Flaky",
+            "title_only": "Flaky",
+            "artist": "Artist",
+            "ritual_moment_id": "partial-moment",
+            "release_beat_id": "partial-beat",
+        },
     )
     good = Segment(
         type=SegmentType.MUSIC,
@@ -1646,9 +1715,22 @@ async def test_run_playback_loop_skips_mid_read_oserror_and_survives(tmp_path):
         for outcome in app.state.station_state.stream_outcome_history
         if outcome["terminal_reason"] == "file_error"
     )
-    assert partial_error["result"] == "aired"
+    # A mid-read failure TRUNCATES the segment, so it did not air in full.
+    # Classifying it `aired` told the Moment Receipt panel a home-triggered
+    # moment "made it to air" and let a cut-off release beat count a delivery
+    # against max_airings. A file that never opened is different: it writes zero
+    # bytes and still classifies `not_streamed` (see the missing-file test).
+    assert partial_error["result"] == "skipped"
     assert partial_error["bytes_sent"] > 0
     assert partial_error["accepted_listener_count"] == 1
+    app.state.station_state.moment_store.finalize.assert_any_call("partial-moment", "skipped")
+    app.state.station_state.release_campaign.record_stream_result.assert_any_call(
+        flaky.metadata,
+        bytes_sent=partial_error["bytes_sent"],
+        was_skipped=True,
+        listeners=1,
+        accepted_listeners=1,
+    )
 
 
 @pytest.mark.asyncio

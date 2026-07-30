@@ -3834,7 +3834,16 @@ async def run_playback_loop(app) -> None:
                                 logger.error("Companionship cue could not transition QUEUED -> CONSUMED")
                                 break
 
-                        if accepted_count > 0:
+                        # `bytes_sent` means "bytes this segment wrote", not
+                        # "bytes a listener accepted" — `accepted_listener_count`
+                        # below carries the audible truth. Gating it on
+                        # `accepted_count` made an ordinary segment that played
+                        # to EOF in an empty room report zero bytes, which
+                        # `classify_stream_outcome` reads as NOT_STREAMED ("zero
+                        # bytes left the box (file error)") rather than the
+                        # honest NO_LISTENERS. A cue still only counts when heard,
+                        # because an unheard cue is genuinely never delivered.
+                        if not is_companionship_cue or accepted_count > 0:
                             bytes_sent += len(chunk)
 
                         # First chunk a listener queue actually accepted. This is
@@ -3894,6 +3903,16 @@ async def run_playback_loop(app) -> None:
                 raise
             except OSError as exc:
                 logger.warning("Segment file unreadable; moving to next: %s (%s)", segment.path, exc)
+                # This handler covers two different failures. A file that never
+                # opened wrote nothing, and `bytes_sent == 0` already classifies
+                # it `not_streamed` — the honest "zero bytes left the box".
+                # A read that fails PART WAY THROUGH is a truncation: without
+                # the skip marker it classifies `aired`, so a home-triggered
+                # Moment Receipt would report "made it to air" for audio that
+                # was cut off, and a truncated release beat would count a
+                # delivery against max_airings.
+                if bytes_sent > 0:
+                    was_skipped = True
                 terminal_reason = "file_error"
             # Lookback snapshot: when an ad/banter segment finishes, remember the
             # whole thing so a listener who taps Share just after it ends (music
@@ -3962,6 +3981,7 @@ async def run_playback_loop(app) -> None:
                 bytes_sent=bytes_sent,
                 send_completed_cleanly=send_completed_cleanly,
                 listeners=start_listeners,
+                accepted_listeners=accepted_listener_count,
             )
             _emit_stream_result(
                 state,
@@ -3989,9 +4009,20 @@ def _schedule_banter_memory_extraction_after_send(
     bytes_sent: int,
     send_completed_cleanly: bool,
     listeners: int,
+    accepted_listeners: int | None = None,
 ) -> None:
-    """Start post-air memory extraction only after the send loop reaches EOF."""
-    if segment.type is not SegmentType.BANTER or not send_completed_cleanly or bytes_sent <= 0 or listeners <= 0:
+    """Start post-air memory extraction only after a listener actually heard it.
+
+    `bytes_sent` counts bytes this loop WROTE, which a room that accepted
+    nothing still accumulates. Durable listener memory must follow the audible
+    boundary instead, so gate on accepted listeners when the caller knows them.
+    """
+    if segment.type is not SegmentType.BANTER or not send_completed_cleanly or bytes_sent <= 0:
+        return
+    if accepted_listeners is None:
+        if listeners <= 0:
+            return
+    elif accepted_listeners <= 0:
         return
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
     if not metadata.get("memory_extraction"):
@@ -4008,7 +4039,15 @@ def _schedule_banter_memory_extraction_after_send(
         logger.warning("memory_extract: scheduling failed", exc_info=True)
 
 
-def _finalize_moment_receipts(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+def _finalize_moment_receipts(
+    state,
+    segment,
+    bytes_sent: int,
+    was_skipped: bool,
+    listeners: int,
+    *,
+    accepted_listeners: int | None = None,
+) -> None:
     """Record the TRUE outcome on any Moment Receipt this segment carried.
 
     Independent of the provenance ledger (runs even when Show Memory is off).
@@ -4032,6 +4071,7 @@ def _finalize_moment_receipts(state, segment, bytes_sent: int, was_skipped: bool
             bytes_sent=bytes_sent,
             listeners=listeners,
             fallback_active=is_fallback_active(meta),
+            accepted_listeners=accepted_listeners,
         )
         for moment_id in moment_ids:
             store.finalize(moment_id, status)
@@ -4061,8 +4101,15 @@ def _emit_stream_result(
         if bytes_sent > 0
         else 0
     )
-    _emit_release_campaign_result(state, segment, bytes_sent, was_skipped, listeners)
-    _finalize_moment_receipts(state, segment, bytes_sent, was_skipped, listeners)
+    _emit_release_campaign_result(
+        state,
+        segment,
+        bytes_sent,
+        was_skipped,
+        listeners,
+        accepted_listeners=accepted_count,
+    )
+    _finalize_moment_receipts(state, segment, bytes_sent, was_skipped, listeners, accepted_listeners=accepted_count)
     try:
         from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
 
@@ -4072,6 +4119,7 @@ def _emit_stream_result(
             bytes_sent=bytes_sent,
             listeners=listeners,
             fallback_active=is_fallback_active(meta),
+            accepted_listeners=accepted_count,
         )
         state.record_stream_outcome(
             segment_type=segment.type.value,
@@ -4111,6 +4159,7 @@ def _emit_stream_result(
                     bytes_sent=bytes_sent,
                     listeners=listeners,
                     fallback_active=fallback_active,
+                    accepted_listeners=accepted_count,
                 ),
                 "bytes_sent": bytes_sent,
                 "listeners": listeners,
@@ -4123,7 +4172,15 @@ def _emit_stream_result(
         logger.debug("Provenance Tier-3 emit failed: %s", exc)
 
 
-def _emit_release_campaign_result(state, segment, bytes_sent: int, was_skipped: bool, listeners: int) -> None:
+def _emit_release_campaign_result(
+    state,
+    segment,
+    bytes_sent: int,
+    was_skipped: bool,
+    listeners: int,
+    *,
+    accepted_listeners: int | None = None,
+) -> None:
     """Best-effort release campaign accounting, independent from Show Memory."""
     campaign = getattr(state, "release_campaign", None)
     if campaign is None:
@@ -4134,6 +4191,7 @@ def _emit_release_campaign_result(state, segment, bytes_sent: int, was_skipped: 
             bytes_sent=bytes_sent,
             was_skipped=was_skipped,
             listeners=listeners,
+            accepted_listeners=accepted_listeners,
         )
         # Persist synchronously: the ledger is one tiny object, guarded by _dirty
         # so it writes only on a real change (once per segment, at the segment
