@@ -7704,6 +7704,7 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
             "url": url,
             "persisted": True,
             "skipped": bool(source_result.get("skipped")),
+            "metadata_only": bool(source_result.get("metadata_only")),
         }
         try:
             await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
