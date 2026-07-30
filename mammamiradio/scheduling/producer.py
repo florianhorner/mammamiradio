@@ -857,7 +857,17 @@ async def _queue_continuity_bridge(
     while the packaged clip pays an ffprobe in a worker thread before it can be
     queued. The clip stays as the rung below, for a cold cache.
     """
+    # Re-armed before each rung rather than captured once for the whole ladder.
+    # A rung that awaits (the packaged clip pays an ffprobe) must still be
+    # discarded if the epoch moved under it — but the rungs BELOW it are fresh
+    # work against the new timeline. Capturing once meant a single control
+    # action mid-bridge rejected every remaining rung down to the emergency
+    # tone, disarming the whole dead-air ladder in one go.
     bridge_continuity_epoch = state.continuity_epoch
+
+    def _arm_bridge_rung() -> None:
+        nonlocal bridge_continuity_epoch
+        bridge_continuity_epoch = state.continuity_epoch
 
     def _bridge_stale_reason() -> str | None:
         if state.continuity_epoch == bridge_continuity_epoch:
@@ -875,6 +885,7 @@ async def _queue_continuity_bridge(
         )
         return GenerationWasteReason.STALE_CONTINUITY
 
+    _arm_bridge_rung()
     if music_runway and await _queue_norm_cache_bridge_segment(
         queue_segment,
         state,
@@ -893,6 +904,7 @@ async def _queue_continuity_bridge(
 
     fallback = _pick_recovery_clip(state)
     if fallback:
+        _arm_bridge_rung()
         duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback, rescue=True)
         duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         metadata = {
@@ -930,13 +942,18 @@ async def _queue_continuity_bridge(
                     "%s bridge: no cache music queued behind the canned clip",
                     bridge_type.capitalize(),
                 )
-        return ok
+            return True
+        if state.continuity_epoch == bridge_continuity_epoch:
+            # A capacity or admission refusal is still authoritative for this
+            # timeline. Only an epoch-stale rung is allowed to re-arm below.
+            return False
 
     # No packaged clip. Retry the cache PERMISSIVELY before the tone: at this
     # depth the only thing left is 2 seconds of emergency tone, so a song the
     # listener heard recently genuinely beats it. Every real caller passes
     # music_runway=True, so gating this rung on `not music_runway` made it dead
     # code and dropped a warm-cache station straight to the tone.
+    _arm_bridge_rung()
     ok = await _queue_norm_cache_bridge_segment(
         queue_segment,
         state,
@@ -958,6 +975,9 @@ async def _queue_continuity_bridge(
         "%s bridge: no canned clips or norm cache available — inserting packaged emergency tone",
         bridge_type.capitalize(),
     )
+    # Last rung. The tone is the floor between the listener and dead air, so it
+    # is armed against the current timeline no matter what happened above it.
+    _arm_bridge_rung()
     ok = await queue_segment(
         Segment(
             type=SegmentType.MUSIC,

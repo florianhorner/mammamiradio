@@ -1510,6 +1510,44 @@ def test_stamping_blesses_only_protected_runway():
     assert "continuity_admission_epoch" not in ordinary.metadata
 
 
+def test_discarding_a_dead_head_keeps_the_surviving_reservation_admissible(tmp_path):
+    """Bumping the epoch must not orphan the runway the same control just reserved.
+
+    Resume and Skip reserve runway (which stamps it) and then trim a dead queue
+    head. That trim advances `continuity_epoch`, so without a re-stamp the
+    survivor carries the previous epoch, `admitted_on_current_timeline` is False,
+    and the playback loop discards the exact audio the control reserved to avoid
+    dead air — after the route already answered 200.
+    """
+
+    app = _make_app()
+    state = app.state.station_state
+    app.state.queue = asyncio.Queue(maxsize=4)
+
+    real = tmp_path / "reserved.mp3"
+    real.write_bytes(b"\x00" * 4096)
+    dead = _queue_segment("Evicted head", duration_sec=200.0)
+    dead.path = tmp_path / "gone.mp3"  # never written -> unplayable
+    reserved = _queue_segment("Reserved runway", duration_sec=200.0)
+    reserved.path = real
+    reserved.metadata["continuity_reservation"] = True
+    app.state.queue.put_nowait(dead)
+    app.state.queue.put_nowait(reserved)
+    state.queued_segments = [
+        {"id": "dead", "type": "music", "label": "Evicted head"},
+        {"id": "reserved", "type": "music", "label": "Reserved runway"},
+    ]
+    state.continuity_epoch = 7
+    _stamp_continuity_runway_epoch(app.state.queue, state)
+    assert reserved.metadata["continuity_admission_epoch"] == 7
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_STOP)
+
+    assert dropped == 1
+    assert state.continuity_epoch == 8
+    assert reserved.metadata["continuity_admission_epoch"] == state.continuity_epoch
+
+
 def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_path):
     """Even a default-reason live control settles every cue it removes."""
     app = _make_app()

@@ -1125,6 +1125,13 @@ def _discard_unplayable_queue_prefix(q, state: StationState, *, reason: str) -> 
     # unchanged, driving the reconcile's keep-branch (clears when now-unplayable).
     _reconcile_queue_tail_adjacency(q, state, prior_tail=prior_tail)
     state.continuity_epoch += 1
+    # Advancing the epoch invalidates any admission stamp written before this
+    # call. Callers reserve runway first and trim the dead head second (Resume,
+    # Skip), so without a re-stamp the surviving reservation carries the old
+    # epoch and the playback loop discards the exact audio the control just
+    # reserved to avoid dead air. Re-stamp here rather than at each call site:
+    # every path that bumps the epoch owns keeping its own survivors admissible.
+    _stamp_continuity_runway_epoch(q, state)
     return len(dropped)
 
 

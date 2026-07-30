@@ -5101,8 +5101,8 @@ async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invarian
 
 
 @pytest.mark.asyncio
-async def test_continuity_bridge_probe_spanning_stop_resume_is_discarded_by_epoch(tmp_path, caplog):
-    """A blocked recovery probe cannot enqueue across a Stop→Resume ABA cycle."""
+async def test_continuity_bridge_probe_spanning_stop_resume_rearms_lower_rung(tmp_path, caplog):
+    """A stale canned rung falls through to a lower rung armed after Resume."""
     from mammamiradio.scheduling import producer
 
     state = _make_state()
@@ -5111,6 +5111,9 @@ async def test_continuity_bridge_probe_spanning_stop_resume_is_discarded_by_epoc
     config.tmp_dir = tmp_path
     canned_clip = tmp_path / "canned.mp3"
     canned_clip.write_bytes(b"fake audio" * 256)
+    norm_file = tmp_path / "norm_fresh_runway.mp3"
+    norm_file.write_bytes(b"pre-normalized fresh runway")
+    save_track_metadata(norm_file, title="Fresh Runway", artist="Cache Artist")
     probe_started = threading.Event()
     release_probe = threading.Event()
     queued: list[Segment] = []
@@ -5133,6 +5136,7 @@ async def test_continuity_bridge_probe_spanning_stop_resume_is_discarded_by_epoc
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_blocked_probe),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_file),
     ):
         bridge_task = asyncio.create_task(
             producer._queue_continuity_bridge(
@@ -5153,10 +5157,11 @@ async def test_continuity_bridge_probe_spanning_stop_resume_is_discarded_by_epoc
         release_probe.set()
         ok = await asyncio.wait_for(bridge_task, timeout=2)
 
-    assert ok is False
-    assert queued == []
+    assert ok is True
+    assert [segment.path for segment in queued] == [norm_file]
+    assert queued[0].metadata.get("audio_source") == "norm_cache"
     assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
-    assert list(state.bridge_events) == []
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("resume", "norm_cache")]
     assert any(
         "bridge discarded after continuity epoch changed captured_epoch=0 current_epoch=1" in record.message
         for record in caplog.records
