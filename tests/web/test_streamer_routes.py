@@ -5143,6 +5143,10 @@ async def test_slow_source_load_crossing_stop_commits_filtered_metadata_only(tmp
     assert load_response.status_code == 200
     assert load_response.json()["tracks"] == 1
     assert load_response.json()["skipped"] is False
+    # The route must actually say it went metadata-only. Every sibling ingest
+    # route reports this flag and the operator docs promise it here too, but the
+    # response dropped it while the test name still claimed it.
+    assert load_response.json()["metadata_only"] is True
     assert state.session_stopped is True
     assert state.now_streaming["type"] == "stopped"
     assert [track.display for track in state.playlist] == ["Allowed Artist – Allowed Song"]

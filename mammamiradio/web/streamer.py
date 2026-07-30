@@ -2079,6 +2079,14 @@ def _listener_audible_provider_status(
 
 
 def _script_runtime_reason_label(reason: str) -> str:
+    """Turn an internal script-provider reason into operator-facing copy.
+
+    The sibling of :func:`_tts_runtime_reason_label`. Codes like
+    ``anthropic_auth_failed`` are stored verbatim so logs stay diagnosable; this
+    is what stands between that code and the control-room screen. Unmapped
+    values degrade to spaced words rather than leaking underscores, and copy
+    that is already human passes through untouched, so applying it twice is safe.
+    """
     return _FALLBACK_REASON_LABELS.get(reason, reason.replace("_", " "))
 
 
