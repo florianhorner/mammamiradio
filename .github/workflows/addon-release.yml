@@ -127,8 +127,10 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-latest
+            docker_arch: amd64
           - arch: aarch64
             runner: ubuntu-24.04-arm
+            docker_arch: arm64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -149,6 +151,48 @@ jobs:
         env:
           IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
         run: python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"
+
+      - name: Verify exact prebuilt SHA published add-on port
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          EXPECTED_DOCKER_ARCH: ${{ matrix.docker_arch }}
+          SMOKE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          ACTUAL_DOCKER_ARCH="$(docker image inspect "$IMAGE_REF" --format '{{.Architecture}}')"
+          if [ "$ACTUAL_DOCKER_ARCH" != "$EXPECTED_DOCKER_ARCH" ]; then
+            echo "::error::Expected $SMOKE_ARCH image architecture $EXPECTED_DOCKER_ARCH, got $ACTUAL_DOCKER_ARCH"
+            exit 1
+          fi
+
+          CONTAINER_NAME="mamma-release-published-${SMOKE_ARCH}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run --detach \
+            --name "$CONTAINER_NAME" \
+            --publish 127.0.0.1:8765:8000 \
+            --env LOG_LEVEL=WARNING \
+            --env SUPERVISOR_TOKEN=smoke-ci \
+            "$IMAGE_REF"
+
+          HEALTH="$(
+            curl --fail --silent --show-error \
+              --retry 20 --retry-all-errors --retry-delay 1 \
+              --max-time 3 \
+              http://127.0.0.1:8765/healthz
+          )"
+          python3 - "$HEALTH" <<'PY'
+          import json
+          import sys
+
+          payload = json.loads(sys.argv[1])
+          if payload.get("status") != "ok":
+              raise SystemExit(f"published /healthz was not healthy: {payload}")
+          print("Exact prebuilt SHA published add-on port is reachable and healthy")
+          PY
 
   promote:
     runs-on: ubuntu-latest

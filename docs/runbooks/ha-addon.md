@@ -11,7 +11,7 @@ Code change
   → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
   → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, and prebuilt :sha checks
-  → addon-release.yml smoke-prebuilt: runs the amd64 :sha image before stable tags exist
+  → addon-release.yml smoke-prebuilt: runs both per-arch :sha images and proves their host-published ports before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
   → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
   → HA discovers new version via config.yaml
@@ -286,7 +286,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
-`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, smoke-tests the amd64 SHA image before stable publishing, promotes those exact images to `:X.Y.Z` without changing the source manifest shape, updates `:latest` only when the current tag is the newest stable semver, and then smoke-tests the published amd64 `:X.Y.Z` image. The source `:sha` image is built with `io.hass.version` set to the stable `config.yaml` version because it may later become the stable release artifact. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
+`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, runs the launch and host-published-port proofs for each native architecture before stable publishing, promotes those exact images to `:X.Y.Z` without changing the source manifest shape, updates `:latest` only when the current tag is the newest stable semver, and then smoke-tests the published amd64 `:X.Y.Z` image. The source `:sha` image is built with `io.hass.version` set to the stable `config.yaml` version because it may later become the stable release artifact. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
 
 ## Edge channel (dev releases)
 
@@ -305,7 +305,7 @@ Both add-ons pull the **same image repo** (`ghcr.io/florianhorner/mammamiradio-a
 
 1. Run `make edge-release` (`scripts/cut-edge-release.sh`). It selects the **newest `main` commit with a green `Build HA Addon` run** (that success is the proof both per-arch `:<short-sha>` images were pushed), validates the release-beat manifest against that target SHA (`scripts/validate-release-beat.py --channel edge --target-sha "$SHA"` — a no-op if the manifest is absent/disabled), sets the edge `version:` to that commit's short SHA, and opens a normal PR you merge via `/ship`. You no longer pre-check the build by hand — the script does it via `gh run list`.
 
-The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the image paths (`ha-addon/**`, `mammamiradio/**`, `pyproject.toml`, `radio.toml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). It uses `gh run list` (needs only `actions:read`); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
+The pin **may trail `origin/main` HEAD**: when the tip commits touch only files outside the complete image trigger set (`ha-addon/**`, `mammamiradio/**`, `pyproject.toml`, `radio.toml`, `model_registry.toml`, `scripts/validate-addon.sh`, `scripts/ha-green-launch-smoke.py`, `scripts/ha-green-perf-smoke.py`, and `.github/workflows/addon-build.yml`), `Build HA Addon` never ran for them and no `:<sha>` image exists, so pinning HEAD would make the Supervisor pull a missing tag. The script pins the last *built* commit instead, and **hard-fails (no PR)** rather than warn-and-continue when it cannot find a successful build run, when `gh` cannot be queried, or when an image file changed between the built commit and HEAD (which means the newest image-affecting commit has not gone green yet — wait for it, or fix the failed build). `scripts/cut-edge-release.sh` mirrors this trigger set exactly, and its hermetic test fails on drift. It uses `gh run list` (needs only `actions:read`); it no longer calls the GHCR packages API (which needed the `read:packages` scope the maintainer token lacks and 403'd into a soft-pass).
 
 Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`quality`, `pi-smoke`) run normally and you merge it like any PR — no protected-branch fight, no self-merging CI, no races. Stable is never touched. (This replaced an auto-bump CI job that opened a PR and busy-waited on its own checks; it raced check-creation and orphaned PRs — see #384 / #476 / #487.)
 
@@ -313,17 +313,19 @@ Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`qu
 
 **Smoke runs in addon mode.** Every smoke `docker run` (`addon-build.yml`, and both blocks in `addon-release.yml`) sets `-e SUPERVISOR_TOKEN=smoke-ci`, mirroring how the HA Supervisor launches the image. Without it the container boots in standalone mode, where binding `0.0.0.0` with no admin token is a fatal config error (`config._is_addon` is false), uvicorn never starts, and the smoke fails with `/healthz` connection-refused — a false negative that doesn't reflect the real addon. Keep the token on any new smoke step.
 
-`addon-build.yml` also starts the exact amd64 SHA image with
+For both `amd64` and `aarch64`, `addon-build.yml` starts the exact SHA image with
 `127.0.0.1:8765:8000` published and probes `/healthz` through that host port.
-This is separate from the in-container launch smoke: it proves that the image
-actually exposes the port Home Assistant connects to. The launch smoke's warm
-and cold scenarios first give the fresh process a separate readiness budget,
-then require an accepted stream byte within two seconds of the listener's
-`/stream` request and agreement across `/healthz`, `/readyz`, and
-`/public-status`. This is a fresh-process listener-to-first-byte contract, not a
-process-spawn-to-audio measurement. A cold start must open on approved packaged
-recovery speech; the technical emergency tone is a last-resort continuity rung
-and does not count as a healthy cold open.
+Before stable promotion, `addon-release.yml` repeats that published-port proof
+for both exact SHA images on native-architecture runners. This is separate from
+the in-container launch smoke: it proves that each image actually exposes the
+port Home Assistant connects to. The launch smoke's warm and cold scenarios
+first give the fresh process a separate readiness budget, then require an
+accepted stream byte within two seconds of the listener's `/stream` request and
+agreement across `/healthz`, `/readyz`, and `/public-status`. This is a
+fresh-process listener-to-first-byte contract, not a process-spawn-to-audio
+measurement. A cold start must open on approved packaged recovery speech; the
+technical emergency tone is a last-resort continuity rung and does not count as
+a healthy cold open.
 
 **Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same Apps catalog entry, re-enter API keys. Reverse it to go back.
 
