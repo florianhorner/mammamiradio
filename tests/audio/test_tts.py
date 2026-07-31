@@ -713,6 +713,142 @@ async def test_synthesize_cloud_fallback_records_route_provenance(_mock_all, tmp
 
 
 @pytest.mark.asyncio
+async def test_tts_aggregate_does_not_inherit_fallback_from_prior_render(_mock_all, tmp_path, monkeypatch):
+    """A later successful render must not carry an earlier render's fallback."""
+    from mammamiradio.audio.tts import synthesize
+
+    state = StationState()
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+
+    first_scope = state.bind_runtime_provider_observation_scope("azure-fallback-render")
+    try:
+        await synthesize(
+            "Prima",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "azure_fallback.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            state=state,
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(first_scope)
+    first_render = state.take_runtime_provider_observations("azure-fallback-render")
+    assert first_render["tts_provider"].current_provider == "edge"
+    assert first_render["tts_provider"].fallback_active is True
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+
+    async def _successful_elevenlabs(_text, _voice, output_path, **kwargs):
+        _touch(output_path)
+        on_paid_provider_success = kwargs.get("on_paid_provider_success")
+        if on_paid_provider_success is not None:
+            on_paid_provider_success()
+        return output_path
+
+    second_scope = state.bind_runtime_provider_observation_scope("elevenlabs-success-render")
+    try:
+        with patch(
+            "mammamiradio.audio.tts.synthesize_elevenlabs",
+            new=AsyncMock(side_effect=_successful_elevenlabs),
+        ):
+            await synthesize(
+                "Seconda",
+                "voice_italian_character",
+                tmp_path / "elevenlabs_success.mp3",
+                engine="elevenlabs",
+                state=state,
+            )
+    finally:
+        state.reset_runtime_provider_observation_scope(second_scope)
+    second_render = state.take_runtime_provider_observations("elevenlabs-success-render")
+
+    assert second_render["tts:elevenlabs"].current_provider == "elevenlabs"
+    assert second_render["tts:elevenlabs"].fallback_active is False
+    assert second_render["tts_provider"].current_provider == "elevenlabs"
+    assert second_render["tts_provider"].fallback_active is False
+    assert second_render["tts_provider"].current_reason == "Cloud TTS route rendered successfully"
+
+
+@pytest.mark.asyncio
+async def test_tts_aggregate_preserves_fallback_within_same_mixed_render(_mock_all, tmp_path, monkeypatch):
+    """One failed voice keeps its own mixed render on Edge aggregate truth."""
+    from mammamiradio.audio.tts import synthesize
+
+    state = StationState()
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+
+    async def _successful_elevenlabs(_text, _voice, output_path, **kwargs):
+        _touch(output_path)
+        return output_path
+
+    scope = state.bind_runtime_provider_observation_scope("mixed-tts-render")
+    try:
+        await synthesize(
+            "Prima",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "mixed_azure_fallback.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            state=state,
+        )
+        with patch(
+            "mammamiradio.audio.tts.synthesize_elevenlabs",
+            new=AsyncMock(side_effect=_successful_elevenlabs),
+        ):
+            await synthesize(
+                "Seconda",
+                "voice_italian_character",
+                tmp_path / "mixed_elevenlabs_success.mp3",
+                engine="elevenlabs",
+                state=state,
+            )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+    render = state.take_runtime_provider_observations("mixed-tts-render")
+
+    assert render["tts:azure"].fallback_active is True
+    assert render["tts:elevenlabs"].fallback_active is False
+    assert render["tts_provider"].current_provider == "edge"
+    assert render["tts_provider"].fallback_active is True
+    assert "azure=missing_credentials" in render["tts_provider"].current_reason
+
+
+def test_tts_aggregate_preserves_earlier_same_engine_fallback_in_one_render():
+    """A later voice success cannot erase fallback audio already in the render."""
+    from mammamiradio.audio.tts import _record_tts_runtime_state
+
+    state = StationState()
+    scope = state.bind_runtime_provider_observation_scope("same-engine-render")
+    try:
+        _record_tts_runtime_state(
+            state,
+            engine="azure",
+            current_provider="edge",
+            fallback_active=True,
+            reason="first_voice_failed",
+        )
+        _record_tts_runtime_state(
+            state,
+            engine="azure",
+            current_provider="azure",
+            fallback_active=False,
+            reason="second_voice_ok",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+
+    render = state.take_runtime_provider_observations("same-engine-render")
+    assert render["tts:azure"].current_provider == "azure"
+    assert render["tts:azure"].fallback_active is False
+    assert render["tts_provider"].current_provider == "edge"
+    assert render["tts_provider"].fallback_active is True
+    assert "first_voice_failed" in render["tts_provider"].current_reason
+
+
+@pytest.mark.asyncio
 async def test_synthesize_elevenlabs_happy_path(_mock_all, tmp_path, monkeypatch):
     from mammamiradio.audio.tts import synthesize
 

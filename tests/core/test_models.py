@@ -482,9 +482,16 @@ def test_provider_observation_scope_returns_and_collects_render_ownership():
         state.reset_runtime_provider_observation_scope(scope)
 
     assert observation.observation_token == "render-123"
+    snapshot = state.snapshot_runtime_provider_observations("render-123")
+    assert snapshot == {"script_provider": observation}
+    snapshot.clear()
+    assert state.snapshot_runtime_provider_observations("render-123") == {
+        "script_provider": observation,
+    }
     assert state.take_runtime_provider_observations("render-123") == {
         "script_provider": observation,
     }
+    assert state.snapshot_runtime_provider_observations("render-123") == {}
     assert state.take_runtime_provider_observations("render-123") == {}
 
 

@@ -1485,6 +1485,16 @@ class StationState:
         """Restore the caller's previous provider-observation ownership."""
         _RUNTIME_PROVIDER_OBSERVATION_TOKEN.reset(scope)
 
+    def snapshot_runtime_provider_observations(
+        self,
+        observation_token: str,
+    ) -> dict[str, RuntimeProviderObservation]:
+        """Inspect one render's observations without transferring ownership."""
+        owner_token = str(observation_token).strip()
+        if not owner_token:
+            return {}
+        return dict(self._runtime_provider_observations_by_token.get(owner_token, {}))
+
     def take_runtime_provider_observations(
         self,
         observation_token: str,
