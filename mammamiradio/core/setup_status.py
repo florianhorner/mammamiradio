@@ -164,7 +164,7 @@ def _setup_status_shape(status: str) -> dict[str, str]:
         return {"tone": "ok", "shape": "ok", "display_status": "Ready"}
     if status == "not_configured":
         return {"tone": "info", "shape": "info", "display_status": "Optional"}
-    if status in {"blocked", "rejected", "stopped"}:
+    if status in {"blocked", "rejected"}:
         return {"tone": "error", "shape": "error", "display_status": "Needs setup"}
     display = {
         "missing": "Missing",

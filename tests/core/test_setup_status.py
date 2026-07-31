@@ -6,10 +6,11 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import StationState, Track
+from mammamiradio.core.models import PlaylistSource, StationState, Track
 from mammamiradio.core.setup_status import (
     _home_context_copy,
     _playlist_is_demo,
+    _setup_status_shape,
     _stream_status,
     build_guided_setup,
     build_setup_status,
@@ -490,6 +491,38 @@ def test_guided_setup_stream_pause_is_separate_from_source_readiness():
 
     config.allow_ytdlp = False
     assert build_guided_setup(config, state)["stream"]["status"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("playlist_source", "playlist", "allow_ytdlp", "expected"),
+    [
+        (PlaylistSource(kind="charts", label="Charts"), [], False, "ready"),
+        (None, [Track(title="Loaded", artist="Artist", duration_ms=180_000)], False, "ready"),
+        (None, [], True, "checking"),
+        (None, [], False, "blocked"),
+    ],
+)
+def test_stream_status_without_golden_path_uses_source_readiness(
+    playlist_source,
+    playlist,
+    allow_ytdlp,
+    expected,
+):
+    config = load_config()
+    config.allow_ytdlp = allow_ytdlp
+    state = StationState()
+    state.playlist_source = playlist_source
+    state.playlist = playlist
+
+    assert _stream_status(config, state) == expected
+
+
+def test_setup_status_shape_does_not_classify_runtime_pause_as_setup_failure():
+    assert _setup_status_shape("stopped") == {
+        "tone": "warn",
+        "shape": "warn",
+        "display_status": "Stopped",
+    }
 
 
 def test_build_setup_status_identity_preview_uses_station_name(monkeypatch):

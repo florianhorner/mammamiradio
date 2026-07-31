@@ -214,7 +214,8 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
 
 def test_pipeline_stream_status_is_driven_by_fast_runtime_truth() -> None:
     html = _read_admin_html()
-    block = _function_block(html, "pipelineStreamStatus")
+    block = _function_block(html, "stationRuntimeVerdict")
+    pipeline = _function_block(html, "pipelineStreamStatus")
     refresh = _function_block(html, "refreshFast")
 
     assert "const runtime=st?.runtime_status||{}" in block
@@ -228,7 +229,57 @@ def test_pipeline_stream_status_is_driven_by_fast_runtime_truth() -> None:
     assert "guidedStream.status==='ready'||fastGoldenPath?.blocking===false" in block
     for state in ("'idle'", "'blocked'", "'degraded'", "'ready'", "'working'"):
         assert state in block
+    assert "return stationRuntimeVerdict(st,caps)" in pipeline
     assert "updatePipelineStatus(_caps,_st)" in refresh
+
+
+def test_runtime_status_surfaces_share_one_pause_first_verdict() -> None:
+    html = _read_admin_html()
+    verdict = _function_block(html, "stationRuntimeVerdict")
+    pipeline = _function_block(html, "pipelineStreamStatus")
+    runtime = _function_block(html, "updateRuntimeStatus")
+
+    assert "st?.session_stopped===true" in verdict
+    assert "runtime.health_state==='blocked'" in verdict
+    assert verdict.index("st?.session_stopped===true") < verdict.index("runtime.health_state==='blocked'")
+    assert "stationRuntimeVerdict(st,caps)" in pipeline
+    assert "stationRuntimeVerdict(st,_caps)" in runtime
+    assert "guidedStream.status==='stopped'" not in pipeline
+
+
+def test_metadata_only_admin_mutations_explain_that_start_is_required() -> None:
+    html = _read_admin_html()
+    helper = _function_block(html, "metadataOnlyMutationCopy")
+
+    assert "response?.metadata_only!==true" in helper
+    assert "saved. Nothing new will air until you press Start." in helper
+    for name in ("enrichPlaylistSource", "setHeading", "setDirectionText"):
+        block = _function_block(html, name)
+        assert "metadataOnlyMutationCopy(" in block
+        assert block.index("metadataOnlyMutationCopy(") < block.rindex("await refreshFast()")
+
+
+def test_resume_offers_force_start_only_after_confirmed_assetless_refusal() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "doResume")
+
+    normal_request = "apiResponse('POST','/api/resume')"
+    force_request = "apiResponse('POST','/api/resume?force=true')"
+    force_gate = "response.status===503&&payload?.force_available===true"
+    assert normal_request in block
+    assert force_gate in block
+    assert "window.confirm(FORCE_RESUME_CONFIRM_COPY)" in block
+    assert force_request in block
+    assert block.index(normal_request) < block.index(force_gate)
+    assert block.index(force_gate) < block.index("window.confirm(FORCE_RESUME_CONFIRM_COPY)")
+    assert block.index("window.confirm(FORCE_RESUME_CONFIRM_COPY)") < block.index(force_request)
+    assert block.count(force_request) == 1
+    assert (
+        'const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? '
+        'The station may be quiet briefly while the studio rebuilds.";'
+    ) in html
+    assert "Station remains paused." in block
+    assert "Station is recovering. A host break is being prepared." in block
 
 
 def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
@@ -239,19 +290,18 @@ def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
     assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
 
 
-def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:
+def test_runtime_status_header_uses_shared_runtime_verdict() -> None:
     block = _function_block(_read_admin_html(), "updateRuntimeStatus")
 
+    assert "const verdict=stationRuntimeVerdict(st,_caps)" in block
     assert "const stationOnAir=rs.station_on_air===true" in block
-    assert "const sessionStopped=st?.session_stopped===true" in block
-    assert "const taskBlocked=rs.health_state==='blocked'" in block
-    assert "const headerState=taskBlocked?'blocked':stationOnAir?'ready':sessionStopped?'ready':'working'" in block
-    assert "const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':sessionStopped?'Paused':'Ready'" in block
-    assert "const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel" in block
+    assert "const headerState=verdict.state" in block
+    assert "const headerLabel=verdict.label" in block
+    assert "const headerDetail=verdict.detail" in block
     assert "header.className='status-dot '+headerState" in block
     assert "header.setAttribute('aria-label',headerDetail)" in block
     assert "header.innerHTML='<span class=\"dot\"></span>'+esc(headerLabel)" in block
-    assert "statusRow('Current health',headerState,headerLabel" in block
+    assert "statusRow('Current health',headerState,headerLabel,headerDetail)" in block
     assert "const state=rs.health_state||'ready'" not in block
 
 

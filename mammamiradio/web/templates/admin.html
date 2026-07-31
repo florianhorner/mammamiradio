@@ -416,7 +416,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-strip-chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 8px;border:1px solid rgba(245,237,216,0.14);border-radius:8px;font-size:11px;color:rgba(245,237,216,0.82);background:rgba(245,237,216,0.04)}
 .setup-strip-chip[data-s="ready"]{border-color:rgba(37,99,235,0.35);color:var(--ok-text)}
 .setup-strip-chip[data-s="missing"],.setup-strip-chip[data-s="checking"],.setup-strip-chip[data-s="waiting_ai"],.setup-strip-chip[data-s="empty"],.setup-strip-chip[data-s="stale"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
-.setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"],.setup-strip-chip[data-s="stopped"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
+.setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
 .setup-strip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .setup-strip-action{min-width:44px;min-height:44px;white-space:nowrap}
 .setup-note{font-size:11px;line-height:1.45;color:rgba(245,237,216,0.66);margin-top:6px}
@@ -2392,6 +2392,10 @@ function toast(m){const e=document.getElementById('toast');e.textContent=m;e.cla
 // never reach the screen (leadership principle #5) — they stay in the logs.
 function wayOut(action){return (action?"Couldn't "+action:"That didn't go through")+" — give it a few seconds and try again.";}
 function offlineMsg(){return "Can't reach the studio right now — check the connection and try again.";}
+function metadataOnlyMutationCopy(response,subject){
+  if(response?.metadata_only!==true)return'';
+  return `${subject} saved. Nothing new will air until you press Start.`;
+}
 // Surface background queue-from-search failures the POST couldn't report (it
 // returned 200 before the download finished). /status carries recent notices;
 // toast any whose ts we haven't shown yet. The first poll only primes the
@@ -2883,9 +2887,10 @@ async function doPurge(el){
 }
 const STOP_FAILURE_COPY="We couldn't pause the station. Give the studio a few seconds, then press Stop again.";
 const RESUME_FAILURE_COPY="We couldn't resume the station. Give the studio a few seconds, then press Start again.";
-// Stop and Resume answer with the precise reason they refused ("no playable audio
-// is available; wait a moment, then try again"). Prefer it over the generic line —
-// it already names the way out. Fall back only when the station said nothing.
+const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? The station may be quiet briefly while the studio rebuilds.";
+// Stop and Resume answer with the precise reason they refused. Prefer it over
+// the generic line because it names the way out. An assetless Resume may also
+// offer the separately confirmed force-start below; it is never sent implicitly.
 function transportFailureCopy(payload,fallback){
   const reported=typeof payload?.error==='string'?payload.error.trim():'';
   return reported||fallback;
@@ -2906,8 +2911,22 @@ async function doResume(el){
   flash(el);
   try{
     const {response,payload}=await apiResponse('POST','/api/resume');
-    if(response.ok&&payload?.ok===true)toast('Station resumed');
-    else toast(transportFailureCopy(payload,RESUME_FAILURE_COPY));
+    if(response.ok&&payload?.ok===true){
+      toast('Station resumed');
+    }else if(response.status===503&&payload?.force_available===true){
+      if(!window.confirm(FORCE_RESUME_CONFIRM_COPY)){
+        toast('Station remains paused.');
+        return;
+      }
+      const {response:forceResponse,payload:forcePayload}=await apiResponse('POST','/api/resume?force=true');
+      if(forceResponse.ok&&forcePayload?.ok===true&&forcePayload?.recovering===true){
+        toast('Station is recovering. A host break is being prepared.');
+      }else{
+        toast(transportFailureCopy(forcePayload,RESUME_FAILURE_COPY));
+      }
+    }else{
+      toast(transportFailureCopy(payload,RESUME_FAILURE_COPY));
+    }
   }catch(_){
     toast(RESUME_FAILURE_COPY);
   }finally{
@@ -3425,9 +3444,8 @@ function statusDot(state,label,title=''){
   const safeTitle=title||label;
   return `<span class="status-dot ${state}" title="${esc(safeTitle)}" aria-label="${esc(safeTitle)}"><span class="dot"></span>${esc(label)}</span>`;
 }
-function pipelineStreamStatus(st,caps){
+function stationRuntimeVerdict(st,caps){
   const runtime=st?.runtime_status||{};
-  const hasFastStatus=Boolean(st&&Object.keys(st).length);
   const fastGoldenPath=st?.golden_path;
   const goldenPath=fastGoldenPath||caps?.golden_path||{};
   const guidedStream=caps?.guided_setup?.stream||{};
@@ -3459,9 +3477,6 @@ function pipelineStreamStatus(st,caps){
       detail:runtime.health_explanation||'Stream Engine is ready for the next listener.',
     };
   }
-  if(!hasFastStatus&&guidedStream.status==='stopped'){
-    return {state:'idle',label:'Paused',detail:'Stream Engine is paused by the operator.'};
-  }
   if(guidedStream.status==='ready'||fastGoldenPath?.blocking===false){
     return {state:'ready',label:'Ready',detail:goldenPath.headline||'Stream Engine is ready.'};
   }
@@ -3469,6 +3484,9 @@ function pipelineStreamStatus(st,caps){
     return {state:'working',label:'Starting',detail:runtime.health_explanation||'Stream Engine is preparing the next audio.'};
   }
   return {state:'working',label:'Checking',detail:'Checking Stream Engine status.'};
+}
+function pipelineStreamStatus(st,caps){
+  return stationRuntimeVerdict(st,caps);
 }
 function updatePipelineStatus(caps,st){
   const el=document.getElementById('pipelineStatus');
@@ -3590,23 +3608,22 @@ function updateRuntimeStatus(st){
   const card=document.getElementById('runtimeStatusCard');
   const header=document.getElementById('headerHealth');
   const rs=st?.runtime_status;
+  const verdict=stationRuntimeVerdict(st,_caps);
   try{
     if(!rs){
       if(card)card.innerHTML='<div class="empty">Runtime status unavailable</div>';
       if(header){
-        header.className='status-dot working';
-        header.setAttribute('aria-label','status: working');
-        header.title='Runtime status loading';
-        header.innerHTML='<span class="dot"></span>Checking';
+        header.className='status-dot '+verdict.state;
+        header.setAttribute('aria-label',verdict.detail);
+        header.title=verdict.detail;
+        header.innerHTML='<span class="dot"></span>'+esc(verdict.label);
       }
       return;
     }
     const stationOnAir=rs.station_on_air===true;
-    const sessionStopped=st?.session_stopped===true;
-    const taskBlocked=rs.health_state==='blocked';
-    const headerState=taskBlocked?'blocked':stationOnAir?'ready':sessionStopped?'ready':'working';
-    const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':sessionStopped?'Paused':'Ready';
-    const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel;
+    const headerState=verdict.state;
+    const headerLabel=verdict.label;
+    const headerDetail=verdict.detail;
     if(header){
       header.className='status-dot '+headerState;
       header.setAttribute('aria-label',headerDetail);
@@ -3723,7 +3740,7 @@ function updateRuntimeStatus(st){
       continuityRow=statusRow('Protected continuity','ready','Reserved',`${seconds}s ready · ${sourceLabels[continuity.audio_source]||'Immediate audio'}`);
     }
     card.innerHTML=[
-      statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
+      statusRow('Current health',headerState,headerLabel,headerDetail),
       runtimeProviderRow('Audio source',providers.audio_source,stationOnAir),
       runtimeProviderRow('Script provider',providers.script_provider,stationOnAir),
       runtimeProviderRow('TTS provider',providers.tts_provider,stationOnAir),
@@ -4277,7 +4294,7 @@ async function enrichPlaylistSource(kind,el){
     toast(wayOut());
     return;
   }
-  toast(dispatch.toast+` (${r.added} nuovi)`);
+  toast(metadataOnlyMutationCopy(r,'Rotation change')||dispatch.toast+` (${r.added} nuovi)`);
   await refreshFast();
   updateSourceControls(_st,_caps);
 }
@@ -4293,7 +4310,10 @@ async function setHeading(kind,el){
     await refreshFast();
     return;
   }
-  toast(r.idempotent?`${dispatch.label} is already in the crate.`:`Found records for ${dispatch.label}.`);
+  toast(
+    metadataOnlyMutationCopy(r,'Record Hunt')
+      ||(r.idempotent?`${dispatch.label} is already in the crate.`:`Found records for ${dispatch.label}.`)
+  );
   await refreshFast();
 }
 let _directionPending=false;
@@ -4392,7 +4412,10 @@ async function setDirectionText(el){
       return;
     }
     const label=r.heading?.label||text;
-    if(r.idempotent){
+    const metadataOnlyCopy=metadataOnlyMutationCopy(r,'Record Hunt');
+    if(metadataOnlyCopy){
+      toast(metadataOnlyCopy);
+    }else if(r.idempotent){
       toast(`${label} is already in the crate.`);
     }else{
       // Only count songs actually confirmed in rotation; anything still
