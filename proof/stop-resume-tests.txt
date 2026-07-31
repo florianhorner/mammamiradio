@@ -72,8 +72,13 @@ BROWSER
   unexpected page/console errors: none
 
 PRESHIP EVIDENCE
-  The fixed-name proof/preship-review.json is emitted and checked after this
-  current-state receipt is committed. It must pin an ancestor of final HEAD.
+  proof/preship-review.json:
+    clean adversarial-review receipt pinned to
+    092943792acdbd9c1905a9fe9bae01077f4a5235
+  check-preship-evidence.sh loaded from origin/main: PASS
+  branch-local check-preship-evidence.sh: PASS
+  preship evidence self-test: all assertions passed
+  ancestry contract: the reviewed commit is an ancestor of final HEAD
 
 BOUNDARY
   Local validation only. Remote PR checks still describe the old remote head.
