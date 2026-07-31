@@ -39,7 +39,7 @@ curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/readyz
 ```
 
-`/healthz` answers "is the process alive?". `/readyz` answers "has this running session actually delivered audio to a listener?". Every fresh or Resumed session returns HTTP `503` with `status: "starting"` until at least one listener queue accepts audio; `Producer started`, queued work, and elapsed startup time are not sufficient. Listener acceptance changes the probe to HTTP `200` with `status: "ready"`. A confirmed Force Start remains `starting` while it rebuilds that proof, and prolonged listener silence can return an active session to `starting`. An intentional operator pause is distinct: `/healthz` normally stays `200`, while `/readyz` returns HTTP `503` with `status: "stopped"` until explicit Resume.
+`/healthz` answers "is the process and listener-facing runtime healthy?"; it normally stays HTTP `200` during an intentional Stop but returns `503` for prolonged silence with active listeners. `/readyz` answers "has this running session actually delivered audio to a listener?". Every fresh or Resumed session returns HTTP `503` with `status: "starting"` until at least one listener queue accepts audio; `Producer started`, queued work, and elapsed startup time are not sufficient. Listener acceptance changes the probe to HTTP `200` with `status: "ready"`. A confirmed Force Start remains `starting` while it rebuilds that proof, and prolonged listener silence can return an active session to `starting`. An intentional operator pause is distinct: `/readyz` returns HTTP `503` with `status: "stopped"` until explicit Resume.
 
 ## The app starts but there is no real music
 

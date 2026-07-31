@@ -514,6 +514,20 @@ After merging to main, verify the full chain:
 
 Do NOT merge the next PR until all 7 steps pass.
 
+## Operator Stop and assetless Resume
+
+Stop persists the operator pause across add-on or watchdog restarts. A normal
+Resume remains fail-closed until readable recovery audio is available. If every
+recovery asset is missing, it returns HTTP `503` with
+`force_available: true`, keeps the station stopped, and the Admin UI asks for
+explicit confirmation.
+
+Only that confirmation sends `POST /api/resume?force=true`. The confirmed
+escape removes the stop marker, requests a host break, returns
+`{"ok":true,"recovering":true,"runway_source":"none"}`, and leaves `/readyz`
+at `503 starting` until a listener actually accepts the rebuilt audio. Force
+Start is recovery for a corrupt installation; it is never automatic.
+
 ## Expected log signatures after a release
 
 Use these to tell intentional degradation from a real regression during post-merge verification and soak runs.

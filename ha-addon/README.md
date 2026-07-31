@@ -69,7 +69,7 @@ starting and never writes it directly. A selection held only in memory by an
 older build cannot be recovered after an update rematerializes an older
 Supervisor value.
 
-The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. `/healthz` reports process liveness. `/readyz` reports `503 starting` on a fresh or Resumed session until a listener actually accepts audio, `200 ready` after that proof, and `503 stopped` during an intentional Stop; queued work or elapsed startup time alone is not readiness. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
+The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. `/healthz` reports process/runtime health: an intentional Stop normally stays healthy, while prolonged silence with active listeners returns `503`. `/readyz` reports `503 starting` on a fresh or Resumed session until a listener actually accepts audio, `200 ready` after that proof, and `503 stopped` during an intentional Stop; queued work or elapsed startup time alone is not readiness. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 
 ### Playing on speakers
 

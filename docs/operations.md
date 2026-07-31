@@ -142,11 +142,22 @@ Resume remains paused while it prepares the handoff:
 
 1. Reserve readable immediate audio: eligible norm-cache music, then
    `continuity_1.mp3`, then `emergency_tone.mp3`.
-2. If no playable runway exists, return `503` and keep the marker.
+2. If no playable runway exists, return `503` with `force_available: true` and
+   keep the marker.
 3. Remove the marker. If removal fails, return `503` and stay paused.
 4. Clear the runtime stop state and wake producer/playback.
 
-`/healthz` remains a process-liveness probe during an intentional pause.
+The assetless path represents a corrupt installation and never starts
+automatically. After the normal `503`, the admin requires explicit operator
+confirmation before sending `POST /api/resume?force=true`. That request removes
+the marker first, sets `force_next=BANTER`, clears the stopped state, wakes
+recovery, and returns
+`{"ok":true,"recovering":true,"runway_source":"none"}`. `/readyz` remains
+`503 starting` until a listener accepts the rebuilt host audio.
+
+`/healthz` remains a runtime-health probe during an intentional pause: Stop
+normally stays HTTP `200`, while prolonged silence with active listeners can
+make it HTTP `503`.
 `/readyz` returns HTTP `503` with `status: "stopped"` even when tasks are alive
 and queued audio exists; this prevents routing new listeners to a deliberately
 paused station. Every fresh or Resumed session returns HTTP `503` with
