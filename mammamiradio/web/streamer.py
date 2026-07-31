@@ -4019,12 +4019,16 @@ async def run_playback_loop(app) -> None:
                 # This handler covers two different failures. A file that never
                 # opened wrote nothing, and `bytes_sent == 0` already classifies
                 # it `not_streamed` — the honest "zero bytes left the box".
-                # A read that fails PART WAY THROUGH is a truncation: without
-                # the skip marker it classifies `aired`, so a home-triggered
-                # Moment Receipt would report "made it to air" for audio that
-                # was cut off, and a truncated release beat would count a
-                # delivery against max_airings.
-                if bytes_sent > 0:
+                # A read that fails PART WAY THROUGH is a truncation only when
+                # at least one listener accepted an earlier chunk. Without the
+                # skip marker that accepted partial delivery would classify
+                # `aired`, so a home-triggered Moment Receipt would report
+                # "made it to air" for audio that was cut off, and a truncated
+                # release beat would count a delivery against max_airings.
+                # Bytes rejected by every connected listener are different:
+                # preserve `was_skipped=False` so accepted-listener truth
+                # classifies that failed delivery `not_streamed`.
+                if bytes_sent > 0 and accepted_listener_count > 0:
                     was_skipped = True
                 terminal_reason = "file_error"
             # Lookback snapshot: when an ad/banter segment finishes, remember the

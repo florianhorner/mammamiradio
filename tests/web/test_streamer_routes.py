@@ -1800,6 +1800,115 @@ async def test_run_playback_loop_skips_mid_read_oserror_and_survives(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rejected_mid_read_oserror_stays_not_streamed_across_post_air_truth(tmp_path):
+    """A connected room that rejects every partial chunk never becomes a skip.
+
+    ``bytes_sent`` records bytes written by the loop, not listener acceptance.
+    A later read error must therefore use accepted-listener truth: an accepted
+    partial send is ``skipped`` (covered above), while this wholly rejected
+    delivery remains ``not_streamed`` everywhere downstream.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    state.moment_store = MagicMock()
+    state.release_campaign = MagicMock()
+
+    flaky_path = tmp_path / "rejected-flaky-banter.mp3"
+    flaky_path.write_bytes(b"x" * (4096 * 3))
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=flaky_path,
+        metadata={
+            "title": "Rejected partial banter",
+            "ritual_moment_id": "rejected-partial-moment",
+            "release_beat_id": "rejected-partial-beat",
+            "memory_extraction": {"script_lines": [{"host": "Marco", "text": "unheard"}]},
+        },
+        runtime_provider_observations={
+            "script_provider": RuntimeProviderObservation(
+                current_provider="openai",
+                primary_provider="anthropic",
+                fallback_active=True,
+                current_reason="anthropic_exception",
+            )
+        },
+    )
+    app.state.queue.put_nowait(segment)
+    app.state.stream_hub.broadcast = AsyncMock(return_value=0)
+
+    real_open = open
+
+    class _RejectedFlakyReaderFile:
+        def __init__(self, path, mode):
+            self._f = real_open(path, mode)
+            self._reads = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            self._f.close()
+            return False
+
+        def read(self, *args, **kwargs):
+            self._reads += 1
+            if self._reads == 4:  # header probes, one rejected chunk, then fail
+                raise OSError("disk read failed after rejected chunk")
+            return self._f.read(*args, **kwargs)
+
+        def seek(self, *args, **kwargs):
+            return self._f.seek(*args, **kwargs)
+
+        def tell(self, *args, **kwargs):
+            return self._f.tell(*args, **kwargs)
+
+    def _open_side_effect(path, mode="rb", *args, **kwargs):
+        if str(path) == str(flaky_path):
+            return _RejectedFlakyReaderFile(path, mode)
+        return real_open(path, mode, *args, **kwargs)
+
+    with (
+        patch("builtins.open", side_effect=_open_side_effect),
+        patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule,
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    rejected_error = next(
+        outcome for outcome in state.stream_outcome_history if outcome["terminal_reason"] == "file_error"
+    )
+    assert rejected_error["result"] == "not_streamed"
+    assert rejected_error["bytes_sent"] > 0
+    assert rejected_error["starting_listener_count"] == 1
+    assert rejected_error["accepted_listener_count"] == 0
+    state.moment_store.mark_airing.assert_not_called()
+    state.moment_store.finalize.assert_called_once_with(
+        "rejected-partial-moment",
+        "not_streamed",
+    )
+    state.release_campaign.record_stream_result.assert_called_once_with(
+        segment.metadata,
+        bytes_sent=rejected_error["bytes_sent"],
+        was_skipped=False,
+        listeners=1,
+        accepted_listeners=0,
+    )
+    schedule.assert_not_called()
+    assert state.current_stream_audible is False
+    assert state.audible_playback_epoch == 0
+    assert state.last_air_monotonic is None
+    assert state.runtime_provider_state == {}
+    assert list(state.runtime_events) == []
+    assert list(state.recent_banter_paths) == []
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_fallback_keeps_queue_bookkeeping_balanced(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
