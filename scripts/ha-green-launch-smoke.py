@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch smoke gate: process-start to first audio byte without external network.
+"""Launch smoke gate: fresh-process listener-to-first-byte without external network.
 
 The sibling ``ha-green-perf-smoke.py`` assumes a station is ALREADY running, so
 it never measures the add-on update / restart reality — the window where a
@@ -14,10 +14,13 @@ This script launches a real uvicorn twice on isolated temp state:
 * a first boot with an empty cache where only packaged recovery audio can win.
 
 Both processes deny non-loopback sockets and clear every network-backed source
-or provider credential. Each scenario then runs the existing perf-smoke HTTP
-checks with a STRICT first-byte bound (default 2.0s vs the perf-smoke's looser
-8s already-running budget), followed by launch-specific semantic checks that
-require health, readiness, and public status to agree after audio is accepted.
+or provider credential. Process startup has its own readiness budget: the smoke
+waits for the fresh process to accept TCP before running the listener probe.
+The STRICT first-byte timer therefore measures the listener's ``/stream``
+request to its first accepted audio byte (default 2.0s vs the perf-smoke's
+looser 8s already-running budget); it does not claim process-spawn-to-audio
+latency. Launch-specific semantic checks then require health, readiness, and
+public status to agree after audio is accepted.
 
 Pass ``--image IMAGE_REF`` to run the same two scenarios against an already
 built add-on image. Image mode creates isolated Docker volumes, starts the
@@ -79,7 +82,7 @@ cache_dir.mkdir(parents=True, exist_ok=True)
     ),
     encoding="utf-8",
 )
-(data_dir / ".provider_recovery_checked").write_text("checked\\n", encoding="utf-8")
+(data_dir / ".provider_recovery_checked_v2").write_text("checked\\n", encoding="utf-8")
 
 if os.environ.get("MAMMAMIRADIO_SMOKE_WARM") == "1":
     norm_path = cache_dir / "norm_launch_smoke_192k.mp3"

@@ -12,6 +12,7 @@ An explicit persisted operator stop is a valid non-streaming state only when
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -100,17 +101,38 @@ def _check_public_status(*, expect_stopped: bool) -> None:
     status, payload = _fetch_json("/public-status")
     if status != 200:
         _fail(f"/public-status returned HTTP {status}: {payload}")
-    session_stopped = payload.get("session_stopped") is True
+
+    session_stopped = payload.get("session_stopped")
+    if not isinstance(session_stopped, bool):
+        _fail(f"/public-status must include boolean session_stopped, got {session_stopped!r}")
     if session_stopped != expect_stopped:
         _fail(
             "/public-status disagrees with /readyz about the intentional stop: "
-            f"expected session_stopped={expect_stopped}, got {payload.get('session_stopped')!r}"
+            f"expected session_stopped={expect_stopped}, got {session_stopped!r}"
         )
-    runtime_health = payload.get("runtime_health") or {}
-    queue_empty = float(runtime_health.get("queue_empty_elapsed_s") or 0)
+
+    runtime_health = payload.get("runtime_health")
+    if not isinstance(runtime_health, dict):
+        _fail(f"/public-status must include object runtime_health, got {runtime_health!r}")
+
+    queue_empty = runtime_health.get("queue_empty_elapsed_s")
+    if (
+        isinstance(queue_empty, bool)
+        or not isinstance(queue_empty, int | float)
+        or not math.isfinite(float(queue_empty))
+    ):
+        _fail(f"/public-status runtime_health must include numeric queue_empty_elapsed_s, got {queue_empty!r}")
+
+    silence_with_listeners = runtime_health.get("silence_with_listeners")
+    if not isinstance(silence_with_listeners, bool):
+        _fail(
+            f"/public-status runtime_health must include boolean silence_with_listeners, got {silence_with_listeners!r}"
+        )
+
+    queue_empty = float(queue_empty)
     if queue_empty > MAX_QUEUE_EMPTY_S:
         _fail(f"/public-status runtime queue_empty_elapsed_s={queue_empty:.1f} exceeds {MAX_QUEUE_EMPTY_S:.1f}")
-    if runtime_health.get("silence_with_listeners") is True:
+    if silence_with_listeners:
         _fail(f"/public-status runtime reports silence_with_listeners=true: {runtime_health}")
     _pass("/public-status runtime health within queue-empty budget")
 

@@ -317,10 +317,13 @@ Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`qu
 `127.0.0.1:8765:8000` published and probes `/healthz` through that host port.
 This is separate from the in-container launch smoke: it proves that the image
 actually exposes the port Home Assistant connects to. The launch smoke's warm
-and cold scenarios then require an accepted stream byte within two seconds and
-agreement across `/healthz`, `/readyz`, and `/public-status`. A cold start must
-open on approved packaged recovery speech; the technical emergency tone is a
-last-resort continuity rung and does not count as a healthy cold open.
+and cold scenarios first give the fresh process a separate readiness budget,
+then require an accepted stream byte within two seconds of the listener's
+`/stream` request and agreement across `/healthz`, `/readyz`, and
+`/public-status`. This is a fresh-process listener-to-first-byte contract, not a
+process-spawn-to-audio measurement. A cold start must open on approved packaged
+recovery speech; the technical emergency tone is a last-resort continuity rung
+and does not count as a healthy cold open.
 
 **Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same Apps catalog entry, re-enter API keys. Reverse it to go back.
 
