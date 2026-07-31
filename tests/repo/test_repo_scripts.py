@@ -528,7 +528,14 @@ def test_ha_green_launch_smoke_builds_isolated_exact_image_commands() -> None:
     assert f"{volume}:/data" in warm_seed
     assert "MAMMAMIRADIO_SMOKE_WARM=1" in warm_seed
     assert "MAMMAMIRADIO_SMOKE_WARM=0" in cold_seed
-    assert warm_seed[-4:-2] == [image, "python3"]
+    seed_entrypoint = warm_seed.index("--entrypoint")
+    assert warm_seed[seed_entrypoint : seed_entrypoint + 3] == [
+        "--entrypoint",
+        "python3",
+        image,
+    ]
+    assert warm_seed[-2] == "-c"
+    assert warm_seed.count(image) == 1
 
     assert launch[:4] == ["run", "--detach", "--name", container]
     assert launch[-1] == image

@@ -416,8 +416,12 @@ def _image_seed_command(image: str, volume_name: str, *, seed_warm_cache: bool) 
         f"{volume_name}:/data",
         "--env",
         f"MAMMAMIRADIO_SMOKE_WARM={'1' if seed_warm_cache else '0'}",
-        image,
+        # Home Assistant base images inherit ENTRYPOINT ["/init"]. Override it
+        # for the one-shot volume seed; passing "python3" after the image only
+        # supplies arguments to s6 and leaves the cache unseeded.
+        "--entrypoint",
         "python3",
+        image,
         "-c",
         _IMAGE_VOLUME_SEED_SOURCE,
     ]
