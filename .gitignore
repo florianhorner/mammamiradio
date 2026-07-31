@@ -26,7 +26,6 @@ go-librespot/state.json
 coverage.json
 htmlcov/
 .playwright-cli/
-.playwright-mcp/
 # Ephemeral render staging dir (scripts/generate_welcome_clips.py) — never
 # commit/package a partial render left by an interrupted run.
 **/.staging/
