@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -63,8 +65,12 @@ def _write_release_check_repo(
     )
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
     _write(tmp_path / "mammamiradio/scheduling/producer.py", "# producer recovery ladder\n")
-    _write(tmp_path / "mammamiradio/assets/demo/recovery/continuity_1.mp3", "x" * 2048)
-    _write(tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3", "x" * 2048)
+    demo_assets = ROOT / "mammamiradio/assets/demo"
+    for asset_name in REQUIRED_RECOVERY_ASSETS:
+        target = tmp_path / "mammamiradio/assets/demo/recovery" / asset_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(demo_assets / "recovery" / asset_name, target)
+    shutil.copy2(demo_assets / "spoken_assets.json", tmp_path / "mammamiradio/assets/demo/spoken_assets.json")
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -365,6 +371,44 @@ def test_pre_release_check_accepts_dated_addon_changelog_heading(tmp_path: Path)
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
 
 
+def test_pre_release_check_requires_each_recovery_asset(tmp_path: Path) -> None:
+    _write_release_check_repo(tmp_path)
+    (tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3").unlink()
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "emergency_tone.mp3" in result.stdout
+
+
+def test_pre_release_check_rejects_recovery_asset_hash_drift(tmp_path: Path) -> None:
+    _write_release_check_repo(tmp_path)
+    asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
+    asset.write_bytes(asset.read_bytes() + b"tampered")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "emergency_tone.mp3 failed its manifest/hash check" in result.stdout
+
+
+def test_pre_release_check_rejects_manifest_approved_non_audio(tmp_path: Path) -> None:
+    _write_release_check_repo(tmp_path)
+    asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
+    payload = b"x" * 2048
+    asset.write_bytes(payload)
+    manifest_path = tmp_path / "mammamiradio/assets/demo/spoken_assets.json"
+    manifest = json.loads(manifest_path.read_text())
+    entry = next(item for item in manifest["assets"] if item["path"] == "recovery/emergency_tone.mp3")
+    entry["sha256"] = hashlib.sha256(payload).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "emergency_tone.mp3 is not ffprobe-readable audio" in result.stdout
+
+
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     body = HA_GREEN_PERF_SMOKE.read_text()
 
@@ -502,6 +546,68 @@ def test_ha_green_launch_smoke_builds_isolated_exact_image_commands() -> None:
     assert f"MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S={smoke.FIRST_BYTE_S}" in perf
 
 
+def test_ha_green_launch_smoke_rejects_emergency_tone_as_valid_cold_open() -> None:
+    smoke = _load_ha_green_launch_smoke()
+    cold = next(scenario for scenario in smoke._LAUNCH_SCENARIOS if scenario[0] == "cold packaged-only")
+
+    assert "packaged_recovery" in cold[2]
+    assert "emergency_tone" not in cold[2]
+
+
+@pytest.mark.parametrize(
+    ("statuses", "message"),
+    [
+        (
+            {
+                "/healthz": (503, {"status": "failing"}),
+                "/readyz": (200, {"status": "ready", "ready": True}),
+                "/public-status": (200, {"session_stopped": False, "now_streaming": {"type": "music"}}),
+            },
+            "/healthz",
+        ),
+        (
+            {
+                "/healthz": (200, {"status": "ok"}),
+                "/readyz": (503, {"status": "starting", "ready": False}),
+                "/public-status": (200, {"session_stopped": False, "now_streaming": {"type": "music"}}),
+            },
+            "/readyz",
+        ),
+        (
+            {
+                "/healthz": (200, {"status": "ok"}),
+                "/readyz": (200, {"status": "ready", "ready": True}),
+                "/public-status": (200, {"session_stopped": True, "now_streaming": {"type": "stopped"}}),
+            },
+            "/public-status",
+        ),
+    ],
+)
+def test_ha_green_launch_smoke_rejects_false_post_stream_health(
+    statuses: dict[str, tuple[int, dict]],
+    message: str,
+) -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    with pytest.raises(RuntimeError, match=message):
+        smoke._assert_post_stream_status(statuses)
+
+
+def test_ha_green_launch_smoke_accepts_truthful_post_stream_health() -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    smoke._assert_post_stream_status(
+        {
+            "/healthz": (200, {"status": "ok"}),
+            "/readyz": (200, {"status": "ready", "ready": True}),
+            "/public-status": (
+                200,
+                {"session_stopped": False, "now_streaming": {"type": "music"}},
+            ),
+        }
+    )
+
+
 def test_ha_green_launch_smoke_image_scenario_cleans_exact_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -523,6 +629,15 @@ def test_ha_green_launch_smoke_image_scenario_cleans_exact_resources(
     monkeypatch.setattr(smoke, "_seed_image_volume", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(smoke, "_wait_for_image_server", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(smoke, "_run_image_perf_smoke", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        smoke,
+        "_image_post_stream_statuses",
+        lambda *_args, **_kwargs: {
+            "/healthz": (200, {"status": "ok"}),
+            "/readyz": (200, {"status": "ready", "ready": True}),
+            "/public-status": (200, {"session_stopped": False, "now_streaming": {}}),
+        },
+    )
     monkeypatch.setattr(smoke, "_image_current_audio_source", lambda *_args, **_kwargs: ("norm_cache", {}))
 
     assert smoke._run_image_launch_scenario(
@@ -606,17 +721,103 @@ def test_ha_green_perf_smoke_rejects_unexpected_readyz_500() -> None:
         raise AssertionError("unexpected /readyz 500 must fail the smoke gate")
 
 
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (200, {"status": "ready", "ready": True}, "ready"),
+        (503, {"status": "starting", "ready": False}, "starting"),
+        (
+            503,
+            {"status": "stopped", "ready": False, "session_stopped": True},
+            "stopped",
+        ),
+    ],
+)
+def test_ha_green_perf_smoke_classifies_truthful_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    payload: dict,
+    expected: str,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    monkeypatch.setattr(smoke, "_fetch_json", lambda _path: (status, payload))
+
+    assert smoke._check_readiness() == expected
+
+
+def test_ha_green_perf_smoke_rejects_unconfirmed_stopped_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    monkeypatch.setattr(
+        smoke,
+        "_fetch_json",
+        lambda _path: (503, {"status": "stopped", "ready": False}),
+    )
+
+    with pytest.raises(SystemExit):
+        smoke._check_readiness()
+
+
+@pytest.mark.parametrize(("expect_stopped", "session_stopped"), [(False, True), (True, False)])
+def test_ha_green_perf_smoke_rejects_public_stop_disagreement(
+    monkeypatch: pytest.MonkeyPatch,
+    expect_stopped: bool,
+    session_stopped: bool,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    monkeypatch.setattr(
+        smoke,
+        "_fetch_json",
+        lambda _path: (
+            200,
+            {
+                "session_stopped": session_stopped,
+                "runtime_health": {
+                    "queue_empty_elapsed_s": 0,
+                    "silence_with_listeners": False,
+                },
+            },
+        ),
+    )
+
+    with pytest.raises(SystemExit):
+        smoke._check_public_status(expect_stopped=expect_stopped)
+
+
+@pytest.mark.parametrize(("readiness", "stream_expected"), [("ready", True), ("starting", True), ("stopped", False)])
+def test_ha_green_perf_smoke_skips_stream_only_for_intentional_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    readiness: str,
+    stream_expected: bool,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    calls: list[object] = []
+    monkeypatch.setattr(smoke, "_wait_for_health", lambda: calls.append("health"))
+    monkeypatch.setattr(smoke, "_check_readiness", lambda: readiness)
+    monkeypatch.setattr(
+        smoke,
+        "_check_public_status",
+        lambda *, expect_stopped: calls.append(("public", expect_stopped)),
+    )
+    monkeypatch.setattr(smoke, "_check_first_stream_byte", lambda: calls.append("stream"))
+
+    assert smoke.main() == 0
+    assert ("public", readiness == "stopped") in calls
+    assert ("stream" in calls) is stream_expected
+
+
 def test_release_invariants_guard_ha_green_perf_budget() -> None:
     release_body = (ROOT / "scripts" / "check-release-invariants.sh").read_text()
     pre_release_body = (ROOT / "scripts" / "pre-release-check.sh").read_text()
 
-    assert "REQUIRED_RECOVERY_ASSETS=(" in release_body
-    assert '"continuity_1.mp3"' in release_body
-    assert '"emergency_tone.mp3"' in release_body
-    assert "is_approved_packaged_audio_asset" in release_body
-    assert "ffprobe" in release_body
-
     for body in (release_body, pre_release_body):
+        assert "REQUIRED_RECOVERY_ASSETS=(" in body
+        assert '"continuity_1.mp3"' in body
+        assert '"emergency_tone.mp3"' in body
+        assert "manifest/hash" in body
+        assert "is_approved_packaged_audio_asset" in body or "hashlib.sha256" in body
+        assert "ffprobe" in body
         assert "QUEUE_FALLBACK_WAIT_SECONDS" in body
         assert "norm_files\\[0\\]" in body
         assert "ha-green-perf-smoke.py" in body

@@ -254,6 +254,17 @@ def test_ci_runs_listener_byte_smoke_against_exact_built_image():
     assert "docker run -d --name mamma-smoke" not in smoke_block
 
 
+def test_ci_verifies_the_published_addon_port():
+    """The exact image must also be reachable through Docker's host-published port."""
+    workflow_text = _workflow_text()
+    smoke_block = _extract_step_block(workflow_text, "Verify published add-on port")
+
+    assert "--publish 127.0.0.1:8765:8000" in smoke_block
+    assert "http://127.0.0.1:8765/healthz" in smoke_block
+    assert "curl --fail" in smoke_block
+    assert "trap " in smoke_block and "docker rm --force" in smoke_block
+
+
 def test_ci_publishes_short_sha_edge_tag():
     """The single build per arch must also push the :<short-sha> edge tag.
 

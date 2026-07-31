@@ -313,6 +313,15 @@ Because *you* open the PR (not a bot / `GITHUB_TOKEN`), its required checks (`qu
 
 **Smoke runs in addon mode.** Every smoke `docker run` (`addon-build.yml`, and both blocks in `addon-release.yml`) sets `-e SUPERVISOR_TOKEN=smoke-ci`, mirroring how the HA Supervisor launches the image. Without it the container boots in standalone mode, where binding `0.0.0.0` with no admin token is a fatal config error (`config._is_addon` is false), uvicorn never starts, and the smoke fails with `/healthz` connection-refused — a false negative that doesn't reflect the real addon. Keep the token on any new smoke step.
 
+`addon-build.yml` also starts the exact amd64 SHA image with
+`127.0.0.1:8765:8000` published and probes `/healthz` through that host port.
+This is separate from the in-container launch smoke: it proves that the image
+actually exposes the port Home Assistant connects to. The launch smoke's warm
+and cold scenarios then require an accepted stream byte within two seconds and
+agreement across `/healthz`, `/readyz`, and `/public-status`. A cold start must
+open on approved packaged recovery speech; the technical emergency tone is a
+last-resort continuity rung and does not count as a healthy cold open.
+
 **Switching the soak Pi to edge.** Edge and stable both use `host_network: true` and port 8000 — they cannot run at the same time. Uninstall stable, install "Mamma Mi Radio (Edge)" from the same Apps catalog entry, re-enter API keys. Reverse it to go back.
 
 **Editing the edge add-on.** Its `options`/`schema` MUST stay identical to stable — edge runs the same image and the same `run.sh` reads the options. `scripts/validate-addon.sh` fails CI on any drift. When you add a config option to stable (the THREE-files contract above), the edge `config.yaml` and `translations/en.yaml` are a fourth and fifth file to update in the same commit. The edge `version:` line is the only field that changes to cut a release, and `make edge-release` does that for you.
@@ -456,10 +465,14 @@ Before merging ANY change that touches addon files:
 `scripts/check-release-invariants.sh` runs on every PR via `quality.yml`. It catches audio delivery invariants that have caused production silence incidents, plus a release-beat manifest check:
 
 1. **FFmpeg `music_eq_chain` eq count**: must be exactly 2. A 3rd `equalizer=` filter in `mammamiradio/audio/normalizer.py` triggers FFmpeg 8.x SIGABRT on Pi aarch64. Local: `bash scripts/check-release-invariants.sh`.
-2. **Packaged recovery audio**: at least one MP3 must ship under `mammamiradio/assets/demo/recovery/`, and `producer.py` must not call `generate_silence` in recovery paths.
+2. **Packaged recovery audio**: both `continuity_1.mp3` and
+   `emergency_tone.mp3` must ship under
+   `mammamiradio/assets/demo/recovery/`, exceed 1 KiB, match their approved
+   `spoken_assets.json` hashes, and contain an FFprobe-readable audio stream.
+   `producer.py` must not call `generate_silence` in recovery paths.
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
-5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist.
+5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist. The perf smoke skips its stream-byte probe only for a persisted operator stop confirmed independently by `503 stopped` from `/readyz` and `session_stopped: true` from `/public-status`; every other starting or ready state must still produce bytes.
 6. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.

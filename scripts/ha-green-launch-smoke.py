@@ -16,8 +16,8 @@ This script launches a real uvicorn twice on isolated temp state:
 Both processes deny non-loopback sockets and clear every network-backed source
 or provider credential. Each scenario then runs the existing perf-smoke HTTP
 checks with a STRICT first-byte bound (default 2.0s vs the perf-smoke's looser
-8s already-running budget). ``ha-green-perf-smoke.py`` remains the single source
-of health/readiness/stream-check truth.
+8s already-running budget), followed by launch-specific semantic checks that
+require health, readiness, and public status to agree after audio is accepted.
 
 Pass ``--image IMAGE_REF`` to run the same two scenarios against an already
 built add-on image. Image mode creates isolated Docker volumes, starts the
@@ -53,7 +53,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PERF_SMOKE = _REPO_ROOT / "scripts" / "ha-green-perf-smoke.py"
 _LAUNCH_SCENARIOS = (
     ("warm norm-cache", True, frozenset({"norm_cache"})),
-    ("cold packaged-only", False, frozenset({"canned", "packaged_recovery", "emergency_tone"})),
+    ("cold packaged-only", False, frozenset({"canned", "packaged_recovery"})),
 )
 _IMAGE_VOLUME_SEED_SOURCE = """\
 import json
@@ -115,13 +115,22 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     sock.settimeout(0.5)
     raise SystemExit(0 if sock.connect_ex(("127.0.0.1", 8000)) == 0 else 1)
 """
-_IMAGE_PUBLIC_STATUS_SOURCE = """\
+_IMAGE_JSON_STATUS_SOURCE = """\
 import json
+import sys
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-request = Request("http://127.0.0.1:8000/public-status", headers={"Accept": "application/json"})
-with urlopen(request, timeout=3.0) as response:
-    print(json.dumps(json.load(response)))
+path = sys.argv[1]
+request = Request(f"http://127.0.0.1:8000{path}", headers={"Accept": "application/json"})
+try:
+    with urlopen(request, timeout=3.0) as response:
+        status = response.status
+        payload = json.load(response)
+except HTTPError as exc:
+    status = exc.code
+    payload = json.loads(exc.read().decode("utf-8") or "{}")
+print(json.dumps({"status": status, "payload": payload}))
 """
 _NETWORK_GUARD_SOURCE = """\
 import ipaddress
@@ -322,13 +331,45 @@ def _launch_env(*, port: int, cache_dir: str, tmp_dir: str, guard_dir: str) -> d
     return env
 
 
-def _current_audio_source(base_url: str) -> tuple[str, dict]:
-    request = Request(f"{base_url}/public-status", headers={"Accept": "application/json"})
+def _fetch_json_status(base_url: str, path: str) -> tuple[int, dict]:
+    request = Request(f"{base_url}{path}", headers={"Accept": "application/json"})
     try:
         with urlopen(request, timeout=3.0) as response:
             payload = json.loads(response.read().decode("utf-8") or "{}")
-    except (HTTPError, TimeoutError, URLError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"could not read post-stream public status: {exc}") from exc
+            return response.status, payload
+    except HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        return exc.code, payload
+    except (TimeoutError, URLError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"could not read post-stream {path}: {exc}") from exc
+
+
+def _post_stream_statuses(base_url: str) -> dict[str, tuple[int, dict]]:
+    return {path: _fetch_json_status(base_url, path) for path in ("/healthz", "/readyz", "/public-status")}
+
+
+def _assert_post_stream_status(statuses: dict[str, tuple[int, dict]]) -> None:
+    health_status, health = statuses["/healthz"]
+    if health_status != 200 or health.get("status") != "ok" or health.get("silence_with_listeners") is True:
+        raise RuntimeError(f"/healthz is not healthy after first audio: HTTP {health_status} {health}")
+
+    ready_status, ready = statuses["/readyz"]
+    if ready_status != 200 or ready.get("status") != "ready" or ready.get("ready") is not True:
+        raise RuntimeError(f"/readyz is not ready after first audio: HTTP {ready_status} {ready}")
+
+    public_status, public = statuses["/public-status"]
+    now_streaming = public.get("now_streaming")
+    if public_status != 200 or public.get("session_stopped") is not False or not isinstance(now_streaming, dict):
+        raise RuntimeError(f"/public-status is not live after first audio: HTTP {public_status} {public}")
+
+
+def _current_audio_source(base_url: str) -> tuple[str, dict]:
+    status, payload = _fetch_json_status(base_url, "/public-status")
+    if status != 200:
+        raise RuntimeError(f"could not read post-stream public status: HTTP {status} {payload}")
 
     return _audio_source_from_payload(payload)
 
@@ -465,15 +506,26 @@ def _run_image_perf_smoke(container_name: str) -> bool:
     return result.returncode == 0
 
 
-def _image_current_audio_source(container_name: str) -> tuple[str, dict]:
-    result = _run_docker(["exec", container_name, "python3", "-c", _IMAGE_PUBLIC_STATUS_SOURCE])
+def _image_fetch_json_status(container_name: str, path: str) -> tuple[int, dict]:
+    result = _run_docker(["exec", container_name, "python3", "-c", _IMAGE_JSON_STATUS_SOURCE, path])
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "unknown error").strip()
-        raise RuntimeError(f"could not read built-image public status: {detail}")
+        raise RuntimeError(f"could not read built-image {path}: {detail}")
     try:
-        payload = json.loads(result.stdout or "{}")
+        result_payload = json.loads(result.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"built-image public status was not JSON: {result.stdout!r}") from exc
+        raise RuntimeError(f"built-image {path} was not JSON: {result.stdout!r}") from exc
+    return int(result_payload.get("status") or 0), result_payload.get("payload") or {}
+
+
+def _image_post_stream_statuses(container_name: str) -> dict[str, tuple[int, dict]]:
+    return {path: _image_fetch_json_status(container_name, path) for path in ("/healthz", "/readyz", "/public-status")}
+
+
+def _image_current_audio_source(container_name: str) -> tuple[str, dict]:
+    status, payload = _image_fetch_json_status(container_name, "/public-status")
+    if status != 200:
+        raise RuntimeError(f"could not read built-image public status: HTTP {status} {payload}")
     return _audio_source_from_payload(payload)
 
 
@@ -523,6 +575,13 @@ def _run_image_launch_scenario(
         if not _run_image_perf_smoke(container_name):
             _print_image_logs(container_name)
             print(f"[FAIL] {label}: built-image first-byte smoke failed", file=sys.stderr)
+            return False
+
+        try:
+            _assert_post_stream_status(_image_post_stream_statuses(container_name))
+        except RuntimeError as exc:
+            _print_image_logs(container_name)
+            print(f"[FAIL] {label}: {exc}", file=sys.stderr)
             return False
 
         source, metadata = _image_current_audio_source(container_name)
@@ -603,6 +662,12 @@ def _run_launch_scenario(label: str, *, seed_warm_cache: bool, expected_sources:
             )
             if result.returncode != 0:
                 print(f"[FAIL] {label}: launch first-byte smoke failed", file=sys.stderr)
+                return False
+
+            try:
+                _assert_post_stream_status(_post_stream_statuses(base_url))
+            except RuntimeError as exc:
+                print(f"[FAIL] {label}: {exc}", file=sys.stderr)
                 return False
 
             source, metadata = _current_audio_source(base_url)
