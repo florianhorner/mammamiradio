@@ -3612,7 +3612,7 @@ async def test_readyz_returns_503_when_silent_with_active_listeners():
 
 
 @pytest.mark.asyncio
-async def test_readyz_does_not_fail_silence_gate_without_listeners():
+async def test_readyz_stays_starting_without_listener_accepted_audio():
     app = _make_test_app()
     app.state.start_time = time.time() - 31
     app.state.station_state.listeners_active = 0
@@ -3622,37 +3622,58 @@ async def test_readyz_does_not_fail_silence_gate_without_listeners():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/readyz")
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["silence_with_listeners"] is False
-    assert body["ready"] is True
-
-
-@pytest.mark.asyncio
-async def test_readyz_returns_503_when_session_stopped():
-    """readyz must return 503 when session_stopped=True — station is not ready for listeners."""
-    app = _make_test_app()
-    app.state.start_time = time.time() - 31  # startup_complete=True
-    app.state.queue.put_nowait(object())  # queue_depth > 0
-    app.state.station_state.session_stopped = True
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.get("/readyz")
-
     assert resp.status_code == 503
     body = resp.json()
+    assert body["silence_with_listeners"] is False
     assert body["ready"] is False
-    assert body["status"] == "stopped"
+    assert body["status"] == "starting"
 
 
 @pytest.mark.asyncio
-async def test_readyz_returns_200_when_session_resumed():
-    """readyz must return 200 once session_stopped is cleared and queue has audio."""
+async def test_stop_clears_readiness_after_listener_accepted_audio(tmp_path):
+    """An accepted stream is ready until Stop clears the audible-session latch."""
     app = _make_test_app()
-    app.state.start_time = time.time() - 31
-    app.state.queue.put_nowait(object())
-    app.state.station_state.session_stopped = False
+    state = app.state.station_state
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=tmp_path / "accepted-before-stop.mp3",
+            metadata={"title": "Accepted before Stop"},
+        )
+    )
+    state.last_air_monotonic = time.monotonic()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        before = await client.get("/readyz")
+        stop = await client.post("/api/stop")
+        after = await client.get("/readyz")
+
+    assert before.status_code == 200
+    assert before.json()["ready"] is True
+    assert stop.status_code == 200
+    assert stop.json()["ok"] is True
+    assert after.status_code == 503
+    body = after.json()
+    assert body["ready"] is False
+    assert body["status"] == "stopped"
+    assert state.current_stream_audible is False
+    assert state.last_air_monotonic is None
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_200_after_resumed_audio_is_accepted(tmp_path):
+    """Clearing Stop is insufficient; readiness begins at listener acceptance."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = False
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / "accepted-after-resume.mp3",
+            metadata={"title": "Accepted after Resume"},
+        )
+    )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -3664,10 +3685,17 @@ async def test_readyz_returns_200_when_session_resumed():
 
 
 @pytest.mark.asyncio
-async def test_readyz_requires_queue_grace_or_listener_accepted_audio(tmp_path):
+async def test_readyz_requires_listener_accepted_audio_not_queue_or_startup_grace(tmp_path):
     app = _make_test_app()
-    app.state.start_time = time.time()
+    app.state.start_time = time.time() - 31
     state = app.state.station_state
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / "queued-not-accepted.mp3",
+            metadata={"title": "Queued but unheard"},
+        )
+    )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -3825,6 +3853,69 @@ async def test_skip_bit_sets_pending_directive():
     directive = app.state.station_state.ha_pending_directive
     assert "Brutta Canzone" in directive
     assert "saltato" in directive or "skippa" in directive
+
+
+@pytest.mark.asyncio
+async def test_stale_now_streaming_is_not_skip_ready_on_public_or_admin_status():
+    """Selected metadata left after EOF cannot advertise or execute Skip."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Already ended",
+        "started": time.time() - 180,
+        "metadata": {"title": "Already ended"},
+    }
+    state.current_stream_audible = False
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_status = await client.get("/public-status")
+        admin_status = await client.get("/status")
+        skip = await client.post("/api/skip")
+
+    expected_actions = {"skip_ready": False, "skip_would_bridge": False}
+    assert public_status.json()["playback_actions"] == expected_actions
+    assert admin_status.json()["playback_actions"] == expected_actions
+    assert skip.json()["ok"] is False
+    assert "nothing is on air" in skip.json()["error"].lower()
+    assert not app.state.skip_event.is_set()
+    assert state.force_next is None
+
+
+@pytest.mark.asyncio
+async def test_panic_does_not_cut_stale_now_streaming_even_with_ready_runway(tmp_path):
+    """Panic must not treat selected-but-unheard metadata as an audible cut target."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {
+        "type": "music",
+        "label": "Already ended",
+        "started": time.time() - 180,
+        "metadata": {"title": "Already ended"},
+    }
+    state.current_stream_audible = False
+    runway_path = tmp_path / "panic-ready-runway.mp3"
+    runway_path.write_bytes(b"ready-runway")
+    runway = Segment(
+        type=SegmentType.MUSIC,
+        path=runway_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "panic-ready", "title": "Ready runway"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(runway)
+    state.queued_segments = [{"id": "panic-ready", "type": "music", "label": "Ready runway"}]
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._continuity_reservation_segments", return_value=[]):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/panic")
+
+    assert response.json() == {"ok": True, "purged": 0, "skipped": False}
+    assert list(app.state.queue._queue) == [runway]
+    assert not app.state.skip_event.is_set()
+    assert state.force_next is SegmentType.MUSIC
 
 
 @pytest.mark.asyncio
@@ -5083,10 +5174,50 @@ async def test_runtime_status_keeps_on_air_hysteresis_only_for_recent_listener_a
 
 
 @pytest.mark.asyncio
+async def test_runtime_status_handoff_keeps_last_audible_provider_until_new_audio_is_accepted():
+    """A selected next source cannot replace provider truth during handoff grace."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.listeners_active = 1
+    state.playlist_source = PlaylistSource(kind="charts", label="Charts")
+    state.update_runtime_provider(
+        "audio_source",
+        current_provider="charts",
+        primary_provider="charts",
+        fallback_active=False,
+        reason="Primary audio source is on air",
+        timestamp=10.0,
+    )
+
+    # Selection has advanced to Local, but no listener accepted those bytes.
+    state.playlist_source = PlaylistSource(kind="local", label="Local")
+    state.now_streaming = {
+        "type": "music",
+        "label": "Selected but unheard Local song",
+        "started": time.time(),
+        "metadata": {"audio_source": "local", "title": "Selected but unheard"},
+    }
+    state.current_stream_audible = False
+    state.last_air_monotonic = 100.0
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._runtime_monotonic", return_value=102.0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            runtime_status = (await client.get("/status")).json()["runtime_status"]
+
+    provider = runtime_status["providers"]["audio_source"]
+    assert runtime_status["station_on_air"] is True
+    assert provider["current_provider"] == "charts"
+    assert provider["primary_provider"] == "charts"
+    assert "handoff is in progress" in provider["current_reason"].lower()
+
+
+@pytest.mark.asyncio
 async def test_skip_with_admin_auth():
     app = _make_test_app(admin_password="secret123")
     # Put something in now_streaming so skip has something to act on
     app.state.station_state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    app.state.station_state.current_stream_audible = True
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/skip", auth=("admin", "secret123"))
@@ -5876,6 +6007,7 @@ async def test_skip_controls_bridge_after_discarding_stale_companionship_only_ru
         "started": time.time(),
         "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
     }
+    state.current_stream_audible = True
     stale_cue.ephemeral = True
     stale_cue.metadata["ritual_moment_id"] = "stale-skip-moment"
     stale_path = stale_cue.path
@@ -5919,6 +6051,7 @@ async def test_skip_controls_promote_safe_audio_past_stale_companionship_cue(tmp
         "started": time.time(),
         "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
     }
+    state.current_stream_audible = True
     assert state.listener_session.epoch == claim.epoch + 1
 
     safe_path = tmp_path / "safe_after_stale_skip.mp3"
@@ -5973,6 +6106,7 @@ async def test_skip_ignores_unplayable_duration_when_reserving_before_cut(tmp_pa
         "started": time.time(),
         "metadata": {"artist": "Current Artist", "title_only": "Current Song"},
     }
+    state.current_stream_audible = True
     missing_segments = [
         Segment(
             type=SegmentType.MUSIC,
@@ -6026,6 +6160,7 @@ async def test_zero_byte_queue_head_is_not_skip_or_status_runway(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
     state.now_streaming = {"type": "banter", "label": "Current", "started": time.time()}
+    state.current_stream_audible = True
     empty_path = tmp_path / "empty-runway.mp3"
     empty_path.touch()
     empty = Segment(
@@ -6064,6 +6199,7 @@ async def test_public_status_reports_stale_companionship_head_as_skip_bridge(tmp
     app.state.stream_hub.subscribe()
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    state.current_stream_audible = True
     assert state.listener_session.epoch == claim.epoch + 1
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
@@ -6084,6 +6220,7 @@ async def test_panic_cut_does_not_skip_for_stale_companionship_only_runway(tmp_p
     app.state.stream_hub.subscribe()
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    state.current_stream_audible = True
     assert state.listener_session.epoch == claim.epoch + 1
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
@@ -6132,6 +6269,7 @@ async def test_panic_cut_promotes_safe_audio_past_stale_companionship_cue(tmp_pa
         }
     )
     state.now_streaming = {"type": "music", "label": "Current", "started": time.time()}
+    state.current_stream_audible = True
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
     with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
@@ -6172,6 +6310,7 @@ async def test_panic_cut_invalidates_in_flight_admission_when_queue_is_unchanged
     app = _make_test_app()
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.current_stream_audible = True
     state.continuity_epoch = 5
     queue = BlockingQueue()
     app.state.queue = queue
@@ -6234,6 +6373,7 @@ async def test_panic_cut_uses_capacity_exempt_slot_as_playable_runway(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": "Test", "started": time.time()}
+    state.current_stream_audible = True
     state.continuity_epoch = 5
     slot_path = tmp_path / "capacity_exempt_slot.mp3"
     slot_path.write_bytes(b"slot")
@@ -8272,6 +8412,7 @@ async def test_public_status_skip_hint_does_not_clear_continuity_slot(tmp_path):
     )
     state.continuity_slot = reserved_slot
     state.now_streaming = {"type": "music", "label": "On air", "started": time.time(), "metadata": {}}
+    state.current_stream_audible = True
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

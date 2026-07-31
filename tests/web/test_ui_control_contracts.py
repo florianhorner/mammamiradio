@@ -136,6 +136,7 @@ class TestSkipEndpoint:
     async def test_skip_when_streaming_sets_skip_event(self):
         """skip_event is set synchronously — playback loop picks it up."""
         app = _make_app(now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}})
+        app.state.station_state.current_stream_audible = True
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/skip", headers=AUTH)
@@ -212,6 +213,7 @@ class TestSkipEndpoint:
         This test documents that gap as intentional behaviour.
         """
         app = _make_app(now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}})
+        app.state.station_state.current_stream_audible = True
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/skip", headers=AUTH)
@@ -240,6 +242,7 @@ class TestSkipEndpoint:
             now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}},
             queue_items=0,
         )
+        app.state.station_state.current_stream_audible = True
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/skip", headers=AUTH)
         assert resp.json()["bridged"] is True
@@ -254,6 +257,7 @@ class TestSkipEndpoint:
             shadow=shadow,
             queue_items=1,
         )
+        app.state.station_state.current_stream_audible = True
         queued_path = tmp_path / "next-up.mp3"
         queued_path.write_bytes(b"playable")
         app.state.queue._queue[0].path = queued_path
@@ -277,9 +281,11 @@ class TestSkipEndpoint:
         )
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            await c.post("/api/skip", headers=AUTH)
+            response = await c.post("/api/skip", headers=AUTH)
 
         profile = app.state.station_state.listener
+        assert response.json()["ok"] is False
+        assert not app.state.skip_event.is_set()
         assert profile.songs_skipped == 0
 
     @pytest.mark.asyncio
@@ -311,8 +317,8 @@ class TestSkipEndpoint:
         assert state.listener.songs_skipped == 1
 
     @pytest.mark.asyncio
-    async def test_skip_of_unheard_selection_preserves_previous_audible_completion(self):
-        """Skipping unread media must not erase the prior heard song."""
+    async def test_skip_rejects_unheard_selection_and_preserves_previous_audible_completion(self):
+        """A stale selection cannot be cut or erase the prior heard song."""
         app = _make_app(
             now_streaming={
                 "type": "music",
@@ -334,7 +340,9 @@ class TestSkipEndpoint:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             response = await c.post("/api/skip", headers=AUTH)
 
-        assert response.json()["ok"] is True
+        assert response.json()["ok"] is False
+        assert not app.state.skip_event.is_set()
+        assert state.now_streaming["label"] == "Selected but unheard"
         assert state._last_audible_stream == previous
         state.on_stream_segment(
             Segment(
@@ -435,11 +443,14 @@ class TestSkipEndpoint:
         app = _make_app(
             now_streaming={"type": "banter", "label": "Sofia talking", "started": time.time(), "metadata": {}}
         )
+        app.state.station_state.current_stream_audible = True
         profile_before = app.state.station_state.listener.songs_skipped
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            await c.post("/api/skip", headers=AUTH)
+            response = await c.post("/api/skip", headers=AUTH)
 
+        assert response.json()["ok"] is True
+        assert app.state.skip_event.is_set()
         assert app.state.station_state.listener.songs_skipped == profile_before
 
 
@@ -461,6 +472,7 @@ class TestBanNowPlayingEndpoint:
                 "metadata": {"artist": "Modugno", "title_only": "Volare"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/track/ban-now-playing", headers=AUTH)
         body = resp.json()
@@ -554,6 +566,33 @@ class TestBanNowPlayingEndpoint:
         assert app.state.station_state.blocklist == {}
 
     @pytest.mark.asyncio
+    async def test_ban_now_rejects_selected_but_unheard_music_without_mutation(self):
+        """Stale music metadata is not an on-air target for Ban or Skip."""
+        now_streaming = {
+            "type": "music",
+            "label": "Artist — Already ended",
+            "started": time.time() - 180,
+            "metadata": {"artist": "Artist", "title_only": "Already ended"},
+        }
+        shadow = [{"type": "music", "label": "Next Up", "metadata": {}}]
+        app = _make_app(
+            now_streaming=now_streaming,
+            shadow=shadow,
+            queue_items=1,
+        )
+        queued_before = list(app.state.queue._queue)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            response = await c.post("/api/track/ban-now-playing", headers=AUTH)
+
+        assert response.json()["ok"] is False
+        assert app.state.station_state.blocklist == {}
+        assert not app.state.skip_event.is_set()
+        assert app.state.station_state.now_streaming == now_streaming
+        assert app.state.station_state.queued_segments == shadow
+        assert list(app.state.queue._queue) == queued_before
+
+    @pytest.mark.asyncio
     async def test_ban_only_long_candidate_reserves_against_post_ban_queue(self, tmp_path: Path):
         """A just-blocklisted cache file cannot be counted or reintroduced as runway."""
         app = _make_app(
@@ -564,6 +603,7 @@ class TestBanNowPlayingEndpoint:
                 "metadata": {"artist": "Blocked Artist", "title_only": "Blocked Song"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         app.state.config.cache_dir = tmp_path
         app.state.queue = asyncio.Queue(maxsize=3)
         banned_path = tmp_path / "norm_blocked_only_128k.mp3"

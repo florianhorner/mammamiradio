@@ -146,10 +146,15 @@ async def test_readyz_starting():
 
 
 @pytest.mark.asyncio
-async def test_readyz_ready():
+async def test_readyz_ready_after_listener_accepted_audio(tmp_path):
     app = _make_test_app()
-    # Put something in queue
-    app.state.queue.put_nowait(MagicMock())
+    app.state.station_state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=tmp_path / "accepted-readyz.mp3",
+            metadata={"title": "Accepted"},
+        )
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/readyz")
@@ -5722,6 +5727,7 @@ async def test_public_status_playback_actions_match_skip_contract():
     assert idle_resp.json()["playback_actions"] == {"skip_ready": False, "skip_would_bridge": False}
 
     app.state.station_state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    app.state.station_state.current_stream_audible = True
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         active_resp = await client.get("/public-status")
 
@@ -6182,6 +6188,7 @@ async def test_skip_track_with_empty_queue_returns_bridged_true(tmp_path):
         "started": time.time(),
         "metadata": {"title": "Song A"},
     }
+    app.state.station_state.current_stream_audible = True
     # Queue is empty — skip should bridge
     assert app.state.queue.empty()
 
@@ -6211,6 +6218,7 @@ async def test_skip_track_with_queued_segments_not_bridged(tmp_path):
         "started": time.time(),
         "metadata": {"title": "Current"},
     }
+    app.state.station_state.current_stream_audible = True
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -6234,6 +6242,7 @@ async def test_skip_track_post_restart_empty_queue_returns_bridged_true(tmp_path
         "started": time.time(),
         "metadata": {"title": "Song A"},
     }
+    app.state.station_state.current_stream_audible = True
     assert app.state.queue.empty()
     assert app.state.station_state.queued_segments == []
 

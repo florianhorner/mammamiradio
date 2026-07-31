@@ -1062,33 +1062,49 @@ async def test_readyz_not_ready_when_queue_empty():
 
 
 @pytest.mark.asyncio
-async def test_readyz_ready_when_queue_has_segments():
-    """readyz returns 200 when queue_depth > 0 and tasks are alive."""
+async def test_readyz_stays_starting_when_queue_has_unheard_segments():
+    """Queued work is not proof that any listener has accepted audio."""
     app = _make_app(shadow=[_seg()], queue_items=1)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/readyz")
 
-    assert resp.status_code == 200
-    assert resp.json()["ready"] is True
+    assert resp.status_code == 503
+    assert resp.json()["ready"] is False
+    assert resp.json()["status"] == "starting"
 
 
 @pytest.mark.asyncio
-async def test_readyz_ready_after_startup_window():
-    """readyz returns 200 once uptime > 30s even with an empty queue."""
+async def test_readyz_stays_starting_after_startup_window_without_accepted_audio():
+    """Elapsed startup time cannot turn an unheard station ready."""
     app = _make_app(shadow=[], queue_items=0)
     app.state.start_time = time.time() - 31  # simulate 31s of uptime
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/readyz")
 
+    assert resp.status_code == 503
+    assert resp.json()["ready"] is False
+    assert resp.json()["status"] == "starting"
+
+
+@pytest.mark.asyncio
+async def test_readyz_ready_after_listener_accepts_audio():
+    app = _make_app(shadow=[], queue_items=0)
+    app.state.station_state.on_stream_segment(_queue_segment("Accepted", duration_sec=180.0))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/readyz")
+
     assert resp.status_code == 200
     assert resp.json()["ready"] is True
+    assert resp.json()["status"] == "ready"
 
 
 @pytest.mark.asyncio
 async def test_readyz_not_ready_when_producer_dead():
     app = _make_app(shadow=[_seg()], queue_items=1)
+    app.state.station_state.on_stream_segment(_queue_segment("Accepted", duration_sec=180.0))
     dead_task = MagicMock()
     dead_task.done.return_value = True
     app.state.producer_task = dead_task

@@ -62,6 +62,7 @@ from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilitie
 from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, load_model_registry
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     ChaosSubtype,
     GenerationWasteReason,
     Heading,
@@ -388,7 +389,6 @@ QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 # silence while hoping the producer catches up. Must stay <=
 # QUEUE_FALLBACK_WAIT_SECONDS (asserted in test_streamer_routes).
 FIRST_BYTE_GRACE_SECONDS = 1.0
-STARTUP_GRACE_SECONDS = 30.0
 # Keep the admin "On air" verdict stable across a normal segment handoff. This
 # is deliberately far shorter than the 30s silence alarm.
 STREAM_HANDOFF_GRACE_SECONDS = 3.0
@@ -1809,12 +1809,17 @@ def _persist_session_stopped(config, stopped: bool) -> None:
         flag.unlink(missing_ok=True)
 
 
-def _now_streaming_is_real_media(state: StationState) -> bool:
-    """Return whether now_streaming describes actual timeline media."""
+def _now_streaming_has_selected_media(state: StationState) -> bool:
+    """Return whether transport selected real timeline media."""
     now_streaming = state.now_streaming
     if not isinstance(now_streaming, dict):
         return False
     return str(now_streaming.get("type") or "") in {segment_type.value for segment_type in SegmentType}
+
+
+def _now_streaming_is_real_media(state: StationState) -> bool:
+    """Return whether selected timeline media reached a listener."""
+    return state.current_stream_audible and _now_streaming_has_selected_media(state)
 
 
 def _skip_is_in_flight(state: StationState) -> bool:
@@ -1840,6 +1845,7 @@ def _clear_session_stopped(state: StationState) -> None:
     if isinstance(state.now_streaming, dict) and state.now_streaming.get("type") == "stopped":
         state.now_streaming = {}
     state.current_stream_audible = False
+    state.last_air_monotonic = None
     state.last_state_change_at = time.time()
 
 
@@ -1881,8 +1887,11 @@ def _runtime_health_snapshot(request: Request) -> dict:
     if not audio_source and fallback_active:
         audio_source = "canned"
     if not audio_source or audio_source == "prewarm" or (audio_source == "download" and not fallback_active):
+        bound_playlist_source = str(now_metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY) or "")
         playlist_source = state.playlist_source
-        if playlist_source is not None:
+        if bound_playlist_source:
+            audio_source = bound_playlist_source
+        elif playlist_source is not None:
             audio_source = playlist_source.kind
     producer_task = getattr(request.app.state, "producer_task", None)
     playback_task = getattr(request.app.state, "playback_task", None)
@@ -2345,14 +2354,16 @@ def _runtime_status_snapshot(
         and not state.session_stopped
         and (state.current_stream_audible or recent_handoff)
     )
+    audible_now = bool(state.current_stream_audible)
+    handoff_only = station_on_air and not audible_now
 
     saved_audio = state.runtime_provider_state.get("audio_source", {})
-    if station_on_air:
+    selected_metadata = state.now_streaming.get("metadata", {}) if isinstance(state.now_streaming, dict) else {}
+    if station_on_air and audible_now:
         audio_current = str(runtime_health.get("audio_source") or "unknown")
         if audio_current == "fallback_norm_cache":
             audio_current = "norm_cache"
         audio_fallback = bool(runtime_health.get("failover_active"))
-        selected_metadata = state.now_streaming.get("metadata", {}) if isinstance(state.now_streaming, dict) else {}
         audio_reason = (
             str(selected_metadata.get("fallback_reason") or "Fallback audio is currently on air")
             if audio_fallback
@@ -2373,10 +2384,15 @@ def _runtime_status_snapshot(
         audio_reason = (
             "Last listener-audible provider; station is paused."
             if state.session_stopped
-            else "Last listener-audible provider; no audio is currently on air."
+            else (
+                "Last listener-audible provider; stream handoff is in progress."
+                if handoff_only
+                else "Last listener-audible provider; no audio is currently on air."
+            )
         )
-    if station_on_air:
-        audio_primary = (
+    if station_on_air and audible_now:
+        bound_playlist_source = str(selected_metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY) or "")
+        audio_primary = bound_playlist_source or (
             state.playlist_source.kind
             if state.playlist_source is not None
             else str(saved_audio.get("primary_provider") or audio_current)
@@ -2385,7 +2401,7 @@ def _runtime_status_snapshot(
         audio_primary = str(
             saved_audio.get("last_audible_primary_provider")
             or saved_audio.get("primary_provider")
-            or (state.playlist_source.kind if state.playlist_source is not None else "")
+            or (state.playlist_source.kind if state.playlist_source is not None and not handoff_only else "")
             or audio_current
         )
     audio_status = _provider_status(
@@ -3083,13 +3099,13 @@ def _apply_loaded_source(
     # into audio from the prior source.
     skipped = False
     if (
-        _now_streaming_is_real_media(state)
+        _now_streaming_has_selected_media(state)
         and runway.fresh_reservation
         and _playable_runway_available(request.app.state.queue, state)
     ):
         request.app.state.skip_event.set()
         skipped = True
-    elif _now_streaming_is_real_media(state):
+    elif _now_streaming_has_selected_media(state):
         logger.warning(
             "Source changed without fresh cutover audio; current audio will finish (preserved=%s)",
             runway.preserved_existing,
@@ -5425,9 +5441,10 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state.session_stopped = True
     state.force_recovery_active = False
     state.current_stream_audible = False
+    state.last_air_monotonic = None
     state.continuity_epoch += 1
     visible_epoch = state.continuity_epoch
-    if _now_streaming_is_real_media(state):
+    if _now_streaming_has_selected_media(state):
         app_state.skip_event.set()
 
     purged = _purge_queue_and_shadow(
@@ -6598,6 +6615,11 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
     now_seg = state.now_streaming or {}
     if now_seg.get("type") != "music":
         return {"ok": False, "error": "Only a song can be banned — nothing musical is on air right now."}
+    if not _now_streaming_is_real_media(state):
+        return {
+            "ok": False,
+            "error": "That song is no longer on air. Wait for the next audible song before banning.",
+        }
 
     # Prefer ``title_only`` so the blocklist key matches both the queue-purge key and
     # the clean ``Track.title`` used at every ingest doorway. Fall back through the
@@ -8483,13 +8505,13 @@ async def readyz(request: Request):
     start_time = getattr(request.app.state, "start_time", None)
     queue_depth = runtime["queue_depth"]
     tasks_alive = runtime["producer_task_alive"] and runtime["playback_task_alive"]
-    startup_complete = start_time is not None and (time.time() - start_time) > STARTUP_GRACE_SECONDS
     state = request.app.state.station_state
     queue_empty_elapsed = _queue_empty_elapsed(state)
     silence_with_listeners = _silence_with_listeners(state, queue_empty_elapsed)
+    accepted_audio = state.current_stream_audible or state.last_air_monotonic is not None
     ready = (
         tasks_alive
-        and (queue_depth > 0 or startup_complete or state.current_stream_audible)
+        and accepted_audio
         and not silence_with_listeners
         and not state.session_stopped
         and not state.force_recovery_active
