@@ -116,6 +116,9 @@ async (page) => {
   let failListenerRequests = false;
   let failHosts = false;
   let skipScenario = 'declined';
+  let resumeScenario = 'healthy';
+  let normalResumeRequests = 0;
+  let forceResumeRequests = 0;
   const restoredStatus = {
     ...liveStatus,
     session_stopped: false,
@@ -190,6 +193,38 @@ async (page) => {
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"bridged":false}' });
   });
+  await page.route('**/api/resume*', async (route) => {
+    const request = route.request();
+    const [requestPath, requestQuery = ''] = request.url().split('?', 2);
+    if (request.method() !== 'POST' || !requestPath.endsWith('/api/resume')) {
+      await route.fallback();
+      return;
+    }
+    const forced = requestQuery.split('&').includes('force=true');
+    if (forced) forceResumeRequests += 1;
+    else normalResumeRequests += 1;
+    if (resumeScenario === 'assetless' && !forced) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: false,
+          force_available: true,
+          error: 'No recovery audio is ready. Add a source or explicitly force-start a host break.',
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        forced
+          ? { ok: true, recovering: true, runway_source: 'none' }
+          : { ok: true, recovering: false },
+      ),
+    });
+  });
   await page.evaluate(() => {
     const nativeFetch = window.fetch.bind(window);
     window.__adminSmokeHangPath = '';
@@ -210,6 +245,83 @@ async (page) => {
       return nativeFetch(input, init);
     };
   });
+
+  // Exercise the real Resume controller against intercepted same-origin
+  // requests. A healthy resume must never pre-emptively force; the assetless
+  // escape is available only after the operator sees and accepts the browser
+  // confirmation.
+  statusScenario = 'success';
+  resumeScenario = 'healthy';
+  normalResumeRequests = 0;
+  forceResumeRequests = 0;
+  const healthyResumeToast = await page.evaluate(async () => {
+    updateStopState(true);
+    await doResume(document.getElementById('resumeBtn'));
+    return document.getElementById('toast').textContent;
+  });
+  assert(
+    normalResumeRequests === 1 && forceResumeRequests === 0,
+    'healthy Resume sent anything other than one normal /api/resume request',
+  );
+  assert(healthyResumeToast === 'Station resumed', 'healthy Resume did not report success');
+
+  resumeScenario = 'assetless';
+  normalResumeRequests = 0;
+  forceResumeRequests = 0;
+  const cancelledResume = await page.evaluate(async () => {
+    const nativeConfirm = window.confirm;
+    const confirmationCopy = [];
+    window.confirm = (message) => {
+      confirmationCopy.push(message);
+      return false;
+    };
+    try {
+      updateStopState(true);
+      await doResume(document.getElementById('resumeBtn'));
+      return { confirmationCopy, toast: document.getElementById('toast').textContent };
+    } finally {
+      window.confirm = nativeConfirm;
+    }
+  });
+  assert(
+    cancelledResume.confirmationCopy.length === 1
+      && cancelledResume.confirmationCopy[0].includes('Force-start with a host break anyway?'),
+    'assetless Resume lost its force confirmation',
+  );
+  assert(
+    normalResumeRequests === 1 && forceResumeRequests === 0,
+    'cancelling assetless Resume sent a force request',
+  );
+  assert(cancelledResume.toast === 'Station remains paused.', 'cancelled assetless Resume did not stay paused');
+
+  normalResumeRequests = 0;
+  forceResumeRequests = 0;
+  const confirmedResume = await page.evaluate(async () => {
+    const nativeConfirm = window.confirm;
+    const confirmationCopy = [];
+    window.confirm = (message) => {
+      confirmationCopy.push(message);
+      return true;
+    };
+    try {
+      updateStopState(true);
+      await doResume(document.getElementById('resumeBtn'));
+      return { confirmationCopy, toast: document.getElementById('toast').textContent };
+    } finally {
+      window.confirm = nativeConfirm;
+    }
+  });
+  assert(
+    confirmedResume.confirmationCopy.length === 1
+      && normalResumeRequests === 1 && forceResumeRequests === 1,
+    'confirmed assetless Resume did not send exactly one /api/resume?force=true request',
+  );
+  assert(
+    confirmedResume.toast === 'Station is recovering. A host break is being prepared.',
+    'confirmed force Resume did not report recovery',
+  );
+  statusScenario = 'network';
+
   await page.evaluate(() => renderProduction({
     session_stopped: false,
     listeners: { active: 1 },
@@ -1396,7 +1508,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 50,
+    checks: 53,
     viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

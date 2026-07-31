@@ -110,22 +110,56 @@ fi
 echo ""
 echo "5. Packaged recovery audio"
 
-if [ -d mammamiradio/assets/demo/recovery ]; then
-    RECOVERY_MP3_COUNT=$(find mammamiradio/assets/demo/recovery -maxdepth 1 -type f -name '*.mp3' -size +1024c | wc -l | tr -d ' ')
-else
-    RECOVERY_MP3_COUNT=0
-fi
+RECOVERY_DIR="mammamiradio/assets/demo/recovery"
+REQUIRED_RECOVERY_ASSETS=(
+    "continuity_1.mp3"
+    "emergency_tone.mp3"
+)
 
-if [ "$RECOVERY_MP3_COUNT" -gt 0 ]; then
-    ok "packaged recovery clip is present ($RECOVERY_MP3_COUNT mp3 file(s))"
-else
-    fail "No packaged recovery MP3 under mammamiradio/assets/demo/recovery/ — image can fall through to technical fallback audio"
-fi
+for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
+    asset_path="$RECOVERY_DIR/$asset_name"
+    if [ ! -f "$asset_path" ]; then
+        fail "Required recovery asset is missing: $asset_path"
+        continue
+    fi
+
+    asset_size=$(wc -c < "$asset_path" | tr -d '[:space:]')
+    if [ "$asset_size" -gt 1024 ]; then
+        ok "$asset_name is present and nontrivial ($asset_size bytes)"
+    else
+        fail "$asset_name is too small ($asset_size bytes; must be > 1024)"
+    fi
+done
 
 if grep -q 'generate_silence' mammamiradio/scheduling/producer.py; then
     fail "producer.py must not call generate_silence in recovery paths — use recovery clip, norm cache, or emergency tone"
 else
     ok "producer recovery paths do not call generate_silence"
+fi
+
+if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+    --assets-root "$PWD/mammamiradio/assets/demo"; then
+    ok "packaged spoken assets are manifest/hash/transcript approved"
+else
+    fail "packaged spoken-asset manifest/hash/transcript validation failed"
+fi
+
+if command -v ffprobe >/dev/null 2>&1; then
+    for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
+        asset_path="$RECOVERY_DIR/$asset_name"
+        if probe_output=$(ffprobe \
+            -v error \
+            -select_streams a:0 \
+            -show_entries stream=codec_type \
+            -of csv=p=0 \
+            "$asset_path" 2>&1) && grep -qi 'audio' <<<"$probe_output"; then
+            ok "$asset_name contains an ffprobe-readable audio stream"
+        else
+            fail "$asset_name is not ffprobe-readable audio (${probe_output:-no audio stream})"
+        fi
+    done
+else
+    fail "ffprobe is required to validate every packaged recovery asset"
 fi
 
 # ── 6. Test: _pick_canned_clip returns None (missing packaged clip scenario) ──

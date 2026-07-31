@@ -52,7 +52,7 @@ AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder
 
 1. Start the add-on
 2. Open it from the HA sidebar / ingress entry first. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics
-3. Confirm the log shows `Producer started` and `/readyz` returns `"ready": true`. No provider key is required, but a full music rotation still needs live-chart access or Jamendo
+3. Open the listener action and start playback. Confirm the log shows `Producer started`; after a listener accepts audio, `/readyz` returns HTTP `200` with `"ready": true`. A fresh session stays at `503 starting` before that point even when audio is queued. No provider key is required, but a full music rotation still needs live-chart access or Jamendo
 4. Set **Station Name** to the name people should see and hear; entity IDs and `media-source://mammamiradio/live` stay stable
 5. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from **Motore → Setup → AI hosts** to unlock live AI hosts
 6. Review **Home context preview** and mute any entity the hosts should never use. Casual host breaks use one rotating safe cue at most; room-presence remains off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** are separate: turn host context off to stop prompt-context polling while keeping entity publishing and timer interrupts. Supervisor Home Assistant access is automatic in add-on mode, but filtered home context is useful only after an AI host key is ready
@@ -69,7 +69,7 @@ starting and never writes it directly. A selection held only in memory by an
 older build cannot be recovered after an update rematerializes an older
 Supervisor value.
 
-The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
+The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. `/healthz` reports process/runtime health: an intentional Stop normally stays healthy, while prolonged silence with active listeners returns `503`. `/readyz` reports `503 starting` on a fresh or Resumed session until a listener actually accepts audio, `200 ready` after that proof, and `503 stopped` during an intentional Stop; queued work or elapsed startup time alone is not readiness. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 
 ### Playing on speakers
 

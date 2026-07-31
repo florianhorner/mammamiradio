@@ -12,12 +12,14 @@ from mammamiradio.core.models import (
     HEADING_MAX_LIFT,
     HEADING_MIN_LIFT,
     HEADING_TARGET_SHARE,
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     ChaosSubtype,
     DialogueLine,
     GenerationWasteReason,
     Heading,
     HostPersonality,
     ListenerProfile,
+    PlaylistSource,
     Segment,
     SegmentType,
     StationState,
@@ -205,6 +207,7 @@ def test_stream_delivery_diagnostics_coalesce_and_keep_only_anonymous_bounded_va
             "result": "not_streamed",
             "bytes_sent": 0,
             "starting_listener_count": 0,
+            "accepted_listener_count": 0,
             "terminal_reason": "file_error",
         }
     ]
@@ -295,6 +298,271 @@ def test_on_stream_segment_updates_now_streaming():
     assert state.now_streaming["duration_sec"] == 5.0
     assert len(state.stream_log) == 1
     assert state.stream_log[0].duration_sec == 5.0
+
+
+def test_selected_segment_does_not_commit_listener_audible_bookkeeping():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/readable.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Readable",
+            "title_only": "Readable",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+
+    selected_epoch = state.on_stream_segment_selected(seg)
+
+    assert selected_epoch == state.playback_epoch == 1
+    assert state.now_streaming["label"] == "Artist – Readable"
+    assert state.current_stream_audible is False
+    assert state.audible_playback_epoch == 0
+    assert state.runtime_provider_state == {}
+    assert list(state.played_track_log) == []
+
+
+def test_audible_segment_commit_is_exactly_once():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/audible.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Audible",
+            "title_only": "Audible",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+    state.on_stream_segment_selected(seg)
+
+    assert state.on_stream_segment_audible(seg) is True
+    assert state.on_stream_segment_audible(seg) is False
+    assert state.current_stream_audible is True
+    assert state.audible_playback_epoch == state.playback_epoch == 1
+    assert len(state.played_track_log) == 1
+    assert state.runtime_provider_state["audio_source"]["current_provider"] == "charts"
+
+
+def test_audible_music_keeps_render_bound_source_after_source_swap():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/audible.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Audible",
+            "title_only": "Audible",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+            SEGMENT_PLAYLIST_SOURCE_KIND_KEY: "charts",
+        },
+    )
+    state.on_stream_segment_selected(seg)
+    state.playlist_source = PlaylistSource(kind="local", label="Local files")
+
+    assert state.on_stream_segment_audible(seg) is True
+    provider = state.runtime_provider_state["audio_source"]
+    assert provider["current_provider"] == "charts"
+    assert provider["primary_provider"] == "charts"
+
+
+def test_unheard_selection_never_becomes_a_listener_outcome():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    audible_music = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/audible.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Audible",
+            "title_only": "Audible",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+    unheard_music = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/unheard.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Unheard",
+            "title_only": "Unheard",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+    later_banter = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/later.mp3"),
+        duration_sec=10.0,
+        metadata={"title": "Later banter"},
+    )
+
+    state.on_stream_segment_selected(audible_music)
+    assert state.on_stream_segment_audible(audible_music) is True
+    state.on_stream_segment_selected(unheard_music)
+    state.on_stream_segment_selected(later_banter)
+    assert state.on_stream_segment_audible(later_banter) is True
+
+    assert state.listener.songs_played == 1
+    assert [outcome["track"] for outcome in state.listener.recent_outcomes] == ["Artist – Audible"]
+    assert all(outcome["track"] != "Artist – Unheard" for outcome in state.listener.recent_outcomes)
+
+
+def test_provider_observation_reason_does_not_rewrite_switch_history():
+    state = StationState()
+
+    first = state.update_runtime_provider(
+        "audio_source",
+        current_provider="norm_cache",
+        primary_provider="charts",
+        fallback_active=True,
+        reason="Chart download failed",
+        timestamp=10.0,
+    )
+    same_route = state.update_runtime_provider(
+        "audio_source",
+        current_provider="norm_cache",
+        primary_provider="charts",
+        fallback_active=True,
+        reason="Serving the reserved cache runway",
+        timestamp=20.0,
+    )
+
+    saved = state.runtime_provider_state["audio_source"]
+    assert first is not None
+    assert same_route is None
+    assert saved["current_reason"] == "Serving the reserved cache runway"
+    assert saved["last_switch_reason"] == "Chart download failed"
+    assert saved["last_switch_timestamp"] == 10.0
+    assert len(state.runtime_events) == 1
+
+
+def test_provider_observation_updates_current_without_switch_history():
+    state = StationState()
+
+    observation = state.observe_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_exception",
+        timestamp=10.0,
+    )
+
+    saved = state.runtime_provider_state["script_provider"]
+    assert observation.current_provider == "openai"
+    assert saved["current_provider"] == "openai"
+    assert saved["current_reason"] == "anthropic_exception"
+    assert saved["last_switch_timestamp"] is None
+    assert saved["last_switch_reason"] is None
+    assert list(state.runtime_events) == []
+
+
+def test_provider_observation_scope_returns_and_collects_render_ownership():
+    state = StationState()
+    scope = state.bind_runtime_provider_observation_scope("render-123")
+    try:
+        observation = state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+
+    assert observation.observation_token == "render-123"
+    snapshot = state.snapshot_runtime_provider_observations("render-123")
+    assert snapshot == {"script_provider": observation}
+    snapshot.clear()
+    assert state.snapshot_runtime_provider_observations("render-123") == {
+        "script_provider": observation,
+    }
+    assert state.take_runtime_provider_observations("render-123") == {
+        "script_provider": observation,
+    }
+    assert state.snapshot_runtime_provider_observations("render-123") == {}
+    assert state.take_runtime_provider_observations("render-123") == {}
+
+
+def test_provider_observation_preserves_legacy_audible_baseline():
+    state = StationState()
+    state.runtime_provider_state["audio_source"] = {
+        "current_provider": "norm_cache",
+        "primary_provider": "charts",
+        "fallback_active": True,
+        "reason": "Chart download failed",
+        "last_switch_timestamp": 5.0,
+    }
+
+    event = state.update_runtime_provider(
+        "audio_source",
+        current_provider="norm_cache",
+        primary_provider="charts",
+        fallback_active=True,
+        reason="Serving the reserved cache runway",
+        timestamp=10.0,
+    )
+
+    saved = state.runtime_provider_state["audio_source"]
+    assert event is None
+    assert saved["last_audible_provider"] == "norm_cache"
+    assert saved["last_audible_primary_provider"] == "charts"
+    assert saved["last_audible_fallback_active"] is True
+    assert saved["last_audible_reason"] == "Serving the reserved cache runway"
+    assert saved["last_switch_timestamp"] == 5.0
+    assert saved["last_switch_reason"] == "Chart download failed"
+
+
+@pytest.mark.parametrize("provider_class", ["script_provider", "tts_provider"])
+def test_audible_provider_commit_is_once_and_preserves_newer_observation(provider_class):
+    state = StationState()
+    audible_observation = state.observe_runtime_provider(
+        provider_class,
+        current_provider="fallback",
+        primary_provider="primary",
+        fallback_active=True,
+        reason="primary unavailable",
+        timestamp=10.0,
+    )
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/provider-observation.mp3"),
+        metadata={"title": "Provider observation"},
+        runtime_provider_observations={provider_class: audible_observation},
+    )
+    state.on_stream_segment_selected(segment)
+    state.observe_runtime_provider(
+        provider_class,
+        current_provider="primary",
+        primary_provider="primary",
+        fallback_active=False,
+        reason="primary recovered",
+        timestamp=20.0,
+    )
+
+    assert state.on_stream_segment_audible(segment) is True
+    assert state.on_stream_segment_audible(segment) is False
+
+    saved = state.runtime_provider_state[provider_class]
+    assert saved["current_provider"] == "primary"
+    assert saved["current_reason"] == "primary recovered"
+    assert saved["last_audible_provider"] == "fallback"
+    assert saved["last_audible_primary_provider"] == "primary"
+    assert saved["last_audible_reason"] == "primary unavailable"
+    assert saved["last_switch_reason"] == "primary unavailable"
+    assert len(state.runtime_events) == 1
+    assert state.runtime_events[0].provider_class == provider_class
 
 
 def test_chaos_subtypes_are_not_segment_types():
@@ -423,17 +691,19 @@ def test_switch_playlist_clears_played_track_log():
 
 def test_on_stream_segment_records_previous_music_as_completed():
     state = StationState()
-    state.now_streaming = {
-        "type": "music",
-        "label": "Prev Song",
-        "started": 100.0,
-    }
+    previous = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/previous.mp3"),
+        metadata={"title": "Prev Song", "duration_ms": 180_000},
+    )
     seg = Segment(
         type=SegmentType.BANTER,
         path=Path("/tmp/fake2.mp3"),
         metadata={"title": "Banter"},
     )
 
+    with patch("mammamiradio.core.models.time.time", return_value=100.0):
+        state.on_stream_segment(previous)
     with patch("mammamiradio.core.models.time.time", return_value=130.0):
         state.on_stream_segment(seg)
 

@@ -10,7 +10,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track
+from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    Heading,
+    PlaylistSource,
+    StationState,
+    Track,
+)
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
 from mammamiradio.web.assets import _ASSETS_DIR
@@ -70,7 +76,6 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         allow_ytdlp,
         getattr(state, "playlist_revision", 0),
         getattr(state, "source_revision", 0),
-        bool(getattr(state, "session_stopped", False)),
     )
     if (
         not force_refresh
@@ -505,6 +510,10 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        # Render-scoped playlist identity keeps provider truth stable across a
+        # metadata-only source swap. It is operational bookkeeping, not part of
+        # the public or frozen now-playing contract.
+        SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     }
 )
 

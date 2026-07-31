@@ -305,7 +305,7 @@ def test_release_workflow_build_needs_preflight():
 
 
 def test_release_workflow_runs_smoke_test():
-    """Smoke jobs must gate promotion on :sha and verify the published release tag."""
+    """Smoke jobs gate promotion on both :sha images and verify the release tag."""
     text = _workflow_text()
     prebuilt_section = re.search(r"\n  smoke-prebuilt:\n((?:    .+\n|\n)*)", text)
     assert prebuilt_section, "Could not locate `smoke-prebuilt:` job in addon-release.yml"
@@ -314,6 +314,17 @@ def test_release_workflow_runs_smoke_test():
         "smoke-prebuilt must pull :${{ github.sha }} before stable tags are promoted."
     )
     assert "needs: pre-flight" in prebuilt_block
+    assert "runs-on: ${{ matrix.runner }}" in prebuilt_block
+    assert "- arch: amd64\n            runner: ubuntu-latest" in prebuilt_block
+    assert "- arch: aarch64\n            runner: ubuntu-24.04-arm" in prebuilt_block
+    assert "IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}" in prebuilt_block
+    assert 'python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"' in prebuilt_block
+    assert "-amd64:${{ github.sha }}" not in prebuilt_block, (
+        "Stable promotion must independently smoke both exact SHA images, not only amd64."
+    )
+    assert "sleep 40" not in prebuilt_block, (
+        "The prebuilt gate must use the launch-smoke proof rather than the legacy sleep/health probe."
+    )
 
     smoke_section = re.search(r"\n  smoke:\n((?:    .+\n|\n)*)", text)
     assert smoke_section, "Could not locate `smoke:` job in addon-release.yml"
@@ -327,6 +338,34 @@ def test_release_workflow_runs_smoke_test():
     )
     assert "/healthz" in smoke_block, "smoke job must call /healthz."
     assert "failing" in smoke_block, "smoke job must check that status != 'failing'."
+
+
+def test_release_workflow_proves_each_prebuilt_sha_on_the_published_host_port():
+    """Both native-architecture SHA images must expose port 8000 before promotion."""
+    text = _workflow_text()
+    prebuilt_section = re.search(r"\n  smoke-prebuilt:\n((?:    .+\n|\n)*)", text)
+    assert prebuilt_section, "Could not locate `smoke-prebuilt:` job in addon-release.yml"
+    prebuilt_block = prebuilt_section.group(1)
+
+    assert "Verify exact prebuilt SHA published add-on port" in prebuilt_block
+    assert "--publish 127.0.0.1:8765:8000" in prebuilt_block, (
+        "smoke-prebuilt must prove the exact SHA image is reachable through Docker's host-published port."
+    )
+    assert "http://127.0.0.1:8765/healthz" in prebuilt_block
+    assert "SUPERVISOR_TOKEN=smoke-ci" in prebuilt_block, (
+        "published-port proof must launch in Home Assistant add-on mode."
+    )
+    assert "SMOKE_ARCH: ${{ matrix.arch }}" in prebuilt_block
+    assert "EXPECTED_DOCKER_ARCH: ${{ matrix.docker_arch }}" in prebuilt_block
+    assert "- arch: amd64\n            runner: ubuntu-latest\n            docker_arch: amd64" in prebuilt_block
+    assert "- arch: aarch64\n            runner: ubuntu-24.04-arm\n            docker_arch: arm64" in prebuilt_block
+    assert 'docker image inspect "$IMAGE_REF"' in prebuilt_block, (
+        "the proof must reject an architecture-mismatched image before starting it."
+    )
+
+    assert text.index("Verify exact prebuilt SHA published add-on port") < text.index("\n  promote:\n"), (
+        "host-published-port proof must finish before stable tags can be promoted."
+    )
 
 
 # ---------------------------------------------------------------------------

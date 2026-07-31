@@ -146,10 +146,15 @@ async def test_readyz_starting():
 
 
 @pytest.mark.asyncio
-async def test_readyz_ready():
+async def test_readyz_ready_after_listener_accepted_audio(tmp_path):
     app = _make_test_app()
-    # Put something in queue
-    app.state.queue.put_nowait(MagicMock())
+    app.state.station_state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=tmp_path / "accepted-readyz.mp3",
+            metadata={"title": "Accepted"},
+        )
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/readyz")
@@ -849,6 +854,44 @@ async def test_playlist_enrich_adds_source_without_cutover(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_playlist_enrich_crossing_stop_resume_adds_metadata_without_runway(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    loaded_tracks = [Track(title="Fresh Song", artist="Fresh Artist", duration_ms=180_000, spotify_id="fresh1")]
+    resolved_source = PlaylistSource(kind="classic", url="classic://italian/80s", label="Anni '80 italiani")
+    load_started = Event()
+    release_load = Event()
+
+    def _slow_load(*_args, **_kwargs):
+        load_started.set()
+        assert release_load.wait(timeout=2.0)
+        return loaded_tracks, resolved_source
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.load_explicit_source", side_effect=_slow_load):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request_task = asyncio.create_task(client.post("/api/playlist/enrich", json={"url": resolved_source.url}))
+            deadline = time.monotonic() + 1.0
+            while not load_started.is_set():
+                if time.monotonic() > deadline:
+                    raise AssertionError("playlist enrichment did not begin")
+                await asyncio.sleep(0)
+            state.session_stopped = True
+            state.continuity_epoch += 1
+            state.session_stopped = False
+            release_load.set()
+            response = await asyncio.wait_for(request_task, timeout=2.0)
+
+    assert response.json()["ok"] is True
+    assert response.json()["metadata_only"] is True
+    assert response.json()["resume_required"] is False
+    assert state.playlist[-1].spotify_id == "fresh1"
+    assert app.state.queue.empty()
+    assert state.continuity_slot is None
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
 async def test_playlist_enrich_deduplicates_incoming_source_tracks():
     app = _make_test_app(admin_token="tok")
     duplicate_a = Track(title="Fresh Song", artist="Fresh Artist", duration_ms=180_000, spotify_id="fresh1")
@@ -1229,6 +1272,57 @@ async def test_commit_external_download_probe_failure_falls_back_to_metadata(tmp
     assert state.pinned_track is track
     assert track in state.playlist
     assert raw_path.exists() is True
+
+
+@pytest.mark.asyncio
+async def test_external_download_crossing_stop_resume_commits_metadata_without_audio(tmp_path):
+    """Slow admin ingress can retain play-next ownership without admitting audio."""
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    track = Track(title="Late Arrival", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+    download_started = asyncio.Event()
+    release_download = asyncio.Event()
+
+    async def _slow_download(*_args, **_kwargs):
+        download_started.set()
+        await release_download.wait()
+        return raw_path
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new=AsyncMock(side_effect=_slow_download),
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=None),
+    ):
+        task = asyncio.create_task(
+            streamer._commit_external_download(
+                track,
+                app.state,
+                state.source_revision,
+                should_commit=lambda: True,
+                should_pin=lambda: True,
+            )
+        )
+        await asyncio.wait_for(download_started.wait(), timeout=1.0)
+        state.session_stopped = True
+        state.continuity_epoch += 1
+        state.session_stopped = False
+        release_download.set()
+        status = await asyncio.wait_for(task, timeout=1.0)
+
+    assert status == "pinned"
+    assert track in state.playlist
+    assert state.pinned_track is track
+    assert state.force_next is SegmentType.MUSIC
+    assert app.state.queue.empty()
+    assert state.continuity_slot is None
 
 
 @pytest.mark.asyncio
@@ -5633,6 +5727,7 @@ async def test_public_status_playback_actions_match_skip_contract():
     assert idle_resp.json()["playback_actions"] == {"skip_ready": False, "skip_would_bridge": False}
 
     app.state.station_state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    app.state.station_state.current_stream_audible = True
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         active_resp = await client.get("/public-status")
 
@@ -6093,6 +6188,7 @@ async def test_skip_track_with_empty_queue_returns_bridged_true(tmp_path):
         "started": time.time(),
         "metadata": {"title": "Song A"},
     }
+    app.state.station_state.current_stream_audible = True
     # Queue is empty — skip should bridge
     assert app.state.queue.empty()
 
@@ -6122,6 +6218,7 @@ async def test_skip_track_with_queued_segments_not_bridged(tmp_path):
         "started": time.time(),
         "metadata": {"title": "Current"},
     }
+    app.state.station_state.current_stream_audible = True
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -6145,6 +6242,7 @@ async def test_skip_track_post_restart_empty_queue_returns_bridged_true(tmp_path
         "started": time.time(),
         "metadata": {"title": "Song A"},
     }
+    app.state.station_state.current_stream_audible = True
     assert app.state.queue.empty()
     assert app.state.station_state.queued_segments == []
 

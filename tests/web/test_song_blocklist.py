@@ -281,6 +281,7 @@ async def test_ban_reports_not_persisted_when_disk_write_fails(tmp_path):
 
 def _airing_music(state, *, artist="Modugno", title_only="Volare", label=None):
     """Stamp now_streaming as a music segment the way the playback loop does."""
+    state.current_stream_audible = True
     state.now_streaming = {
         "type": "music",
         "label": label if label is not None else f"{artist} — {title_only}",
@@ -419,6 +420,7 @@ async def test_ban_now_playing_label_dash_variants(tmp_path, label, expected):
     app = _make_app(tmp_path, [])
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": label, "started": time.time(), "metadata": {}}
+    state.current_stream_audible = True
     async with _client(app) as c:
         body = (await c.post("/api/track/ban-now-playing")).json()
     assert body["ok"] is True
@@ -434,6 +436,7 @@ async def test_ban_now_playing_one_sided_label_is_refused(tmp_path, label):
     app = _make_app(tmp_path, [])
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": label, "started": time.time(), "metadata": {}}
+    state.current_stream_audible = True
     async with _client(app) as c:
         body = (await c.post("/api/track/ban-now-playing")).json()
     assert body["ok"] is False
@@ -487,6 +490,7 @@ async def test_ban_now_playing_falls_back_to_label_when_metadata_missing(tmp_pat
         "started": time.time(),
         "metadata": {},
     }
+    state.current_stream_audible = True
 
     async with _client(app) as c:
         body = (await c.post("/api/track/ban-now-playing")).json()
@@ -503,6 +507,7 @@ async def test_ban_now_playing_unresolvable_identity_is_refused(tmp_path):
     app = _make_app(tmp_path, [])
     state = app.state.station_state
     state.now_streaming = {"type": "music", "label": "music", "started": time.time(), "metadata": {}}
+    state.current_stream_audible = True
 
     async with _client(app) as c:
         body = (await c.post("/api/track/ban-now-playing")).json()

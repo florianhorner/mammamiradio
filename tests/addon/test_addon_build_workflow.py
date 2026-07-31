@@ -149,6 +149,10 @@ def test_ci_trigger_paths_cover_version_bump_files():
         "pyproject.toml",
         "radio.toml",
         "model_registry.toml",
+        "scripts/validate-addon.sh",
+        "scripts/ha-green-launch-smoke.py",
+        "scripts/ha-green-perf-smoke.py",
+        ".github/workflows/addon-build.yml",
     ]
 
     missing = [p for p in required_trigger_patterns if p not in trigger_block]
@@ -237,6 +241,47 @@ def test_ci_stages_and_verifies_the_canonical_model_registry():
     assert "sha256sum model_registry.toml" in registry_smoke_block
     assert "/app/model_registry.toml" in registry_smoke_block
     assert "does not match the canonical root registry" in registry_smoke_block
+
+
+def test_ci_runs_listener_byte_smoke_against_exact_built_image():
+    """Each exact per-arch SHA image must prove listener bytes, not health alone."""
+    workflow_text = _workflow_text()
+    smoke_block = _extract_step_block(workflow_text, "Run built-image launch smoke")
+
+    assert "IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}" in smoke_block
+    assert 'python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"' in smoke_block
+    assert "steps.pull_image.outcome == 'success'" in smoke_block
+    assert "sleep 40" not in smoke_block
+    assert "docker run -d --name mamma-smoke" not in smoke_block
+
+
+def test_ci_smokes_both_exact_images_on_native_arch_runners():
+    """A pushed SHA is proven only after both native-architecture smoke jobs pass."""
+    smoke_section = re.search(r"\n  smoke:\n((?:    .+\n|\n)*)", _workflow_text())
+    assert smoke_section, "Could not locate `smoke:` job block in addon-build.yml"
+    smoke_block = smoke_section.group(1)
+
+    assert "runs-on: ${{ matrix.runner }}" in smoke_block
+    assert "- arch: amd64\n            runner: ubuntu-latest" in smoke_block
+    assert "- arch: aarch64\n            runner: ubuntu-24.04-arm" in smoke_block
+    assert "IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}" in smoke_block
+    assert "id: pull_image" in smoke_block
+    assert "-amd64:${{ github.sha }}" not in smoke_block, (
+        "The smoke job must not silently prove only amd64; every exact-image reference must be matrix.arch-scoped."
+    )
+
+
+def test_ci_verifies_the_published_addon_port():
+    """Each exact image must also be reachable through Docker's host-published port."""
+    workflow_text = _workflow_text()
+    smoke_block = _extract_step_block(workflow_text, "Verify published add-on port")
+
+    assert "--publish 127.0.0.1:8765:8000" in smoke_block
+    assert "http://127.0.0.1:8765/healthz" in smoke_block
+    assert "curl --fail" in smoke_block
+    assert "trap " in smoke_block and "docker rm --force" in smoke_block
+    assert "SMOKE_ARCH: ${{ matrix.arch }}" in smoke_block
+    assert "mamma-published-${SMOKE_ARCH}-" in smoke_block
 
 
 def test_ci_publishes_short_sha_edge_tag():
