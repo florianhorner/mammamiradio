@@ -2394,7 +2394,10 @@ function wayOut(action){return (action?"Couldn't "+action:"That didn't go throug
 function offlineMsg(){return "Can't reach the studio right now — check the connection and try again.";}
 function metadataOnlyMutationCopy(response,subject){
   if(response?.metadata_only!==true)return'';
-  return `${subject} saved. Nothing new will air until you press Start.`;
+  if(response?.resume_required===true){
+    return `${subject} saved. Nothing new will air until you press Start.`;
+  }
+  return `${subject} saved without interrupting the current audio.`;
 }
 // Surface background queue-from-search failures the POST couldn't report (it
 // returned 200 before the download finished). /status carries recent notices;
@@ -3451,6 +3454,9 @@ function stationRuntimeVerdict(st,caps){
   const guidedStream=caps?.guided_setup?.stream||{};
   if(st?.session_stopped===true){
     return {state:'idle',label:'Paused',detail:'Stream Engine is paused by the operator.'};
+  }
+  if(runtime.recovering===true){
+    return {state:'working',label:'Starting',detail:runtime.health_explanation||'Stream Engine is rebuilding listener-audible audio.'};
   }
   if(runtime.health_state==='blocked'){
     return {state:'blocked',label:'Needs attention',detail:runtime.health_explanation||'Stream Engine needs attention.'};

@@ -250,6 +250,31 @@ def test_recovery_segment_does_not_inherit_failed_render_provider_observations()
     assert state.take_runtime_provider_observations("failed-render") == {}
 
 
+def test_canned_fallback_does_not_claim_a_failed_tts_observation():
+    state = _make_state()
+    scope = state.bind_runtime_provider_observation_scope("failed-canned-render")
+    try:
+        state.observe_runtime_provider(
+            "tts_provider",
+            current_provider="edge",
+            primary_provider="openai",
+            fallback_active=True,
+            reason="provider_error",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/canned-fallback.mp3"),
+        metadata={"title": "Canned fallback", "canned": True},
+    )
+
+    _attach_runtime_provider_observations(segment, state, "failed-canned-render")
+
+    assert segment.runtime_provider_observations == {}
+    assert state.take_runtime_provider_observations("failed-canned-render") == {}
+
+
 def _manifest_recovery_clip(root: Path, name: str, payload: bytes, *, kind: str = "speech") -> Path:
     """Create one content-addressed speech or tone recovery fixture."""
 

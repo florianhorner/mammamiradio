@@ -174,6 +174,19 @@ class TestSkipEndpoint:
                     assert app.state.skip_event.is_set()
                     assert app.state.station_state.now_streaming["type"] == "skipping"
                     assert not request_task.done()
+                    # Playback may already have selected the next song while
+                    # history persistence is still in flight. The transport
+                    # ownership flag, not the replaceable sentinel, must keep a
+                    # second rapid click from cutting that next song too.
+                    app.state.station_state.on_stream_segment(
+                        Segment(
+                            type=SegmentType.MUSIC,
+                            path=Path("/tmp/next-song.mp3"),
+                            metadata={"title": "Song B"},
+                        )
+                    )
+                    assert app.state.station_state.now_streaming["type"] == "music"
+                    assert app.state.station_state.skip_in_flight is True
                     duplicate = await c.post("/api/skip", headers=AUTH)
                     assert duplicate.json()["ok"] is False
                     assert "already on its way" in duplicate.json()["error"]

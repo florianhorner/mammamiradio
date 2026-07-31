@@ -5006,6 +5006,51 @@ async def test_paused_provider_status_exposes_newer_action_required_observation(
 
 
 @pytest.mark.asyncio
+async def test_same_provider_unheard_reason_is_kept_separate_from_audible_truth():
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.anthropic_api_key = "anthropic-key"
+    app.state.config.openai_api_key = "openai-key"
+    audible = state.observe_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_transient",
+    )
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/audible-openai-fallback.mp3"),
+        metadata={"title": "Audible OpenAI fallback"},
+        runtime_provider_observations={"script_provider": audible},
+    )
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment) is True
+
+    state.observe_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_auth_failed",
+    )
+    state.anthropic_disabled_until = time.time() + 120
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        provider = (await client.get("/status")).json()["runtime_status"]["providers"]["script_provider"]
+
+    assert provider["current_provider"] == "openai"
+    assert "overloaded" in provider["current_reason"].lower()
+    assert provider["recovery_mode"] is None
+    observed = provider["latest_observation"]
+    assert observed["current_provider"] == "openai"
+    assert observed["recovery_mode"] == "circuit_breaker"
+    assert observed["current_reason"] == "Anthropic API key rejected - check your key in Engine Room"
+    assert observed["action_guidance"] == "Anthropic API key rejected - check your key in Engine Room"
+
+
+@pytest.mark.asyncio
 async def test_runtime_status_keeps_on_air_hysteresis_only_for_recent_listener_audio():
     app = _make_test_app()
     state = app.state.station_state
@@ -5236,6 +5281,7 @@ async def test_force_resume_without_assets_arms_recovery_after_marker_commit(tmp
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post("/api/resume?force=true")
             readiness = await client.get("/readyz")
+            runtime = (await client.get("/status")).json()["runtime_status"]
             assert not marker.exists()
             assert state.session_stopped is False
             assert state.now_streaming == {}
@@ -5259,6 +5305,9 @@ async def test_force_resume_without_assets_arms_recovery_after_marker_commit(tmp
     }
     assert readiness.status_code == 503
     assert readiness.json()["status"] == "starting"
+    assert runtime["recovering"] is True
+    assert runtime["health_state"] == "degraded"
+    assert runtime["station_on_air"] is False
     assert state.force_recovery_active is False
     assert recovered_readiness.status_code == 200
     assert recovered_readiness.json()["status"] == "ready"
@@ -5655,6 +5704,7 @@ async def test_slow_source_load_crossing_stop_commits_filtered_metadata_only(tmp
     # route reports this flag and the operator docs promise it here too, but the
     # response dropped it while the test name still claimed it.
     assert load_response.json()["metadata_only"] is True
+    assert load_response.json()["resume_required"] is True
     assert state.session_stopped is True
     assert state.now_streaming["type"] == "stopped"
     assert [track.display for track in state.playlist] == ["Allowed Artist – Allowed Song"]
@@ -5694,6 +5744,11 @@ def test_source_load_epoch_change_after_fast_resume_preserves_entire_queue(tmp_p
     state.session_stopped = False
     state.continuity_epoch = 6
     state.now_streaming = {"type": "music", "label": "Current", "started": time.time(), "metadata": {}}
+    pinned = Track(title="Newer Pin", artist="Operator", duration_ms=180_000)
+    state.pinned_track = pinned
+    state.force_next = SegmentType.BANTER
+    state.operator_force_pending = SegmentType.AD
+    state.pending_actions.append({"type": "newer-control", "label": "keep me"})
     new_source = PlaylistSource(kind="url", url="https://example.test/new", label="New source")
 
     result = _apply_loaded_source(
@@ -5704,6 +5759,7 @@ def test_source_load_epoch_change_after_fast_resume_preserves_entire_queue(tmp_p
     )
 
     assert result["metadata_only"] is True
+    assert result["resume_required"] is False
     assert result["skipped"] is False
     assert state.session_stopped is False
     assert list(app.state.queue._queue) == [protected, stale]
@@ -5711,6 +5767,10 @@ def test_source_load_epoch_change_after_fast_resume_preserves_entire_queue(tmp_p
     assert stale_path.exists()
     assert not app.state.skip_event.is_set()
     assert state.playlist_source == new_source
+    assert state.pinned_track is pinned
+    assert state.force_next is SegmentType.BANTER
+    assert state.operator_force_pending is SegmentType.AD
+    assert list(state.pending_actions) == [{"type": "newer-control", "label": "keep me"}]
 
 
 @pytest.mark.asyncio

@@ -879,6 +879,7 @@ async def test_playlist_enrich_crossing_stop_resume_adds_metadata_without_runway
 
     assert response.json()["ok"] is True
     assert response.json()["metadata_only"] is True
+    assert response.json()["resume_required"] is False
     assert state.playlist[-1].spotify_id == "fresh1"
     assert app.state.queue.empty()
     assert state.continuity_slot is None

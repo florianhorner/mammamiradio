@@ -778,6 +778,11 @@ class StationState:
     chaos_last_degraded_reason: str = ""
     # Pinned track: select_next_track returns this immediately then clears it
     pinned_track: Track | None = None
+    # Transport ownership for an operator Skip. The now-playing "skipping"
+    # sentinel can be replaced as soon as playback selects the next segment,
+    # while the originating request is still settling history. Keep request
+    # ownership separate so a rapid second Skip cannot cut two songs.
+    skip_in_flight: bool = False
     # Persistent operator blocklist: normalized (artist, title) -> {display,
     # banned_by, banned_at}. A banned song never re-enters the rotation pool, across
     # HA restarts and every music source. Loaded from blocklist.json at startup

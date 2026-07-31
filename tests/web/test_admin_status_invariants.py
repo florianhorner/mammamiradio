@@ -222,6 +222,7 @@ def test_pipeline_stream_status_is_driven_by_fast_runtime_truth() -> None:
     assert "const fastGoldenPath=st?.golden_path" in block
     assert "const goldenPath=fastGoldenPath||caps?.golden_path||{}" in block
     assert "st?.session_stopped===true" in block
+    assert "runtime.recovering===true" in block
     assert "runtime.health_state==='blocked'" in block
     assert "runtime.station_on_air===true" in block
     assert "goldenPath.blocking===true" in block
@@ -240,19 +241,23 @@ def test_runtime_status_surfaces_share_one_pause_first_verdict() -> None:
     runtime = _function_block(html, "updateRuntimeStatus")
 
     assert "st?.session_stopped===true" in verdict
+    assert "runtime.recovering===true" in verdict
     assert "runtime.health_state==='blocked'" in verdict
     assert verdict.index("st?.session_stopped===true") < verdict.index("runtime.health_state==='blocked'")
+    assert verdict.index("runtime.recovering===true") < verdict.index("runtime.health_state==='blocked'")
     assert "stationRuntimeVerdict(st,caps)" in pipeline
     assert "stationRuntimeVerdict(st,_caps)" in runtime
     assert "guidedStream.status==='stopped'" not in pipeline
 
 
-def test_metadata_only_admin_mutations_explain_that_start_is_required() -> None:
+def test_metadata_only_admin_mutations_distinguish_pause_from_epoch_race() -> None:
     html = _read_admin_html()
     helper = _function_block(html, "metadataOnlyMutationCopy")
 
     assert "response?.metadata_only!==true" in helper
+    assert "response?.resume_required===true" in helper
     assert "saved. Nothing new will air until you press Start." in helper
+    assert "saved without interrupting the current audio." in helper
     for name in ("enrichPlaylistSource", "setHeading", "setDirectionText"):
         block = _function_block(html, name)
         assert "metadataOnlyMutationCopy(" in block

@@ -119,6 +119,7 @@ async def test_heading_load_crossing_stop_resume_updates_metadata_without_runway
 
     assert response.json()["ok"] is True
     assert response.json()["metadata_only"] is True
+    assert response.json()["resume_required"] is False
     assert [track.title for track in state.playlist] == ["Base", "Blue Jeans"]
     assert state.heading is not None
     assert app.state.queue.empty()

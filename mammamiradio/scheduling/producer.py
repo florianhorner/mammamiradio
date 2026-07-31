@@ -805,7 +805,7 @@ def _attach_runtime_provider_observations(
     """Carry only this render's provider truth to listener-audible commit."""
     render_observations = state.take_runtime_provider_observations(observation_token)
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-    if metadata.get("rescue") or metadata.get("error"):
+    if metadata.get("rescue") or metadata.get("error") or metadata.get("canned"):
         return
     segment.runtime_provider_observations = {
         provider_class: observation

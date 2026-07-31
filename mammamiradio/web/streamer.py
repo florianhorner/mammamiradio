@@ -1826,6 +1826,8 @@ def _skip_is_in_flight(state: StationState) -> bool:
     Audio is still audibly playing throughout, so this state is neither "real
     media" nor "nothing is streaming" — it needs its own answer.
     """
+    if state.skip_in_flight:
+        return True
     now_streaming = state.now_streaming
     if not isinstance(now_streaming, dict):
         return False
@@ -2104,14 +2106,18 @@ def _listener_audible_provider_status(
     if not audible_provider:
         return status
 
-    original_route = (str(status.get("current_provider") or ""), bool(status.get("fallback_active")))
+    latest_primary = str(status.get("primary_provider") or "")
+    latest_current = str(status.get("current_provider") or "")
+    latest_fallback = bool(status.get("fallback_active"))
+    latest_reason = str(status.get("current_reason") or "")
+    original_route = (latest_primary, latest_current, latest_fallback, latest_reason)
     latest_observation = {
-        "primary_provider": str(status.get("primary_provider") or ""),
+        "primary_provider": latest_primary,
         "primary_label": str(status.get("primary_label") or ""),
-        "current_provider": original_route[0],
+        "current_provider": latest_current,
         "current_label": str(status.get("current_label") or ""),
-        "fallback_active": original_route[1],
-        "current_reason": str(status.get("current_reason") or ""),
+        "fallback_active": latest_fallback,
+        "current_reason": latest_reason,
         "recovery_mode": status.get("recovery_mode"),
         "retry_in_seconds": status.get("retry_in_seconds"),
         "action_guidance": str(status.get("action_guidance") or ""),
@@ -2137,7 +2143,13 @@ def _listener_audible_provider_status(
         )
         status["current_reason"] = f"{context} Last observed reason: {audible_reason}" if audible_reason else context
 
-    if original_route != (audible_provider, audible_fallback):
+    audible_route = (
+        audible_primary,
+        audible_provider,
+        audible_fallback,
+        audible_reason,
+    )
+    if original_route != audible_route:
         # Recovery metadata belongs to the newer generation observation, not
         # the listener-audible route projected above. Keep it in a separately
         # labeled observation instead of hiding an action-required failure.
@@ -2434,6 +2446,10 @@ def _runtime_status_snapshot(
         health_state = "ready"
         health_color = "blue"
         health_explanation = "Station is paused by the operator."
+    elif state.force_recovery_active:
+        health_state = "degraded"
+        health_color = "yellow"
+        health_explanation = "Force Start is rebuilding the first listener-audible host break."
     elif silence_with_listeners:
         health_state = "blocked"
         health_color = "red"
@@ -2481,6 +2497,7 @@ def _runtime_status_snapshot(
         "health_color": health_color,
         "health_explanation": health_explanation,
         "station_on_air": station_on_air,
+        "recovering": state.force_recovery_active,
         "fallback_active": fallback_active,
         "providers": providers,
         "last_switch_timestamp": last_switch.get("timestamp") if last_switch else None,
@@ -3001,7 +3018,20 @@ def _apply_loaded_source(
         # created after its captured epoch, so preserve the queue, its shadow,
         # and every protected slot exactly as they are.
         preserved_segments = len(getattr(q, "_queue", ()))
+        # `switch_playlist()` intentionally clears old-source transport intent
+        # during an ordinary cutover. This request is stale, though: controls
+        # visible on the current continuity epoch belong to a newer timeline and
+        # must survive the metadata commit. Snapshot and restore them without an
+        # await so no concurrent control can interleave with the handoff.
+        preserved_pending_actions = list(state.pending_actions)
+        preserved_pinned_track = state.pinned_track
+        preserved_force_next = state.force_next
+        preserved_operator_force_pending = state.operator_force_pending
         state.switch_playlist(tracks, resolved_source)
+        state.pending_actions.extend(preserved_pending_actions)
+        state.pinned_track = preserved_pinned_track
+        state.force_next = preserved_force_next
+        state.operator_force_pending = preserved_operator_force_pending
         _delete_persisted_heading(request.app.state.config.cache_dir)
         logger.info(
             "Loaded source metadata only kind=%s tracks=%d captured_epoch=%d current_epoch=%d "
@@ -3029,6 +3059,7 @@ def _apply_loaded_source(
             "tracks": len(state.playlist),
             "skipped": False,
             "metadata_only": True,
+            "resume_required": state.session_stopped,
         }
 
     # The queue replacement and its reservation happen before the source
@@ -3080,6 +3111,7 @@ def _apply_loaded_source(
         "tracks": len(state.playlist),
         "skipped": skipped,
         "metadata_only": False,
+        "resume_required": False,
     }
 
 
@@ -5089,6 +5121,30 @@ async def _request_skip(
     next music instead of risking dead air (#2 INSTANT AUDIO). Returns whether a bridge
     was forced.
     """
+    if state.skip_in_flight:
+        raise RuntimeError("skip request already in flight")
+    state.skip_in_flight = True
+    try:
+        return await _request_skip_once(
+            app_state,
+            state,
+            config,
+            source=source,
+            discard_reason=discard_reason,
+        )
+    finally:
+        state.skip_in_flight = False
+
+
+async def _request_skip_once(
+    app_state,
+    state: StationState,
+    config,
+    *,
+    source: str,
+    discard_reason: str,
+) -> bool:
+    """Execute one Skip while :func:`_request_skip` owns the transport."""
     _reserve_continuity_runway(app_state, state, config, discard_reason=discard_reason)
     _discard_unplayable_queue_prefix(app_state.queue, state, reason=discard_reason)
     now_seg = state.now_streaming or {}
@@ -6534,6 +6590,11 @@ async def ban_now_playing(request: Request, _: None = Depends(require_admin_acce
     state = request.app.state.station_state
     config = request.app.state.config
 
+    if _skip_is_in_flight(state):
+        return {
+            "ok": False,
+            "error": "That skip is already on its way — wait for the next song before banning again.",
+        }
     now_seg = state.now_streaming or {}
     if now_seg.get("type") != "music":
         return {"ok": False, "error": "Only a song can be banned — nothing musical is on air right now."}
@@ -7553,6 +7614,7 @@ async def _set_direction_text(request: Request, text: str):
         "targets": expansion.target_dicts,
         "tracks": [_serialize_track(track) for track in (existing_tracks + download_tracks)[:20]],
         "metadata_only": metadata_only,
+        "resume_required": bool(metadata_only and state.session_stopped),
     }
 
 
@@ -7738,6 +7800,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
                 "heading": _serialize_heading(heading, state),
                 "tracks": [],
                 "metadata_only": metadata_only,
+                "resume_required": bool(metadata_only and state.session_stopped),
             }
 
         heading = Heading(
@@ -7787,6 +7850,7 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
             "heading": _serialize_heading(heading, state),
             "tracks": [_serialize_track(track) for track in new_tracks[:20]],
             "metadata_only": metadata_only,
+            "resume_required": bool(metadata_only and state.session_stopped),
         }
 
 
@@ -7875,6 +7939,7 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
             "source": _serialize_source(resolved_source),
             "tracks": [_serialize_track(track) for track in new_tracks[:20]],
             "metadata_only": metadata_only,
+            "resume_required": bool(metadata_only and state.session_stopped),
         }
 
 
@@ -7918,6 +7983,7 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
             "persisted": True,
             "skipped": bool(source_result.get("skipped")),
             "metadata_only": bool(source_result.get("metadata_only")),
+            "resume_required": bool(source_result.get("resume_required")),
         }
         try:
             await asyncio.to_thread(write_persisted_source, config.cache_dir, resolved_source)
