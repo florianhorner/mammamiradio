@@ -9,6 +9,7 @@ on:
       - "pyproject.toml"
       - "radio.toml"
       - "model_registry.toml"
+      - "scripts/validate-addon.sh"
       - "scripts/ha-green-launch-smoke.py"
       - "scripts/ha-green-perf-smoke.py"
       - ".github/workflows/addon-build.yml"
@@ -115,11 +116,19 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: build
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
     steps:
       # Needed by "Assert installed model registry": it hashes the canonical
       # root model_registry.toml against the copy baked into the image. Without
@@ -136,13 +145,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull amd64 image
-        id: pull_amd64
-        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+      - name: Pull exact SHA image
+        id: pull_image
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+        run: docker pull "$IMAGE_REF"
 
       - name: Assert installed recovery assets
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}"
+          IMAGE="$IMAGE_REF"
           docker run --rm -i "$IMAGE" python3 - <<'PY'
           from importlib import resources
           from pathlib import Path
@@ -226,7 +239,7 @@ jobs:
         env:
           # Route trusted expansions through env so they reach the script as shell
           # variables, not inline ${{ }} interpolation (zizmor: template-injection).
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
         run: |
           set -euo pipefail
           IMAGE="$IMAGE_REF"
@@ -248,18 +261,19 @@ jobs:
           echo "Installed model registry matches the canonical root registry"
 
       - name: Run built-image launch smoke
-        if: ${{ always() && steps.pull_amd64.outcome == 'success' }}
+        if: ${{ always() && steps.pull_image.outcome == 'success' }}
         env:
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
         run: python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"
 
       - name: Verify published add-on port
-        if: ${{ always() && steps.pull_amd64.outcome == 'success' }}
+        if: ${{ always() && steps.pull_image.outcome == 'success' }}
         env:
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          SMOKE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          CONTAINER_NAME="mamma-published-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          CONTAINER_NAME="mamma-published-${SMOKE_ARCH}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cleanup() {
             docker rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true
           }

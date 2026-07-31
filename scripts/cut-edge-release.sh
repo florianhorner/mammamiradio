@@ -32,7 +32,7 @@ cd "$ROOT"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 
 # Paths that trigger Build HA Addon — must mirror addon-build.yml `on.push.paths`.
-IMAGE_PATHS="ha-addon mammamiradio pyproject.toml radio.toml model_registry.toml scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py .github/workflows/addon-build.yml"
+IMAGE_PATHS="ha-addon mammamiradio pyproject.toml radio.toml model_registry.toml scripts/validate-addon.sh scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py .github/workflows/addon-build.yml"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: working tree not clean — commit or stash first, then cut the edge release." >&2

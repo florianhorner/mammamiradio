@@ -305,7 +305,7 @@ def test_release_workflow_build_needs_preflight():
 
 
 def test_release_workflow_runs_smoke_test():
-    """Smoke jobs must gate promotion on :sha and verify the published release tag."""
+    """Smoke jobs gate promotion on both :sha images and verify the release tag."""
     text = _workflow_text()
     prebuilt_section = re.search(r"\n  smoke-prebuilt:\n((?:    .+\n|\n)*)", text)
     assert prebuilt_section, "Could not locate `smoke-prebuilt:` job in addon-release.yml"
@@ -314,6 +314,17 @@ def test_release_workflow_runs_smoke_test():
         "smoke-prebuilt must pull :${{ github.sha }} before stable tags are promoted."
     )
     assert "needs: pre-flight" in prebuilt_block
+    assert "runs-on: ${{ matrix.runner }}" in prebuilt_block
+    assert "- arch: amd64\n            runner: ubuntu-latest" in prebuilt_block
+    assert "- arch: aarch64\n            runner: ubuntu-24.04-arm" in prebuilt_block
+    assert "IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}" in prebuilt_block
+    assert 'python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"' in prebuilt_block
+    assert "-amd64:${{ github.sha }}" not in prebuilt_block, (
+        "Stable promotion must independently smoke both exact SHA images, not only amd64."
+    )
+    assert "sleep 40" not in prebuilt_block, (
+        "The prebuilt gate must use the launch-smoke proof rather than the legacy sleep/health probe."
+    )
 
     smoke_section = re.search(r"\n  smoke:\n((?:    .+\n|\n)*)", text)
     assert smoke_section, "Could not locate `smoke:` job in addon-release.yml"

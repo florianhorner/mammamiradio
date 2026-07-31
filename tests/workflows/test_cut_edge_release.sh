@@ -29,6 +29,28 @@ BASH_BIN="$(command -v bash)"   # absolute, so the restricted-PATH cases still f
 fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
+# The drift guard and workflow trigger are one release contract. Normalise the
+# workflow's directory globs to git pathspec directories before comparing.
+WORKFLOW_IMAGE_PATHS="$(
+  sed -n '/^    paths:/,/^  workflow_dispatch:/p' .github/workflows/addon-build.yml \
+    | sed -n 's/^      - "\(.*\)"$/\1/p' \
+    | sed 's#/\*\*$##' \
+    | sort
+)"
+SCRIPT_IMAGE_PATHS="$(
+  sed -n 's/^IMAGE_PATHS="\([^"]*\)"$/\1/p' "$SCRIPT" \
+    | tr ' ' '\n' \
+    | sort
+)"
+[ "$SCRIPT_IMAGE_PATHS" = "$WORKFLOW_IMAGE_PATHS" ] || {
+  echo "workflow trigger paths:" >&2
+  printf '%s\n' "$WORKFLOW_IMAGE_PATHS" >&2
+  echo "cut-edge drift paths:" >&2
+  printf '%s\n' "$SCRIPT_IMAGE_PATHS" >&2
+  fail "cut-edge IMAGE_PATHS must stay in parity with addon-build.yml on.push.paths"
+}
+pass "cut-edge IMAGE_PATHS matches the add-on build trigger paths"
+
 TMPDIR_T="$(mktemp -d)"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 EDGE_ORIG="$TMPDIR_T/edge-config.orig"
