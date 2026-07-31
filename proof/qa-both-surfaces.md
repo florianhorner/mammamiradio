@@ -1,45 +1,78 @@
-# QA: Player and Admin surfaces
+# Player and Admin QA
 
-Local loopback station (`scripts/conductor-run.sh`, port 8123), real FFmpeg 8.1.1,
-real Apple Music IT chart source (79 tracks), real normalization cache. Driven
-through the actual UI with Playwright — buttons clicked, not endpoints poked,
-except where a payload assertion is named below.
+This receipt covers code SHA `16c78caa1318848a8071d5ec09b8a815ca614d96`
+against isolated loopback servers. External network access was denied for the
+station processes. It is local proof, not Home Assistant deployment proof.
 
-## Admin QA (`/admin`)
+## Player
 
-| Check | Result |
+The executable Chromium smoke drove the real listener page and its interaction
+controller. It passed 15 checks:
+
+- stream intent reached the audio element in 22 ms;
+- station identity remained `Mamma Mi Radio`;
+- shout-out and song-request success paths rendered correctly;
+- rate-limited, queue-full, declined, and network-failure request paths kept an
+  actionable listener state;
+- the page retained its audio element, listener controls, on-air copy, and
+  accessible state;
+- the only blocked off-origin request was the optional Google Fonts stylesheet;
+- no unexpected page or console error occurred.
+
+## Admin
+
+The executable Chromium Admin guard passed against the real `/admin`, `/status`,
+and `/api/setup/status` surfaces. Same-origin response interception was used only
+to deterministically exercise failure and corrupt-install branches.
+
+| Contract | Result |
 |---|---|
-| Stop acknowledges from real JSON, no optimistic success | PASS — `#stopBtn` click, `data-stopped` flips to `true`, `session_stopped: true` |
-| Paused with a configured source never reads "Needs setup" | PASS — zero "Needs setup" strings on the page while paused |
-| Setup stays ready while runtime is paused | PASS — Setup reads "Ready"; runtime reads "Station paused · press Start when you're ready." |
-| Stream Engine card uses runtime truth, not a hard-coded chip | PASS — `Stream Engine · Paused` when paused, `· Ready with backup` when running, `· On air with backup` on air |
-| Provider rows: "Current" on air, "Last observed" when paused | PASS — `Current: Anthropic · …` on air; `Last observed: Anthropic · …` when paused |
-| Primary label never welded to a stale fallback reason | PASS — switch history renders as its own timestamped line |
-| Failover line is operator copy, not provider keys | PASS — `Audio source: Charts → Norm cache rescue · Fallback audio is currently on air · 10:57:49` |
-| Failed status poll marks data stale | PASS — `Status may be out of date — still trying. Last updated 10:58:32` |
-| Recovered poll clears the marker | PASS — freshness banner returns to hidden |
-| Resume returns the station to running | PASS — `data-stopped: false`, `session_stopped: false` |
-| Console errors | None. The three recorded errors are the injected `Error: offline` used to force the stale-poll state. |
+| Healthy Start sends one normal `POST /api/resume` and no force request | PASS |
+| Assetless refusal leaves the station paused and offers a way out | PASS |
+| Cancelling the confirmation sends no force request | PASS |
+| Confirming sends exactly one `POST /api/resume?force=true` | PASS |
+| Failed/malformed/stale status polls retain last-good truth and an accessible retry | PASS |
+| Setup remains source-readiness guidance while `/status` owns paused runtime truth | PASS |
+| Metadata-only copy distinguishes paused commits from epoch-race commits | PASS |
+| Stopped controls, keyboard focus, reduced motion, and 320–768 px layouts stay coherent | PASS |
+| Unexpected page or console errors | None |
 
-Screenshots: `admin-qa-paused-setup-ready.png`, `admin-qa-paused-last-observed.png`.
+## Transport and race QA
 
-## Player QA (`/`)
+The browser guard covers the controllers; deterministic ASGI regressions cover
+the backend concurrency boundaries that cannot be timed reliably by a visual
+click script:
 
-| Check | Result |
-|---|---|
-| Listener page serves and renders | PASS — HTTP 200, `<audio>` element present |
-| Gold "Mi" accent | PASS — `span.mi` present |
-| Italian tricolor band | PASS — `.tricolor-band` present |
-| In-character copy | PASS — "In Onda", "On Air · 96,7 FM" |
-| No machine words, no `undefined`/`null`/`NaN` on screen | PASS — zero matches |
-| `/public-status.current_source` semantics unchanged | PASS — still the configured playlist source ("Current Italian charts", 79 tracks) |
-| Console errors | None |
+- a second Skip is declined while the first Skip history write is in flight;
+- Stop wins over an in-flight Skip without resurrecting transport state;
+- Panic during Skip preserves exactly-once listener history;
+- a source load crossing Stop commits filtered metadata only;
+- a source load crossing a fast Resume preserves the entire queued runway;
+- playlist enrichment and external-download completion crossing Stop/Resume
+  update metadata without injecting stale audio.
 
-Screenshot: `player-qa-listener-on-air.png`.
+All seven focused race tests passed.
 
-## The regression this change exists to fix
+## Status and restart QA
 
-Timings in `stop-resume-continuity.txt`. Headline: a station that booted with a
-stopped marker left over from a prior process (Scenario 3) resumed and delivered
-listener bytes in **0.001s**; a live Stop→Resume cycle delivered in **0.124s**.
-Budget is 2.000s.
+- `/healthz` stayed healthy throughout the launch scenarios.
+- `/readyz` stayed `starting` until a listener accepted audio.
+- `/readyz` and `/public-status` both reported an intentional persisted stop.
+- `/status` and the Admin runtime card treated paused state as runtime truth,
+  not a setup failure.
+- `/api/setup/status` remained focused on source and credential readiness.
+- Warm, empty-cache packaged, exact-image, and persisted-stop scenarios are
+  recorded in `proof/stop-resume-continuity.txt`.
+
+## Evidence format
+
+The final receipt uses executable browser/API results rather than retaining
+screenshots captured before the last runtime and Admin changes. Timing,
+confirmation ownership, and concurrency are not provable from static pixels.
+
+## Residual behavior outside this remediation
+
+An already-open listener page does not automatically invoke browser playback
+after an operator Resume; it returns to the on-air state and the listener may
+need to press Listen Now. This predates the PR #914 remediation and was not
+changed here.
