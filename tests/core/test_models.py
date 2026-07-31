@@ -442,6 +442,27 @@ def test_provider_observation_updates_current_without_switch_history():
     assert list(state.runtime_events) == []
 
 
+def test_provider_observation_scope_returns_and_collects_render_ownership():
+    state = StationState()
+    scope = state.bind_runtime_provider_observation_scope("render-123")
+    try:
+        observation = state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+
+    assert observation.observation_token == "render-123"
+    assert state.take_runtime_provider_observations("render-123") == {
+        "script_provider": observation,
+    }
+    assert state.take_runtime_provider_observations("render-123") == {}
+
+
 def test_provider_observation_preserves_legacy_audible_baseline():
     state = StationState()
     state.runtime_provider_state["audio_source"] = {

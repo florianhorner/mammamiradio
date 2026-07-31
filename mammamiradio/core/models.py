@@ -11,6 +11,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Callable, Collection, Iterator
+from contextvars import ContextVar, Token
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import cached_property
@@ -34,6 +35,11 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger("mammamiradio.render_timing")
+
+_RUNTIME_PROVIDER_OBSERVATION_TOKEN: ContextVar[str] = ContextVar(
+    "mammamiradio_runtime_provider_observation_token",
+    default="",
+)
 
 
 PartyMode = Literal["festival"]
@@ -233,6 +239,7 @@ class RuntimeProviderObservation:
     primary_provider: str
     fallback_active: bool
     current_reason: str
+    observation_token: str = ""
 
 
 @dataclass
@@ -936,6 +943,10 @@ class StationState:
     last_state_change_at: float = 0.0
     runtime_events: deque[RuntimeProviderEvent] = field(default_factory=lambda: deque(maxlen=50))
     runtime_provider_state: dict[str, dict] = field(default_factory=dict)
+    _runtime_provider_observations_by_token: dict[str, dict[str, RuntimeProviderObservation]] = field(
+        default_factory=dict,
+        repr=False,
+    )
     runtime_health_state: str = ""
     # Live production tracking — what the producer is building right now, surfaced
     # in /api/status so the admin "In produzione" feed can show backstage work.
@@ -1384,9 +1395,21 @@ class StationState:
         fallback_active: bool,
         reason: str,
         timestamp: float | None = None,
+        observation_token: str | None = None,
     ) -> RuntimeProviderObservation:
-        """Update current provider truth without claiming that audio was heard."""
+        """Update current provider truth without claiming that audio was heard.
+
+        A producer render binds a task-local observation token before it starts
+        script and voice work. Observations made by child tasks inherit that
+        token, while unrelated tasks retain their own context. Keeping the
+        token-owned observations separately from the process-wide latest state
+        prevents a background LLM call from being attached to whichever segment
+        happens to finish next.
+        """
         now = time.time() if timestamp is None else timestamp
+        owner_token = (
+            _RUNTIME_PROVIDER_OBSERVATION_TOKEN.get() if observation_token is None else str(observation_token).strip()
+        )
         previous = self.runtime_provider_state.get(provider_class, {})
         previous_switch_timestamp = previous.get("last_switch_timestamp")
         previous_switch_reason = previous.get("last_switch_reason")
@@ -1429,12 +1452,37 @@ class StationState:
             "last_switch_timestamp": previous_switch_timestamp,
             "last_switch_reason": previous_switch_reason,
         }
-        return RuntimeProviderObservation(
+        observation = RuntimeProviderObservation(
             current_provider=current_provider,
             primary_provider=primary_provider,
             fallback_active=fallback_active,
             current_reason=reason,
+            observation_token=owner_token,
         )
+        if owner_token:
+            self._runtime_provider_observations_by_token.setdefault(owner_token, {})[provider_class] = observation
+        return observation
+
+    def bind_runtime_provider_observation_scope(self, observation_token: str) -> Token[str]:
+        """Bind provider observations made by this async render and its children."""
+        owner_token = str(observation_token).strip()
+        if not owner_token:
+            raise ValueError("provider observation scope token must not be empty")
+        return _RUNTIME_PROVIDER_OBSERVATION_TOKEN.set(owner_token)
+
+    def reset_runtime_provider_observation_scope(self, scope: Token[str]) -> None:
+        """Restore the caller's previous provider-observation ownership."""
+        _RUNTIME_PROVIDER_OBSERVATION_TOKEN.reset(scope)
+
+    def take_runtime_provider_observations(
+        self,
+        observation_token: str,
+    ) -> dict[str, RuntimeProviderObservation]:
+        """Transfer one render's provider observations to its future segment."""
+        owner_token = str(observation_token).strip()
+        if not owner_token:
+            return {}
+        return self._runtime_provider_observations_by_token.pop(owner_token, {})
 
     def commit_runtime_provider_audible(
         self,

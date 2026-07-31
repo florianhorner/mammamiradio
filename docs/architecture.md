@@ -442,7 +442,13 @@ the last listener-audible route, while a newer unheard route is exposed
 separately as `latest_observation` so an operator can see a current
 action-required failure without the UI claiming that provider is on air.
 Operator-facing script/TTS reasons are humanized; the corresponding recent
-event retains its raw code as `diagnostic_reason`.
+event retains its raw code as `diagnostic_reason`. Each producer render binds
+an internal task-local observation token around script and TTS work. Only
+observations owned by that token move onto the resulting segment, including the
+aggregate TTS route and each `tts:<engine>` route; an independently scheduled
+post-air memory call cannot be attributed to a coincident render. Failed,
+cancelled, and rescue renders drain their token-owned observations, and the
+token itself is never part of a public status or integration payload.
 
 The required recovery set is a subset, not an exact directory inventory:
 additional reviewed assets may ship. Release checks independently require

@@ -62,7 +62,6 @@ from mammamiradio.core.models import (
     GenerationWasteReason,
     HostPersonality,
     InterruptSpec,
-    RuntimeProviderObservation,
     Segment,
     SegmentType,
     StationState,
@@ -795,47 +794,24 @@ def _pick_recovery_clip(state: StationState) -> Path | None:
     return None
 
 
-_AUDIBLE_PROVIDER_CLASSES = ("script_provider", "tts_provider")
-
-
-def _runtime_provider_observation_revisions(state: StationState) -> dict[str, int]:
-    """Capture provider observations at the start of one render attempt."""
-    revisions: dict[str, int] = {}
-    for provider_class in _AUDIBLE_PROVIDER_CLASSES:
-        try:
-            revisions[provider_class] = int(
-                state.runtime_provider_state.get(provider_class, {}).get("observation_revision") or 0
-            )
-        except (TypeError, ValueError):
-            revisions[provider_class] = 0
-    return revisions
+_AUDIBLE_PROVIDER_CLASSES = frozenset({"script_provider", "tts_provider"})
 
 
 def _attach_runtime_provider_observations(
     segment: Segment,
     state: StationState,
-    starting_revisions: dict[str, int],
+    observation_token: str,
 ) -> None:
-    """Carry render-time provider truth to the listener-audible commit."""
+    """Carry only this render's provider truth to listener-audible commit."""
+    render_observations = state.take_runtime_provider_observations(observation_token)
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
     if metadata.get("rescue") or metadata.get("error"):
         return
-    observations: dict[str, RuntimeProviderObservation] = {}
-    for provider_class, starting_revision in starting_revisions.items():
-        provider_state = state.runtime_provider_state.get(provider_class, {})
-        try:
-            current_revision = int(provider_state.get("observation_revision") or 0)
-        except (TypeError, ValueError):
-            current_revision = 0
-        if current_revision <= starting_revision:
-            continue
-        observations[provider_class] = RuntimeProviderObservation(
-            current_provider=str(provider_state.get("current_provider") or ""),
-            primary_provider=str(provider_state.get("primary_provider") or ""),
-            fallback_active=bool(provider_state.get("fallback_active")),
-            current_reason=str(provider_state.get("current_reason") or provider_state.get("reason") or ""),
-        )
-    segment.runtime_provider_observations = observations
+    segment.runtime_provider_observations = {
+        provider_class: observation
+        for provider_class, observation in render_observations.items()
+        if provider_class in _AUDIBLE_PROVIDER_CLASSES or provider_class.startswith("tts:")
+    }
 
 
 async def _queue_continuity_bridge(
@@ -4395,7 +4371,7 @@ async def _run_producer_inner(
         # A completed render from before that change must never refill the queue
         # after the reservation has made its safety promise.
         generation_continuity_epoch = state.continuity_epoch
-        generation_provider_revisions = _runtime_provider_observation_revisions(state)
+        generation_provider_token = uuid4().hex
 
         success_callback: Callable[[], None] | None = None
         banter_commit = None
@@ -4666,6 +4642,7 @@ async def _run_producer_inner(
             state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CHAOS)
             continue
 
+        provider_observation_scope = state.bind_runtime_provider_observation_scope(generation_provider_token)
         try:
             if seg_type == SegmentType.MUSIC:
                 track = _select_accepted_music_track(state, config)
@@ -6315,6 +6292,7 @@ async def _run_producer_inner(
                 )
             segment = await _producer_error_recovery_segment(state, config)
             if segment is None:
+                state.take_runtime_provider_observations(generation_provider_token)
                 await asyncio.sleep(0.5)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
@@ -6324,10 +6302,15 @@ async def _run_producer_inner(
             # fan-outs have finished their executor-backed siblings by here.
             # Remove their outputs before preserving cancellation semantics.
             _unlink_render_scratch(render_failure_scratch)
+            state.take_runtime_provider_observations(generation_provider_token)
             raise
+        finally:
+            state.reset_runtime_provider_observation_scope(provider_observation_scope)
+            if segment is None:
+                state.take_runtime_provider_observations(generation_provider_token)
 
         if segment:
-            _attach_runtime_provider_observations(segment, state, generation_provider_revisions)
+            _attach_runtime_provider_observations(segment, state, generation_provider_token)
             actual_seg_type = _adjacency_type_for(segment)
             if (
                 prev_seg_type is not None

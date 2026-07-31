@@ -49,7 +49,6 @@ from mammamiradio.scheduling.producer import (
     _attach_runtime_provider_observations,
     _listener_truth_guard,
     _pick_canned_clip,
-    _runtime_provider_observation_revisions,
     run_producer,
 )
 
@@ -116,53 +115,139 @@ def test_segment_carries_only_provider_observations_created_during_its_render():
         fallback_active=False,
         reason="Anthropic active",
     )
-    starting = _runtime_provider_observation_revisions(state)
-    state.observe_runtime_provider(
-        "script_provider",
-        current_provider="openai",
-        primary_provider="anthropic",
-        fallback_active=True,
-        reason="anthropic_exception",
-    )
-    state.observe_runtime_provider(
-        "tts_provider",
-        current_provider="edge",
-        primary_provider="mixed_tts",
-        fallback_active=True,
-        reason="Cloud TTS unavailable",
-    )
+    scope = state.bind_runtime_provider_observation_scope("banter-render")
+    try:
+        state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+        state.observe_runtime_provider(
+            "tts:openai",
+            current_provider="edge",
+            primary_provider="openai",
+            fallback_active=True,
+            reason="missing_credentials",
+        )
+        state.observe_runtime_provider(
+            "tts_provider",
+            current_provider="edge",
+            primary_provider="mixed_tts",
+            fallback_active=True,
+            reason="Cloud TTS unavailable",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
     segment = Segment(
         type=SegmentType.BANTER,
         path=Path("/tmp/provider-carry.mp3"),
         metadata={"title": "Rendered banter"},
     )
 
-    _attach_runtime_provider_observations(segment, state, starting)
+    _attach_runtime_provider_observations(segment, state, "banter-render")
 
-    assert set(segment.runtime_provider_observations) == {"script_provider", "tts_provider"}
+    assert set(segment.runtime_provider_observations) == {
+        "script_provider",
+        "tts:openai",
+        "tts_provider",
+    }
     assert segment.runtime_provider_observations["script_provider"].current_provider == "openai"
     assert segment.runtime_provider_observations["tts_provider"].current_provider == "edge"
+    assert segment.runtime_provider_observations["tts:openai"].current_provider == "edge"
+
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment) is True
+    assert state.runtime_provider_state["tts_provider"]["last_audible_provider"] == "edge"
+    assert state.runtime_provider_state["tts:openai"]["last_audible_provider"] == "edge"
+    assert {event.provider_class for event in state.runtime_events} == {
+        "script_provider",
+        "tts:openai",
+        "tts_provider",
+    }
+
+
+@pytest.mark.asyncio
+async def test_background_provider_observation_during_music_render_is_not_attached(tmp_path):
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.playlist[1].youtube_id = "yt_demo2"
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    music_render_started = asyncio.Event()
+    background_observed = asyncio.Event()
+    source_audio = tmp_path / "source.mp3"
+    source_audio.write_bytes(b"\x00" * 2048)
+
+    async def _background_memory_observation() -> None:
+        await music_render_started.wait()
+        state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="background_memory_extract",
+        )
+        background_observed.set()
+
+    async def _download_during_background_observation(*_args, **_kwargs) -> Path:
+        music_render_started.set()
+        await background_observed.wait()
+        return source_audio
+
+    def _normalize_source(_src: Path, dst: Path, *_args, **_kwargs) -> None:
+        dst.write_bytes(source_audio.read_bytes())
+
+    # The task is born outside the render scope, as memory extraction and other
+    # unrelated observers are in production. Context ownership must therefore
+    # stay blank even when it completes while a music render is active.
+    background = asyncio.create_task(_background_memory_observation())
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(
+            f"{PRODUCER_MODULE}.download_track",
+            new_callable=AsyncMock,
+            side_effect=_download_during_background_observation,
+        ),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize_source),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+    ):
+        await _run_until_queued(queue, state, config)
+        await background
+
+    segment = queue.get_nowait()
+
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "background_memory_extract"
+    assert segment.runtime_provider_observations == {}
 
 
 def test_recovery_segment_does_not_inherit_failed_render_provider_observations():
     state = _make_state()
-    starting = _runtime_provider_observation_revisions(state)
-    state.observe_runtime_provider(
-        "script_provider",
-        current_provider="openai",
-        primary_provider="anthropic",
-        fallback_active=True,
-        reason="anthropic_exception",
-    )
+    scope = state.bind_runtime_provider_observation_scope("failed-render")
+    try:
+        state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
     segment = Segment(
         type=SegmentType.BANTER,
         path=Path("/tmp/provider-recovery.mp3"),
         metadata={"title": "Recovery", "rescue": True},
     )
 
-    _attach_runtime_provider_observations(segment, state, starting)
+    _attach_runtime_provider_observations(segment, state, "failed-render")
 
     assert segment.runtime_provider_observations == {}
+    assert state.take_runtime_provider_observations("failed-render") == {}
 
 
 def _manifest_recovery_clip(root: Path, name: str, payload: bytes, *, kind: str = "speech") -> Path:
