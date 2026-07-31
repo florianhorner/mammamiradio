@@ -890,7 +890,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/quality` | POST | Admin | Set the active model profile with `{"quality_profile": "premium"\|"balanced"\|"economy"}`; hot-swaps live with no restart and no queue purge; persists `MAMMAMIRADIO_QUALITY` to `.env` or `quality_profile` through Supervisor |
 | `/api/trigger` | POST | Admin | Trigger segment production |
 | `/api/stop` | POST | Admin | Persist the stop marker first, then invalidate stale work, cut, purge, and pause producer until `/api/resume`; persistence failure changes nothing |
-| `/api/resume` | POST | Admin | Reserve readable immediate audio, clear the durable stop marker, then publish running state; otherwise remain stopped |
+| `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 | `/api/clip` | POST | Public | Capture a shareable clip (full ad/banter segment, or last 30s of music) |
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
