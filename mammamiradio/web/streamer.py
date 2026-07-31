@@ -1166,7 +1166,18 @@ def _discard_unplayable_queue_prefix(q, state: StationState, *, reason: str) -> 
     return len(dropped)
 
 
-def _reserve_continuity_runway(app_state, state: StationState, config, **kwargs) -> int:
+def _reserve_continuity_runway(
+    app_state,
+    state: StationState,
+    config,
+    *,
+    replace_queue: bool = False,
+    discard_reason: str = GenerationWasteReason.OPERATOR_PURGE,
+    excluded_paths: set[Path] | None = None,
+    excluded_track_keys: set[tuple[str, str]] | None = None,
+    outcome: ContinuityRunwayOutcome | None = None,
+    minimum_runway_seconds: float = 0.0,
+) -> int:
     """Reserve playable runway, then bind it to the timeline it was created on.
 
     Every reservation MUST be stamped. `_reserve_continuity_runway_unstamped`
@@ -1178,8 +1189,23 @@ def _reserve_continuity_runway(app_state, state: StationState, config, **kwargs)
     operator tapping a silent Panic/Purge/Air-Next extends the silence instead
     of ending it. Stamping here rather than at each call site is deliberate:
     there is no correct way for a caller to opt out.
+
+    The keyword list mirrors `_reserve_continuity_runway_unstamped` on purpose:
+    a bare `**kwargs` pass-through erased keyword checking at every one of the
+    ~22 live-control call sites, so a typo'd argument type-checked clean and
+    raised at request time inside a control whose job is preventing dead air.
     """
-    dropped = _reserve_continuity_runway_unstamped(app_state, state, config, **kwargs)
+    dropped = _reserve_continuity_runway_unstamped(
+        app_state,
+        state,
+        config,
+        replace_queue=replace_queue,
+        discard_reason=discard_reason,
+        excluded_paths=excluded_paths,
+        excluded_track_keys=excluded_track_keys,
+        outcome=outcome,
+        minimum_runway_seconds=minimum_runway_seconds,
+    )
     _stamp_continuity_runway_epoch(app_state.queue, state)
     return dropped
 
@@ -3723,22 +3749,13 @@ async def run_playback_loop(app) -> None:
                 # Building a packaged fill can await a bounded probe while a
                 # Stop/Resume or another control advances continuity_epoch.
                 # These source-neutral rescue bytes are admitted only after
-                # that await, so bind them to the timeline that now owns them —
-                # UNLESS that control already queued playable audio of its own.
-                # Stamping unconditionally made the staleness gate below
-                # unreachable for every gap fill, so a control that reserved
-                # fresh runway had its cut swallowed and the pre-control fill
-                # aired instead. Yield only when a real replacement exists;
-                # otherwise the fill still airs, because silence is worse.
-                if _playable_runway_available(segment_queue, state):
-                    logger.info(
-                        "Playback gap fill yielding to runway queued by a newer control "
-                        "captured_epoch=%d current_epoch=%d",
-                        selection_continuity_epoch,
-                        state.continuity_epoch,
-                    )
-                else:
-                    segment = _stamp_playback_gap_fill(segment, state)
+                # that await, so bind them to the timeline that now owns them.
+                # Known trade-off: the stamp makes the staleness gate below
+                # unreachable for gap fills, so a control that queued fresh
+                # runway mid-probe has its cut deferred until the fill ends.
+                # Airing rescue audio is the safer default; teaching the fill
+                # to yield needs the full three-scenario test set first.
+                segment = _stamp_playback_gap_fill(segment, state)
 
         segment_metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         admitted_on_current_timeline = segment_metadata.get(
@@ -3784,13 +3801,10 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
-            # Restart the escalation clocks only if this discard actually left
-            # playable audio behind. Keying this on the gap-fill flag was wrong
-            # in both directions: a stamped fill never reaches this gate at all,
-            # and a discarded queue segment can leave the station just as silent.
-            # Resetting with nothing to air would rewind the rescue ladder and
-            # push out the forced-banter escape while the listener hears nothing.
-            if _playable_runway_available(segment_queue, state):
+            # A rejected playback-built rescue did not replace the gap. Keep
+            # both escalation clocks running instead of restarting the ladder
+            # and extending listener-visible silence.
+            if not segment_metadata.get(_PLAYBACK_GAP_FILL_FLAG):
                 state.queue_empty_since = None
                 gap_clips_served = 0
             logger.warning(

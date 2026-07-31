@@ -160,7 +160,8 @@ Queued work and elapsed startup time do not make it ready.
 
 **Recovery**: open the listener page and play the stream. If it still does not
 flip after a listener is connected and audio is audible, follow the silence
-checks in `docs/troubleshooting.md`.
+checks in
+[docs/troubleshooting.md](https://github.com/florianhorner/mammamiradio/blob/main/docs/troubleshooting.md).
 
 ### Stream is repeatedly playing recovery audio
 

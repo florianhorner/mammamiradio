@@ -46,8 +46,9 @@ script-provider credentials, that state is not sent to an AI provider.
 
 `Producer started` in the app log means the engine came up. `/readyz` answers a
 stricter question: it stays `503 starting` until a listener has actually accepted
-audio, so `"ready": true` is already proof that someone heard the station, not
-just that the process booted. Neither replaces the first-listen check: hear
+audio (`503 stopped` while the station is deliberately paused), so
+`"ready": true` is already proof that someone heard the station, not just that
+the process booted. Neither replaces the first-listen check: hear
 **Mamma Mi Radio Live** on the selected speaker.
 
 ### Docker alternative

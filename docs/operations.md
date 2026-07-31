@@ -165,6 +165,15 @@ paused station. Every fresh or Resumed session returns HTTP `503` with
 startup, queued work, and elapsed startup time alone are not readiness. After
 listener acceptance it returns HTTP `200` with `status: "ready"`.
 
+This inverts the usual probe contract, and it is deliberate: readiness means
+"delivered audio to a real listener", not "would probably deliver audio". The
+consequence is a circular dependency for admission control — no listener means
+never ready, never ready means no listener gets routed. **Do not use `/readyz`
+to gate load-balancer or proxy admission.** Route listeners unconditionally (or
+gate on `/healthz`, which stays green on a healthy idle station) and use
+`/readyz` for what it is: proof of delivery and the smoke gates. The HA add-on's
+own `healthcheck` in `config.yaml` points at `/healthz` for exactly this reason.
+
 Setup and runtime pause are separate truth surfaces. `/api/setup/status` and
 setup recovery endpoints continue to describe and repair configuration while
 the transport is paused; a configured source stays setup-ready. Runtime status
@@ -240,7 +249,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, the session is not stopped, and either a listener accepted a chunk from the current segment or an active listener is inside the bounded three-second handoff grace after the last accepted audio.
 - `health_state` — backward-compatible runtime health state for blocked tasks, listener-facing silence, paused sessions, and provider fallback summaries.
-- `recovering` — true between a confirmed Force Start and the first chunk a listener accepts. The admin header renders it as "Starting". It is deliberately outranked by a paused session and by listener-facing silence, so it can never mask the failure Force Start exists to recover from.
+- `recovering` — true between a confirmed Force Start and whichever comes first: a listener accepting a chunk, an operator Stop, or a later successful Resume. The admin header renders it as "Starting". It is deliberately outranked by a paused session and by listener-facing silence, so it can never mask the failure Force Start exists to recover from.
 - `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary_provider`, `current_provider`, `fallback_active`, `recovery_mode`, `retry_in_seconds`, `action_guidance`, `current_reason`, and `switch_reason` fields per provider. `current_reason` says why the provider shown in *this* snapshot is selected right now; `switch_reason` and `last_switch_timestamp` describe the last listener-audible switch and are historical facts a fresh observation never rewrites. Both are operator copy — raw provider codes are translated before they reach the payload. `script_provider` populates the recovery fields so transient Anthropic errors read differently from circuit-breaker and `action_required` fallback; non-script providers keep those fields empty unless future recovery metadata is added.
 - `recent_events` — last 10 provider switch/failover events with timestamps, reasons, and whether a fallback was active.
 - `last_switch` — most recent provider change event, or `null` if no switches have occurred this session.
@@ -259,12 +268,17 @@ without that recent proof it stays false.
 
 The Engine Room card in `/admin` renders this as two tiers: station health ("On Air" / "Paused" / "Error") and provider health ("Primary" / "Auto-recovering" / "Backup active"). Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 
-An operator pause outranks every other verdict, because a paused station is not a
-failure. Below that, prolonged silence with listeners connected outranks a Force
-Start rebuild. Recovery state clears only once a listener accepts audio, so a
-Force Start that never produces audio would otherwise hold a calm "Starting"
-while the room hears nothing. A rebuild still in progress with no one waiting
-stays yellow.
+A dead producer or playback task outranks everything in `health_state`,
+including a pause — a paused station whose runtime task also died reports
+`blocked`, because that fault needs attention before Resume can work. Below
+that, a deliberate pause reads as ready ("Paused"), never as an error. Below
+that, prolonged silence with listeners connected outranks a Force Start
+rebuild: recovery state ends when a listener accepts audio (or when the
+operator presses Stop, or a later Resume succeeds normally), so a Force Start
+that never produces audio would otherwise hold a calm "Starting" while the
+room hears nothing. A rebuild still in progress with no one waiting stays
+yellow. The admin header applies the same ranking with one difference: it
+checks the pause first, since the operator who paused is looking at it.
 
 ### Reading queue-rescue health ("running on rescue")
 
@@ -733,14 +747,19 @@ integration is installed, turn `ha_media_player_push` off so its registered
 `media_player.mammamiradio` owns the id instead of the REST-pushed ghost; the
 sensors keep flowing either way.
 
-These entities publish the **selected** boundary, not the audible one: the push
-fires when a segment's file opens, and `is_playing` derives from `now_streaming`.
-The control room's `station_on_air` uses the stricter audible boundary (see
-"Diagnosing provider fallbacks" above), so an automation keyed on
-`binary_sensor.mammamiradio_on_air` can read "on" a beat before, or during a
-handoff after, the admin header says On Air. Neither is wrong; they answer
-different questions. For automations that should only fire on audio a listener
-actually received, poll `/status` for `station_on_air` rather than the entity.
+These entities answer a much looser question than the control room does.
+`binary_sensor.mammamiradio_on_air` reports only "has the operator stopped the
+station" — it derives from the persisted stop marker alone, so it stays `on`
+through queue starvation, a dead playback task, and even prolonged silence with
+listeners connected. `media_player.mammamiradio` is nearly as loose: its state
+derives from the stop marker plus a sticky `now_streaming` row that survives the
+end of a segment, republished by a 30-second heartbeat. The control room's
+`station_on_air` requires a listener to have actually accepted audio (see
+"Diagnosing provider fallbacks" above), so the entity and the admin header can
+disagree for as long as a failure lasts, not just for a moment. For automations
+that should only fire on audio a listener actually received, poll `/status` for
+`station_on_air`; treat the entities as "the station is not paused", nothing
+stronger.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
