@@ -592,6 +592,9 @@ class StationState:
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
     session_stopped: bool = False
+    # True only after an explicit assetless force-resume, until a listener
+    # accepts the first rebuilt segment. Readiness stays "starting" meanwhile.
+    force_recovery_active: bool = False
     # Set by streamer when session_stopped flips False, so producer's
     # stopped-state sleep wakes immediately instead of polling up to 1s.
     resume_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -1644,6 +1647,7 @@ class StationState:
 
         self.audible_playback_epoch = self.playback_epoch
         self.current_stream_audible = True
+        self.force_recovery_active = False
         now = time.time()
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         try:

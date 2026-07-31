@@ -660,6 +660,7 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str) -> int:
 
 _CONTINUITY_RESERVATION_FLAG = "continuity_reservation"
 _CONTINUITY_ADMISSION_EPOCH = "continuity_admission_epoch"
+_PLAYBACK_GAP_FILL_FLAG = "playback_gap_fill"
 _CONTINUITY_CACHE_SCAN_LIMIT = 24
 # "Any audio at all", for callers that need a non-empty reservation rather than a
 # full runway. Deliberately sub-frame: it only has to beat a zero target.
@@ -713,6 +714,20 @@ def _companionship_cue_is_current(state: StationState, epoch: int | None) -> boo
         and epoch == state.listener_session.epoch
         and state.listener_session.companionship_cue_state is ListenerSessionCueState.QUEUED
     )
+
+
+def _clear_stale_companionship_selection(state: StationState, selected_epoch: int | None) -> None:
+    """Remove provisional now-playing state for a rejected companionship cue."""
+    if selected_epoch is None:
+        return
+    now_streaming = state.now_streaming if isinstance(state.now_streaming, dict) else {}
+    if now_streaming.get("epoch") != selected_epoch or state.playback_epoch != selected_epoch:
+        return
+    state.now_streaming = {}
+    state.current_stream_audible = False
+    if state.audible_playback_epoch == selected_epoch:
+        state._last_audible_stream = {}
+    state.last_state_change_at = time.time()
 
 
 def _segment_is_immediately_playable(
@@ -1015,6 +1030,19 @@ def _stamp_continuity_runway_epoch(q, state: StationState) -> None:
         metadata = slot.metadata if isinstance(slot.metadata, dict) else {}
         if metadata.get(_CONTINUITY_RESERVATION_FLAG):
             metadata[_CONTINUITY_ADMISSION_EPOCH] = state.continuity_epoch
+
+
+def _stamp_playback_gap_fill(segment: Segment, state: StationState) -> Segment:
+    """Bind a playback-built rescue fill to the current continuity timeline."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    metadata["rescue"] = True
+    metadata[_PLAYBACK_GAP_FILL_FLAG] = True
+    metadata[_CONTINUITY_RESERVATION_FLAG] = True
+    metadata[_CONTINUITY_ADMISSION_EPOCH] = state.continuity_epoch
+    metadata.setdefault("continuity_reservation_id", f"playback-gap-{uuid4().hex}")
+    metadata.setdefault("queue_reason", "Playback gap recovery.")
+    segment.metadata = metadata
+    return segment
 
 
 def _continuity_slot_status(state: StationState) -> dict | None:
@@ -2940,41 +2968,21 @@ def _apply_loaded_source(
 
     if metadata_only:
         # Stop never waits for source I/O. If this load crossed a stop/control
-        # epoch, admit metadata only. A running station may hold the protected
-        # Resume runway created after this request began; preserve that
-        # source-neutral safety audio while removing ordinary stale queue work.
-        queued = list(getattr(q, "_queue", ()))
-        survivors = (
-            [segment for segment in queued if segment.metadata.get(_CONTINUITY_RESERVATION_FLAG)]
-            if not state.session_stopped
-            else []
-        )
-        survivor_ids = {id(segment) for segment in survivors}
-        dropped = [segment for segment in queued if id(segment) not in survivor_ids]
-        for segment in dropped:
-            state.record_discard(
-                segment,
-                reason=GenerationWasteReason.SOURCE_SWITCH,
-                already_counted_in_produced=True,
-            )
-            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.SOURCE_SWITCH)
-            _unlink_ephemeral_best_effort(segment)
-        _rebuild_queue_shadow(q, state, survivors)
-        if state.session_stopped and state.continuity_slot is not None:
-            _unlink_ephemeral_best_effort(state.continuity_slot)
-            state.continuity_slot = None
-
+        # epoch, admit metadata only. The request does not own transport state
+        # created after its captured epoch, so preserve the queue, its shadow,
+        # and every protected slot exactly as they are.
+        preserved_segments = len(getattr(q, "_queue", ()))
         state.switch_playlist(tracks, resolved_source)
         _delete_persisted_heading(request.app.state.config.cache_dir)
         logger.info(
             "Loaded source metadata only kind=%s tracks=%d captured_epoch=%d current_epoch=%d "
-            "session_stopped=%s purged_segments=%d",
+            "session_stopped=%s preserved_segments=%d",
             resolved_source.kind,
             len(state.playlist),
             captured_epoch,
             state.continuity_epoch,
             state.session_stopped,
-            len(dropped),
+            preserved_segments,
             extra={
                 "event": "source_load_metadata_only",
                 "source_kind": resolved_source.kind,
@@ -2982,7 +2990,7 @@ def _apply_loaded_source(
                 "captured_continuity_epoch": captured_epoch,
                 "continuity_epoch": state.continuity_epoch,
                 "session_stopped": state.session_stopped,
-                "purged_segments": len(dropped),
+                "preserved_segments": preserved_segments,
             },
         )
         return {
@@ -3625,6 +3633,12 @@ async def run_playback_loop(app) -> None:
                         logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
                         continue
 
+                # Building a packaged fill can await a bounded probe while a
+                # Stop/Resume or another control advances continuity_epoch.
+                # These source-neutral rescue bytes are admitted only after
+                # that await, so bind them to the timeline that now owns them.
+                segment = _stamp_playback_gap_fill(segment, state)
+
         segment_metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         admitted_on_current_timeline = segment_metadata.get(
             _CONTINUITY_ADMISSION_EPOCH
@@ -3668,8 +3682,12 @@ async def run_playback_loop(app) -> None:
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
-            state.queue_empty_since = None
-            gap_clips_served = 0
+            # A rejected playback-built rescue did not replace the gap. Keep
+            # both escalation clocks running instead of restarting the ladder
+            # and extending listener-visible silence.
+            if not segment_metadata.get(_PLAYBACK_GAP_FILL_FLAG):
+                state.queue_empty_since = None
+                gap_clips_served = 0
             logger.warning(
                 "Discarding playback selection after continuity epoch changed "
                 "captured_epoch=%d current_epoch=%d type=%s",
@@ -3974,6 +3992,8 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            if is_companionship_cue and terminal_reason == GenerationWasteReason.LISTENER_SESSION_STALE:
+                _clear_stale_companionship_selection(state, selected_playback_epoch)
             if (
                 is_companionship_cue
                 and not air_start_stamped
@@ -5315,6 +5335,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
         )
 
     state.session_stopped = True
+    state.force_recovery_active = False
     state.current_stream_audible = False
     state.continuity_epoch += 1
     visible_epoch = state.continuity_epoch
@@ -5374,8 +5395,12 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
 
 
 @router.post("/api/resume")
-async def resume_session(request: Request, _: None = Depends(require_admin_access)):
-    """Resume only after immediate audio and persistence are both ready."""
+async def resume_session(
+    request: Request,
+    force: bool = False,
+    _: None = Depends(require_admin_access),
+):
+    """Resume with immediate audio, or explicitly force a host-audio rebuild."""
     state = request.app.state.station_state
     app_state = request.app.state
     config = request.app.state.config
@@ -5393,7 +5418,42 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
                 },
             )
         logger.info("Resume reconciled restart state; active playback was unchanged")
-        return {"ok": True}
+        return {"ok": True, "recovering": state.force_recovery_active}
+
+    if force:
+        # Persistence remains the transaction boundary. An operator-confirmed
+        # force start may rebuild without installed recovery assets, but a
+        # marker-removal failure must still leave every live field untouched.
+        try:
+            _persist_session_stopped(config, False)
+        except Exception:
+            logger.error(
+                "Forced resume marker removal failed; station remains stopped epoch=%d",
+                state.continuity_epoch,
+                exc_info=True,
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "ok": False,
+                    "error": "Couldn't save the running state. The station is still paused; try again.",
+                },
+            )
+
+        state.force_next = SegmentType.BANTER
+        state.force_recovery_active = True
+        _clear_session_stopped(state)
+        state.resume_event.set()
+        logger.warning(
+            "Session force-resumed without recovery runway epoch=%d",
+            state.continuity_epoch,
+            extra={
+                "event": "session_force_resumed",
+                "runway_source": "none",
+                "continuity_epoch": state.continuity_epoch,
+            },
+        )
+        return {"ok": True, "recovering": True, "runway_source": "none"}
 
     # Resume needs *some* playable audio, not a full runway: the producer
     # replenishes once it wakes. This keeps the reservation non-empty even when
@@ -5427,7 +5487,11 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
             status_code=503,
             content={
                 "ok": False,
-                "error": "Not ready to resume yet. No playable audio is available; wait a moment, then try again.",
+                "error": (
+                    "No recovery audio is installed. Restore the packaged recovery assets, "
+                    "or confirm Force Start to rebuild the station with host audio."
+                ),
+                "force_available": True,
             },
         )
 
@@ -5450,6 +5514,7 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
         )
 
     _clear_session_stopped(state)
+    state.force_recovery_active = False
     # Wake producer and playback only after runway, persistence, and live state
     # have all committed.
     state.resume_event.set()
@@ -5463,7 +5528,7 @@ async def resume_session(request: Request, _: None = Depends(require_admin_acces
             "continuity_epoch": state.continuity_epoch,
         },
     )
-    return {"ok": True}
+    return {"ok": True, "recovering": False}
 
 
 @router.post("/api/trigger")
@@ -8322,14 +8387,16 @@ async def readyz(request: Request):
     silence_with_listeners = _silence_with_listeners(state, queue_empty_elapsed)
     ready = (
         tasks_alive
-        and (queue_depth > 0 or startup_complete)
+        and (queue_depth > 0 or startup_complete or state.current_stream_audible)
         and not silence_with_listeners
         and not state.session_stopped
+        and not state.force_recovery_active
     )
     status = "ready" if ready else "stopped" if state.session_stopped else "starting"
     body = {
         "status": status,
         "ready": ready,
+        "session_stopped": state.session_stopped,
         "watchdog_status": "ok",
         "queue_depth": queue_depth,
         "silence_with_listeners": silence_with_listeners,

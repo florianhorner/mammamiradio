@@ -605,8 +605,11 @@ async def test_companionship_cue_is_consumed_only_after_a_listener_accepts_audio
 
 
 @pytest.mark.asyncio
-async def test_companionship_cue_without_an_accepting_listener_is_selected_but_not_audible(tmp_path):
+async def test_companionship_cue_without_an_accepting_listener_clears_selected_state(tmp_path):
+    from mammamiradio.integrations.now_playing import router as integrations_router
+
     app = _make_test_app()
+    app.include_router(integrations_router)
     _, listener_id, listener_queue, _, _ = _queue_companionship_cue(app, tmp_path)
 
     async def _reject_first_chunk(_chunk: bytes) -> int:
@@ -621,9 +624,14 @@ async def test_companionship_cue_without_an_accepting_listener_is_selected_but_n
         assert listener_queue.empty()
         assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
         assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
-        assert state.now_streaming.get("label") == "Companionship"
+        assert state.now_streaming == {}
         assert state.current_stream_audible is False
         assert state.last_air_monotonic is None
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            now_playing = await client.get("/api/integrations/v1/now-playing")
+        assert now_playing.json()["session_state"] == "empty_queue"
+        assert now_playing.json()["now_playing"] is None
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -1848,6 +1856,122 @@ async def test_run_playback_loop_timeout_fallback_keeps_queue_empty_clock_and_du
 
 
 @pytest.mark.asyncio
+async def test_playback_built_rescue_rearms_after_epoch_changes_during_probe(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    fallback_path = tmp_path / "fallback-after-control.mp3"
+    fallback_path.write_bytes(b"current-timeline-rescue" * 512)
+    audible_committed = False
+
+    async def _forced_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    async def _build_after_control(_path):
+        await asyncio.sleep(0)
+        state.continuity_epoch += 1
+        return Segment(
+            type=SegmentType.BANTER,
+            path=fallback_path,
+            duration_sec=1.7,
+            metadata={"title": "Recovery", "canned": True},
+            ephemeral=False,
+        )
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=fallback_path),
+        patch(
+            "mammamiradio.web.streamer._packaged_recovery_segment",
+            new=AsyncMock(side_effect=_build_after_control),
+        ),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while listener_queue.empty():
+                if time.monotonic() > deadline:
+                    raise AssertionError("current-timeline rescue was discarded after the epoch changed")
+                await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
+            while not state.current_stream_audible:
+                if time.monotonic() > deadline:
+                    raise AssertionError("accepted rescue never committed listener-audible state")
+                await asyncio.sleep(0)
+            audible_committed = True
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    metadata = state.now_streaming["metadata"]
+    assert heard
+    assert metadata["playback_gap_fill"] is True
+    assert metadata["continuity_reservation"] is True
+    assert metadata["continuity_admission_epoch"] == state.continuity_epoch
+    assert audible_committed is True
+
+
+@pytest.mark.asyncio
+async def test_rejected_playback_rescue_preserves_gap_clock(tmp_path):
+    from mammamiradio.web.streamer import _stamp_playback_gap_fill
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    gap_started = time.monotonic() - 20
+    state.queue_empty_since = gap_started
+
+    fallback_path = tmp_path / "rejected-rescue.mp3"
+    fallback_path.write_bytes(b"rejected-rescue" * 512)
+    second_wait_started = asyncio.Event()
+    waits = 0
+
+    async def _scripted_wait(awaitable, *_args, **_kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            awaitable.close()
+            await asyncio.sleep(0)
+            raise TimeoutError
+        second_wait_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            awaitable.close()
+
+    def _stamp_then_invalidate(segment, current_state):
+        stamped = _stamp_playback_gap_fill(segment, current_state)
+        current_state.continuity_epoch += 1
+        return stamped
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_scripted_wait)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=fallback_path),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
+        patch("mammamiradio.web.streamer._stamp_playback_gap_fill", side_effect=_stamp_then_invalidate),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            deadline = time.monotonic() + 3.0
+            while not second_wait_started.is_set():
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not reject the stale rescue")
+                await asyncio.sleep(0.01)
+            assert state.queue_empty_since == gap_started
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert not state.stream_log
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_timeout_serves_one_packaged_clip_then_norm_cache(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
@@ -2630,12 +2754,12 @@ async def test_blocked_playback_waiter_reparks_runway_when_resume_marker_fails(t
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_discards_recovery_selected_across_stop_resume_aba(tmp_path):
+async def test_run_playback_loop_rearms_source_neutral_recovery_across_stop_resume_aba(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
     app.state.config.cache_dir = tmp_path
     app.state.stream_hub.subscribe()
-    app.state.stream_hub.broadcast = AsyncMock()
+    app.state.stream_hub.broadcast = AsyncMock(return_value=1)
     clip = tmp_path / "continuity.mp3"
     clip.write_bytes(b"recovery" * 512)
     probe_started = asyncio.Event()
@@ -2671,17 +2795,17 @@ async def test_run_playback_loop_discards_recovery_selected_across_stop_resume_a
         try:
             await asyncio.wait_for(probe_started.wait(), timeout=1.0)
             deadline = time.monotonic() + 1.0
-            while state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY, 0) == 0:
+            while app.state.stream_hub.broadcast.await_count == 0:
                 if time.monotonic() > deadline:
-                    raise AssertionError("stale recovery selection was not discarded")
+                    raise AssertionError("source-neutral recovery was not rearmed on the resumed timeline")
                 await asyncio.sleep(0)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    app.state.stream_hub.broadcast.assert_not_awaited()
-    assert state.now_streaming == {}
-    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    app.state.stream_hub.broadcast.assert_awaited()
+    assert state.now_streaming["metadata"]["continuity_admission_epoch"] == state.continuity_epoch
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY, 0) == 0
 
 
 @pytest.mark.asyncio
@@ -3443,6 +3567,30 @@ async def test_readyz_returns_200_when_session_resumed():
     assert resp.status_code == 200
     body = resp.json()
     assert body["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_readyz_requires_queue_grace_or_listener_accepted_audio(tmp_path):
+    app = _make_test_app()
+    app.state.start_time = time.time()
+    state = app.state.station_state
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        before = await client.get("/readyz")
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=tmp_path / "accepted-startup.mp3",
+                metadata={"title": "Accepted startup"},
+            )
+        )
+        after = await client.get("/readyz")
+
+    assert before.status_code == 503
+    assert before.json()["status"] == "starting"
+    assert after.status_code == 200
+    assert after.json()["status"] == "ready"
 
 
 @pytest.mark.asyncio
@@ -4863,7 +5011,11 @@ async def test_resume_without_any_immediate_audio_fails_closed(tmp_path):
     assert response.status_code == 503
     assert response.json() == {
         "ok": False,
-        "error": "Not ready to resume yet. No playable audio is available; wait a moment, then try again.",
+        "error": (
+            "No recovery audio is installed. Restore the packaged recovery assets, "
+            "or confirm Force Start to rebuild the station with host audio."
+        ),
+        "force_available": True,
     }
     assert state.session_stopped is True
     assert state.now_streaming["type"] == "stopped"
@@ -4871,6 +5023,85 @@ async def test_resume_without_any_immediate_audio_fails_closed(tmp_path):
     assert app.state.queue.empty()
     assert state.continuity_slot is None
     assert not state.resume_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_force_resume_without_assets_arms_recovery_after_marker_commit(tmp_path):
+    app = _make_test_app()
+    app.state.start_time = time.time() - 31
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume?force=true")
+            readiness = await client.get("/readyz")
+            assert not marker.exists()
+            assert state.session_stopped is False
+            assert state.now_streaming == {}
+            assert state.force_next is SegmentType.BANTER
+            assert state.force_recovery_active is True
+            assert state.resume_event.is_set()
+            state.on_stream_segment(
+                Segment(
+                    type=SegmentType.BANTER,
+                    path=tmp_path / "accepted-recovery.mp3",
+                    metadata={"title": "Accepted recovery"},
+                )
+            )
+            recovered_readiness = await client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "recovering": True,
+        "runway_source": "none",
+    }
+    assert readiness.status_code == 503
+    assert readiness.json()["status"] == "starting"
+    assert state.force_recovery_active is False
+    assert recovered_readiness.status_code == 200
+    assert recovered_readiness.json()["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_force_resume_marker_failure_is_total_live_state_noop(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = True
+    state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
+    state.continuity_epoch = 9
+    state.force_next = SegmentType.AD
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch("mammamiradio.web.streamer._persist_session_stopped", side_effect=OSError("read only")),
+    ):
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/resume?force=true")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "ok": False,
+        "error": "Couldn't save the running state. The station is still paused; try again.",
+    }
+    assert marker.exists()
+    assert state.session_stopped is True
+    assert state.now_streaming["type"] == "stopped"
+    assert state.continuity_epoch == 9
+    assert state.force_next is SegmentType.AD
+    assert state.force_recovery_active is False
+    assert not state.resume_event.is_set()
+    assert app.state.queue.empty()
 
 
 @pytest.mark.asyncio
@@ -4916,7 +5147,7 @@ async def test_resume_clears_a_dead_queue_head_instead_of_refusing_forever(tmp_p
         response = await client.post("/api/resume")
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.json() == {"ok": True, "recovering": False}
     assert state.session_stopped is False
     assert not marker.exists()
     assert state.resume_event.is_set()
@@ -5238,7 +5469,7 @@ async def test_slow_source_load_crossing_stop_commits_filtered_metadata_only(tmp
     assert state.continuity_slot is None
 
 
-def test_source_load_epoch_change_after_fast_resume_preserves_only_protected_runway(tmp_path):
+def test_source_load_epoch_change_after_fast_resume_preserves_entire_queue(tmp_path):
     app = _make_test_app()
     state = app.state.station_state
     app.state.config.cache_dir = tmp_path
@@ -5280,8 +5511,9 @@ def test_source_load_epoch_change_after_fast_resume_preserves_only_protected_run
     assert result["metadata_only"] is True
     assert result["skipped"] is False
     assert state.session_stopped is False
-    assert list(app.state.queue._queue) == [protected]
-    assert [row["id"] for row in state.queued_segments] == ["protected"]
+    assert list(app.state.queue._queue) == [protected, stale]
+    assert [row["id"] for row in state.queued_segments] == ["protected", "stale"]
+    assert stale_path.exists()
     assert not app.state.skip_event.is_set()
     assert state.playlist_source == new_source
 

@@ -39,7 +39,7 @@ curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/readyz
 ```
 
-`/healthz` answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue or when active listeners have hit prolonged silence. An intentional operator pause is distinct: `/healthz` normally stays `200`, while `/readyz` returns HTTP `503` with `status: "stopped"` until explicit Resume.
+`/healthz` answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue, while a confirmed Force Start is rebuilding its first listener-accepted audio, or when active listeners have hit prolonged silence. An intentional operator pause is distinct: `/healthz` normally stays `200`, while `/readyz` returns HTTP `503` with `status: "stopped"` until explicit Resume.
 
 ## The app starts but there is no real music
 
@@ -72,7 +72,11 @@ paused merely because the button was pressed.
 
 Resume first reserves readable immediate audio, preferring a warm norm-cache
 song, then `continuity_1.mp3`, then `emergency_tone.mp3`. It stays paused if no
-runway is readable or if the persisted marker cannot be removed. Check:
+runway is readable or if the persisted marker cannot be removed. When every
+recovery asset is missing, the response offers **Force Start**. Confirming it is
+an explicit corrupt-install escape: it removes the stop marker, requests host
+banter, and reports `recovering` while `/readyz` remains `503 starting` until a
+listener accepts the rebuilt audio. It is never automatic. Check:
 
 ```bash
 ls -l cache/session_stopped.flag

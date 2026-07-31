@@ -394,10 +394,15 @@ Resume is the inverse, with audio readiness before state publication. While the
 session is still stopped it reserves immediately playable runway: eligible
 norm-cache music first, the manifested `continuity_1.mp3` clip on a cold cache,
 then the manifested two-second `emergency_tone.mp3` last rung. If no readable
-runway exists, Resume returns `503` and keeps the marker. Once runway exists it
-removes the marker; a removal failure also returns `503` and leaves the session
-stopped. Only then does it clear `session_stopped` and wake producer/playback.
-A stream connection never clears the marker; only explicit Resume does.
+runway exists, normal Resume returns `503` with `force_available: true` and
+keeps the marker. The admin may then explicitly confirm Force Start, which
+removes the marker before touching live state, clears `session_stopped`, sets
+`force_next=BANTER`, and wakes recovery without pretending that runway exists.
+`/readyz` remains `503 starting` for that forced rebuild until a listener
+actually accepts audio. A marker-removal failure leaves the session stopped and
+all live fields untouched. With readable runway, normal Resume removes the
+marker, clears `session_stopped`, and wakes producer/playback immediately. A
+stream connection never clears the marker; only explicit Resume does.
 
 Skip publishes a `skipping` transport sentinel before any best-effort history
 write, so a second Skip is rejected while the first cut is still landing.
@@ -413,7 +418,10 @@ advances it before queue cleanup. A Resume reservation uses the same continuity
 rebuild path and advances it whenever that path mutates the queue or protected
 slot. Producer renders, continuity bridges, startup prewarm, and playback
 selections compare their captured epoch again at admission, so audio prepared
-for the pre-Stop state cannot leak into the resumed timeline.
+for the pre-Stop state cannot leak into the resumed timeline. Playback-built gap
+fills bind themselves to the current epoch after their bounded asset probe; if
+a later control still rejects one, the queue-gap clock and ladder position keep
+running because rejected rescue bytes did not end the silence episode.
 
 Playback has two truth boundaries:
 
@@ -668,7 +676,7 @@ The persona tracks motifs, open station theories, running jokes, callbacks, and 
 
 The cue lifecycle is `UNAVAILABLE → AVAILABLE → ATTEMPTED → QUEUED → CONSUMED` or `ABANDONED`. Only a naturally scheduled ambient banter break may claim it; operator/Chaos/urgent/Home/directive/request/release/ritual/recovery/fallback lanes cannot. Accepted generated copy must return matching proof fields and pass application-owned aggregate-companionship and exact-bucket content checks before the segment receives `listener_session_epoch` and `listener_session_cue="companionship"`. The queue admission boundary marks it queued synchronously. Generation, TTS, quality, admission, purge, stop, queue removal, overflow, fallback, or stale-epoch failure permanently abandons the claim, and stock fallback copy remains untagged.
 
-Playback verifies the stamped epoch before the segment and before every audio chunk. A mismatch is discarded through `GenerationWasteReason.LISTENER_SESSION_STALE` before that chunk reaches the hub. `LiveStreamHub.broadcast()` reports how many listener queues accepted the chunk; only the first positive acceptance moves the cue to `CONSUMED` and publishes now-playing state. The central `StationState.record_discard()` boundary owns abandonment for all unstarted queue cleanup, and the queue shadow verifies the pulled `queue_id` before removing a row, rebuilding from the real bounded queue if the projection ever drifts.
+Playback verifies the stamped epoch before the segment and before every audio chunk. A mismatch is discarded through `GenerationWasteReason.LISTENER_SESSION_STALE` before that chunk reaches the hub. `LiveStreamHub.broadcast()` reports how many listener queues accepted the chunk; only the first positive acceptance moves the cue to `CONSUMED` and commits listener-audible state. File selection may briefly create provisional now-playing metadata, but a rejected or stale companionship cue clears that selection before status readers can keep advertising unheard audio as live. The central `StationState.record_discard()` boundary owns abandonment for all unstarted queue cleanup, and the queue shadow verifies the pulled `queue_id` before removing a row, rebuilding from the real bounded queue if the projection ever drifts.
 
 Hosts may build shared station mythology, but may not turn a stream connection into an arrival, return, or identity claim. The final producer boundary checks the assembled transition plus banter text in English and Italian; it makes one bounded identity-free repair attempt and falls back to deterministic safe copy if the repair remains unsafe. A separately authorized, named Home Assistant resident-return fact is line-bound to its source entity; a door unlock or generic presence signal never grants that authority.
 
@@ -831,7 +839,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
 | `/stream` | GET | Public | Infinite MP3 stream |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
-| `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; a persisted operator stop returns `503 stopped` |
+| `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped` |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `rescue_rotation` cached-music cooldown telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and a render-ready `guided_setup.strip` payload |
@@ -928,6 +936,11 @@ generated for a stale source. `/api/shuffle` increments the broader
 `playlist_revision`, but that alone no longer discards in-flight producer work:
 reordering the pool does not make a rendered song unplayable, and the render is
 kept and queued against the new sequence.
+
+If a slow source request crosses a Stop or another continuity-epoch change, its
+commit is metadata-only: the playlist metadata may change, but the request
+preserves the real queue, queue shadow, and protected slots byte-for-byte. It
+does not own transport work admitted after the epoch it captured.
 
 Source replacement also follows the protected-continuity reservation contract
 above. A successful fresh replacement supersedes existing reservations and
