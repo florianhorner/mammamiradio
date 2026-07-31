@@ -83,6 +83,32 @@ def _write_release_check_repo(
     os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
 
 
+@pytest.fixture
+def fake_ffprobe_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep repository-script tests independent of host multimedia packages."""
+
+    bin_dir = tmp_path / ".test-bin"
+    ffprobe = bin_dir / "ffprobe"
+    _write(
+        ffprobe,
+        """#!/usr/bin/env python3
+from pathlib import Path
+import sys
+
+payload = Path(sys.argv[-1]).read_bytes()
+is_mp3 = payload.startswith(b"ID3") or (
+    len(payload) >= 2 and payload[0] == 0xFF and payload[1] & 0xE0 == 0xE0
+)
+if not is_mp3:
+    print("invalid audio", file=sys.stderr)
+    raise SystemExit(1)
+print("audio")
+""",
+    )
+    ffprobe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
 def _load_ha_green_perf_smoke() -> types.ModuleType:
     import importlib.util
 
@@ -325,7 +351,10 @@ def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Pat
     assert r"\bTrack [A-Z]\b" in result.stdout
 
 
-def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Path) -> None:
+def test_pre_release_check_skips_unreleased_addon_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     _write_release_check_repo(tmp_path)
 
     result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
@@ -335,7 +364,10 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Pa
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
 
 
-def test_pre_release_check_fails_on_manifest_version_mismatch(tmp_path: Path) -> None:
+def test_pre_release_check_fails_on_manifest_version_mismatch(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     # The HACS integration manifest must ride the release number (docs/release-process.md).
     _write_release_check_repo(tmp_path, version="1.1.0", manifest_version="1.0.0")
 
@@ -345,7 +377,10 @@ def test_pre_release_check_fails_on_manifest_version_mismatch(tmp_path: Path) ->
     assert "manifest.json version is '1.0.0' but config.yaml is 1.1.0" in result.stdout
 
 
-def test_pre_release_check_fails_cleanly_on_unreadable_manifest(tmp_path: Path) -> None:
+def test_pre_release_check_fails_cleanly_on_unreadable_manifest(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     # Malformed manifest must produce a clean [FAIL], never a Python traceback that
     # aborts the release gate.
     _write_release_check_repo(tmp_path, manifest_version=None)
@@ -358,7 +393,10 @@ def test_pre_release_check_fails_cleanly_on_unreadable_manifest(tmp_path: Path) 
     assert "manifest.json version is 'unreadable'" in result.stdout
 
 
-def test_pre_release_check_accepts_dated_addon_changelog_heading(tmp_path: Path) -> None:
+def test_pre_release_check_accepts_dated_addon_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     # Guards the dated-header parse: "## 1.1.0 - 2026-06-21" reduces to "1.1.0".
     _write_release_check_repo(
         tmp_path,
@@ -371,7 +409,10 @@ def test_pre_release_check_accepts_dated_addon_changelog_heading(tmp_path: Path)
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
 
 
-def test_pre_release_check_requires_each_recovery_asset(tmp_path: Path) -> None:
+def test_pre_release_check_requires_each_recovery_asset(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     _write_release_check_repo(tmp_path)
     (tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3").unlink()
 
@@ -381,7 +422,10 @@ def test_pre_release_check_requires_each_recovery_asset(tmp_path: Path) -> None:
     assert "emergency_tone.mp3" in result.stdout
 
 
-def test_pre_release_check_rejects_recovery_asset_hash_drift(tmp_path: Path) -> None:
+def test_pre_release_check_rejects_recovery_asset_hash_drift(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     _write_release_check_repo(tmp_path)
     asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
     asset.write_bytes(asset.read_bytes() + b"tampered")
@@ -389,10 +433,14 @@ def test_pre_release_check_rejects_recovery_asset_hash_drift(tmp_path: Path) -> 
     result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
 
     assert result.returncode != 0
-    assert "emergency_tone.mp3 failed its manifest/hash check" in result.stdout
+    assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
+    assert "recovery/emergency_tone.mp3 sha256 does not match" in result.stderr
 
 
-def test_pre_release_check_rejects_manifest_approved_non_audio(tmp_path: Path) -> None:
+def test_pre_release_check_rejects_manifest_approved_non_audio(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     _write_release_check_repo(tmp_path)
     asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
     payload = b"x" * 2048
@@ -407,6 +455,28 @@ def test_pre_release_check_rejects_manifest_approved_non_audio(tmp_path: Path) -
 
     assert result.returncode != 0
     assert "emergency_tone.mp3 is not ffprobe-readable audio" in result.stdout
+
+
+def test_pre_release_check_rejects_manifest_approved_unsafe_transcript(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    """The release gate must enforce listener truth, not only asset paths and hashes."""
+
+    _write_release_check_repo(tmp_path)
+    manifest_path = tmp_path / "mammamiradio/assets/demo/spoken_assets.json"
+    manifest = json.loads(manifest_path.read_text())
+    entry = next(item for item in manifest["assets"] if item["path"] == "recovery/continuity_1.mp3")
+    audio_path = tmp_path / "mammamiradio/assets/demo/recovery/continuity_1.mp3"
+    assert entry["sha256"] == hashlib.sha256(audio_path.read_bytes()).hexdigest()
+    entry["transcript"] = "Bentornato, ti stavamo aspettando."
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
+    assert "transcript contains listener arrival/return copy" in result.stderr
 
 
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
@@ -823,7 +893,11 @@ def test_release_invariants_guard_ha_green_perf_budget() -> None:
         assert '"continuity_1.mp3"' in body
         assert '"emergency_tone.mp3"' in body
         assert "manifest/hash" in body
-        assert "is_approved_packaged_audio_asset" in body or "hashlib.sha256" in body
+        assert (
+            "is_approved_packaged_audio_asset" in body
+            or "hashlib.sha256" in body
+            or "validate-spoken-assets.py" in body
+        )
         assert "ffprobe" in body
         assert "QUEUE_FALLBACK_WAIT_SECONDS" in body
         assert "norm_files\\[0\\]" in body

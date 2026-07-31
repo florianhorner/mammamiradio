@@ -137,37 +137,12 @@ else
     ok "producer recovery paths do not call generate_silence"
 fi
 
-for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
-    if python3 - "$asset_name" <<'PY'
-import hashlib
-import json
-from pathlib import Path
-import sys
-
-name = sys.argv[1]
-assets_root = Path.cwd() / "mammamiradio" / "assets" / "demo"
-asset_path = assets_root / "recovery" / name
-manifest_path = assets_root / "spoken_assets.json"
-try:
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    entries = manifest.get("assets", [])
-    expected = next(
-        entry.get("sha256")
-        for entry in entries
-        if isinstance(entry, dict) and entry.get("path") == f"recovery/{name}"
-    )
-    actual = hashlib.sha256(asset_path.read_bytes()).hexdigest()
-except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError, StopIteration) as exc:
-    raise SystemExit(f"{name} manifest/hash validation failed: {exc}") from None
-if not isinstance(expected, str) or actual != expected:
-    raise SystemExit(f"{name} is not approved by the packaged manifest/hash boundary")
-PY
-    then
-        ok "$asset_name is manifest/hash approved"
-    else
-        fail "$asset_name failed its manifest/hash check"
-    fi
-done
+if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+    --assets-root "$PWD/mammamiradio/assets/demo"; then
+    ok "packaged spoken assets are manifest/hash/transcript approved"
+else
+    fail "packaged spoken-asset manifest/hash/transcript validation failed"
+fi
 
 if command -v ffprobe >/dev/null 2>&1; then
     for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
