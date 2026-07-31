@@ -149,8 +149,10 @@ Resume remains paused while it prepares the handoff:
 `/healthz` remains a process-liveness probe during an intentional pause.
 `/readyz` returns HTTP `503` with `status: "stopped"` even when tasks are alive
 and queued audio exists; this prevents routing new listeners to a deliberately
-paused station. After explicit Resume it returns `starting` until its ordinary
-readiness conditions hold, then `ready`.
+paused station. Every fresh or Resumed session returns HTTP `503` with
+`status: "starting"` until at least one listener queue accepts audio. Producer
+startup, queued work, and elapsed startup time alone are not readiness. After
+listener acceptance it returns HTTP `200` with `status: "ready"`.
 
 Setup and runtime pause are separate truth surfaces. `/api/setup/status` and
 setup recovery endpoints continue to describe and repair configuration while
@@ -225,7 +227,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 `GET /status` returns a `runtime_status` object under the top-level response. It contains:
 
-- `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, the session is not stopped, and at least one listener queue accepted a chunk from the current segment.
+- `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, the session is not stopped, and either a listener accepted a chunk from the current segment or an active listener is inside the bounded three-second handoff grace after the last accepted audio.
 - `health_state` — backward-compatible runtime health state for blocked tasks, listener-facing silence, paused sessions, and provider fallback summaries.
 - `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary_provider`, `current_provider`, `fallback_active`, `recovery_mode`, `retry_in_seconds`, `action_guidance`, `current_reason`, and `switch_reason` fields per provider. `current_reason` says why the provider shown in *this* snapshot is selected right now; `switch_reason` and `last_switch_timestamp` describe the last listener-audible switch and are historical facts a fresh observation never rewrites. Both are operator copy — raw provider codes are translated before they reach the payload. `script_provider` populates the recovery fields so transient Anthropic errors read differently from circuit-breaker and `action_required` fallback; non-script providers keep those fields empty unless future recovery metadata is added.
 - `recent_events` — last 10 provider switch/failover events with timestamps, reasons, and whether a fallback was active.
@@ -239,8 +241,9 @@ it. Listener-audible truth commits only when the stream hub accepts the first
 chunk into at least one listener queue. That second boundary sets
 `current_stream_audible`, updates `last_air_monotonic` and provider state, and
 records rescue/continuity airplay. During the selected-but-not-audible window,
-provider rows retain the last listener-audible source and `station_on_air` stays
-false.
+provider rows retain the last listener-audible source. `station_on_air` remains
+true only for the bounded three-second handoff grace after prior accepted audio;
+without that recent proof it stays false.
 
 The Engine Room card in `/admin` renders this as two tiers: station health ("On Air" / "Paused" / "Error") and provider health ("Primary" / "Auto-recovering" / "Backup active"). Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 

@@ -18,11 +18,11 @@ Click Start. Watch the log for:
 - `[mammamiradio] Home Assistant API access configured via Supervisor`
 - `Producer started`
 
-First boot can take 30-90 seconds while chart tracks are downloaded and cached. No AI key is required: without one, the hosts use stock copy and fallback voices. Music is a separate requirement — live charts need outbound access, or configure a Jamendo client ID in the app's advanced options. A successful start shows `Producer started` in the log and returns `"ready": true` from `/readyz`.
+First boot can take 30-90 seconds while chart tracks are downloaded and cached. No AI key is required: without one, the hosts use stock copy and fallback voices. Music is a separate requirement — live charts need outbound access, or configure a Jamendo client ID in the app's advanced options. A successful process start shows `Producer started` in the log. `/readyz` remains HTTP `503` with `status: "starting"` until a listener actually accepts audio; queued work and elapsed startup time do not make the station ready by themselves.
 
 ### 3. Open the Web UI and listen
 
-Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode, ingress opens the admin control room first. Use the setup strip's listener action, or open `/listen`, to hear the station before adding keys.
+Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode, ingress opens the admin control room first. Use the setup strip's listener action, or open `/listen`, to hear the station before adding keys. Once a listener accepts the first audio bytes, `/readyz` returns HTTP `200` with `status: "ready"`.
 
 ### 4. Add one AI host key, then review home context
 
