@@ -201,10 +201,14 @@ If generated banter airs but listener memory or song callbacks are not growing,
 check the post-air extractor path separately:
 
 - The extractor runs only after generated banter sends cleanly. Canned clips,
-  stock/impossible fallback copy, skipped segments, source switches, and partial
-  sends intentionally do not write memory.
+  stock/impossible fallback copy, skipped segments, source switches, partial
+  sends, and banter that no listener accepted intentionally do not write memory.
 - The segment metadata must include `memory_extraction`, and the streamer must
-  reach EOF with bytes sent before scheduling `memory_extract`.
+  reach EOF with bytes sent AND at least one listener queue accepting a chunk
+  before scheduling `memory_extract`. Bytes sent alone is not enough: an empty
+  room still accumulates written bytes, and durable listener memory follows the
+  audible boundary. If memory stops growing on a station nobody is tuned into,
+  that is the gate working, not a failure.
 - `memory_extract` uses the fast script role and appears in `/status`
   consumption as the Memory row (`script_memory`). Missing provider keys make it
   a warning-only no-op/fallback path, not a stream failure.

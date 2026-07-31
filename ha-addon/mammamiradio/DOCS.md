@@ -132,6 +132,36 @@ its files by hand.
 
 ## Failure modes and recovery
 
+### Start returns an error and the station stays paused
+
+**Symptom**: pressing Start answers `503` and the station remains paused across
+add-on restarts.
+
+**Cause**: Stop writes a durable marker, and Start refuses to clear it until it
+has reserved audio that can play immediately. A restart re-reads the marker, so a
+paused station stays paused on purpose. When no recovery audio is installed at
+all, the response offers **Force Start**, which is an explicit corrupt-install
+escape rather than an automatic retry.
+
+**Recovery**: full procedure, including what to inspect and when Force Start is
+the right answer, is in
+[docs/troubleshooting.md](https://github.com/florianhorner/mammamiradio/blob/main/docs/troubleshooting.md)
+under "Stop or Resume returns 503". Inspect the installed image read-only; do not
+patch or restart the running container as a test.
+
+### `/readyz` stays at `503 starting`
+
+**Symptom**: the add-on is running and the log shows `Producer started`, but
+`/readyz` never reaches `200 ready`.
+
+**Cause**: usually not a fault. Readiness means a listener queue actually
+accepted audio, so a station nobody is tuned into stays `starting` by design.
+Queued work and elapsed startup time do not make it ready.
+
+**Recovery**: open the listener page and play the stream. If it still does not
+flip after a listener is connected and audio is audible, follow the silence
+checks in `docs/troubleshooting.md`.
+
 ### Stream is repeatedly playing recovery audio
 
 **Symptom**: Ingress URL loads, but logs show repeated source-acquisition failures and recovery/continuity clips rather than music.

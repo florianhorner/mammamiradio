@@ -3702,6 +3702,9 @@ function updateRuntimeStatus(st){
         operator_panic:'panic stop',
         operator_purge:'queue cleared',
         operator_queue_remove:'removed from queue',
+        stale_continuity:'replaced by a newer cue',
+        stale_played_track_ref:'the song moved on first',
+        listener_session_stale:'the listener left first',
       };
       const reasonHuman=(r)=>REASON_LABELS[r]||String(r||'').replace(/_/g,' ');
       const wasteState=gw.degraded?'degraded':'ready';

@@ -240,6 +240,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, the session is not stopped, and either a listener accepted a chunk from the current segment or an active listener is inside the bounded three-second handoff grace after the last accepted audio.
 - `health_state` — backward-compatible runtime health state for blocked tasks, listener-facing silence, paused sessions, and provider fallback summaries.
+- `recovering` — true between a confirmed Force Start and the first chunk a listener accepts. The admin header renders it as "Starting". It is deliberately outranked by a paused session and by listener-facing silence, so it can never mask the failure Force Start exists to recover from.
 - `providers` — current `audio_source`, `script_provider`, and `tts_provider` with `primary_provider`, `current_provider`, `fallback_active`, `recovery_mode`, `retry_in_seconds`, `action_guidance`, `current_reason`, and `switch_reason` fields per provider. `current_reason` says why the provider shown in *this* snapshot is selected right now; `switch_reason` and `last_switch_timestamp` describe the last listener-audible switch and are historical facts a fresh observation never rewrites. Both are operator copy — raw provider codes are translated before they reach the payload. `script_provider` populates the recovery fields so transient Anthropic errors read differently from circuit-breaker and `action_required` fallback; non-script providers keep those fields empty unless future recovery metadata is added.
 - `recent_events` — last 10 provider switch/failover events with timestamps, reasons, and whether a fallback was active.
 - `last_switch` — most recent provider change event, or `null` if no switches have occurred this session.
@@ -260,10 +261,10 @@ The Engine Room card in `/admin` renders this as two tiers: station health ("On 
 
 An operator pause outranks every other verdict, because a paused station is not a
 failure. Below that, prolonged silence with listeners connected outranks a Force
-Start rebuild: recovery state clears only once a listener accepts audio, so a
-Force Start that never produces audio would otherwise hold a benign "Starting"
-indefinitely while the room hears nothing. A rebuild that is merely still in
-progress, with no one waiting, stays yellow.
+Start rebuild. Recovery state clears only once a listener accepts audio, so a
+Force Start that never produces audio would otherwise hold a calm "Starting"
+while the room hears nothing. A rebuild still in progress with no one waiting
+stays yellow.
 
 ### Reading queue-rescue health ("running on rescue")
 
@@ -389,7 +390,11 @@ fields:
 - `by_reason` / `by_type` — lifetime breakdown by discard reason and segment
   type (`stale_source` for a true source switch, `stale_playlist` for a song that
   left the rotation while it was being rendered, `quality_gate_reject`,
-  `operator_stop`, etc.). `stale_playlist` no longer fires for a pool that merely
+  `operator_stop`, etc.). `stale_continuity` is the expected companion of any
+  Stop, Resume, Skip, or Panic: it counts work that was fenced off the air by a
+  live control, so a burst of it right after an operator action is proof the
+  fence held, not a new fault. Sustained `stale_continuity` with no operator
+  activity is worth investigating. `stale_playlist` no longer fires for a pool that merely
   grew or was reordered: adding, shuffling, moving, or enriching the rotation
   leaves a finished render exactly as playable as when it started, and binning it
   cost minutes of Pi CPU while opening the gap the rescue ladder then had to
@@ -727,6 +732,15 @@ between bounded recovery heartbeats to reduce HA Core REST churn. When the HACS
 integration is installed, turn `ha_media_player_push` off so its registered
 `media_player.mammamiradio` owns the id instead of the REST-pushed ghost; the
 sensors keep flowing either way.
+
+These entities publish the **selected** boundary, not the audible one: the push
+fires when a segment's file opens, and `is_playing` derives from `now_streaming`.
+The control room's `station_on_air` uses the stricter audible boundary (see
+"Diagnosing provider fallbacks" above), so an automation keyed on
+`binary_sensor.mammamiradio_on_air` can read "on" a beat before, or during a
+handoff after, the admin header says On Air. Neither is wrong; they answer
+different questions. For automations that should only fire on audio a listener
+actually received, poll `/status` for `station_on_air` rather than the entity.
 
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|

@@ -324,8 +324,9 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 - BANTER memory extraction is deliberately **not** a queue-time commit. The
   scriptwriter snapshots context, the producer rewrites that snapshot with the
   final aired lines including the transition, and the streamer schedules
-  `memory_extractor` only after the send loop reaches EOF with bytes sent. Purged,
-  skipped, stale, failed, or partial banter never writes persona or song-cue memory.
+  `memory_extractor` only after the send loop reaches EOF with bytes sent and at
+  least one listener accepted a chunk. Purged, skipped, stale, failed, partial, or
+  unheard banter never writes persona or song-cue memory.
 
 ### Protected continuity reservations
 
@@ -422,6 +423,35 @@ for the pre-Stop state cannot leak into the resumed timeline. Playback-built gap
 fills bind themselves to the current epoch after their bounded asset probe; if
 a later control still rejects one, the queue-gap clock and ladder position keep
 running because rejected rescue bytes did not end the silence episode.
+
+The fence has one deliberate exemption, and it is the subtlest part of this
+design. A reservation advances `continuity_epoch` as a side effect of publishing
+itself, so a naive fence would discard the very audio the control just reserved.
+The problem is an ABA cycle: a playback task can already be blocked in
+`queue.get()` from before a Stop, holding a local epoch that is necessarily
+stale, while the runway queued after that Stop is new and must survive. Reserved
+protected segments therefore carry a `continuity_admission_epoch` stamp
+(`_stamp_continuity_runway_epoch`), and the playback loop admits a segment whose
+stamp matches the current epoch even when its own captured epoch does not. The
+exemption is narrow on purpose: only segments already carrying the reservation
+flag are stamped, so ordinary pre-Stop work stays fenced.
+
+Stamping is not optional for a caller, which is why it lives inside the
+reservation helper rather than at each of the ~22 control sites. Anything that
+advances the epoch owns keeping its own survivors admissible: `Resume` and
+`Skip` trim a dead queue head before testing runway (`_discard_unplayable_queue_prefix`),
+and that trim advances the epoch and re-stamps in the same call. An assetless
+Panic, which reserves nothing and bumps the epoch itself, re-stamps at its own
+site. Remove any one of those re-stamps and the failure is silent and specific:
+the route answers 200, the operator sees success, and the reserved audio is
+discarded as `stale_continuity` a moment later, turning a control meant to end
+silence into one that extends it. Two of those paths are guarded by dedicated
+tests for exactly that reason.
+
+Because that trim runs on the Resume path, pressing **Start** on a station with
+an evicted queue head files `operator_stop` rows in
+`runtime_status.generation_waste.by_reason`. That is the dead head being cleared,
+not a second Stop.
 
 Playback has two truth boundaries:
 
@@ -695,7 +725,7 @@ Playback verifies the stamped epoch before the segment and before every audio ch
 
 Hosts may build shared station mythology, but may not turn a stream connection into an arrival, return, or identity claim. The final producer boundary checks the assembled transition plus banter text in English and Italian; it makes one bounded identity-free repair attempt and falls back to deterministic safe copy if the repair remains unsafe. A separately authorized, named Home Assistant resident-return fact is line-bound to its source entity; a door unlock or generic presence signal never grants that authority.
 
-The hot `write_banter` contract does not write persona memory. Instead, `scriptwriter.py` creates a `MemoryExtractionCommit` snapshot, `producer.py` replaces its draft lines with the final aired script, and `streamer.py` schedules `hosts/memory_extractor.py` only after the banter segment finishes sending cleanly. The extractor then asks the fast script model for bounded `persona_updates` and applies them under a write lock. This post-air fast-lane call is automatic whenever generated banter has station-memory metadata and airs cleanly; there is no separate per-call opt-out beyond disabling the persona store or removing script-provider credentials.
+The hot `write_banter` contract does not write persona memory. Instead, `scriptwriter.py` creates a `MemoryExtractionCommit` snapshot, `producer.py` replaces its draft lines with the final aired script, and `streamer.py` schedules `hosts/memory_extractor.py` only after the banter segment finishes sending cleanly to at least one listener that accepted a chunk. The extractor then asks the fast script model for bounded `persona_updates` and applies them under a write lock. This post-air fast-lane call is automatic whenever generated banter has station-memory metadata and airs cleanly; there is no separate per-call opt-out beyond disabling the persona store or removing script-provider credentials.
 
 Instruction-like patterns in persona entries are filtered before storage (matching the `ha_context` sanitizer) to prevent stored prompt injection across sessions.
 
@@ -864,7 +894,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/homeassistant/context-candidates` | GET | Admin | Sanitized Home Assistant context preview for onboarding; includes additive `entities` rows while preserving legacy arrays, and is never exposed on `/public-status` |
 | `/api/homeassistant/entity-policy` | PATCH | Admin | Apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response includes effective consent, policy revision, and the count of matching queued host breaks removed by a mute or a personal-moment consent revocation |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
-| `/api/skip` | POST | Admin | Skip current segment. Requires audible media: the loop parks with no listeners and leaves the finished segment's metadata in place at EOF, so selected-but-inaudible means there is nothing to cut. A skip already in flight is reported as such rather than as "nothing streaming" |
+| `/api/skip` | POST | Admin | Skip current segment. Requires audible media: the loop parks with no listeners and leaves the finished segment's metadata in place at EOF, so selected-but-inaudible means there is nothing to cut. A skip already in flight says so instead of claiming nothing is streaming |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |
 | `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; the Admin playlist sends the existing key target so a refreshed row cannot redirect the vote, while the index target remains compatible for existing API clients; never skips, purges, or mutates the blocklist |
 | `/api/track/preferences` | GET | Admin | List operator song preference rows and up/down counts |
