@@ -12,6 +12,7 @@ from mammamiradio.core.models import (
     HEADING_MAX_LIFT,
     HEADING_MIN_LIFT,
     HEADING_TARGET_SHARE,
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     ChaosSubtype,
     DialogueLine,
     GenerationWasteReason,
@@ -346,6 +347,30 @@ def test_audible_segment_commit_is_exactly_once():
     assert state.audible_playback_epoch == state.playback_epoch == 1
     assert len(state.played_track_log) == 1
     assert state.runtime_provider_state["audio_source"]["current_provider"] == "charts"
+
+
+def test_audible_music_keeps_render_bound_source_after_source_swap():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/audible.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Audible",
+            "title_only": "Audible",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+            SEGMENT_PLAYLIST_SOURCE_KIND_KEY: "charts",
+        },
+    )
+    state.on_stream_segment_selected(seg)
+    state.playlist_source = PlaylistSource(kind="local", label="Local files")
+
+    assert state.on_stream_segment_audible(seg) is True
+    provider = state.runtime_provider_state["audio_source"]
+    assert provider["current_provider"] == "charts"
+    assert provider["primary_provider"] == "charts"
 
 
 def test_unheard_selection_never_becomes_a_listener_outcome():

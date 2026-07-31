@@ -41,6 +41,12 @@ _RUNTIME_PROVIDER_OBSERVATION_TOKEN: ContextVar[str] = ContextVar(
     default="",
 )
 
+# Internal render-scoped identity for the playlist source that produced a
+# segment.  The active station source may change while already-rendered audio
+# remains queued, so listener-audible provider truth must travel with the audio
+# rather than being reconstructed from mutable global state.
+SEGMENT_PLAYLIST_SOURCE_KIND_KEY = "_playlist_source_kind"
+
 
 PartyMode = Literal["festival"]
 
@@ -1741,20 +1747,22 @@ class StationState:
         if raw_audio_source == "fallback_norm_cache":
             raw_audio_source = "norm_cache"
         fallback_active = is_fallback_active(metadata)
+        bound_playlist_source = str(metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY) or "")
+        active_playlist_source = (
+            bound_playlist_source or (self.playlist_source.kind if self.playlist_source is not None else "") or "stream"
+        )
         if raw_audio_source or metadata.get("fallback") or fallback_active or segment.type == SegmentType.MUSIC:
             audio_source = raw_audio_source
             if not audio_source and fallback_active:
                 audio_source = "canned"
-            elif (
-                segment.type == SegmentType.MUSIC
-                and self.playlist_source is not None
-                and (not audio_source or (not fallback_active and audio_source == "download"))
+            elif segment.type == SegmentType.MUSIC and (
+                not audio_source or (not fallback_active and audio_source in {"download", "prewarm"})
             ):
-                audio_source = self.playlist_source.kind
+                audio_source = active_playlist_source
             self.update_runtime_provider(
                 "audio_source",
                 current_provider=audio_source or "stream",
-                primary_provider=self.playlist_source.kind if self.playlist_source is not None else "stream",
+                primary_provider=active_playlist_source,
                 fallback_active=fallback_active,
                 reason=(
                     str(metadata.get("fallback_reason") or "Fallback audio is currently on air")

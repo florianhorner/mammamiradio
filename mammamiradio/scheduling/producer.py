@@ -56,6 +56,7 @@ from mammamiradio.core.listener_session import (
 )
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     AdHistoryEntry,
     ChaosSubtype,
     DialogueLine,
@@ -70,6 +71,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.core.spoken_assets import (
     approved_spoken_assets,
     is_approved_packaged_audio_asset,
@@ -2301,6 +2303,18 @@ async def _enqueue_with_egress(
     entry point. FX run BEFORE the front-insert critical section so it stays a
     no-await drain→prepend→repush.
     """
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if (
+        segment.type is SegmentType.MUSIC
+        and state.playlist_source is not None
+        and SEGMENT_PLAYLIST_SOURCE_KIND_KEY not in metadata
+        and not is_fallback_active(metadata)
+    ):
+        # Bind ordinary music to the source that rendered it before the first
+        # gate or await. A metadata-only source load may deliberately preserve
+        # this queued audio while changing ``state.playlist_source``.
+        metadata[SEGMENT_PLAYLIST_SOURCE_KIND_KEY] = state.playlist_source.kind
+
     # Final pre-egress gate: stop, blocklist, and captured cutover state are all
     # reclassified by the same pure helper used after each subsequent await.
     rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)

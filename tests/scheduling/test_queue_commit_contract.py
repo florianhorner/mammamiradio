@@ -49,7 +49,15 @@ import pytest
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    GenerationWasteReason,
+    PlaylistSource,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
     _adjacent_music_source,
@@ -592,6 +600,7 @@ async def test_direct_enqueue_publishes_matching_shadow_row(tmp_path):
     egress colour pass (patch ``apply_broadcast_chain``, never ``_apply_egress`` —
     mocking the latter would hide the rescue-skip branch)."""
     state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     bridge = tmp_path / "bridge.mp3"
@@ -611,7 +620,35 @@ async def test_direct_enqueue_publishes_matching_shadow_row(tmp_path):
     assert len(state.queued_segments) == 1
     assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
     assert state.queued_segments[0]["label"] == "Resume bridge"
+    assert SEGMENT_PLAYLIST_SOURCE_KIND_KEY not in seg.metadata
     m_chain.assert_not_called()  # rescue skipped the egress colour pass
+
+
+@pytest.mark.asyncio
+async def test_direct_enqueue_binds_ordinary_music_to_active_playlist_source(tmp_path):
+    state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    audio_path = tmp_path / "chart-track.mp3"
+    audio_path.write_bytes(b"audio")
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=audio_path,
+        ephemeral=False,
+        metadata={
+            "artist": "Artist",
+            "title": "Artist – Track",
+            "title_only": "Track",
+            "audio_source": "download",
+        },
+    )
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", return_value=seg):
+        assert await _enqueue_with_egress(queue, state, config, seg) is True
+
+    queued = queue.get_nowait()
+    assert queued.metadata[SEGMENT_PLAYLIST_SOURCE_KIND_KEY] == "charts"
 
 
 @pytest.mark.asyncio
