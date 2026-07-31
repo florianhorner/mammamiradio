@@ -3455,11 +3455,11 @@ function stationRuntimeVerdict(st,caps){
   if(st?.session_stopped===true){
     return {state:'idle',label:'Paused',detail:'Stream Engine is paused by the operator.'};
   }
-  if(runtime.recovering===true){
-    return {state:'working',label:'Starting',detail:runtime.health_explanation||'Stream Engine is rebuilding listener-audible audio.'};
-  }
   if(runtime.health_state==='blocked'){
     return {state:'blocked',label:'Needs attention',detail:runtime.health_explanation||'Stream Engine needs attention.'};
+  }
+  if(runtime.recovering===true){
+    return {state:'working',label:'Starting',detail:runtime.health_explanation||'Stream Engine is rebuilding listener-audible audio.'};
   }
   if(runtime.station_on_air===true){
     const degraded=runtime.health_state==='degraded';

@@ -3987,7 +3987,11 @@ async def test_stale_now_streaming_is_not_skip_ready_on_public_or_admin_status()
     assert public_status.json()["playback_actions"] == expected_actions
     assert admin_status.json()["playback_actions"] == expected_actions
     assert skip.json()["ok"] is False
-    assert "nothing is on air" in skip.json()["error"].lower()
+    error = skip.json()["error"].lower()
+    assert "nothing is on air" in error
+    # The station is running, so it must not point at Start — the admin hides
+    # that button while running, which made the refusal read as broken.
+    assert "press start" not in error
     assert not app.state.skip_event.is_set()
     assert state.force_next is None
 

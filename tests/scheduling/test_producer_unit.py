@@ -5279,6 +5279,57 @@ async def test_continuity_bridge_probe_spanning_stop_resume_rearms_lower_rung(tm
 
 
 @pytest.mark.asyncio
+async def test_emergency_tone_rung_still_fires_after_a_mid_bridge_epoch_bump(tmp_path):
+    """The tone is the floor between the listener and dead air.
+
+    Every rung above it is unavailable here, so the bridge reaches the packaged
+    emergency tone. If the tone were still armed against the epoch captured at
+    the top of the bridge, one control action landing mid-ladder would reject the
+    last rung too and the bridge would return False having queued nothing.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment, *, stale_check=None, **_kwargs) -> bool:
+        verdict = stale_check() if stale_check is not None else None
+        if verdict:
+            state.record_discard(segment, reason=str(verdict))
+            return False
+        queued.append(segment)
+        return True
+
+    def _bump_then_miss(*_args, **_kwargs):
+        # Model a control landing while the ladder is walking its rungs.
+        state.continuity_epoch += 1
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", side_effect=_bump_then_miss),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.is_approved_packaged_audio_asset", return_value=True),
+    ):
+        ok = await producer._queue_continuity_bridge(
+            _capture,
+            state,
+            config,
+            bridge_type="resume",
+            bridge_flag="resume_bridge",
+            canned_title="Resume bridge",
+            music_runway=True,
+        )
+
+    assert state.continuity_epoch > 0, "the test must actually move the epoch mid-bridge"
+    assert ok is True, "one epoch bump must not disarm the last rung before dead air"
+    assert [segment.metadata.get("audio_source") for segment in queued] == ["emergency_tone"]
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("resume", "emergency_tone")]
+
+
+@pytest.mark.asyncio
 async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
     """A warm cache means a mid-playback drain airs a real song, with no clip in front."""
     from mammamiradio.scheduling import producer

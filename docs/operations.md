@@ -258,6 +258,13 @@ without that recent proof it stays false.
 
 The Engine Room card in `/admin` renders this as two tiers: station health ("On Air" / "Paused" / "Error") and provider health ("Primary" / "Auto-recovering" / "Backup active"). Structured log events (`provider_switch_event`, `provider_health_state`) are also emitted so log aggregators can alert on sustained fallback states.
 
+An operator pause outranks every other verdict, because a paused station is not a
+failure. Below that, prolonged silence with listeners connected outranks a Force
+Start rebuild: recovery state clears only once a listener accepts audio, so a
+Force Start that never produces audio would otherwise hold a benign "Starting"
+indefinitely while the room hears nothing. A rebuild that is merely still in
+progress, with no one waiting, stays yellow.
+
 ### Reading queue-rescue health ("running on rescue")
 
 `runtime_status.bridge_health` reports how often the producer is bridging a

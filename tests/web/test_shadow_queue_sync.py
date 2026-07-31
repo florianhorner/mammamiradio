@@ -66,6 +66,7 @@ from mammamiradio.web.streamer import (
     _segment_is_immediately_playable,
     _stamp_continuity_runway_epoch,
     _sync_runtime_state,
+    panic_cut,
     router,
 )
 
@@ -507,6 +508,40 @@ class TestRuntimeStatusSnapshot:
         assert set(snap["providers"]) == {"audio_source", "script_provider", "tts_provider"}
         assert snap["providers"]["script_provider"]["current_provider"] == "anthropic"
         assert snap["no_failover_message"] == "No failover in current session."
+
+    def test_silence_with_listeners_outranks_force_recovery(self):
+        """Force Start must not mask the failure it exists to recover from.
+
+        `force_recovery_active` clears only when a listener accepts audio, so a
+        force recovery that never produces audio holds the flag forever. Ranking
+        it above the silence alarm rendered indefinite dead air, with listeners
+        connected, as a benign yellow "Starting".
+        """
+
+        app = _make_app()
+        state = app.state.station_state
+        state.force_recovery_active = True
+        req = _fake_request(app)
+
+        with patch("mammamiradio.web.streamer._silence_with_listeners", return_value=True):
+            snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "blocked"
+        assert snap["health_color"] == "red"
+        assert "listeners are waiting" in snap["health_explanation"].lower()
+
+    def test_force_recovery_still_reads_degraded_while_the_station_is_quiet(self):
+        """Without the silence alarm, an in-progress rebuild is still just yellow."""
+
+        app = _make_app()
+        app.state.station_state.force_recovery_active = True
+        req = _fake_request(app)
+
+        with patch("mammamiradio.web.streamer._silence_with_listeners", return_value=False):
+            snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["recovering"] is True
 
     def test_station_on_air_requires_listener_audible_commit(self):
         app = _make_app()
@@ -1562,6 +1597,41 @@ def test_discarding_a_dead_head_keeps_the_surviving_reservation_admissible(tmp_p
     assert dropped == 1
     assert state.continuity_epoch == 8
     assert reserved.metadata["continuity_admission_epoch"] == state.continuity_epoch
+
+
+@pytest.mark.asyncio
+async def test_assetless_panic_keeps_its_own_reservation_admissible(tmp_path):
+    """Panic's own epoch bump must not orphan the runway it just reserved.
+
+    An assetless Panic leaves the queue untouched, so `_reserve_continuity_runway`
+    does not advance the epoch and `panic_cut` bumps it itself to supersede any
+    in-flight render. That bump lands after the reservation was stamped, so
+    without a re-stamp the playback loop discards the protected audio Panic was
+    protecting — on the exact path where there is least to spare.
+    """
+
+    app = _make_app()
+    state = app.state.station_state
+    app.state.queue = asyncio.Queue(maxsize=4)
+
+    real = tmp_path / "protected.mp3"
+    real.write_bytes(b"\x00" * 4096)
+    protected = _queue_segment("Protected runway", duration_sec=200.0)
+    protected.path = real
+    protected.metadata["continuity_reservation"] = True
+    app.state.queue.put_nowait(protected)
+    state.queued_segments = [{"id": "protected", "type": "music", "label": "Protected runway"}]
+    state.now_streaming = {"type": "music", "label": "On air", "metadata": {}}
+    state.current_stream_audible = True
+    state.continuity_epoch = 3
+
+    # Assetless: nothing new to reserve, so the reservation cannot bump the epoch.
+    with patch("mammamiradio.web.streamer._continuity_reservation_segments", return_value=[]):
+        response = await panic_cut(_fake_request(app), None)
+
+    assert response["ok"] is True
+    assert state.continuity_epoch == 4, "panic must supersede in-flight renders"
+    assert protected.metadata["continuity_admission_epoch"] == state.continuity_epoch
 
 
 def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_path):

@@ -864,7 +864,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/homeassistant/context-candidates` | GET | Admin | Sanitized Home Assistant context preview for onboarding; includes additive `entities` rows while preserving legacy arrays, and is never exposed on `/public-status` |
 | `/api/homeassistant/entity-policy` | PATCH | Admin | Apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response includes effective consent, policy revision, and the count of matching queued host breaks removed by a mute or a personal-moment consent revocation |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
-| `/api/skip` | POST | Admin | Skip current segment |
+| `/api/skip` | POST | Admin | Skip current segment. Requires audible media: the loop parks with no listeners and leaves the finished segment's metadata in place at EOF, so selected-but-inaudible means there is nothing to cut. A skip already in flight is reported as such rather than as "nothing streaming" |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |
 | `/api/track/preference` | POST | Admin | Set or clear an operator song preference with `vote: "up"\|"down"\|"clear"` plus one target: `now_playing: true`, `index`, or `key: [artist, title]`; the Admin playlist sends the existing key target so a refreshed row cannot redirect the vote, while the index target remains compatible for existing API clients; never skips, purges, or mutates the blocklist |
 | `/api/track/preferences` | GET | Admin | List operator song preference rows and up/down counts |

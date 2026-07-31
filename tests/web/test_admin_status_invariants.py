@@ -244,7 +244,12 @@ def test_runtime_status_surfaces_share_one_pause_first_verdict() -> None:
     assert "runtime.recovering===true" in verdict
     assert "runtime.health_state==='blocked'" in verdict
     assert verdict.index("st?.session_stopped===true") < verdict.index("runtime.health_state==='blocked'")
-    assert verdict.index("runtime.recovering===true") < verdict.index("runtime.health_state==='blocked'")
+    # `blocked` outranks `recovering`. force_recovery_active clears only when a
+    # listener accepts audio, so a rebuild that never succeeds holds the flag
+    # forever — ranking it first rendered indefinite dead air, and even a dead
+    # runtime task, as a benign "Starting". A deliberate pause still wins over
+    # both, because a paused station is not a failure.
+    assert verdict.index("runtime.health_state==='blocked'") < verdict.index("runtime.recovering===true")
     assert "stationRuntimeVerdict(st,caps)" in pipeline
     assert "stationRuntimeVerdict(st,_caps)" in runtime
     assert "guidedStream.status==='stopped'" not in pipeline
