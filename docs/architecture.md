@@ -431,9 +431,18 @@ Playback has two truth boundaries:
 2. **Listener-audible:** only after at least one listener queue accepts that
    chunk does `on_stream_segment_audible()` set `current_stream_audible` and
    commit provider state, rescue rotation, continuity-fire receipts, and other
-   heard-only bookkeeping. `runtime_status.station_on_air` requires this second
-   boundary. A `now_streaming` row by itself must never be cited as proof that a
-   listener heard audio.
+   heard-only bookkeeping. `runtime_status.station_on_air` is established at
+   this second boundary and stays stable for a three-second segment-handoff
+   grace only while a listener remains connected; a stopped session, expired
+   handoff, task failure, or silence alarm still clears it. A `now_streaming`
+   row by itself must never be cited as proof that a listener heard audio.
+
+Provider status follows the same truth split. The main provider row describes
+the last listener-audible route, while a newer unheard route is exposed
+separately as `latest_observation` so an operator can see a current
+action-required failure without the UI claiming that provider is on air.
+Operator-facing script/TTS reasons are humanized; the corresponding recent
+event retains its raw code as `diagnostic_reason`.
 
 The required recovery set is a subset, not an exact directory inventory:
 additional reviewed assets may ship. Release checks independently require
@@ -941,6 +950,14 @@ If a slow source request crosses a Stop or another continuity-epoch change, its
 commit is metadata-only: the playlist metadata may change, but the request
 preserves the real queue, queue shadow, and protected slots byte-for-byte. It
 does not own transport work admitted after the epoch it captured.
+Text-direction expansion performs its network work before entering
+`source_switch_lock` and captures that epoch at the serialized commit boundary;
+an unrelated Stop/Resume transaction that has already completed therefore does
+not incorrectly turn a current commit into metadata-only work. A later control
+that crosses the actual commit boundary still wins. Likewise, a slow admin
+play-next download that becomes metadata-only may retain its accepted
+`pinned_track`/`force_next=MUSIC` ownership for the producer, but it never queues
+or reserves audio from the stale request.
 
 Source replacement also follows the protected-continuity reservation contract
 above. A successful fresh replacement supersedes existing reservations and

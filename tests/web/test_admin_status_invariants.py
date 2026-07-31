@@ -358,22 +358,26 @@ def test_runtime_provider_row_handles_recovery_mode() -> None:
     block = _function_block(html, "runtimeProviderRow")
     runtime = _function_block(html, "updateRuntimeStatus")
 
-    assert "item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'" in block
+    assert "const latest=item?.latest_observation||null" in block
+    assert "const operational=latest||item" in block
+    assert "operational?.recovery_mode==='circuit_breaker'||operational?.recovery_mode==='action_required'" in block
     assert "state='degraded'" in block
     assert "label='Backup active'" in block
-    assert "item?.recovery_mode==='transient'" in block
+    assert "operational?.recovery_mode==='transient'" in block
     assert "state='working'" in block
     assert "label='Auto-recovering'" in block
-    assert "const observationLabel=stationOnAir?'Current':'Last observed'" in block
+    assert "const observationLabel=stationOnAir?'Current on air':'Last heard'" in block
     assert "const currentReason=item?.current_reason||''" in block
-    assert "const guidanceLine=item?.action_guidance||''" in block
+    assert "'Latest studio observation: '" in block
+    assert "const guidanceLine=operational?.action_guidance||''" in block
     assert "action_guidance||item?.switch_reason" not in block
-    assert "const retrySeconds=Math.max(0,Number(item?.retry_in_seconds)||0)" in block
+    assert "const retrySeconds=Math.max(0,Number(operational?.retry_in_seconds)||0)" in block
     assert "retrySeconds<60?retrySeconds+' sec':Math.ceil(retrySeconds/60)+' min'" in block
     assert "const switchLine=item?.last_switch_timestamp" in block
     assert "'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp)" in block
     assert "item?.switch_reason||''" in block
     assert "currentReason" in block
+    assert "latestLine" in block
     assert "guidanceLine" in block
     assert "retryLine" in block
     for title in ("Audio source", "Script provider", "TTS provider"):

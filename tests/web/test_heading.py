@@ -446,13 +446,8 @@ async def test_slow_direction_does_not_override_later_back_to_auto(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_direction_crossing_stop_resume_updates_metadata_without_runway(tmp_path):
-    """A direction that spans a fast Stop->Resume must not admit audio.
-
-    The epoch moved while the expansion was in flight, so this work was captured
-    against a session that no longer exists — even though Resume already made the
-    station look running again.
-    """
+async def test_direction_crossing_stop_resume_uses_commit_boundary_runtime_state(tmp_path):
+    """Pre-lock work does not inherit an unrelated, already-finished control epoch."""
 
     existing = _track("Toxic", "Britney Spears", "base")
     app = _make_app(tmp_path, tracks=[existing])
@@ -483,14 +478,10 @@ async def test_direction_crossing_stop_resume_updates_metadata_without_runway(tm
 
     body = response.json()
     assert body["ok"] is True
-    assert body["metadata_only"] is True
+    assert body["metadata_only"] is False
     assert body["retagged_existing"] == 1
     assert state.heading is not None
     assert existing.heading_id == state.heading.id
-    # Metadata moved; audio did not.
-    assert app.state.queue.empty()
-    assert state.continuity_slot is None
-    assert not app.state.skip_event.is_set()
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,7 @@ from mammamiradio.web.streamer import (
     StreamPacer,
     _ad_cast_status_payload,
     _apply_loaded_source,
+    _commit_audible_stream_segment,
     _consume_queue_shadow,
     _continuity_reservation_segments,
     _copy_home_context_to_state,
@@ -1395,6 +1396,63 @@ async def test_first_listener_accepted_chunk_commits_audible_state_once(tmp_path
     assert state.stream_outcome_history[-1]["accepted_listener_count"] == 1
 
 
+def test_audible_commit_logs_new_provider_events_when_object_ids_collide(caplog):
+    state = StationState()
+    state.update_runtime_provider(
+        "audio_source",
+        current_provider="norm_cache",
+        primary_provider="charts",
+        fallback_active=True,
+        reason="old fallback",
+    )
+    assert state.runtime_events
+    state.update_runtime_provider(
+        "script_provider",
+        current_provider="anthropic",
+        primary_provider="anthropic",
+        fallback_active=False,
+        reason="primary_success",
+    )
+    state.update_runtime_provider(
+        "tts_provider",
+        current_provider="azure",
+        primary_provider="azure",
+        fallback_active=False,
+        reason="primary_success",
+    )
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/provider-id-collision.mp3"),
+        metadata={"title": "Fallback render"},
+        runtime_provider_observations={
+            "script_provider": RuntimeProviderObservation(
+                current_provider="openai",
+                primary_provider="anthropic",
+                fallback_active=True,
+                current_reason="anthropic_exception",
+            ),
+            "tts_provider": RuntimeProviderObservation(
+                current_provider="edge",
+                primary_provider="azure",
+                fallback_active=True,
+                current_reason="missing_credentials",
+            ),
+        },
+    )
+    state.on_stream_segment_selected(segment)
+    caplog.set_level(logging.INFO, logger="mammamiradio.web.streamer")
+
+    # The old detector compared integer ids across a maxlen deque. Holding an
+    # `id` collision here deterministically reproduced its lost-event path.
+    with patch("mammamiradio.web.streamer.id", return_value=1, create=True):
+        assert _commit_audible_stream_segment(state, segment, accepted_listeners=1) is True
+
+    logged_classes = [
+        record.provider_class for record in caplog.records if record.getMessage() == "provider_switch_event"
+    ]
+    assert logged_classes == ["script_provider", "tts_provider"]
+
+
 @pytest.mark.asyncio
 async def test_continuity_reservation_reports_a_bridge_fire_from_the_send_loop(tmp_path):
     """Reserved safety audio reports a bridge ONLY once a listener has it.
@@ -2715,6 +2773,34 @@ async def test_blocked_playback_waiter_reparks_runway_when_resume_marker_fails(t
     app.state.stream_hub.subscribe()
     app.state.stream_hub.broadcast = AsyncMock(return_value=1)
     caplog.set_level(logging.INFO)
+    first_path = tmp_path / "resume-first.mp3"
+    second_path = tmp_path / "resume-second.mp3"
+    first_path.write_bytes(b"first-resume-runway")
+    second_path.write_bytes(b"second-resume-runway")
+    reservations = [
+        Segment(
+            type=SegmentType.BANTER,
+            path=first_path,
+            duration_sec=4.0,
+            metadata={
+                "queue_id": "resume-first",
+                "title": "First runway",
+                "continuity_reservation": True,
+            },
+            ephemeral=False,
+        ),
+        Segment(
+            type=SegmentType.MUSIC,
+            path=second_path,
+            duration_sec=180.0,
+            metadata={
+                "queue_id": "resume-second",
+                "title": "Second runway",
+                "continuity_reservation": True,
+            },
+            ephemeral=False,
+        ),
+    ]
     queue_wait_started = asyncio.Event()
     original_queue_get = app.state.queue.get
 
@@ -2728,11 +2814,15 @@ async def test_blocked_playback_waiter_reparks_runway_when_resume_marker_fails(t
     try:
         await asyncio.wait_for(queue_wait_started.wait(), timeout=1.0)
 
-        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            stopped = await client.post("/api/stop")
-            with patch("mammamiradio.web.streamer._persist_session_stopped", side_effect=OSError("read only")):
-                resumed = await client.post("/api/resume")
+        with patch(
+            "mammamiradio.web.streamer._continuity_reservation_segments",
+            return_value=reservations,
+        ):
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                stopped = await client.post("/api/stop")
+                with patch("mammamiradio.web.streamer._persist_session_stopped", side_effect=OSError("read only")):
+                    resumed = await client.post("/api/resume")
 
         assert stopped.status_code == 200
         assert resumed.status_code == 503
@@ -2747,9 +2837,13 @@ async def test_blocked_playback_waiter_reparks_runway_when_resume_marker_fails(t
 
     assert state.session_stopped is True
     assert state.now_streaming["type"] == "stopped"
-    assert app.state.queue.qsize() == len(state.queued_segments) == 1
-    parked = next(iter(app.state.queue._queue))
-    assert parked.metadata["continuity_admission_epoch"] == state.continuity_epoch
+    assert app.state.queue.qsize() == len(state.queued_segments) == 2
+    real_ids = [segment.metadata["queue_id"] for segment in app.state.queue._queue]
+    shadow_ids = [row["id"] for row in state.queued_segments]
+    assert real_ids == shadow_ids == ["resume-second", "resume-first"]
+    assert all(
+        segment.metadata["continuity_admission_epoch"] == state.continuity_epoch for segment in app.state.queue._queue
+    )
     app.state.stream_hub.broadcast.assert_not_awaited()
 
 
@@ -4715,6 +4809,29 @@ async def test_script_provider_switch_reason_never_shows_a_raw_code():
 
 
 @pytest.mark.asyncio
+async def test_script_provider_event_keeps_raw_diagnostic_but_shows_plain_reason():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.update_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_auth_failed",
+        timestamp=10.0,
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        event = (await client.get("/status")).json()["runtime_status"]["recent_events"][0]
+
+    assert event["provider_class"] == "script_provider"
+    assert event["diagnostic_reason"] == "anthropic_auth_failed"
+    assert event["reason"] == "Anthropic API key rejected - check your key in Engine Room"
+    assert "_" not in event["reason"]
+
+
+@pytest.mark.asyncio
 async def test_legacy_fallback_norm_cache_reaches_the_admin_as_norm_cache():
     """The rescue cache has one identifier. "Serving as fallback" is separate metadata.
 
@@ -4840,6 +4957,84 @@ async def test_admin_provider_rows_ignore_newer_unheard_generation_observations(
     assert "last listener-audible provider; station is paused" in (
         paused["providers"]["tts_provider"]["current_reason"].lower()
     )
+
+
+@pytest.mark.asyncio
+async def test_paused_provider_status_exposes_newer_action_required_observation():
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.anthropic_api_key = "anthropic-key"
+    app.state.config.openai_api_key = "openai-key"
+    audible = state.observe_runtime_provider(
+        "script_provider",
+        current_provider="anthropic",
+        primary_provider="anthropic",
+        fallback_active=False,
+        reason="primary_success",
+    )
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/audible-script-provider.mp3"),
+        metadata={"title": "Primary render"},
+        runtime_provider_observations={"script_provider": audible},
+    )
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment) is True
+    state.observe_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_auth_failed",
+    )
+    state.anthropic_disabled_until = time.time() + 120
+    state.session_stopped = True
+    state.current_stream_audible = False
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        provider = (await client.get("/status")).json()["runtime_status"]["providers"]["script_provider"]
+
+    assert provider["current_provider"] == "anthropic"
+    assert provider["fallback_active"] is False
+    observed = provider["latest_observation"]
+    assert observed["current_provider"] == "openai"
+    assert observed["fallback_active"] is True
+    assert observed["recovery_mode"] == "circuit_breaker"
+    assert observed["action_guidance"] == "Anthropic API key rejected - check your key in Engine Room"
+    assert observed["current_reason"] == "Anthropic API key rejected - check your key in Engine Room"
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_keeps_on_air_hysteresis_only_for_recent_listener_audio():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.listeners_active = 1
+    state.current_stream_audible = False
+    state.last_air_monotonic = 100.0
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        with patch("mammamiradio.web.streamer._runtime_monotonic", return_value=102.0):
+            recent = (await client.get("/status")).json()["runtime_status"]
+        with patch(
+            "mammamiradio.web.streamer._runtime_monotonic",
+            return_value=103.1,
+        ):
+            expired = (await client.get("/status")).json()["runtime_status"]
+        state.session_stopped = True
+        with patch("mammamiradio.web.streamer._runtime_monotonic", return_value=102.0):
+            stopped = (await client.get("/status")).json()["runtime_status"]
+        state.session_stopped = False
+        state.queue_empty_since = 50.0
+        state.last_air_monotonic = 50.0
+        with patch("mammamiradio.web.streamer._runtime_monotonic", return_value=100.0):
+            silent = (await client.get("/status")).json()["runtime_status"]
+
+    assert recent["station_on_air"] is True
+    assert expired["station_on_air"] is False
+    assert stopped["station_on_air"] is False
+    assert silent["station_on_air"] is False
 
 
 @pytest.mark.asyncio

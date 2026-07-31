@@ -3515,21 +3515,26 @@ function statusRow(title,state,label,detail){
   return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div>${statusChip(state,label)}</div>`;
 }
 function runtimeProviderRow(title,item,stationOnAir){
+  const latest=item?.latest_observation||null;
+  const operational=latest||item;
   let state,label;
-  if(item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'){
+  if(operational?.recovery_mode==='circuit_breaker'||operational?.recovery_mode==='action_required'){
     state='degraded';
     label='Backup active';
-  }else if(item?.recovery_mode==='transient'){
+  }else if(operational?.recovery_mode==='transient'){
     state='working';
     label='Auto-recovering';
   }else{
-    state=item?.fallback_active?'degraded':'ready';
-    label=item?.fallback_active?'Fallback':'Primary';
+    state=operational?.fallback_active?'degraded':'ready';
+    label=operational?.fallback_active?'Fallback':'Primary';
   }
-  const observationLabel=stationOnAir?'Current':'Last observed';
+  const observationLabel=stationOnAir?'Current on air':'Last heard';
   const currentReason=item?.current_reason||'';
-  const guidanceLine=item?.action_guidance||'';
-  const retrySeconds=Math.max(0,Number(item?.retry_in_seconds)||0);
+  const latestLine=latest
+    ?['Latest studio observation: '+(latest.current_label||latest.current_provider||'—'),latest.current_reason||''].filter(Boolean).join(' — ')
+    :'';
+  const guidanceLine=operational?.action_guidance||'';
+  const retrySeconds=Math.max(0,Number(operational?.retry_in_seconds)||0);
   const retryLine=retrySeconds>0?'Retrying in '+(retrySeconds<60?retrySeconds+' sec':Math.ceil(retrySeconds/60)+' min'):'';
   const switchLine=item?.last_switch_timestamp
     ?['Last switch: '+fmtRuntimeTs(item.last_switch_timestamp),item?.switch_reason||''].filter(Boolean).join(' — ')
@@ -3538,6 +3543,7 @@ function runtimeProviderRow(title,item,stationOnAir){
     observationLabel+': '+(item?.current_label||item?.current_provider||'—'),
     currentReason,
     'Primary: '+(item?.primary_label||item?.primary_provider||'—'),
+    latestLine,
     guidanceLine,
     retryLine,
     switchLine

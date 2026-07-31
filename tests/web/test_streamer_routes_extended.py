@@ -1270,7 +1270,7 @@ async def test_commit_external_download_probe_failure_falls_back_to_metadata(tmp
 
 @pytest.mark.asyncio
 async def test_external_download_crossing_stop_resume_commits_metadata_without_audio(tmp_path):
-    """Slow ingress may join rotation after an epoch cut, but cannot pin or queue audio."""
+    """Slow admin ingress can retain play-next ownership without admitting audio."""
     from mammamiradio.web import streamer
 
     app = _make_test_app()
@@ -1311,10 +1311,10 @@ async def test_external_download_crossing_stop_resume_commits_metadata_without_a
         release_download.set()
         status = await asyncio.wait_for(task, timeout=1.0)
 
-    assert status == "queued"
+    assert status == "pinned"
     assert track in state.playlist
-    assert state.pinned_track is None
-    assert state.force_next is None
+    assert state.pinned_track is track
+    assert state.force_next is SegmentType.MUSIC
     assert app.state.queue.empty()
     assert state.continuity_slot is None
 

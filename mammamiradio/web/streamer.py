@@ -389,6 +389,9 @@ QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 # QUEUE_FALLBACK_WAIT_SECONDS (asserted in test_streamer_routes).
 FIRST_BYTE_GRACE_SECONDS = 1.0
 STARTUP_GRACE_SECONDS = 30.0
+# Keep the admin "On air" verdict stable across a normal segment handoff. This
+# is deliberately far shorter than the 30s silence alarm.
+STREAM_HANDOFF_GRACE_SECONDS = 3.0
 CLIP_RATE_LIMIT_SECONDS = 10.0
 CLIP_RATE_PRUNE_SECONDS = 300.0
 CLIP_DURATION_SECONDS = 30
@@ -2032,7 +2035,11 @@ def _display_runtime_event(event) -> dict:
     """Project runtime events for the admin UI without losing diagnostics."""
     payload = event.to_dict()
     provider_class = str(payload.get("provider_class") or "")
-    if provider_class == "tts_provider" or provider_class.startswith("tts:"):
+    if provider_class == "script_provider":
+        raw_reason = str(payload.get("reason") or "")
+        payload["diagnostic_reason"] = raw_reason
+        payload["reason"] = _script_runtime_reason_label(raw_reason)
+    elif provider_class == "tts_provider" or provider_class.startswith("tts:"):
         raw_reason = str(payload.get("reason") or "")
         payload["diagnostic_reason"] = raw_reason
         payload["reason"] = _tts_runtime_reason_label(raw_reason)
@@ -2098,6 +2105,17 @@ def _listener_audible_provider_status(
         return status
 
     original_route = (str(status.get("current_provider") or ""), bool(status.get("fallback_active")))
+    latest_observation = {
+        "primary_provider": str(status.get("primary_provider") or ""),
+        "primary_label": str(status.get("primary_label") or ""),
+        "current_provider": original_route[0],
+        "current_label": str(status.get("current_label") or ""),
+        "fallback_active": original_route[1],
+        "current_reason": str(status.get("current_reason") or ""),
+        "recovery_mode": status.get("recovery_mode"),
+        "retry_in_seconds": status.get("retry_in_seconds"),
+        "action_guidance": str(status.get("action_guidance") or ""),
+    }
     audible_fallback = bool(saved.get("last_audible_fallback_active"))
     audible_primary = str(saved.get("last_audible_primary_provider") or status.get("primary_provider") or "")
     audible_reason = str(saved.get("last_audible_reason") or "")
@@ -2121,7 +2139,9 @@ def _listener_audible_provider_status(
 
     if original_route != (audible_provider, audible_fallback):
         # Recovery metadata belongs to the newer generation observation, not
-        # the listener-audible route projected above.
+        # the listener-audible route projected above. Keep it in a separately
+        # labeled observation instead of hiding an action-required failure.
+        status["latest_observation"] = latest_observation
         status["recovery_mode"] = None
         status["retry_in_seconds"] = None
         status["action_guidance"] = ""
@@ -2301,8 +2321,17 @@ def _runtime_status_snapshot(
 
     tasks_alive = runtime_health.get("producer_task_alive", True) and runtime_health.get("playback_task_alive", True)
     silence_with_listeners = bool(runtime_health.get("silence_with_listeners", False))
+    last_air = state.last_air_monotonic
+    recent_handoff = bool(
+        state.listeners_active > 0
+        and last_air is not None
+        and 0.0 <= _runtime_monotonic() - last_air <= STREAM_HANDOFF_GRACE_SECONDS
+    )
     station_on_air = bool(
-        tasks_alive and not silence_with_listeners and not state.session_stopped and state.current_stream_audible
+        tasks_alive
+        and not silence_with_listeners
+        and not state.session_stopped
+        and (state.current_stream_audible or recent_handoff)
     )
 
     saved_audio = state.runtime_provider_state.get("audio_source", {})
@@ -3278,13 +3307,15 @@ def _commit_audible_stream_segment(
 ) -> bool:
     """Commit listener-audible state exactly once for one selected segment."""
 
-    previous_provider_event_ids = {id(event) for event in state.runtime_events}
+    # Hold the old objects themselves. Integer ids can be reused as the
+    # maxlen deque evicts entries during a multi-provider commit.
+    previous_provider_events = tuple(state.runtime_events)
     if not state.on_stream_segment_audible(segment):
         return False
 
     state.last_air_monotonic = _runtime_monotonic()
     for provider_event in state.runtime_events:
-        if id(provider_event) not in previous_provider_event_ids:
+        if all(provider_event is not previous for previous in previous_provider_events):
             logger.info("provider_switch_event", extra=provider_event.to_dict())
 
     provider_state = state.runtime_provider_state.get("audio_source", {})
@@ -3652,6 +3683,7 @@ async def run_playback_loop(app) -> None:
             try:
                 segment_queue.put_nowait(segment)
                 segment_queue.task_done()
+                _rebuild_queue_shadow(segment_queue, state, list(getattr(segment_queue, "_queue", ())))
             except asyncio.QueueFull:  # pragma: no cover - the get() freed this exact slot
                 _consume_queue_shadow(segment_queue, state, segment)
                 segment_queue.task_done()
@@ -6940,6 +6972,13 @@ async def _commit_external_download(
                 _reserve_continuity_runway(app_state, state, config)
             state.playlist.append(track)
             state.playlist_revision += 1
+            # Metadata-only means no audio admission, not loss of an accepted
+            # admin play-next claim. Preserve ownership for the resumed producer.
+            pin_claimed = should_pin()
+            if pin_claimed:
+                state.pinned_track = track
+                if state.force_next is None:
+                    state.force_next = SegmentType.MUSIC
             if metadata_only:
                 logger.info(
                     "External download committed as metadata only track=%s captured_epoch=%d "
@@ -6956,18 +6995,12 @@ async def _commit_external_download(
                         "session_stopped": state.session_stopped,
                     },
                 )
-                return "queued"
+                return "pinned" if pin_claimed else "queued"
             # Don't clobber a pin that's still pending — claim the play-next slot only
             # when the caller's guard says it's free. Otherwise the track is in
             # rotation and the caller surfaces that it's queued-behind, not next.
-            if not should_pin():
+            if not pin_claimed:
                 return "queued"
-            state.pinned_track = track
-            # Only force MUSIC when nothing else is already forced. An operator trigger
-            # (banter/ad/news) or a mode change may have set force_next; that directive
-            # plays first, then the pinned track lands on the next music slot.
-            if state.force_next is None:
-                state.force_next = SegmentType.MUSIC
             return "pinned"
 
     await asyncio.to_thread(reject_cached_download, config.cache_dir, track.cache_key, rejected_download_reason)
@@ -7332,7 +7365,6 @@ async def _set_direction_text(request: Request, text: str):
 
     config = request.app.state.config
     state = request.app.state.station_state
-    captured_continuity_epoch = state.continuity_epoch
     seed = f"direction://{safe_text.casefold()}"
     requested_heading_revision = state.heading_revision
     # Idempotent on course identity (seed), NOT on how many tracks have landed:
@@ -7369,6 +7401,10 @@ async def _set_direction_text(request: Request, text: str):
     retagged_existing = 0
     persisted = True
     async with source_switch_lock:
+        # Expansion and search happen before this serialized commit boundary.
+        # An unrelated control that completed while they were in flight must
+        # not make a currently running station look metadata-only.
+        captured_continuity_epoch = state.continuity_epoch
         if state.heading is not None and state.heading.seed == seed:
             return _direction_idempotent_response(request, state)
         if state.heading_revision != requested_heading_revision:
