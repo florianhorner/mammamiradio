@@ -305,7 +305,14 @@ def test_ci_publishes_short_sha_edge_tag():
 
 
 def test_ci_sha_artifact_uses_stable_addon_version_label():
-    """:sha images are later promoted to stable tags, so their HA label must be X.Y.Z."""
+    """The :sha image that gets promoted must carry config.yaml's version in its HA label.
+
+    Under cut-don't-open (docs/release-process.md) only the `chore(release): cut X.Y.Z`
+    commit's image is ever promoted, so most :sha images now carry the last *published*
+    version rather than the one they will ship as. That is inert — the Supervisor reads
+    config.yaml, never io.hass.version, for add-ons. What this test still pins is that the
+    label is wired to the stable config.yaml version and not to something else.
+    """
     workflow_text = _workflow_text()
     stable_block = _extract_step_block(workflow_text, "Build and push stable add-on image")
 
