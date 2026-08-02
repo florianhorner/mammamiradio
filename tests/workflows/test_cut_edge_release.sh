@@ -51,6 +51,18 @@ SCRIPT_IMAGE_PATHS="$(
 }
 pass "cut-edge IMAGE_PATHS matches the add-on build trigger paths"
 
+# The exact-target lookup must filter server-side. Counting successes client-side
+# over a capped page reintroduces the window bug one level down: enough newer
+# failed reruns on the same commit would push the successful run out of the page.
+# Strip comments first: the rationale comment above the command names these same
+# flags, so a whole-file grep would pass even after the real invocation lost them.
+SCRIPT_CODE="$(grep -v '^[[:space:]]*#' "$SCRIPT")"
+printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--status success' \
+  || fail "--target-sha lookup must pass --status success so the result cannot be windowed out"
+printf '%s\n' "$SCRIPT_CODE" | grep -q -- "--commit \"\$TARGET_FULL\"" \
+  || fail "--target-sha lookup must query the target commit directly, not the recent-runs list"
+pass "exact-target lookup filters server-side (no run-history cutoff)"
+
 TMPDIR_T="$(mktemp -d)"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 EDGE_ORIG="$TMPDIR_T/edge-config.orig"
@@ -85,6 +97,18 @@ echo "$*" >> "$GH_MOCK_LOG"
 case "$1 $2" in
   "run list")
     [ -n "${GH_MOCK_RUN_FAIL:-}" ] && exit 1
+    # A per-commit query (--target-sha mode) is answered from GH_MOCK_COMMIT_OK,
+    # which is INDEPENDENT of GH_MOCK_RUN_SHAS. That is what lets a test model a
+    # target whose build is green but sits outside the recent-runs window.
+    # The real query passes `--status success`, so the server returns only
+    # successful runs; membership in GH_MOCK_COMMIT_OK models exactly that, and
+    # the count is unaffected by how many failed reruns the commit also has.
+    _want=""; _prev=""
+    for _a in "$@"; do [ "$_prev" = "--commit" ] && _want="$_a"; _prev="$_a"; done
+    if [ -n "$_want" ]; then
+      if printf '%s\n' "${GH_MOCK_COMMIT_OK:-}" | grep -qxF "$_want"; then echo 1; else echo 0; fi
+      exit 0
+    fi
     printf '%s\n' "${GH_MOCK_RUN_SHAS:-}" ;;
   "pr list")  printf '%s\n' "${GH_MOCK_PR_URL:-}" ;;
   "pr create") : ;;
@@ -121,8 +145,20 @@ case "$1" in
     case "$_last" in
       --show-toplevel) echo "${GIT_MOCK_TOPLEVEL:-$PWD}" ;;
       origin/main)     echo "${GIT_MOCK_MAIN_SHORT:-0000000}" ;;
+      # `rev-parse --verify <sha>^{commit}` resolves a --target-sha. Known commits
+      # (those in GIT_MOCK_REVLIST) resolve to their full SHA; anything else exits 1
+      # silently, the way real git behaves for an unknown object.
+      *"^{commit}")
+        _s="${_last%'^{commit}'}"
+        if printf '%s\n' "${GIT_MOCK_REVLIST:-}" | grep -qxF "$_s"; then
+          echo "$_s"
+        else
+          exit 1
+        fi ;;
       *)               echo "${_last:0:7}" ;;            # --short=7 <sha>
     esac ;;
+  # Ancestry for --target-sha. Default yes; GIT_MOCK_NOT_ANCESTOR makes it say no.
+  merge-base) [ -n "${GIT_MOCK_NOT_ANCESTOR:-}" ] && exit 1; exit 0 ;;
   status)   [ -n "${GIT_MOCK_DIRTY:-}" ] && echo " M somefile" || echo "" ;;
   fetch)    : ;;
   rev-list) printf '%s\n' "${GIT_MOCK_REVLIST:-}" ;;
@@ -158,10 +194,13 @@ run_cut() {
       PYTHON_MOCK_LOG="$PYTHON_MOCK_LOG" \
       GIT_MOCK_TOPLEVEL="$REPO_ROOT" GIT_MOCK_MAIN_SHORT="$MAIN_SHORT" \
       GIT_MOCK_REVLIST="$REVLIST" \
-      "$@" "$BASH_BIN" "$SCRIPT" 2>&1)" || RUN_RC=$?
+      "$@" "$BASH_BIN" "$SCRIPT" ${CUT_ARGS[@]+"${CUT_ARGS[@]}"} 2>&1)" || RUN_RC=$?
   WROTE_VERSION="$(grep '^version:' "$EDGE_CONFIG" | awk '{print $2}')"
   cp "$EDGE_ORIG" "$EDGE_CONFIG"
+  CUT_ARGS=()
 }
+# Script argv for the next run_cut, cleared after each one. Empty-safe on bash 3.2.
+CUT_ARGS=()
 
 created_pr()       { grep -q "pr create" "$GH_MOCK_LOG"; }
 never_created_pr() { ! grep -q "pr create" "$GH_MOCK_LOG"; }
@@ -292,6 +331,84 @@ never_created_pr     || fail "release-beat validation failure must not open a PR
 never_pushed         || fail "release-beat validation failure must not push"
 pass "release-beat validation failure blocks edge cut before commit/push/PR"
 
+# --------------------------------------------------------------------------
+# --target-sha: pin one exact commit instead of "newest built".
+# The release cut in docs/release-process.md soaks the exact commit it is about
+# to tag, so the flag must refuse to drift to anything else.
+# --------------------------------------------------------------------------
+
+# Case: pins the requested commit even when a NEWER green build exists. This is
+# the whole reason the flag exists — default selection would take MAIN_FULL.
+CUT_ARGS=(--target-sha "$OLDER_FULL")
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"$'\n'"$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_DIFF=""
+[ "$RUN_RC" -eq 0 ]                  || fail "--target-sha happy path should exit 0: $RUN_OUT"
+[ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "--target-sha should pin $OLDER_SHORT, wrote '$WROTE_VERSION'"
+created_pr                           || fail "--target-sha happy path should open a PR"
+pass "--target-sha pins the requested commit over a newer green build"
+
+# Case: the target's build is green but sits OUTSIDE the recent-runs window that
+# feeds default selection. The per-commit query has no window, so this must still
+# pin. Reusing the windowed list here would reject a perfectly valid older target.
+CUT_ARGS=(--target-sha "$OLDER_FULL")
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_DIFF=""
+[ "$RUN_RC" -eq 0 ]                   || fail "--target-sha outside the run window should still pin: $RUN_OUT"
+[ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "should pin $OLDER_SHORT, wrote '$WROTE_VERSION'"
+pass "--target-sha is not limited by the recent-runs window"
+
+# Case: an unresolvable commit-ish is refused before anything is written.
+CUT_ARGS=(--target-sha deadbeefdeadbeefdeadbeefdeadbeefdeadbeef)
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
+[ "$RUN_RC" -ne 0 ]  || fail "unresolvable --target-sha should fail"
+case "$RUN_OUT" in *"is not a commit in this repository"*) : ;; *) fail "expected unresolvable message, got: $RUN_OUT" ;; esac
+if ! (never_committed && never_created_pr && never_pushed); then
+  fail "unresolvable --target-sha must not commit/PR/push"
+fi
+pass "--target-sha rejects an unresolvable commit"
+
+# Case: a commit that is not on main is refused. Edge must only ever point at main.
+CUT_ARGS=(--target-sha "$OLDER_FULL")
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"$'\n'"$OLDER_FULL" GIT_MOCK_NOT_ANCESTOR=1
+[ "$RUN_RC" -ne 0 ]  || fail "non-ancestor --target-sha should fail"
+case "$RUN_OUT" in *"is not an ancestor of origin/main"*) : ;; *) fail "expected ancestor message, got: $RUN_OUT" ;; esac
+never_created_pr     || fail "non-ancestor --target-sha must not open a PR"
+pass "--target-sha rejects a commit that is not on main"
+
+# Case: a commit with no green build has no :<short-sha> image, so the Supervisor
+# would pull a missing tag. Refuse rather than advertise it.
+CUT_ARGS=(--target-sha "$OLDER_FULL")
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_COMMIT_OK=""
+[ "$RUN_RC" -ne 0 ]  || fail "--target-sha without a green build should fail"
+case "$RUN_OUT" in *"has no successful 'Build HA Addon' run"*) : ;; *) fail "expected no-build message, got: $RUN_OUT" ;; esac
+never_created_pr     || fail "--target-sha without a green build must not open a PR"
+pass "--target-sha rejects a commit with no built image"
+
+# Case: the drift guard still applies. Encodes the deliberate decision that
+# --target-sha does NOT bypass it — pinning an older image while main carries newer
+# add-on metadata would advertise options that image does not implement.
+CUT_ARGS=(--target-sha "$OLDER_FULL")
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"$'\n'"$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_DIFF="mammamiradio/audio/normalizer.py"
+[ "$RUN_RC" -ne 0 ]  || fail "--target-sha must not bypass the image-drift guard"
+case "$RUN_OUT" in *"newer image-affecting"*) : ;; *) fail "expected mode-aware drift message, got: $RUN_OUT" ;; esac
+never_created_pr     || fail "drift-blocked --target-sha must not open a PR"
+pass "--target-sha does not bypass the image-drift guard"
+
+# Case: bad usage is refused before any work.
+CUT_ARGS=(--target-sha)
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
+[ "$RUN_RC" -ne 0 ]  || fail "--target-sha with no value should fail"
+case "$RUN_OUT" in *"needs a commit-ish"*) : ;; *) fail "expected missing-value message, got: $RUN_OUT" ;; esac
+CUT_ARGS=(--bogus)
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
+[ "$RUN_RC" -ne 0 ]  || fail "unknown argument should fail"
+case "$RUN_OUT" in *"unknown argument"*) : ;; *) fail "expected unknown-argument message, got: $RUN_OUT" ;; esac
+pass "--target-sha argument errors are refused"
+
+# Case: the Makefile must forward ARGS, or the documented release command silently
+# pins the wrong commit with nothing failing.
+grep -qE '^\s+\./scripts/cut-edge-release\.sh \$\(ARGS\)' "$REPO_ROOT/Makefile" \
+  || fail "Makefile edge-release must forward \$(ARGS) — docs/release-process.md depends on it"
+pass "make edge-release forwards ARGS to the script"
+
 # Safety: the test must never have mutated the real repo, branch, or edge config.
 [ "$(git rev-parse HEAD)" = "$ORIG_HEAD" ]                 || fail "test mutated real HEAD"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "$ORIG_BRANCH" ]  || fail "test changed the real branch"
@@ -299,4 +416,4 @@ diff -q "$EDGE_CONFIG" "$EDGE_ORIG" >/dev/null             || fail "test left th
 pass "real repo / branch / edge config untouched"
 
 echo
-echo "All 13 cut-edge-release cases passed."
+echo "All 22 cut-edge-release cases passed."
