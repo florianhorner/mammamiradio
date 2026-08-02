@@ -14,12 +14,15 @@ import copy
 import datetime
 import json
 import logging
+import multiprocessing
 import os
 import re
+import threading
 import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Mapping
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -80,13 +83,110 @@ from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 logger = logging.getLogger(__name__)
 
 # JSON decoding and the full entity projection are deliberately isolated from
-# the asyncio loop that paces the live stream. One named worker keeps abandoned
-# calculations bounded and ordered without sharing the default executor.
-_ha_projection_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1,
-    thread_name_prefix="ha-projection",
-)
-atexit.register(_ha_projection_executor.shutdown, wait=False, cancel_futures=True)
+# the process that owns the asyncio loop and paces the live stream. One spawned
+# worker keeps abandoned calculations bounded and ordered without sharing the
+# event loop's GIL or relying on unsafe forking from a multi-threaded server.
+_HA_PROJECTION_MP_CONTEXT = multiprocessing.get_context("spawn")
+_ha_projection_executor: concurrent.futures.ProcessPoolExecutor | None = None
+_ha_projection_executor_lock = threading.Lock()
+_ha_projection_start_failure_logged = False
+
+# Nothing in the projection's call graph reads the environment — it is a pure
+# function over the values it is handed. Spawning re-imports this module in the
+# worker, which re-runs ``core.config``'s module-scope ``load_dotenv()``, so the
+# worker would otherwise hold every provider credential it can never need.
+# Scrubbing by shape rather than by a hand-kept list keeps a newly added
+# provider covered on the day it lands instead of the day someone remembers.
+_CREDENTIAL_ENV_SUFFIXES = ("_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
+
+
+def _init_ha_projection_worker() -> None:
+    """Drop inherited credentials and mute logging inside the projection worker."""
+    for name in [name for name in os.environ if name.endswith(_CREDENTIAL_ENV_SUFFIXES)]:
+        os.environ.pop(name, None)
+    # The worker never runs the station's logging setup, so a stray WARNING+
+    # would skip LOG_LEVEL and land raw in the add-on log. The projection is
+    # silent today; this keeps a future log line from carrying HA values there.
+    worker_logger = logging.getLogger("mammamiradio")
+    worker_logger.handlers.clear()
+    worker_logger.addHandler(logging.NullHandler())
+    worker_logger.propagate = False
+
+
+def _create_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
+    """Build one spawned, credential-free projection worker.
+
+    Single worker on purpose: it serializes an abandoned calculation and the next
+    one so they can never run concurrently, which is what keeps a slow refresh
+    from stacking up behind itself.
+    """
+    return concurrent.futures.ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=_HA_PROJECTION_MP_CONTEXT,
+        initializer=_init_ha_projection_worker,
+    )
+
+
+def _get_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
+    """Return the module's projection pool, creating it on first use.
+
+    Lazy so a station with Home Assistant off never pays for a second
+    interpreter, and so a pool retired after a worker death is rebuilt by the
+    next scheduled refresh rather than in the failing one.
+    """
+    global _ha_projection_executor
+    with _ha_projection_executor_lock:
+        if _ha_projection_executor is None:
+            _ha_projection_executor = _create_ha_projection_executor()
+        return _ha_projection_executor
+
+
+# The worker can fail to come up in three shapes, and only one of them is an
+# OSError. CPython's ``_check_system_limits`` raises **NotImplementedError** when
+# named semaphores are unavailable (the /dev/shm case) or when the system offers
+# too few of them — and it latches that verdict process-wide, so the outage is
+# permanent. A spawn context also defers process creation to the first
+# ``submit()``, so running out of process slots or memory surfaces as an OSError
+# from the submit, not from construction. All three deserve the same one line.
+_PROJECTION_START_FAILURE_ERRORS = (OSError, NotImplementedError)
+
+
+def _note_ha_projection_start_failure() -> None:
+    """Name a worker that cannot come up, once per outage rather than once per poll.
+
+    Cleared by a completed projection, never by a constructed pool: a spawn
+    context builds no process until the first submit, so a pool that constructs
+    cleanly every poll and then fails to spawn is one continuous outage, not a
+    new one each time.
+    """
+    global _ha_projection_start_failure_logged
+    with _ha_projection_executor_lock:
+        if _ha_projection_start_failure_logged:
+            return
+        _ha_projection_start_failure_logged = True
+    logger.warning(
+        "Home context projection worker could not start; Home Assistant colour is paused "
+        "until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's "
+        "process limit, and available memory.",
+        exc_info=True,
+    )
+
+
+def _retire_ha_projection_executor(
+    expected: concurrent.futures.ProcessPoolExecutor | None = None,
+) -> bool:
+    """Detach and stop the current projection pool without racing a replacement."""
+    global _ha_projection_executor
+    with _ha_projection_executor_lock:
+        executor = _ha_projection_executor
+        if executor is None or (expected is not None and executor is not expected):
+            return False
+        _ha_projection_executor = None
+    executor.shutdown(wait=False, cancel_futures=True)
+    return True
+
+
+atexit.register(_retire_ha_projection_executor)
 
 # Entities curated for maximum radio entertainment value
 GOLD_ENTITIES = [
@@ -2221,6 +2321,53 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
     )
 
 
+async def _run_home_context_projection(
+    projection_input: _HomeContextProjectionInput,
+) -> _HomeContextProjectionCandidate:
+    """Run one pure projection outside the stream-owning Python process."""
+    global _ha_projection_start_failure_logged
+    try:
+        executor = _get_ha_projection_executor()
+    except _PROJECTION_START_FAILURE_ERRORS:
+        # Without its own line this is indistinguishable from a transient Home
+        # Assistant fetch failure in the outer handler, and the home colour would
+        # stay off for good with nothing to grep for. The caller's stale/empty
+        # fallback still keeps the show on air.
+        _note_ha_projection_start_failure()
+        raise
+    try:
+        candidate = await asyncio.get_running_loop().run_in_executor(
+            executor,
+            _project_home_context,
+            projection_input,
+        )
+    except BrokenProcessPool:
+        # A dead worker poisons its ProcessPoolExecutor permanently. Preserve
+        # the outer stale/empty fallback for this attempt, then let the next
+        # scheduled refresh create one fresh worker instead of retrying here.
+        # The retire result tells us whether this attempt owned the teardown or
+        # a concurrent one already replaced the pool — only the owner logs.
+        if _retire_ha_projection_executor(executor):
+            logger.warning("Home context projection worker exited; the next refresh starts a fresh one.")
+        raise
+    except _PROJECTION_START_FAILURE_ERRORS:
+        # A spawn context defers process creation to the first submit, so an
+        # exhausted process table or out-of-memory kernel lands here rather than
+        # at construction. The pool is unusable either way: retire it so the next
+        # refresh gets a clean attempt instead of reusing a pool with no worker.
+        _retire_ha_projection_executor(executor)
+        _note_ha_projection_start_failure()
+        raise
+    # Only a completed projection proves the worker is healthy. Re-arming on a
+    # constructed pool instead would make a persistent submit-time outage log on
+    # every poll, because each poll constructs a fresh pool that then fails to
+    # spawn — the outage never looks like the same one twice.
+    if _ha_projection_start_failure_logged:
+        with _ha_projection_executor_lock:
+            _ha_projection_start_failure_logged = False
+    return candidate
+
+
 async def _fetch_home_context_outcome(
     ha_url: str,
     ha_token: str,
@@ -2399,11 +2546,7 @@ async def _fetch_home_context_outcome(
         )
         if stage_callback is not None:
             stage_callback("projection")
-        candidate = await asyncio.get_running_loop().run_in_executor(
-            _ha_projection_executor,
-            _project_home_context,
-            projection_input,
-        )
+        candidate = await _run_home_context_projection(projection_input)
         if observed_entity_ids_callback is not None:
             try:
                 observed_entity_ids_callback(candidate.observed_entity_ids)

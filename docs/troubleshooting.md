@@ -257,6 +257,32 @@ Check:
 
 Even when configured correctly, HA references are opportunistic. A saved token alone stays Full AI Radio until a prompt-safe context slice exists, and the prompt only encourages one casual reference when it fits.
 
+## Home Assistant colour is paused
+
+Home context is projected in a separate worker process so the CPU work cannot
+stall audio. Audio never depends on it: if the worker cannot run, the station
+keeps playing and simply stops mentioning the house.
+
+Two log signatures tell the two causes apart:
+
+```
+WARNING Home context projection worker could not start; Home Assistant colour is paused until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's process limit, and available memory.
+WARNING Home context projection worker exited; the next refresh starts a fresh one.
+```
+
+The first means the worker could not come up. It prints once per outage rather
+than on every poll, and it covers three causes that surface differently
+underneath: a missing, read-only, or zero-sized `/dev/shm` (Python reports this
+as "named semaphores being unavailable", and it stays broken for the life of the
+process once seen); a system offering too few semaphores; and an exhausted
+process table or out-of-memory kernel, which fails a step later when the worker
+is actually spawned. Check with `docker exec <container> df -h /dev/shm`, and
+confirm the container was not started with `--shm-size=0` or an unusually low PID
+limit. The second line is a worker that died mid-refresh, most often the
+out-of-memory killer on a small appliance; that refresh falls back to the last
+prompt-safe snapshot and the next scheduled refresh starts a new worker on its
+own. A single occurrence needs no action.
+
 ## A host repeated a home detail
 
 Open **Motore → HA context**. The fact-free **Home context rotation** row reports whether the director is waiting, has a safe cue queued, or is resting recently aired topics. Casual banter uses one allowlisted cue at most and starts a 30-minute rest when that break streams; weather flashes, rituals, and reactive directives are separate on-air lanes.

@@ -788,23 +788,74 @@ long enough to be heard by a direct listener.
 
 The retained producer-owned HA request now keeps only its **transport and
 enrichment I/O** (`/api/states`, optional registry, optional weather) on the
-event loop. Once the raw response bytes and enrichment values are available, JSON
-decoding plus the pure projection run in one module-owned
-`ThreadPoolExecutor(max_workers=1)` (`ha-projection` thread in `home/ha_context.py`).
-The worker receives copied, inert request values plus the cache-directory path,
-reads its own detached label-catalog snapshot, and returns only a candidate
+parent process's event loop. Once the raw response bytes and enrichment values
+are available, JSON decoding plus the pure projection run through one
+module-owned `ProcessPoolExecutor(max_workers=1)`, created lazily at the first
+projection and configured with the multiprocessing `spawn` context. This keeps
+projection CPU work out of the process that paces `run_playback_loop` without
+forking the multithreaded server. The worker process receives copied, inert
+request values plus the cache-directory path, reads its own detached
+label-catalog snapshot, and returns only a candidate
 (`_HomeContextProjectionCandidate`). It never touches `StationState`, module
 caches, persistence callbacks, event baselines, or any logging that contains HA
 values.
 
 The coordinator (`_HAContextRefreshCoordinator` in `producer.py`) stays the sole
 owner of request lifetime, stage state, mute/authorization revalidation on the
-loop, stale-result discard, observed-entity bookkeeping, and safe-boundary
-adoption at `_drain_completed_result`. A cancelled, timed-out (30 s total cap),
-closed, or superseded request's worker value is ignored — it can never publish
-after coordinator close or after a newer request, and no extra refresh begins
-while the retained request still owns the mailbox. The single worker serializes
-an abandoned calculation and the next one; they never run concurrently.
+parent loop, stale-result discard, observed-entity bookkeeping, and safe-boundary
+adoption at `_drain_completed_result`. The parent coordinator remains the only
+publication owner. A cancelled, timed-out (30 s total cap), closed, or superseded
+request's worker value is ignored — it can never publish after coordinator close
+or after a newer request, and no extra refresh begins while the retained request
+still owns the mailbox. The single worker process serializes an abandoned
+calculation and the next one; they never run concurrently.
+
+The worker starts under `_init_ha_projection_worker`, which enforces two
+properties the thread version got for free. It **drops every credential-shaped
+environment variable** (any name ending `_KEY`, `_TOKEN`, `_SECRET`, or
+`_PASSWORD`): spawning re-imports this module in the child, which re-runs
+`core/config.py`'s module-scope `load_dotenv()`, so an unscrubbed worker would
+hold every provider key while needing none — nothing in the projection's call
+graph reads the environment at all. It then attaches a `NullHandler` to the
+`mammamiradio` logger tree with `propagate = False`, because the worker never
+runs the station's logging setup and a stray `WARNING`+ would otherwise skip
+`LOG_LEVEL` and land raw in the add-on log. The projection is silent today; this
+keeps that true by construction rather than by review.
+
+To keep the worker cheap to start, `core/config.py` reads its two voice-validation
+symbols straight from the `audio/voice_catalog.py` leaf instead of the aliases
+re-exported by `audio/tts.py`. `tts` pulls in `openai`, `edge_tts`, and `aiohttp`,
+and config sits in the worker's import graph; routing around it takes the child's
+cold start from 1104 modules to 334 and roughly 0.35 s to 0.07 s. That cold start
+is paid inside the first refresh after a restart, so it lands in the same
+foreground budget as the cold label/weather warm-up.
+
+Two failure modes are handled distinctly, because both would otherwise reach the
+operator as the same generic `Failed to fetch HA context` line. If the worker
+exits and breaks its process pool, that refresh is not retried in place: the
+broken pool is retired (with its own log line, emitted only by the attempt that
+owns the teardown) and the next scheduled refresh lazily creates a fresh spawned
+worker. If the worker cannot **come up** at all, the cause is named once per
+outage and repeats stay quiet until a pool starts successfully again. That path
+catches both shapes deliberately, because they are not the same exception and do
+not arrive at the same place: CPython's `_check_system_limits` rejects missing or
+undersized semaphore support during construction with a **`NotImplementedError`**
+(not an `OSError`), and latches the verdict process-wide so the outage is
+permanent; while a `spawn` context defers process creation to the first `submit`,
+so an exhausted process table or out-of-memory kernel arrives as an `OSError`
+from the submit instead, and retires the worker-less pool. Both paths follow the
+existing failed-refresh contract: return the stale context filtered against live
+mutes when one exists, or an empty context otherwise. Audio is never affected
+either way.
+
+Because the projection executes in a child process, `[tool.coverage.run]` in
+`pyproject.toml` sets `concurrency = ["multiprocessing", "thread"]` and
+`parallel = true`. Without them coverage stops at the process boundary and
+silently reports the projection as unexecuted, which drops `home/ha_context.py`
+below its floor in `.coverage-floors.json`. The autouse
+`_reset_ha_projection_executor` fixture in `tests/conftest.py` retires the pool
+around every test so the worker exits cleanly and flushes that data, and so one
+poisoned pool cannot cascade into later tests.
 
 The coordinator also stamps a **coarse, privacy-safe stage** on `StationState`
 (`states_request`, `enrichment_wait`, `projection`, `idle`, cleared on every

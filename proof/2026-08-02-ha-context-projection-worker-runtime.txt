@@ -1,0 +1,74 @@
+# Runtime proof — HA context projection worker
+# repo: florianhorner/mammamiradio   branch: florianhorner/fix/ha-context-projection-worker
+# host: Darwin arm64   python: Python 3.11.15
+# generated: 2026-08-02T11:11:48Z
+#
+# A: the worker imports no provider stack and holds no credentials.
+# B: a construction outage raises NotImplementedError, named once across 5 polls.
+# C: a submit-time outage raises OSError from the await, named once across 5 polls.
+#    C is the case CodeRabbit and Copilot caught repeating on every poll; the flag
+#    now clears on a completed projection rather than on a constructed pool.
+
+== A: worker cold cost and isolation ==
+parent seeded 3 credential env vars before spawning the worker
+child: modules=355  rss_mb=39.2  provider_stack=[]  credential_env=[]
+
+== B: construction outage — /dev/shm unavailable, 5 consecutive polls ==
+(CPython raises NotImplementedError here, which is NOT an OSError)
+WARNING: Home context projection worker could not start; Home Assistant colour is paused until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's process limit, and available memory.
+Traceback (most recent call last):
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/process.py", line 589, in _check_system_limits
+    import multiprocessing.synchronize
+  File "/tmp/rp2.py", line 15, in block_semaphores
+    raise ImportError("named semaphores unavailable")
+ImportError: named semaphores unavailable
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 2318, in _run_home_context_projection
+    executor = _get_ha_projection_executor()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 128, in _get_ha_projection_executor
+    _ha_projection_executor = _create_ha_projection_executor()
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 117, in _create_ha_projection_executor
+    return concurrent.futures.ProcessPoolExecutor(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/process.py", line 654, in __init__
+    _check_system_limits()
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/process.py", line 595, in _check_system_limits
+    raise NotImplementedError(_system_limited)
+NotImplementedError: This Python build lacks multiprocessing.synchronize, usually due to named semaphores being unavailable on this platform.
+  poll 1: NotImplementedError -> stale/empty context, audio unaffected
+  poll 2: NotImplementedError -> stale/empty context, audio unaffected
+  poll 3: NotImplementedError -> stale/empty context, audio unaffected
+  poll 4: NotImplementedError -> stale/empty context, audio unaffected
+  poll 5: NotImplementedError -> stale/empty context, audio unaffected
+
+== C: submit-time outage — no process slots, 5 consecutive polls ==
+(spawn defers process creation to submit(), so this is an OSError from the await)
+WARNING: Home context projection worker could not start; Home Assistant colour is paused until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's process limit, and available memory.
+Traceback (most recent call last):
+  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 2327, in _run_home_context_projection
+    candidate = await asyncio.get_running_loop().run_in_executor(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 830, in run_in_executor
+    executor.submit(func, *args), loop=self)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/unittest/mock.py", line 1124, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/unittest/mock.py", line 1128, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/unittest/mock.py", line 1183, in _execute_mock_call
+    raise effect
+BlockingIOError: [Errno 11] Resource temporarily unavailable
+  poll 1: BlockingIOError -> stale/empty context, audio unaffected
+  poll 2: BlockingIOError -> stale/empty context, audio unaffected
+  poll 3: BlockingIOError -> stale/empty context, audio unaffected
+  poll 4: BlockingIOError -> stale/empty context, audio unaffected
+  poll 5: BlockingIOError -> stale/empty context, audio unaffected
+
+Exactly one WARNING per outage block above, not one per poll.
