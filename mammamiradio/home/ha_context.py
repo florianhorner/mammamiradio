@@ -114,6 +114,12 @@ def _init_ha_projection_worker() -> None:
 
 
 def _create_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
+    """Build one spawned, credential-free projection worker.
+
+    Single worker on purpose: it serializes an abandoned calculation and the next
+    one so they can never run concurrently, which is what keeps a slow refresh
+    from stacking up behind itself.
+    """
     return concurrent.futures.ProcessPoolExecutor(
         max_workers=1,
         mp_context=_HA_PROJECTION_MP_CONTEXT,
@@ -122,6 +128,12 @@ def _create_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
 
 
 def _get_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
+    """Return the module's projection pool, creating it on first use.
+
+    Lazy so a station with Home Assistant off never pays for a second
+    interpreter, and so a pool retired after a worker death is rebuilt by the
+    next scheduled refresh rather than in the failing one.
+    """
     global _ha_projection_executor
     with _ha_projection_executor_lock:
         if _ha_projection_executor is None:
