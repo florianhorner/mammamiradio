@@ -28,6 +28,20 @@ def _build_workflow_text() -> str:
     return BUILD_WORKFLOW.read_text(encoding="utf-8")
 
 
+def _assignment_line(text: str, var: str, must_contain: str) -> str | None:
+    """Return the line assigning `var` if it also names `must_contain`, else None.
+
+    Line-scoped rather than a regex over the whole file: the assignments are command
+    substitutions containing sed/awk programs full of parentheses, which defeats any
+    naive `\\$\\([^)]*\\)` match.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"{var}=") and must_contain in stripped:
+            return stripped
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Pre-flight job contract
 # ---------------------------------------------------------------------------
@@ -108,9 +122,29 @@ def test_release_workflow_validates_tag_version_matches_pyproject():
     pre-release-check.sh, but a hand-pushed or mistargeted tag never sees PR CI.
     """
     text = _workflow_text()
-    assert "PYPROJECT_VERSION=" in text, "pre-flight must read pyproject.toml's version."
+    # Bind the extraction to the source file. Asserting only that the variable exists
+    # would still pass if a future edit set PYPROJECT_VERSION from TAG_VERSION, which
+    # would compare the tag against itself and gate nothing.
+    assert _assignment_line(text, "PYPROJECT_VERSION", "pyproject.toml"), (
+        "pre-flight must extract PYPROJECT_VERSION from pyproject.toml itself, not from the tag."
+    )
     assert 'if [ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]; then' in text, (
         "pre-flight must compare pyproject.toml's version against the tag and fail on mismatch."
+    )
+
+
+def test_release_workflow_validates_both_changelog_heads():
+    """Both changelogs are folded in the cut commit, so both must describe the tag."""
+    text = _workflow_text()
+    assert _assignment_line(text, "CHANGELOG_VERSION", "ha-addon/mammamiradio/CHANGELOG.md"), (
+        "pre-flight must extract the ha-addon CHANGELOG head from that file."
+    )
+    root = _assignment_line(text, "ROOT_CHANGELOG_VERSION", "CHANGELOG.md")
+    assert root and "ha-addon" not in root, (
+        "pre-flight must extract the root CHANGELOG head from the top-level CHANGELOG.md."
+    )
+    assert 'if [ "$ROOT_CHANGELOG_VERSION" != "$TAG_VERSION" ]; then' in text, (
+        "pre-flight must compare the root CHANGELOG head against the tag."
     )
 
 

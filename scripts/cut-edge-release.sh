@@ -110,7 +110,18 @@ if [ -n "$REQUESTED_SHA" ]; then
     echo "       Edge may only point at a commit that is actually on main." >&2
     exit 1
   fi
-  if ! printf '%s\n' "$OK_SHAS" | grep -qxF "$TARGET_FULL"; then
+  # Query the runs for THIS commit rather than reusing OK_SHAS. OK_SHAS is the 40
+  # most recent runs on main, so a target older than that window would be rejected
+  # as "no green build" even though its image exists. A per-commit query has no
+  # window. Hard-fail (never soft-pass) if the query itself fails.
+  if ! TARGET_RUNS="$(gh run list --workflow=addon-build.yml --commit "$TARGET_FULL" --limit 20 \
+      --json status,conclusion \
+      -q '[.[] | select(.status == "completed" and .conclusion == "success")] | length' 2>/dev/null)"; then
+    echo "ERROR: could not query 'Build HA Addon' runs for $REQUESTED_SHA." >&2
+    echo "       Refusing to pin an unverified commit." >&2
+    exit 1
+  fi
+  if [ "${TARGET_RUNS:-0}" -lt 1 ]; then
     echo "ERROR: --target-sha $REQUESTED_SHA has no successful 'Build HA Addon' run." >&2
     echo "       No :<short-sha> image exists for it, so the Supervisor would pull a" >&2
     echo "       missing tag. Wait for its build to go green, then re-run." >&2

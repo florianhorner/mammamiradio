@@ -85,6 +85,15 @@ echo "$*" >> "$GH_MOCK_LOG"
 case "$1 $2" in
   "run list")
     [ -n "${GH_MOCK_RUN_FAIL:-}" ] && exit 1
+    # A per-commit query (--target-sha mode) is answered from GH_MOCK_COMMIT_OK,
+    # which is INDEPENDENT of GH_MOCK_RUN_SHAS. That is what lets a test model a
+    # target whose build is green but sits outside the recent-runs window.
+    _want=""; _prev=""
+    for _a in "$@"; do [ "$_prev" = "--commit" ] && _want="$_a"; _prev="$_a"; done
+    if [ -n "$_want" ]; then
+      if printf '%s\n' "${GH_MOCK_COMMIT_OK:-}" | grep -qxF "$_want"; then echo 1; else echo 0; fi
+      exit 0
+    fi
     printf '%s\n' "${GH_MOCK_RUN_SHAS:-}" ;;
   "pr list")  printf '%s\n' "${GH_MOCK_PR_URL:-}" ;;
   "pr create") : ;;
@@ -316,11 +325,20 @@ pass "release-beat validation failure blocks edge cut before commit/push/PR"
 # Case: pins the requested commit even when a NEWER green build exists. This is
 # the whole reason the flag exists — default selection would take MAIN_FULL.
 CUT_ARGS=(--target-sha "$OLDER_FULL")
-run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"$'\n'"$OLDER_FULL" GIT_MOCK_DIFF=""
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"$'\n'"$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_DIFF=""
 [ "$RUN_RC" -eq 0 ]                  || fail "--target-sha happy path should exit 0: $RUN_OUT"
 [ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "--target-sha should pin $OLDER_SHORT, wrote '$WROTE_VERSION'"
 created_pr                           || fail "--target-sha happy path should open a PR"
 pass "--target-sha pins the requested commit over a newer green build"
+
+# Case: the target's build is green but sits OUTSIDE the recent-runs window that
+# feeds default selection. The per-commit query has no window, so this must still
+# pin. Reusing the windowed list here would reject a perfectly valid older target.
+CUT_ARGS=(--target-sha "$OLDER_FULL")
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_DIFF=""
+[ "$RUN_RC" -eq 0 ]                   || fail "--target-sha outside the run window should still pin: $RUN_OUT"
+[ "$WROTE_VERSION" = "$OLDER_SHORT" ] || fail "should pin $OLDER_SHORT, wrote '$WROTE_VERSION'"
+pass "--target-sha is not limited by the recent-runs window"
 
 # Case: an unresolvable commit-ish is refused before anything is written.
 CUT_ARGS=(--target-sha deadbeefdeadbeefdeadbeefdeadbeefdeadbeef)
@@ -343,7 +361,7 @@ pass "--target-sha rejects a commit that is not on main"
 # Case: a commit with no green build has no :<short-sha> image, so the Supervisor
 # would pull a missing tag. Refuse rather than advertise it.
 CUT_ARGS=(--target-sha "$OLDER_FULL")
-run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" GH_MOCK_COMMIT_OK=""
 [ "$RUN_RC" -ne 0 ]  || fail "--target-sha without a green build should fail"
 case "$RUN_OUT" in *"has no successful 'Build HA Addon' run"*) : ;; *) fail "expected no-build message, got: $RUN_OUT" ;; esac
 never_created_pr     || fail "--target-sha without a green build must not open a PR"
@@ -353,7 +371,7 @@ pass "--target-sha rejects a commit with no built image"
 # --target-sha does NOT bypass it — pinning an older image while main carries newer
 # add-on metadata would advertise options that image does not implement.
 CUT_ARGS=(--target-sha "$OLDER_FULL")
-run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"$'\n'"$OLDER_FULL" GIT_MOCK_DIFF="mammamiradio/audio/normalizer.py"
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"$'\n'"$OLDER_FULL" GH_MOCK_COMMIT_OK="$OLDER_FULL" GIT_MOCK_DIFF="mammamiradio/audio/normalizer.py"
 [ "$RUN_RC" -ne 0 ]  || fail "--target-sha must not bypass the image-drift guard"
 case "$RUN_OUT" in *"newer image-affecting"*) : ;; *) fail "expected mode-aware drift message, got: $RUN_OUT" ;; esac
 never_created_pr     || fail "drift-blocked --target-sha must not open a PR"
@@ -383,4 +401,4 @@ diff -q "$EDGE_CONFIG" "$EDGE_ORIG" >/dev/null             || fail "test left th
 pass "real repo / branch / edge config untouched"
 
 echo
-echo "All 20 cut-edge-release cases passed."
+echo "All 21 cut-edge-release cases passed."

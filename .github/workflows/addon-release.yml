@@ -99,7 +99,14 @@ jobs:
             echo "::error::ha-addon/mammamiradio/CHANGELOG.md's newest versioned heading is '${CHANGELOG_VERSION:-missing}' but the tag is $TAG_VERSION — fold the changelog in the cut commit, before tagging"
             exit 1
           fi
-          echo "Cut contract confirmed at $TAG_VERSION: config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG"
+          # The cut folds BOTH changelogs, so both must describe the tag. The root file
+          # uses bracketed headings (## [X.Y.Z] - date); the same extractor handles it.
+          ROOT_CHANGELOG_VERSION=$(awk '/^## / {v=$0; sub(/^##[[:space:]]+/, "", v); gsub(/[[:space:]\r]+$/, "", v); if (v != "Unreleased" && v != "[Unreleased]") {split(v, a, /[[:space:]]+/); h=a[1]; gsub(/^\[|\]$/, "", h); print h; exit}}' CHANGELOG.md)
+          if [ "$ROOT_CHANGELOG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::CHANGELOG.md's newest versioned heading is '${ROOT_CHANGELOG_VERSION:-missing}' but the tag is $TAG_VERSION — fold the changelog in the cut commit, before tagging"
+            exit 1
+          fi
+          echo "Cut contract confirmed at $TAG_VERSION: config.yaml, manifest.json, pyproject.toml, both CHANGELOGs"
 
       - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
