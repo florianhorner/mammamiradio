@@ -112,11 +112,15 @@ if [ -n "$REQUESTED_SHA" ]; then
   fi
   # Query the runs for THIS commit rather than reusing OK_SHAS. OK_SHAS is the 40
   # most recent runs on main, so a target older than that window would be rejected
-  # as "no green build" even though its image exists. A per-commit query has no
-  # window. Hard-fail (never soft-pass) if the query itself fails.
-  if ! TARGET_RUNS="$(gh run list --workflow=addon-build.yml --commit "$TARGET_FULL" --limit 20 \
-      --json status,conclusion \
-      -q '[.[] | select(.status == "completed" and .conclusion == "success")] | length' 2>/dev/null)"; then
+  # as "no green build" even though its image exists.
+  #
+  # `--status success` filters server-side, so `--limit 1` is enough: we only need
+  # to know whether ANY successful run exists. Filtering client-side over a capped
+  # page would reintroduce the same class of bug one level down — enough newer
+  # failed reruns on the same commit would push the successful one out of the page.
+  # Hard-fail (never soft-pass) if the query itself fails.
+  if ! TARGET_RUNS="$(gh run list --workflow=addon-build.yml --commit "$TARGET_FULL" \
+      --status success --limit 1 --json conclusion -q 'length' 2>/dev/null)"; then
     echo "ERROR: could not query 'Build HA Addon' runs for $REQUESTED_SHA." >&2
     echo "       Refusing to pin an unverified commit." >&2
     exit 1

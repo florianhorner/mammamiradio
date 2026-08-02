@@ -51,6 +51,18 @@ SCRIPT_IMAGE_PATHS="$(
 }
 pass "cut-edge IMAGE_PATHS matches the add-on build trigger paths"
 
+# The exact-target lookup must filter server-side. Counting successes client-side
+# over a capped page reintroduces the window bug one level down: enough newer
+# failed reruns on the same commit would push the successful run out of the page.
+# Strip comments first: the rationale comment above the command names these same
+# flags, so a whole-file grep would pass even after the real invocation lost them.
+SCRIPT_CODE="$(grep -v '^[[:space:]]*#' "$SCRIPT")"
+printf '%s\n' "$SCRIPT_CODE" | grep -q -- '--status success' \
+  || fail "--target-sha lookup must pass --status success so the result cannot be windowed out"
+printf '%s\n' "$SCRIPT_CODE" | grep -q -- "--commit \"\$TARGET_FULL\"" \
+  || fail "--target-sha lookup must query the target commit directly, not the recent-runs list"
+pass "exact-target lookup filters server-side (no run-history cutoff)"
+
 TMPDIR_T="$(mktemp -d)"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 EDGE_ORIG="$TMPDIR_T/edge-config.orig"
@@ -88,6 +100,9 @@ case "$1 $2" in
     # A per-commit query (--target-sha mode) is answered from GH_MOCK_COMMIT_OK,
     # which is INDEPENDENT of GH_MOCK_RUN_SHAS. That is what lets a test model a
     # target whose build is green but sits outside the recent-runs window.
+    # The real query passes `--status success`, so the server returns only
+    # successful runs; membership in GH_MOCK_COMMIT_OK models exactly that, and
+    # the count is unaffected by how many failed reruns the commit also has.
     _want=""; _prev=""
     for _a in "$@"; do [ "$_prev" = "--commit" ] && _want="$_a"; _prev="$_a"; done
     if [ -n "$_want" ]; then
@@ -401,4 +416,4 @@ diff -q "$EDGE_CONFIG" "$EDGE_ORIG" >/dev/null             || fail "test left th
 pass "real repo / branch / edge config untouched"
 
 echo
-echo "All 21 cut-edge-release cases passed."
+echo "All 22 cut-edge-release cases passed."
