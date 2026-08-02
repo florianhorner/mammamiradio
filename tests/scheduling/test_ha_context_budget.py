@@ -9,6 +9,7 @@ tests deliberately scale wall-clock values down; their relationships mirror the
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import threading
 import time
@@ -97,9 +98,17 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
     worker_started = threading.Event()
     release_worker = threading.Event()
     worker_finished = threading.Event()
+    loop_thread_id = threading.get_ident()
 
     def _blocked_catalog(cache_dir):
-        assert threading.current_thread().name.startswith("ha-projection")
+        # A thread pool stands in for the spawned worker so the test can block
+        # the projection mid-flight and watch the loop keep ticking; a real
+        # process worker cannot be paused from here. The property under test is
+        # that the projection never occupies the loop thread, which holds for
+        # the production process pool too. The process boundary itself is
+        # covered by test_spawned_projection_process_round_trips_* in
+        # tests/home/test_ha_context.py.
+        assert threading.get_ident() != loop_thread_id
         worker_started.set()
         release_worker.wait(timeout=1.0)
         try:
@@ -117,8 +126,13 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
             await asyncio.sleep(0)
 
     with (
+        concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="projection-stub",
+        ) as projection_executor,
         patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(ha_context, "_get_ha_client", return_value=client),
+        patch.object(ha_context, "_get_ha_projection_executor", return_value=projection_executor),
         patch.object(
             ha_context,
             "_fetch_ha_registry_snapshot",
@@ -186,8 +200,13 @@ async def test_close_while_projection_worker_runs_ignores_late_candidate_and_cle
             worker_finished.set()
 
     with (
+        concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="projection-stub",
+        ) as projection_executor,
         patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(ha_context, "_get_ha_client", return_value=client),
+        patch.object(ha_context, "_get_ha_projection_executor", return_value=projection_executor),
         patch.object(
             ha_context,
             "_fetch_ha_registry_snapshot",

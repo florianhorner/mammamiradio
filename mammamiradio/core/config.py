@@ -23,8 +23,13 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-from mammamiradio.audio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
+# Voice validation reads the catalog leaf directly rather than the aliases
+# re-exported by ``audio.tts``. ``tts`` pulls in openai, edge_tts, and aiohttp,
+# and config sits in the import graph of the spawned HA projection worker
+# (``home/ha_context.py``), which needs none of them. Same values either way.
+from mammamiradio.audio.voice_catalog import EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE
 from mammamiradio.audio.voice_catalog import is_known_azure_voice, is_known_edge_voice
+from mammamiradio.audio.voice_catalog import is_openai_voice as _looks_like_openai_voice
 from mammamiradio.core.models import HostPersonality, PartyMode, PersonalityAxes
 from mammamiradio.hosts.ad_creative import AdBrand, AdCastReport, AdVoice, CampaignSpine, compile_ad_cast
 

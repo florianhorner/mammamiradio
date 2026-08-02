@@ -1,0 +1,44 @@
+# Runtime proof — HA context projection worker
+# repo: florianhorner/mammamiradio   branch: florianhorner/fix/ha-context-projection-worker
+# host: Darwin arm64   python: Python 3.11.15
+# generated: 2026-08-02T10:53:02Z
+#
+# A: the worker imports no provider stack and holds no credentials.
+# B: the /dev/shm outage raises NotImplementedError (which the earlier
+#    'except OSError' could not see at all) and is named once, not per poll.
+
+== A: worker cold cost and isolation ==
+parent seeded 3 credential env vars before spawning the worker
+child: modules=342  rss_mb=36.8  provider_stack=[]  credential_env=[]
+
+== B: /dev/shm unavailable, 3 consecutive polls ==
+WARNING mammamiradio.home.ha_context: Home context projection worker could not start; Home Assistant colour is paused until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's process limit, and available memory.
+Traceback (most recent call last):
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/process.py", line 589, in _check_system_limits
+    import multiprocessing.synchronize
+  File "/tmp/rp.py", line 8, in block_semaphores
+    raise ImportError("named semaphores unavailable")
+ImportError: named semaphores unavailable
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 2312, in _run_home_context_projection
+    executor = _get_ha_projection_executor()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 128, in _get_ha_projection_executor
+    _ha_projection_executor = _create_ha_projection_executor()
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 117, in _create_ha_projection_executor
+    return concurrent.futures.ProcessPoolExecutor(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/process.py", line 654, in __init__
+    _check_system_limits()
+  File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/process.py", line 595, in _check_system_limits
+    raise NotImplementedError(_system_limited)
+NotImplementedError: This Python build lacks multiprocessing.synchronize, usually due to named semaphores being unavailable on this platform.
+poll 1: raised NotImplementedError -> outer handler returns stale/empty context
+poll 2: raised NotImplementedError -> outer handler returns stale/empty context
+poll 3: raised NotImplementedError -> outer handler returns stale/empty context
+
+(exactly one WARNING above for three polls = once-per-outage, not once-per-poll)

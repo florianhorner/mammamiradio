@@ -1,0 +1,21 @@
+# Test proof — HA context projection worker
+# repo: florianhorner/mammamiradio   branch: florianhorner/fix/ha-context-projection-worker
+# host: Darwin arm64   python: Python 3.11.15
+# generated: 2026-08-02T10:53:51Z
+#
+# The 5 failures are pre-existing and unrelated: scripts/pre-release-check.sh
+# shells out to this machine's system python3 (3.9), which rejects
+# dataclass(slots=True). They fail identically on clean origin/main.
+
+== full suite ==
+5 failed, 5906 passed, 3 skipped, 21 deselected, 1 warning in 198.73s (0:03:18)
+
+== coverage ratchet (scripts/coverage-ratchet.py parse) ==
+mammamiradio.home.ha_context: 97%  floor 97  PASS  (was 96% before the concurrency fix)
+mammamiradio.core.config:     91%  floor 90  PASS
+TOTAL:                        93%  fail_under 92  PASS
+per-module regressions across 92 modules: NONE
+
+== new guard tests ==
+...............                                                          [100%]
+15 passed, 291 deselected in 2.32s
