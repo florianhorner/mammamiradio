@@ -93,8 +93,53 @@ def test_release_workflow_validates_tag_version_matches_manifest_json():
         "pre-flight must reference the HACS integration manifest to read the version field.\n"
         "Without this, tagging v2.15.0 while manifest.json says 2.14.1 would publish a mismatched integration."
     )
-    assert "MANIFEST_VERSION" in text and "does not match tag" in text, (
-        "pre-flight must extract manifest.json version and fail when it differs from the tag."
+    # Assert the comparison itself, not the message. "does not match tag" is shared by
+    # four gates now, so a substring check passed even with this whole if-block deleted.
+    assert 'if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then' in text, (
+        "pre-flight must compare manifest.json's version against the tag and fail on mismatch."
+    )
+
+
+def test_release_workflow_validates_tag_version_matches_pyproject():
+    """pyproject is the version file that reaches runtime, so the tag must match it too.
+
+    The addon Dockerfile pip-installs pyproject, so its version becomes the installed
+    dist-info that _ASSET_VERSION and bridge_app_version read. PR CI covers this via
+    pre-release-check.sh, but a hand-pushed or mistargeted tag never sees PR CI.
+    """
+    text = _workflow_text()
+    assert "PYPROJECT_VERSION=" in text, "pre-flight must read pyproject.toml's version."
+    assert 'if [ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]; then' in text, (
+        "pre-flight must compare pyproject.toml's version against the tag and fail on mismatch."
+    )
+
+
+def test_release_workflow_validates_changelog_head_matches_tag():
+    """The tagged tree must describe its own release.
+
+    Under cut-don't-open (docs/release-process.md) the changelog fold happens IN the cut
+    commit, so the newest versioned ha-addon CHANGELOG heading is the release being
+    tagged. Without this gate a tag could ship notes for a different version.
+    """
+    text = _workflow_text()
+    assert "CHANGELOG_VERSION=" in text, "pre-flight must read the ha-addon CHANGELOG head."
+    assert 'if [ "$CHANGELOG_VERSION" != "$TAG_VERSION" ]; then' in text, (
+        "pre-flight must compare the ha-addon CHANGELOG head against the tag."
+    )
+    assert "fold the changelog in the cut commit" in text, (
+        "the failure message must tell the operator to fold the changelog before tagging."
+    )
+
+
+def test_release_workflow_changelog_extractor_trims_trailing_whitespace():
+    """'## Unreleased ' with a stray space must not read as a version heading.
+
+    Without the trim the skip comparison fails, 'Unreleased' is reported as the newest
+    versioned heading, and a legitimate release is blocked with a nonsense message.
+    """
+    text = _workflow_text()
+    assert r"gsub(/[[:space:]\r]+$/" in text, (
+        "the CHANGELOG heading extractor must trim trailing whitespace and CR before comparing against Unreleased."
     )
 
 

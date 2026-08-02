@@ -6,13 +6,16 @@ How to release a new version of the Mamma Mi Radio Home Assistant addon without 
 
 ```
 Code change
-  → bump version in all three files (see below)
-  → push/merge to main
+  → merge to main (version files unchanged; main advertises the last published version)
+  → soak on edge
+  → chore(release): cut X.Y.Z: bump all three version files, fold both changelogs
+  → push/merge to main                                        [cut window opens]
   → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, and prebuilt :sha checks
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs both per-arch :sha images and proves their host-published ports before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
+                                                              [cut window closes]
   → addon-release.yml smoke: runs the published amd64 :X.Y.Z image
   → HA discovers new version via config.yaml
   → User clicks "Update" in HA
@@ -25,7 +28,13 @@ Code change
 
 Every step must succeed. A break at ANY point means the addon doesn't work.
 
-**Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
+**Important:** The cut merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the cut commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
+
+**The cut window.** Between the cut merge and the second `promote` job, `main` advertises a version whose image is not published yet. A fresh install of the stable add-on fails and rolls back, and an update fails to download. A station already playing keeps playing, because the Supervisor pulls the new image before it stops the old container.
+
+The window is normally under an hour. Leaving it open for longer is how this repo spent 74 of 76 days advertising an uninstallable version (`../release-process.md`). Recovery is step 4 of "Cutting a stable release" below: revert the version files, then debug.
+
+To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily and raises a flag if it never closed.
 
 ## Version: three files, must match
 
@@ -40,7 +49,12 @@ fails. The HACS integration ships from this same repo and HACS reads its version
 git release tag, so its `manifest.json` rides the release number too — see
 `../release-process.md` → "The HACS integration shares the release number".
 
-**How to bump:**
+**What value they hold.** Between releases: the **last published** version, because the
+Supervisor pulls `{image}:{version}` straight from this field and a value with no image
+breaks install. They change in exactly one commit — `chore(release): cut X.Y.Z` — and
+`scripts/check-advertised-version.sh` is the guard.
+
+**How to bump (only in the cut commit):**
 ```bash
 # All three files, same version, same commit
 sed -i '' 's/^version:.*/version: X.Y.Z/' ha-addon/mammamiradio/config.yaml
@@ -55,49 +69,86 @@ HEAD." It is "promote a build that has already soaked on the edge Pi." The infra
 for exactly this: `addon-release.yml` does not rebuild on a tag, it promotes the prebuilt
 `:sha` image. The edge channel is your continuous soak track.
 
-**Rolling release candidate.** `main`'s stable `config.yaml` / `pyproject.toml` always carry
-the *next* version (the RC). Every `main` commit bakes that version into its `:sha` image. The
-number is not "where I am" — it is "what I release next." A stable tag that lags `main` by many
-commits is *correct*, not outdated.
+**`main` advertises the last published version.** Between releases the three version files
+name the version currently on GHCR, so the store entry is always installable. The next
+number does not exist anywhere yet; the pending *content* accumulates under
+`## [Unreleased]`. See `../release-process.md` for why (74 of 76 days uninstallable under
+the old rolling-RC model).
 
-**Promote-current-edge.** The release candidate is always whatever your current edge release
-points at — already built, already on your Pi. No SHA archaeology. "Soaked" is your plain
-judgment that the line you have been running has felt healthy, not a stopwatch on one commit.
+**Soaked is a judgment.** "Ready" is your plain read that the edge line you have been
+running feels healthy, not a stopwatch on one commit.
 
-**The cut — 3 steps, when the edge line feels good:**
+**The cut — 4 steps, when the edge line feels good:**
 
-1. **Tag the current edge SHA** (not HEAD, not the `chore(edge)` metadata commit — that commit
-   has no `:sha` image because `addon-build.yml` skips it). The candidate is whatever
-   `ha-addon/mammamiradio-edge/config.yaml` `version:` names:
+1. **Land one `chore(release): cut X.Y.Z` PR** via `/ship`:
+   - `pyproject.toml`, `ha-addon/mammamiradio/config.yaml`,
+     `custom_components/mammamiradio/manifest.json` → `X.Y.Z`
+   - **root CHANGELOG**: roll `## [Unreleased]` into a dated `## [X.Y.Z] - <date>`, then
+     open a fresh `## [Unreleased]`
+   - **ha-addon CHANGELOG**: move its `## Unreleased` content under a real
+     `## X.Y.Z - <date>` heading. REQUIRED — `pre-release-check.sh` compares `config.yaml`
+     to the first *versioned* ha-addon CHANGELOG header (it skips `## Unreleased`).
+
+   **The cut window opens when this merges.** From here to step 3, `main` advertises a
+   version GHCR does not have yet. Capture the SHA now and use it for the rest of the
+   cut, because `origin/main` can move underneath you:
    ```bash
    git fetch origin main --tags
-   EDGE=$(git show origin/main:ha-addon/mammamiradio-edge/config.yaml | awk '/^version:/{print $2}')
-   # X.Y.Z must equal the STABLE config.yaml version at $EDGE
-   git tag vX.Y.Z "$EDGE" && git push origin vX.Y.Z
+   CUT_SHA="$(git rev-parse origin/main)"
    ```
-   `addon-release.yml` pre-flight fails loud if `config.yaml` or `manifest.json` != tag,
-   or either arch `:sha` image is missing — that is your safety net.
-2. **Wait for `addon-release.yml` green**, then verify:
-   `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`.
-3. **Open the next RC immediately** so the number keeps meaning something and CI stays green:
-   - `pyproject.toml` + `ha-addon/mammamiradio/config.yaml` → `X.Y+1.0`
-   - **ha-addon CHANGELOG**: add a new `## [X.Y+1.0]` header at the top. REQUIRED —
-     `pre-release-check.sh` compares `config.yaml` to the first *versioned* ha-addon CHANGELOG
-     header (it skips `## Unreleased`); without the new header the next version-touching PR fails.
-   - **root CHANGELOG**: roll `## [Unreleased]` (plus the pending `## [X.Y.Z]`) into a single
-     dated `## [X.Y.Z] - <real tag date>`, then open a fresh `## [Unreleased]`.
-   - Land as a normal `chore(release): open X.Y+1.0` PR via `/ship`.
 
-**Changelog must match the tagged commit.** If the edge SHA you tag is behind `HEAD`, fold only
-the notes actually in that SHA — never publish notes for commits the promoted image lacks.
+2. **Wait for `addon-build.yml` green** on `$CUT_SHA` (~15-25 min; the PR touches
+   `pyproject.toml` and `ha-addon/**`, both in the build's path filter).
+
+   The long judgment soak belongs *before* the cut, on the edge line. If you want a
+   short confirmation that the cut commit itself boots (it differs from its soaked
+   parent only by version strings and changelog text), pin edge to it:
+   ```bash
+   make edge-release ARGS="--target-sha $CUT_SHA"
+   ```
+   Keep that to hours, not days. The cut window stays open for its whole duration, and
+   `advertised-version.yml` will file a drift issue if it is still open at 09:15 UTC.
+   That alarm is correct, not a false positive.
+
+3. **Tag the cut commit and let CI promote:**
+   ```bash
+   git tag vX.Y.Z "$CUT_SHA" && git push origin vX.Y.Z
+   ```
+   Tag `$CUT_SHA` by name, never `origin/main`. If an unrelated commit landed during the
+   window, tagging HEAD either fails pre-flight (no `:sha` image for a docs-only commit)
+   or, worse, silently publishes a tree you never soaked.
+
+   Pre-flight fails loud if `config.yaml`, `manifest.json`, `pyproject.toml`, or the
+   ha-addon CHANGELOG head do not equal the tag, or either arch `:sha` image is missing.
+
+   **The window closes only when both arch `promote` jobs finish** — not at tag push.
+   Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`, or just
+   `bash scripts/check-advertised-version.sh`.
+
+4. **Write the GitHub Release.** Nothing in CI creates it, and HACS keys the integration
+   update off it. There is **no** "open the next RC" step — you are back at steady state.
+
+**If the release fails, revert first, debug second.** Any failure in `addon-release.yml`
+leaves the window open indefinitely. Land `git revert <cut-sha>`, then investigate. A stuck
+window is a broken install for everyone.
+
+Revert the whole cut commit, not just the version files. The cut also folded both
+changelogs, so a version-only revert leaves the ha-addon CHANGELOG head at the unreleased
+number: `check-changelog-sync.sh` then refuses the commit locally, and `pre-release-check.sh`
+fails the PR in CI. Reverting the commit is atomic across both and passes each gate.
+
+**Never tag the `chore(edge)` metadata commit** — `addon-build.yml` skips those, so it has
+no `:sha` image and pre-flight will reject the tag.
 
 **Known limitations (revisit if they bite):**
 - `release-cooldown.yml` only fails *red* on a tag <24h after the prior release; it does not
   actually block `addon-release.yml` from promoting. Don't push the tag inside the window (or use
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
-- A hotfix after you've opened the next RC (e.g. `2.13.1` once `main` is on `2.14.0`) needs a
-  release branch, because pre-flight requires `config.yaml` and `manifest.json` == tag.
+- The promoted image is built from the cut commit, so it differs from the soaked parent by
+  the version strings and changelog text. The bump reaches runtime (the Dockerfile
+  pip-installs `pyproject.toml`, so `_ASSET_VERSION` and `bridge_app_version` change).
+  Step 2's `--target-sha` soak is what makes "you ran what you tagged" literally true.
 
 ## Addon stage
 
@@ -260,7 +311,7 @@ LABEL \
 ```
 
 The HA Supervisor reads these labels to:
-- `io.hass.version` — match the running image against `config.yaml`'s `version:` field. Without this label the Supervisor cannot determine whether the installed image is current.
+- `io.hass.version` — Supervisor does not read this for add-ons. `DockerAddon.version` overrides `DockerInterface.version` and returns the add-on's `config.yaml` version, so update decisions never consult the label; the label-reading path serves Home Assistant Core, the Supervisor, and plugins. Keep declaring it, since the HA docs require it and `validate-addon.sh` checks the declaration is present, but read update behaviour from `config.yaml` `version:` alone. (Corrected 2026-08-02. This runbook previously said the opposite.)
 - `io.hass.type` — identify this as an application add-on (as opposed to a system add-on).
 - `io.hass.arch` — validate that the pulled image targets the correct host architecture.
 
@@ -286,7 +337,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
-`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, runs the launch and host-published-port proofs for each native architecture before stable publishing, promotes those exact images to `:X.Y.Z` without changing the source manifest shape, updates `:latest` only when the current tag is the newest stable semver, and then smoke-tests the published amd64 `:X.Y.Z` image. The source `:sha` image is built with `io.hass.version` set to the stable `config.yaml` version because it may later become the stable release artifact. If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
+`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, runs the launch and host-published-port proofs for each native architecture before stable publishing, promotes those exact images to `:X.Y.Z` without changing the source manifest shape, updates `:latest` only when the current tag is the newest stable semver, and then smoke-tests the published amd64 `:X.Y.Z` image. The source `:sha` image is built with `io.hass.version` set to the stable `config.yaml` version, so between releases most `:sha` images carry the last published number rather than the one they would ship as. That is inert, because Supervisor reads `config.yaml` and not the label (see "`io.hass.*` image labels" above). If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
 
 ## Edge channel (dev releases)
 
@@ -459,11 +510,7 @@ Before merging ANY change that touches addon files:
 - [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —
       `scripts/check-merge-gate.sh` passes if anything about merging looks off
 
-**After merging a version-bump commit** (to publish the stable image):
-1. Wait for `addon-build.yml` to pass on the merged commit
-2. `git tag vX.Y.Z && git push origin vX.Y.Z`
-3. `addon-release.yml` runs pre-flight → smoke-prebuilt → promote → smoke; check Actions for green
-4. Verify: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:X.Y.Z`
+**After merging a cut commit**, follow "Cutting a stable release" above. Do not tag `HEAD`: tag the cut commit itself, and revert the version files if the release workflow fails.
 
 ## Release invariants gate (2026-04-27 onward)
 
@@ -570,10 +617,21 @@ Use these to tell intentional degradation from a real regression during post-mer
 - `repository.yaml` must be on `main` branch (not a feature branch)
 - The repo URL in HA must be `https://github.com/florianhorner/mammamiradio`
 
-### Version shows but update fails
-- GHCR image might not exist for the version in config.yaml
-- Check: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:VERSION`
-- If not found: CI didn't run or failed, check Actions tab
+### Version shows but update or install fails
+
+This is the cut window left open, not a user error. `main` is advertising a version whose
+image was never published, so the store entry looks healthy (the Supervisor never contacts
+the registry when reading the store) and fails only on click. A fresh install fails and
+rolls back; an update fails to download but leaves a playing station alone.
+
+- Diagnose: `bash scripts/check-advertised-version.sh`
+- Or by hand: `docker pull ghcr.io/florianhorner/mammamiradio-addon-aarch64:VERSION`
+- **Release mid-flight?** Wait for `addon-release.yml` to finish promoting *both*
+  architectures, then re-check.
+- **Release failed or abandoned?** Land `git revert <cut-sha>` immediately, then debug.
+  Revert the commit rather than the version files alone: the cut folded both changelogs
+  too, and a partial revert is refused by `check-changelog-sync.sh` and `pre-release-check.sh`.
+- `advertised-version.yml` raises a flag daily if this state persists.
 
 ## Hardcoded values that must stay in sync
 

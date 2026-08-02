@@ -64,7 +64,7 @@ Everything else lives under `docs/`:
 - `docs/architecture.md` - runtime flow, queue model, and audio pipeline
 - `docs/operations.md` - runtime assumptions and deploy reality
 - `docs/troubleshooting.md` - common failures and recovery paths
-- `docs/release-process.md` - release *strategy*: themes vs versions, single-trunk rolling-RC mental model (the *how-to-cut* lives in the runbook below)
+- `docs/release-process.md` - release *strategy*: themes vs versions, single-trunk cut-don't-open mental model — `main` always advertises the last **published** version, and the number changes only in the `chore(release): cut X.Y.Z` commit (the *how-to-cut* lives in the runbook below)
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
 - `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
@@ -306,6 +306,11 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
 - **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) either required recovery asset (`continuity_1.mp3`, `emergency_tone.mp3`) missing, ≤1 KiB, unapproved by the packaged-asset manifest, or not recognized as audio by `ffprobe` — each checked independently, so validation never stops at the first playable asset — or any `generate_silence` reference in `producer.py`, (3) missing `_pick_canned_clip=None` test mock (empty-container / missing packaged recovery untested), (4) missing `session_stopped` test (post-restart silence untested). Local: `bash scripts/check-release-invariants.sh`.
 - **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
+- **Advertised-version guard** (`scripts/check-advertised-version.sh`): asks GHCR whether the version `main` advertises to the HA Supervisor exists, for both arches, over the anonymous token endpoint (no scope needed). Home Assistant requires a prebuilt `image:` add-on's `version:` to name a real tag; when it does not, fresh installs fail and updates roll back.
+  - Verdicts: a definitive 404 fails (exit 1). An unreachable registry reports `UNKNOWN` and exits 0, since a DNS blip is not a broken release. The last output line is always `VERDICT: pass|unknown|fail` — callers that need the tri-state read that, not the exit code.
+  - Runs daily against `main` via `.github/workflows/advertised-version.yml`, which opens one `release-drift` issue while drift persists and closes it on a `pass`.
+  - Kept out of `pre-release-check.sh` and `make pre-release` on purpose. `quality.yml` runs those on every version-file PR, so a `chore(release): cut X.Y.Z` PR names a version whose image is not built yet and could never go green.
+  - Self-test: `bash tests/workflows/test_advertised_version.sh`, hermetic via `MAMMAMIRADIO_TAG_PROBE` plus a `curl` PATH shim. Two cases guard the deadlock from coming back across the whole cut-PR gate closure. See `docs/release-process.md`.
 
 ## Protected UI elements
 

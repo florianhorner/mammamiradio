@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Pre-release sanity check. Run before bumping the version number.
+# Pre-release sanity check. Run as part of the release cut — it validates the version
+# files and changelog heads AFTER they are bumped, which is what quality.yml does on the
+# `chore(release): cut X.Y.Z` PR. (Deliberately does NOT check whether the advertised
+# image exists: that is scripts/check-advertised-version.sh, and asking it here would
+# deadlock every cut PR, since the cut names a version whose image is not built yet.)
 # Catches the class of bugs that have caused production silence incidents.
 #
 # Usage: scripts/pre-release-check.sh
@@ -73,7 +77,10 @@ echo "2. ha-addon CHANGELOG"
 # Take the FIRST whitespace-delimited token of the header, then strip brackets, so a dated
 # header ("## 2.14.1 - 2026-06-21") or a bracketed one ("## [2.14.1]") both reduce to the
 # bare version. Comparing the whole header string falsely failed whenever it carried a date.
-CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
+# The trailing-whitespace/CR trim matters: without it "## Unreleased " (one stray
+# space, or a CRLF line ending) stops matching the skip and gets reported as the
+# newest *versioned* heading, blocking the release with a nonsense message.
+CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); gsub(/[[:space:]\r]+$/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
 
 if [ "$CHANGELOG_VER" = "$ADDON_VER" ]; then
     ok "CHANGELOG latest version (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
@@ -228,9 +235,9 @@ echo "======================================="
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then
-    echo "Fix the failures above before bumping the version."
+    echo "Fix the failures above before tagging this cut."
     exit 1
 else
-    echo "All checks passed. Safe to bump the version."
+    echo "All checks passed."
     exit 0
 fi

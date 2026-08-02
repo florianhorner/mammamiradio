@@ -26,10 +26,10 @@ Market evidence remains thin.
 | Cloud boundary | Dynamic writing and the best voices still depend on external providers. Edge TTS is also an online service. Mamma Mi Radio is self-hosted and needs internet access for the full experience | Current limitation |
 | Privacy | Filtered context preview, entity muting, narrow defaults for new installations, opt-in sensitive moments, and no home-context transmission to a script model without a provider key | Shipped |
 | Reliability | Ahead-of-playback production, continuity reservations, cached recovery, emergency audio, bounded retries, provider circuit breakers, and listener-delivery receipts | Strong CI evidence |
-| Candidate reliability fix | The current v2.18 candidate fails closed when every configured TTS route is unavailable: required speech enters canned or continuity recovery instead of becoming a silent speech file | Implemented locally; pending merge, public CI, release, and runtime soak |
-| Listener truth | The system distinguishes generated, queued, and heard content. Current `main` adds anonymous aggregate listening epochs and one bounded companionship moment after sustained listening | In v2.18 candidate |
+| Candidate reliability fix | The 2.18 work fails closed when every configured TTS route is unavailable: required speech enters canned or continuity recovery instead of becoming a silent speech file | Implemented locally; pending merge, public CI, release, and runtime soak |
+| Listener truth | The system distinguishes generated, queued, and heard content. Current `main` adds anonymous aggregate listening epochs and one bounded companionship moment after sustained listening | Unreleased, not yet cut |
 | Stable release | v2.17.0, published 12 July 2026 | Public |
-| Current development | v2.18.0 rolling candidate; latest `main` CI is green | Not yet the stable release |
+| Current development | 2.18 content sits in `## [Unreleased]`; `main` advertises the published v2.17.0 so the app stays installable; latest `main` CI is green | Not yet cut |
 | Current distribution | Custom Home Assistant app repository, HACS companion, Docker, and direct installation | Available but founder-led |
 | Next distribution step | Upstream Music Assistant provider submission with typed now-playing metadata | Open, checks green, changes requested; not merged |
 | Potential reach | If accepted, it becomes discoverable in Music Assistant's built-in provider catalog. Opt-in analytics show about 64,000 active Home Assistant installations reporting Music Assistant | Potential distribution, not adoption |

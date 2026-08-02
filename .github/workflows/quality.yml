@@ -129,6 +129,9 @@ jobs:
       - name: Cut-edge-release self-test
         run: bash tests/workflows/test_cut_edge_release.sh
 
+      - name: Advertised-version guard self-test
+        run: bash tests/workflows/test_advertised_version.sh
+
       - name: Edge add-on validation self-test
         run: bash tests/workflows/test_validate_addon_edge.sh
 
