@@ -260,7 +260,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 ## Notes for future edits
 
-- `admin.html` and `listener.html` live in `mammamiradio/web/templates/` and are loaded by `mammamiradio/web/streamer.py`.
+- `admin.html`, `listener.html` and `clip.html` live in `mammamiradio/web/templates/` and are loaded by `mammamiradio/web/streamer.py`. **Before adding a UI feature to a template, verify which route serves it** — the mapping is not obvious: `/` serves `listener.html`, except under HA ingress from hassio/loopback, where it renders the admin page; `/listen` is a listener alias; `/admin` serves `admin.html`; `/dashboard` is only a redirect to `/admin`. Check the `@router.get` definitions in `web/streamer.py`, not the filename. The casa-card feature was built in the wrong file once — a full session wasted. (Moved here from the global `~/.claude/CLAUDE.md` on 2026-08-02; it was repo-specific and its paths had gone stale.)
 - `start.sh` is part of the runtime contract, not just a convenience script.
 - `radio.toml` is the source of truth for hosts, pacing, ad brands, audio settings, and Home Assistant enablement. Secrets stay in `.env`.
 - If you change routes, config keys, auth rules, or fallback behavior, update the matching docs in the same change. (See **Doc sync** rule below.)
