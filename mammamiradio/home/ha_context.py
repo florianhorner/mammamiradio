@@ -122,11 +122,10 @@ def _create_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
 
 
 def _get_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
-    global _ha_projection_executor, _ha_projection_start_failure_logged
+    global _ha_projection_executor
     with _ha_projection_executor_lock:
         if _ha_projection_executor is None:
             _ha_projection_executor = _create_ha_projection_executor()
-        _ha_projection_start_failure_logged = False
         return _ha_projection_executor
 
 
@@ -141,7 +140,13 @@ _PROJECTION_START_FAILURE_ERRORS = (OSError, NotImplementedError)
 
 
 def _note_ha_projection_start_failure() -> None:
-    """Name a worker that cannot come up, once per outage rather than once per poll."""
+    """Name a worker that cannot come up, once per outage rather than once per poll.
+
+    Cleared by a completed projection, never by a constructed pool: a spawn
+    context builds no process until the first submit, so a pool that constructs
+    cleanly every poll and then fails to spawn is one continuous outage, not a
+    new one each time.
+    """
     global _ha_projection_start_failure_logged
     with _ha_projection_executor_lock:
         if _ha_projection_start_failure_logged:
@@ -2308,6 +2313,7 @@ async def _run_home_context_projection(
     projection_input: _HomeContextProjectionInput,
 ) -> _HomeContextProjectionCandidate:
     """Run one pure projection outside the stream-owning Python process."""
+    global _ha_projection_start_failure_logged
     try:
         executor = _get_ha_projection_executor()
     except _PROJECTION_START_FAILURE_ERRORS:
@@ -2318,7 +2324,7 @@ async def _run_home_context_projection(
         _note_ha_projection_start_failure()
         raise
     try:
-        return await asyncio.get_running_loop().run_in_executor(
+        candidate = await asyncio.get_running_loop().run_in_executor(
             executor,
             _project_home_context,
             projection_input,
@@ -2340,6 +2346,14 @@ async def _run_home_context_projection(
         _retire_ha_projection_executor(executor)
         _note_ha_projection_start_failure()
         raise
+    # Only a completed projection proves the worker is healthy. Re-arming on a
+    # constructed pool instead would make a persistent submit-time outage log on
+    # every poll, because each poll constructs a fresh pool that then fails to
+    # spawn — the outage never looks like the same one twice.
+    if _ha_projection_start_failure_logged:
+        with _ha_projection_executor_lock:
+            _ha_projection_start_failure_logged = False
+    return candidate
 
 
 async def _fetch_home_context_outcome(

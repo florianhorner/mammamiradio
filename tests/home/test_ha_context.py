@@ -491,9 +491,9 @@ async def test_projection_worker_that_cannot_be_spawned_at_submit_is_reported_an
 async def test_projection_pool_start_failure_speaks_again_after_a_recovery(caplog):
     """Silencing repeats must not silence the NEXT outage.
 
-    The once-per-outage flag is cleared by a successful `_get_ha_projection_executor`.
-    Without that reset the station recovers, later breaks again, and says nothing at
-    all for the rest of the process lifetime.
+    The flag is cleared by a projection that actually completed. Without that
+    reset the station recovers, later breaks again, and says nothing at all for
+    the rest of the process lifetime.
     """
     import mammamiradio.home.ha_context as ha_context
 
@@ -514,8 +514,9 @@ async def test_projection_pool_start_failure_speaks_again_after_a_recovery(caplo
         timestamp=1_000.0,
     )
     working_executor = MagicMock()
-    working_executor.submit.return_value = concurrent.futures.Future()
-    working_executor.submit.return_value.set_result("ok")
+    healthy = concurrent.futures.Future()
+    healthy.set_result("projected")
+    working_executor.submit.return_value = healthy
 
     with (
         patch.object(ha_context, "_ha_projection_executor", None),
@@ -524,29 +525,74 @@ async def test_projection_pool_start_failure_speaks_again_after_a_recovery(caplo
             ha_context,
             "_create_ha_projection_executor",
             side_effect=[
-                OSError(38, "Function not implemented"),
-                OSError(38, "Function not implemented"),
+                NotImplementedError("no named semaphores"),
+                NotImplementedError("no named semaphores"),
                 working_executor,
-                OSError(38, "Function not implemented"),
+                NotImplementedError("no named semaphores"),
             ],
         ),
         caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
     ):
         # Outage one: two consecutive failures, one line.
         for _ in range(2):
-            with pytest.raises(OSError):
+            with pytest.raises(NotImplementedError):
                 await _run_home_context_projection(projection_input)
         assert len([r for r in caplog.records if "could not start" in r.message]) == 1
 
-        # A pool starts. This is what re-arms the warning.
-        assert _get_ha_projection_executor() is working_executor
+        # A projection completes. That, not a constructed pool, re-arms the warning.
+        assert await _run_home_context_projection(projection_input) == "projected"
         _retire_ha_projection_executor(working_executor)
 
         # Outage two is a genuinely new event and must be reported.
-        with pytest.raises(OSError):
+        with pytest.raises(NotImplementedError):
             await _run_home_context_projection(projection_input)
 
     assert len([r for r in caplog.records if "could not start" in r.message]) == 2
+
+
+@pytest.mark.asyncio
+async def test_persistent_submit_time_outage_is_still_only_named_once(caplog):
+    """A pool that constructs cleanly every poll and then cannot spawn is ONE outage.
+
+    Re-arming on a constructed pool would log on every poll here, because the
+    submit-time path retires the pool and the next poll builds a fresh one. Only
+    a completed projection may clear the flag.
+    """
+    import mammamiradio.home.ha_context as ha_context
+
+    projection_input = _HomeContextProjectionInput(
+        response_bytes=b"[]",
+        registry_snapshot=HomeRegistrySnapshot(source="narrow_not_loaded"),
+        weather_arc="",
+        weather_arc_en="",
+        authorization_mode=HomeAuthorizationMode.NARROW.value,
+        muted_ids=frozenset(),
+        effective_cache=None,
+        radio_event_rules=(),
+        radio_event_state_baseline={},
+        ritual_recipe_state_baseline={},
+        radio_event_cooldowns={},
+        ritual_recipe_cooldowns={},
+        cache_dir=None,
+        timestamp=1_000.0,
+    )
+
+    def _unspawnable(*_args, **_kwargs):
+        executor = MagicMock()
+        executor.submit.side_effect = BlockingIOError(11, "Resource temporarily unavailable")
+        return executor
+
+    with (
+        patch.object(ha_context, "_ha_projection_executor", None),
+        patch.object(ha_context, "_ha_projection_start_failure_logged", False),
+        patch.object(ha_context, "_create_ha_projection_executor", side_effect=_unspawnable),
+        caplog.at_level(logging.WARNING, logger="mammamiradio.home.ha_context"),
+    ):
+        for _ in range(5):
+            with pytest.raises(OSError):
+                await _run_home_context_projection(projection_input)
+
+    assert len([r for r in caplog.records if "could not start" in r.message]) == 1
 
 
 @pytest.mark.asyncio
