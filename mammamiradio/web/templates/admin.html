@@ -262,8 +262,11 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 @keyframes tt-caret-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
 /* ── PACING ── */
-.pace-hint { font-size: 10px; color: rgba(245,237,216,0.35); margin-bottom: 4px; }
-.pace-counter { font-size: 10px; color: rgba(245,237,216,0.4); margin-top: 2px; }
+/* 0.55 alpha, not 0.35/0.4: composited over --surface (#251E19) the old values
+   measured 2.9:1 and 3.4:1, under the 4.5:1 AA floor for 10px text. Lifting the
+   foreground is the only lever here — --surface* must stay at Pi-baseline. */
+.pace-hint { font-size: 10px; color: rgba(245,237,216,0.55); margin-bottom: 4px; }
+.pace-counter { font-size: 10px; color: rgba(245,237,216,0.55); margin-top: 2px; }
 .pace-counter strong { color: var(--sun); font-weight: 600; }
 .pace-row { display: flex; align-items: center; gap: 0; margin-bottom: 6px; }
 .pace-row label { font-size: 12px; color: rgba(245,237,216,0.5); width: 65px; }
@@ -409,7 +412,13 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 }
 .setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
 .setup-snippet.show { display: block; }
-.setup-strip{display:none;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
+/* position+z-index are load-bearing: .setup-strip is a child of the sticky
+   .mmr-deck, whose ::before paints an opaque var(--bg) rectangle over the
+   whole deck. Its siblings .mmr-console and .mmr-tabbar each escape that
+   overlay with z-index:1; without the same lift this strip renders *under*
+   it — an invisible block that still takes layout height and still hands
+   keyboard focus to its "Add AI key" button. */
+.setup-strip{display:none;position:relative;z-index:1;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
 .setup-strip.show{display:flex}
 .setup-strip-title{font-size:12px;font-weight:800;color:var(--cream);min-width:0;white-space:nowrap}
 .setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
@@ -558,7 +567,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .lr-track { margin-left: 6px; font-style: italic; color: rgba(245,237,216,0.45); }
 
 /* ── MISC ── */
-.empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
+.empty { font-size: 12px; color: rgba(245,237,216,0.55); text-align: center; padding: 16px 0; font-style: italic; }
 .force-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; background: rgba(244,208,72,0.2); color: var(--sun); margin-left: 4px; }
 .live-dot { display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle;animation:live-pulse 2s ease-in-out infinite; }
 @keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
@@ -1268,7 +1277,16 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
      panel (4px on rgb(54,43,37)). Bump height + brighter base color.
      Uses background-color (not background shorthand) to preserve the
      gold linear-gradient fill set by --sun2. */
-  .a-sliders input[type=range] { height: 6px; background-color: rgba(245,237,216,0.14); }
+  /* 44px box, 6px visible track. `appearance:none` on the base rule throws away
+     the UA's intrinsic ~20px hit box, so the element box IS the touch target —
+     a 6px-tall one. The thumb is a pseudo-element and can't grow its host. Pad
+     to 44px and clip the paint back to the content box, so the track looks
+     identical and only the reachable area changes. */
+  .a-sliders input[type=range] {
+    height: 44px; padding: 19px 0;
+    background-color: rgba(245,237,216,0.14);
+    background-clip: content-box;
+  }
 
   /* --- everything below was originally in the early @media block, moved here so the cascade wins against base rules at lines 815/646/etc --- */
 /* Mobile fix: panel header stacks vertically so subtitle doesn't collide with wrapped h2 */
@@ -1632,9 +1650,14 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   border-top: 1px solid var(--line);
 }
 .drawer-subgroup > .ttl-eyebrow { display: block; margin-bottom: 10px; }
+/* #E8A29B, not --lancia2: as a label on the chip's own translucent backing the
+   brand red measured 2.8:1, under AA for text and under 3:1 for the border.
+   This is the lifted red the sibling danger controls already use — .btn-ban
+   above, .btn-chip-danger below, .pl-ban in the rotation list — so the purge
+   button now matches them instead of standing alone. 8.3:1 on that backing. */
 .btn-danger-outline {
-  border-color: var(--lancia2) !important;
-  color: var(--lancia2) !important;
+  border-color: #E8A29B !important;
+  color: #E8A29B !important;
 }
 .btn-danger-outline:hover {
   border-color: var(--lancia2) !important;
@@ -1968,10 +1991,10 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
             <span class="programme-runway-detail" id="programmeCount"></span>
           </div>
           <div class="filter-pills">
-            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
-            <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
-            <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Hosts</button>
-            <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
+            <button type="button" class="filter-pill active" aria-pressed="true" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
+            <button type="button" class="filter-pill" aria-pressed="false" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
+            <button type="button" class="filter-pill" aria-pressed="false" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Hosts</button>
+            <button type="button" class="filter-pill" aria-pressed="false" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
           </div>
         </div>
       </header>
@@ -2168,16 +2191,16 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
       <div class="archivio-controls">
         <input type="search" class="search-input" id="logSearch" placeholder="Search archive…" autocomplete="off" aria-label="Search archive" oninput="onArchivioFilterChange()">
         <div class="archivio-chiprow" role="group" aria-label="Filter by type">
-          <button type="button" class="filter-pill active" data-logtype="all" onclick="setArchivioType('all',this)">All</button>
-          <button type="button" class="filter-pill" data-logtype="music" onclick="setArchivioType('music',this)">Music</button>
-          <button type="button" class="filter-pill" data-logtype="banter" onclick="setArchivioType('banter',this)">Hosts</button>
-          <button type="button" class="filter-pill" data-logtype="ad" onclick="setArchivioType('ad',this)">Ads</button>
-          <button type="button" class="filter-pill" data-logtype="news_flash" onclick="setArchivioType('news_flash',this)">News</button>
+          <button type="button" class="filter-pill active" aria-pressed="true" data-logtype="all" onclick="setArchivioType('all',this)">All</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="music" onclick="setArchivioType('music',this)">Music</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="banter" onclick="setArchivioType('banter',this)">Hosts</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="ad" onclick="setArchivioType('ad',this)">Ads</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="news_flash" onclick="setArchivioType('news_flash',this)">News</button>
         </div>
         <div class="archivio-chiprow" role="group" aria-label="Filter by time">
-          <button type="button" class="filter-pill" data-logscope="hour" onclick="setArchivioScope('hour',this)">Last hour</button>
-          <button type="button" class="filter-pill" data-logscope="today" onclick="setArchivioScope('today',this)">Today</button>
-          <button type="button" class="filter-pill active" data-logscope="all" onclick="setArchivioScope('all',this)">All available</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logscope="hour" onclick="setArchivioScope('hour',this)">Last hour</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logscope="today" onclick="setArchivioScope('today',this)">Today</button>
+          <button type="button" class="filter-pill active" aria-pressed="true" data-logscope="all" onclick="setArchivioScope('all',this)">All available</button>
         </div>
       </div>
       <div class="a-log" id="logBody"></div>
@@ -2238,7 +2261,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 
           <div class="card-label">AI Quality</div>
           <div style="margin-bottom:14px">
-            <select id="qualityProfile" onchange="setQuality(this.value)"
+            <select id="qualityProfile" aria-label="AI Quality" onchange="setQuality(this.value)"
                     style="width:100%;padding:8px;background:var(--surface);color:var(--cream);border:1px solid var(--line-strong);border-radius:8px;font:inherit">
               <option value="premium">Premium — best hosts, highest cost</option>
               <option value="balanced" selected>Balanced — great hosts, sensible cost</option>
@@ -3147,7 +3170,14 @@ function updateNow(ns){
 // ── Programme Filter ──
 function setProgrammeFilter(filter, btn){
   _programmeFilter=filter;
-  document.querySelectorAll('.filter-pill').forEach(p=>p.classList.toggle('active',p.dataset.filter===filter));
+  // [data-filter], not a bare .filter-pill: the Archivio type/scope pills share
+  // the class, and an unscoped sweep cleared their state too (harmless while it
+  // was class-only, wrong once it also writes aria-pressed).
+  document.querySelectorAll('.filter-pill[data-filter]').forEach(p=>{
+    const on=p.dataset.filter===filter;
+    p.classList.toggle('active',on);
+    p.setAttribute('aria-pressed',String(on));
+  });
   renderProgramme(_st);
 }
 
@@ -5137,7 +5167,11 @@ function renderHosts(hosts){
     }).join('');
     const sliders=AX.map(a=>{
       const val=h.personality[a];
-      return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" style="background-image:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
+      // aria-label carries host + dimension: the visible "Energy" caption is a
+      // sibling <span>, not a <label for>, so without this the slider has no
+      // accessible name and a screen-reader operator hears five identical
+      // unnamed sliders per host.
+      return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" aria-label="${esc(nm)} — ${AX_LABEL[a]}" style="background-image:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
     }).join('');
     return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Character — moves all sliders</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
   }).join('');
@@ -5308,8 +5342,16 @@ function _persistArchivio(){
 function _syncArchivioChips(){
   const q=document.getElementById('logSearch');
   if(q&&q.value!==_archivioFilters.q)q.value=_archivioFilters.q;
-  document.querySelectorAll('[data-logtype]').forEach(b=>b.classList.toggle('active',b.dataset.logtype===_archivioFilters.type));
-  document.querySelectorAll('[data-logscope]').forEach(b=>b.classList.toggle('active',b.dataset.logscope===_archivioFilters.scope));
+  document.querySelectorAll('[data-logtype]').forEach(b=>{
+    const on=b.dataset.logtype===_archivioFilters.type;
+    b.classList.toggle('active',on);
+    b.setAttribute('aria-pressed',String(on));
+  });
+  document.querySelectorAll('[data-logscope]').forEach(b=>{
+    const on=b.dataset.logscope===_archivioFilters.scope;
+    b.classList.toggle('active',on);
+    b.setAttribute('aria-pressed',String(on));
+  });
 }
 function onArchivioFilterChange(){
   _archivioFilters.q=(document.getElementById('logSearch')?.value||'').trim();
