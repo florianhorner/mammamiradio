@@ -423,49 +423,59 @@ refresh. An existing Stable installation keeps the manifest metadata that came
 with its installed app version until it updates. Edge is the controlled
 installed canary. A merge by itself does not change a running installation.
 
-### Edge backup canary and stable-release gate
+### Edge backup canary
 
-Run this gate after the exact-head Edge image is built and Edge is installed
-through the normal planned update path. The update has one expected restart;
-the backup itself must not restart the app.
+**Trigger: a change to the backup contract, not every release.** The contract is
+the `backup: hot` declaration and its exclusion list.
+`tests/addon/test_addon_backup_contract.py` pins both on every PR — that Stable
+and Edge match exactly, that generated and incomplete artifacts are excluded,
+and that durable state is retained. When that test passes and the contract did
+not change, a manual re-check of the same properties proves nothing new.
+
+What the test cannot observe is the part worth running by hand: Supervisor takes
+a **live file-level copy of a running SQLite database and rotating ledgers**,
+with no stop hooks. That race does not vary by release, but it does re-open
+whenever the exclusion list or the retained set moves. Run the canary then.
+
+Run it after the exact-head Edge image is built and Edge is installed through
+the normal planned update path. That update has one expected restart; the backup
+itself must not restart the app.
 
 1. Start a partial backup while audio is playing. Require Edge to be present,
    `failed_addons` to be empty, and no
    `Error adding ... No such file or directory` message in the backup log.
    `/healthz` and `/readyz` must remain `200`, the restart count must not change
    during the backup, and listening must remain continuous.
-2. Inspect the archive member list and extracted files **regardless of archive
-   size**. Confirm the retained files above are present and the excluded
-   generated-media paths are absent. On the current canary host, a result below
-   50 MiB while `/data/music` is empty is a useful diagnostic; it is not a
-   product limit or a promise for other installations. A larger result blocks
-   Stable promotion until its contents are explained.
-3. Compare the pre-backup and restored `secrets.env` with a silent digest
-   comparison only. For example, with shell tracing disabled, use `cmp -s`
-   over two binary SHA-256 streams and inspect only the exit status. Never
-   print, log, or paste the secret file or either fingerprint.
-4. On the extracted `mammamiradio.db`, require both
+2. On the extracted `mammamiradio.db`, require both
    `PRAGMA quick_check;` and `PRAGMA integrity_check;` to return `ok`. Confirm
    the expected tables are present: `tracks`, `play_history`,
    `listener_persona`, `listener_session_receipts`, `track_rules`, `song_cues`,
    and the install-origin witness
    `_mammamiradio_home_install_origin_v1`.
-5. Parse every retained JSON document. Validate every plain ledger JSONL row,
-   run a gzip integrity check on each `.jsonl.gz`, then parse every decompressed
-   row as JSON. An archive that merely opens is not sufficient.
-6. Restore into a disposable Home Assistant test installation before treating
-   the contract as Stable-ready. Confirm settings, provider-key presence
-   without revealing the key, station memory, and retained history; start the
-   restored app and verify that generated audio rebuilds while the station
-   becomes ready.
-7. Confirm the next scheduled automatic backup includes Edge under the same
-   checks.
+3. Validate every plain ledger JSONL row, run a gzip integrity check on each
+   `.jsonl.gz`, then parse every decompressed row as JSON. An archive that
+   merely opens is not sufficient: rotation can publish a `.jsonl.gz` and delete
+   its source while Supervisor walks the tree.
 
-SQLite integrity, ledger readability, and the disposable restore are
-Stable-release gates, not optional diagnostics. If a retained-state check or
-restore fails—or a retained ledger file hits the narrow delete race—stop the
-rollout and design an application-coordinated snapshot. Do not switch to cold
-backup or add emergency stop/start hooks as a workaround.
+SQLite integrity and ledger readability are the gate. If either fails, or a
+retained ledger file hits the narrow delete race, stop the rollout and design an
+application-coordinated snapshot. Do not switch to cold backup or add emergency
+stop/start hooks as a workaround.
+
+**Restore into a disposable Home Assistant installation** verifies the other
+half — that a valid archive actually brings a station back up, settings and
+provider keys and station memory intact, generated audio rebuilding. Run it when
+a disposable instance is available. It needs Supervisor, so the plain container
+image cannot stand in. Absent that instance, the round trip is unverified and
+the release carries that gap knowingly; record it in
+`../stabilization-log.md` rather than letting it pass silently.
+
+**Retired from this gate, and why.** Archive member inspection and the
+`secrets.env` digest comparison were per-release steps until 2026-08-04. Both
+re-ask what `test_addon_backup_contract.py` now answers on every PR. Confirming
+the next scheduled automatic backup is monitoring, not a release gate. Running
+all three every cut trained the gate to be skipped wholesale for convenience
+rather than pared to what only a live host can show.
 
 ## Landing a PR (merge gate)
 
