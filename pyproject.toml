@@ -19,7 +19,7 @@ dependencies = [
     "httpx>=0.28",
     "websockets>=13",
     "aiosqlite>=0.20",
-    "yt-dlp>=2026.6.9",
+    "yt-dlp>=2026.7.4",
     "tomli>=2.0;python_version<'3.11'",
 ]
 
