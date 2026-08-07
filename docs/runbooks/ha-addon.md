@@ -86,8 +86,15 @@ running feels healthy, not a stopwatch on one commit.
    - **root CHANGELOG**: roll `## [Unreleased]` into a dated `## [X.Y.Z] - <date>`, then
      open a fresh `## [Unreleased]`
    - **ha-addon CHANGELOG**: move its `## Unreleased` content under a real
-     `## X.Y.Z - <date>` heading. REQUIRED — `pre-release-check.sh` compares `config.yaml`
-     to the first *versioned* ha-addon CHANGELOG header (it skips `## Unreleased`).
+     `## X.Y.Z - <date>` heading
+
+   Both are REQUIRED. `pre-release-check.sh` §2 compares `config.yaml` against the
+   first *versioned* heading in each file, skipping `## Unreleased`. The extractor
+   strips brackets, so `## [X.Y.Z]` and `## X.Y.Z` both parse; the root file uses
+   brackets and the ha-addon file does not purely as house style, not because a gate
+   requires it. `addon-release.yml`'s tag pre-flight checks both again, but that
+   fires inside the open window, so a heading typo caught only there costs a revert
+   rather than an edit.
 
    **The cut window opens when this merges.** From here to step 3, `main` advertises a
    version GHCR does not have yet. Capture the SHA now and use it for the rest of the

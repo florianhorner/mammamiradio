@@ -48,9 +48,14 @@ def _write_release_check_repo(
     version: str = "1.1.0",
     manifest_version: str | None = "1.1.0",
     addon_changelog: str = "# Changelog\n\n## Unreleased\n\n## 1.1.0\n",
+    root_changelog: str | None = None,
 ) -> None:
     """Minimal repo layout that scripts/pre-release-check.sh inspects, in a state that
-    passes every check. Override one field to exercise a single gate."""
+    passes every check. Override one field to exercise a single gate.
+
+    Both changelogs are written because the cut folds both and the script checks
+    both. `root_changelog` defaults to a bracketed heading at `version`, matching
+    the root file's house style."""
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", f"version: {version}\n")
     _write(tmp_path / "pyproject.toml", f'[project]\nname = "mammamiradio"\nversion = "{version}"\n')
     if manifest_version is not None:
@@ -59,6 +64,9 @@ def _write_release_check_repo(
             '{\n  "domain": "mammamiradio",\n  "version": "' + manifest_version + '"\n}\n',
         )
     _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", addon_changelog)
+    if root_changelog is None:
+        root_changelog = f"# Changelog\n\n## [Unreleased]\n\n## [{version}] - 2026-01-01\n"
+    _write(tmp_path / "CHANGELOG.md", root_changelog)
     _write(
         tmp_path / "mammamiradio/audio/normalizer.py",
         'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
@@ -407,6 +415,44 @@ def test_pre_release_check_accepts_dated_addon_changelog_heading(
 
     assert result.returncode == 0
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
+
+
+def test_pre_release_check_rejects_stale_root_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    """A cut that folds the ha-addon changelog but not the root one must fail here.
+
+    addon-release.yml's tag pre-flight also checks the root file, but that fires
+    inside the open cut window: the mismatch would pass every pre-merge gate,
+    merge, leave main advertising an unpublished image, and only then fail. This
+    moves the failure to the cut PR, where the fix is an edit not a revert.
+    """
+    _write_release_check_repo(
+        tmp_path,
+        root_changelog="# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n",
+    )
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "root CHANGELOG latest version is ## 1.0.0 but config.yaml is 1.1.0" in result.stdout
+
+
+def test_pre_release_check_accepts_bracketed_root_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    """The root file's bracketed house style must satisfy the same extractor."""
+    _write_release_check_repo(
+        tmp_path,
+        root_changelog="# Changelog\n\n## [Unreleased]\n\n## [1.1.0] - 2026-06-21\n",
+    )
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "root CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
 
 
 def test_pre_release_check_requires_each_recovery_asset(
