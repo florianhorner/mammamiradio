@@ -4165,10 +4165,20 @@ def test_header_safe_output_is_always_a_legal_http_field_value():
         "🎵 Radio Mamma",  # fold leaves a leading space
         "Radio Mamma 🎵",  # fold leaves a trailing space
         "sole — mare … 🎵",
-        "Radio Città",  # NFC accents, must survive as latin-1 bytes
-        "Città",  # NFD accents
+        "Radio Città",  # composed accents, must survive as latin-1 bytes
+        unicodedata.normalize("NFD", "Radio Città"),  # decomposed, as macOS writes it
         "Łódź Radio",  # letters with no decomposition
+        "Radyo Kırmızı",  # dotless i: no decomposition and no accent
         "Radio\r\nX-Evil: 1",  # header injection
+        # C0 and DEL are illegal field content. h11 refuses NUL, VT and FF
+        # outright; the rest it tolerates but no strict server has to.
+        "Radio\x00Mamma",
+        "Radio\x0bMamma",
+        "Radio\x0cMamma",
+        "Radio\x1fMamma",
+        "Radio\x7fMamma",
+        "Radio\x07Mamma",
+        "Radio\tMamma",
         "    ",  # exotic whitespace only
         "广播 电台",
         "🎵🎶",
@@ -4181,6 +4191,40 @@ def test_header_safe_output_is_always_a_legal_http_field_value():
             headers=[("icy-name", value.encode("latin-1"))],
             reason=b"OK",
         )
+
+
+def test_header_safe_removes_control_bytes_not_just_crlf():
+    """C0 and DEL are illegal field content, not only CR/LF.
+
+    `station.theme` never passes through `sanitize_station_name`, so a stray
+    control byte in `radio.toml` or `STATION_THEME` reaches the header raw. h11
+    refuses NUL, VT and FF outright, which is the same no-response-at-all
+    failure as the encode crash, and the rest of the range is illegal even
+    where a lenient parser lets it through.
+    """
+    for control in [*range(0x20), 0x7F]:
+        assert _header_safe(f"Radio{chr(control)}Mamma") == "RadioMamma", hex(control)
+
+
+def test_header_safe_derives_a_letter_rather_than_deleting_it():
+    """A letter latin-1 cannot carry must degrade, never vanish.
+
+    NFKD only helps letters built from a combining accent. Ones built from a
+    stroke, bar or hook decompose to nothing, so a Turkish name written with the
+    dotless i used to air as `Radyo Krmz` — corruption, not degradation. The
+    Unicode name supplies the base letter instead, which is why this is not a
+    hand-curated list: 314 Latin letters fall outside latin-1 and enumerating
+    them is how the first one got missed.
+    """
+    assert _header_safe("Radyo Kırmızı") == "Radyo Kirmizi"
+    assert _header_safe("Radyo Işık") == "Radyo Isik"
+    assert _header_safe("Radio Azərbaycan") == "Radio Azerbaycan"
+    assert _header_safe("Radio Łódź") == "Radio Lódz"
+    assert _header_safe("Ŋŋ") == "Nn"
+    # Unicode hyphens are not latin-1 either and used to disappear, joining the
+    # words either side of them.
+    assert _header_safe("Radio‐Uno") == "Radio-Uno"
+    assert _header_safe("Radio‑Uno") == "Radio-Uno"
 
 
 def test_header_safe_survives_non_string_config_values():

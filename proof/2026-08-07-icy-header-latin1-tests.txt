@@ -1,25 +1,35 @@
 # icy-name latin-1 stream outage — test + runtime evidence
-# commit: 5b72a85faac969b24b00690ad63692ccb7be1a19
-# date:   2026-08-07T00:24:28Z
+# commit: a08a757f2d9618ebb482b7442ade778f4263f589 (+ uncommitted review-feedback changes)
+# date:   2026-08-07T08:35:53Z
 
 ## Targeted tests for the fix
-tests/web/test_streamer_routes_extended.py::test_stream_icy_name_uses_resolved_identity_and_strips_crlf PASSED [  7%]
-tests/web/test_streamer_routes_extended.py::test_stream_survives_smart_quote_in_station_name PASSED [ 14%]
-tests/web/test_streamer_routes_extended.py::test_stream_theme_survives_unencodable_characters PASSED [ 21%]
-tests/web/test_streamer_routes_extended.py::test_stream_keeps_italian_accents_in_icy_name PASSED [ 28%]
-tests/web/test_streamer_routes_extended.py::test_stream_keeps_accents_next_to_an_unencodable_character PASSED [ 35%]
-tests/web/test_streamer_routes_extended.py::test_stream_every_response_header_is_latin1_encodable PASSED [ 42%]
-tests/web/test_streamer_routes_extended.py::test_stream_icy_genre_capped_at_64_after_folding PASSED [ 50%]
-tests/web/test_streamer_routes_extended.py::test_stream_keeps_european_letters_outside_latin1 PASSED [ 57%]
-tests/web/test_streamer_routes_extended.py::test_header_safe_output_is_always_a_legal_http_field_value PASSED [ 64%]
-tests/web/test_streamer_routes_extended.py::test_header_safe_survives_non_string_config_values PASSED [ 71%]
-tests/web/test_streamer_routes_extended.py::test_stream_falls_back_when_whitespace_only_name_folds_away PASSED [ 78%]
-tests/web/test_streamer_routes_extended.py::test_stream_icy_name_has_no_edge_whitespace_after_folding PASSED [ 85%]
-tests/web/test_streamer_routes_extended.py::test_stream_keeps_decomposed_accents_in_icy_name PASSED [ 92%]
+tests/web/test_streamer_routes_extended.py::test_stream_icy_name_uses_resolved_identity_and_strips_crlf PASSED [  6%]
+tests/web/test_streamer_routes_extended.py::test_stream_survives_smart_quote_in_station_name PASSED [ 12%]
+tests/web/test_streamer_routes_extended.py::test_stream_theme_survives_unencodable_characters PASSED [ 18%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_italian_accents_in_icy_name PASSED [ 25%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_accents_next_to_an_unencodable_character PASSED [ 31%]
+tests/web/test_streamer_routes_extended.py::test_stream_every_response_header_is_latin1_encodable PASSED [ 37%]
+tests/web/test_streamer_routes_extended.py::test_stream_icy_genre_capped_at_64_after_folding PASSED [ 43%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_european_letters_outside_latin1 PASSED [ 50%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_output_is_always_a_legal_http_field_value PASSED [ 56%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_removes_control_bytes_not_just_crlf PASSED [ 62%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_derives_a_letter_rather_than_deleting_it PASSED [ 68%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_survives_non_string_config_values PASSED [ 75%]
+tests/web/test_streamer_routes_extended.py::test_stream_falls_back_when_whitespace_only_name_folds_away PASSED [ 81%]
+tests/web/test_streamer_routes_extended.py::test_stream_icy_name_has_no_edge_whitespace_after_folding PASSED [ 87%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_decomposed_accents_in_icy_name PASSED [ 93%]
 tests/web/test_streamer_routes_extended.py::test_stream_falls_back_when_station_name_folds_to_nothing PASSED [100%]
-====================== 14 passed, 281 deselected in 0.70s ======================
+====================== 16 passed, 281 deselected in 0.67s ======================
 
 ## Full suite
+# NOTE: the 5 failing tests/repo/test_repo_scripts.py::test_pre_release_check_* cases
+# are PRE-EXISTING and unrelated to this change. They fail identically on a clean
+# checkout of origin/main. Cause: the release shell scripts invoke bare `python3`,
+# which on macOS resolves to /usr/bin/python3 (3.9.6) and cannot import
+# mammamiradio.core.spoken_assets (@dataclass(slots=True) needs 3.10+). CI pins
+# python 3.11 via setup-python, so CI is green. Verify with:
+#   PATH="/opt/homebrew/bin:$PATH" pytest tests/repo/test_repo_scripts.py -k pre_release_check
+#   -> 8 passed
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
 FAILED tests/repo/test_repo_scripts.py::test_pre_release_check_skips_unreleased_addon_changelog_heading
@@ -27,19 +37,24 @@ FAILED tests/repo/test_repo_scripts.py::test_pre_release_check_fails_cleanly_on_
 FAILED tests/repo/test_repo_scripts.py::test_pre_release_check_accepts_dated_addon_changelog_heading
 FAILED tests/repo/test_repo_scripts.py::test_pre_release_check_rejects_recovery_asset_hash_drift
 FAILED tests/repo/test_repo_scripts.py::test_pre_release_check_rejects_manifest_approved_unsafe_transcript
-5 failed, 5928 passed, 3 skipped, 21 deselected, 1 warning in 151.61s (0:02:31)
+5 failed, 5930 passed, 3 skipped, 21 deselected, 1 warning in 151.40s (0:02:31)
 
 ## Lint / format / typecheck
 All checks passed!
 2 files already formatted
 Success: no issues found in 1 source file
 
-## Runtime QA — real uvicorn, strict h11 parser (the parser that rejects edge whitespace)
-station_name env: 🎵 Let’s Radio — Città Łódź 🎶
-HTTP/1.1 200 OK
-icy-name: Let's Radio - Città Lódz
-icy-genre: unhinged late-night Italian shock radio broadcasting from somewh
-icy-br: 192
+## Runtime QA — real uvicorn, strict h11 parser
+STATION_NAME  = 🎵 Let’s Radyo Kırmızı — Città Łódź‑Uno 🎶
+STATION_THEME = late-night<VT>radio<DEL>shock + trailing spaces
+                (control bytes; the theme never passes the load-time sanitizer.
+                 NUL is not testable this way — env vars are NUL-terminated, so the
+                 OS truncates before Python sees it. All of C0+DEL is covered
+                 exhaustively by test_header_safe_removes_control_bytes_not_just_crlf.)
+'HTTP/1.1 200 OK'
+"icy-name: Let's Radyo Kirmizi - Città Lódz-Uno"
+'icy-genre: late-nightradioshock'
+'icy-br: 192'
 audio bytes: 133200
 listener page: 200
 server errors during run: 0
