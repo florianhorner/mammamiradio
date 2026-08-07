@@ -4741,8 +4741,8 @@ async def static_files(filename: str):
 # Letters are deliberately NOT enumerated here. NFKD handles the ones that
 # decompose, and _ascii_twin() derives the rest from the Unicode name, which
 # covers 199 of the 314 Latin letters that latin-1 cannot carry. Only the named
-# letters whose Unicode name contains no base letter at all — ENG, SCHWA, KRA,
-# the ligatures, SHARP S — need a hand-written twin, and they are listed below.
+# letters whose Unicode name contains no base letter at all (ENG, SCHWA, KRA,
+# the ligatures, SHARP S) need a hand-written twin, and they are listed below.
 # Curating the other 199 by hand is how "Łódź" shipped as "ódz" in the first
 # place: the list is always one letter short of the next operator's name.
 _HEADER_ASCII_FOLDS = str.maketrans(
@@ -4777,9 +4777,9 @@ _HEADER_ASCII_FOLDS = str.maketrans(
 
 # Bytes an HTTP field value may not carry at all (RFC 9110: field-vchar is
 # %x21-7E / %x80-FF, plus interior SP and HTAB). CR and LF are the header
-# injection vector; the rest of C0 and DEL are rejected by real servers —
-# h11 refuses NUL, VT and FF outright — which reproduces this function's
-# own outage class from a different direction. HTAB is legal but pointless
+# injection vector. The rest of C0 and DEL are rejected by real servers (h11
+# refuses NUL, VT and FF outright), which reproduces this function's own
+# outage class from a different direction. HTAB is legal but pointless
 # in a station name, so it goes too rather than surviving as a stray tab.
 _HEADER_FORBIDDEN_BYTES = dict.fromkeys([*range(0x20), 0x7F])
 
@@ -4828,13 +4828,13 @@ def _header_safe(value: object) -> str:
     The guarantee is about the output, not an absolute promise about the call:
     whatever comes back is encodable and is legal HTTP field content, so no
     configured station name or theme can break the response. It is stated that
-    way deliberately — an earlier "cannot 500" wording was an overclaim, since a
+    way deliberately. An earlier "cannot 500" wording was an overclaim, since a
     caller could still hand this an object whose ``__str__`` raises. Nothing in
     a parsed TOML config can.
 
     Starlette encodes every response header with latin-1, so a single curly
     apostrophe in the station name raises UnicodeEncodeError while the response
-    is being built and takes the whole /stream request down with it — no audio,
+    is being built and takes the whole /stream request down with it: no audio,
     for every listener, until the name is changed.
 
     The steps, each one load-bearing:
@@ -4845,8 +4845,8 @@ def _header_safe(value: object) -> str:
     * Compose to NFC. macOS hands over decomposed text (``a`` + U+0300
       combining grave) for the same ``à`` that Linux writes as one codepoint,
       and only the composed form is latin-1. Without this the combining mark
-      alone is dropped and ``Città`` airs as ``Citta`` — or, before this
-      function existed, took /stream down exactly like a curly apostrophe.
+      alone is dropped and ``Città`` airs as ``Citta``. Before this function
+      existed it took /stream down exactly like a curly apostrophe did.
     * Drop C0 and DEL. CR/LF are the header injection vector, and the rest of
       that range is illegal field content that a strict server rejects, which
       would take /stream down exactly like the encode crash did.
@@ -4854,7 +4854,7 @@ def _header_safe(value: object) -> str:
       outside latin-1 (see _fold_char) and drop what has no stand-in at all
       (emoji, CJK).
     * Strip the ends. Folding an emoji away leaves the space beside it, and
-      h11 rejects a field value with leading or trailing whitespace outright —
+      h11 rejects a field value with leading or trailing whitespace outright,
       the same total-failure blast radius as the bug this function fixes.
       Stripping also lets a value that folded away to nothing read as falsy so
       the caller's default can take over.
@@ -4889,8 +4889,8 @@ async def stream(request: Request):
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
     headers = {
-        # A name made entirely of unencodable characters folds to "" — fall back
-        # so the player shows the station rather than a blank label.
+        # A name made entirely of unencodable characters folds to "", so fall
+        # back and let the player show the station rather than a blank label.
         "icy-name": _header_safe(config.display_station_name) or DEFAULT_STATION_NAME,
         # Strip again after the cut: a space landing at index 63 would put the
         # trailing whitespace back and h11 refuses the whole response for it.

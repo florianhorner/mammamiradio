@@ -4055,8 +4055,8 @@ async def test_stream_keeps_accents_next_to_an_unencodable_character():
     ``unicodedata.normalize("NFKD", value).encode("latin-1", "ignore")`` also
     survives an emoji and passes every other test in this suite, but it
     decomposes ``à`` into ``a`` plus a combining accent that then gets dropped,
-    so ``Radio Città 🎵`` would silently air as ``Radio Citta`` — contradicting
-    the promise shipping in the changelog beside it.
+    so ``Radio Città 🎵`` would air as ``Radio Citta``, contradicting the promise
+    shipping in the changelog beside it.
     """
     app = _make_test_app()
     app.state.config.identity.station_name = "Radio Città 🎵"
@@ -4150,7 +4150,7 @@ def test_header_safe_output_is_always_a_legal_http_field_value():
     """Guard the class of bug, not just the one character that caused it.
 
     The route tests above drive the app through ``httpx.ASGITransport``, which
-    calls the ASGI app directly and never serialises an HTTP response — so they
+    calls the ASGI app directly and never serialises an HTTP response, so they
     cannot see an illegal header value at all. h11 can: it rejects a field
     value with leading or trailing whitespace, which is exactly what folding an
     emoji away from the edge of a name leaves behind, and the failure is total
@@ -4193,6 +4193,38 @@ def test_header_safe_output_is_always_a_legal_http_field_value():
         )
 
 
+@pytest.mark.asyncio
+async def test_stream_serves_audio_after_restart_with_unicode_station_name(monkeypatch):
+    """Post-restart scenario: stopped session persisted, hostile name in config.
+
+    Every other test here sets the station name on an app that is already built.
+    This one goes through the real boot path (env, `load_config`,
+    `sanitize_station_name`, identity resolution, header), so a regression that
+    only shows up in the configured representation, rather than in a value
+    assigned afterwards, cannot hide. `session_stopped` is left set the way a
+    watchdog restart leaves it, which is the state the original outage was
+    reported from: the add-on looked healthy and no listener got audio.
+    """
+    monkeypatch.setenv("STATION_NAME", "🎵 Let’s Radyo Kırmızı — Città Łódź 🎶")
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Let's Radyo Kirmizi - Città Lódz"
+            assert resp.headers["icy-name"].encode("latin-1")
+            body = b"".join([chunk async for chunk in resp.aiter_bytes()])
+            assert body == b"frame"
+
+
 def test_header_safe_removes_control_bytes_not_just_crlf():
     """C0 and DEL are illegal field content, not only CR/LF.
 
@@ -4211,8 +4243,8 @@ def test_header_safe_derives_a_letter_rather_than_deleting_it():
 
     NFKD only helps letters built from a combining accent. Ones built from a
     stroke, bar or hook decompose to nothing, so a Turkish name written with the
-    dotless i used to air as `Radyo Krmz` — corruption, not degradation. The
-    Unicode name supplies the base letter instead, which is why this is not a
+    dotless i used to air as `Radyo Krmz`, which reads as corruption rather than
+    degradation. The Unicode name supplies the base letter instead, which is why this is not a
     hand-curated list: 314 Latin letters fall outside latin-1 and enumerating
     them is how the first one got missed.
     """
@@ -4242,9 +4274,9 @@ def test_header_safe_survives_non_string_config_values():
 async def test_stream_falls_back_when_whitespace_only_name_folds_away():
     """A name that folds to whitespace must not send a blank label.
 
-    `"广播 电台"` folds to a single space, which is truthy — without the strip the
-    `or DEFAULT_STATION_NAME` fallback silently misses and the listener's player
-    shows an empty station.
+    `"广播 电台"` folds to a single space, which is truthy. Without the strip the
+    `or DEFAULT_STATION_NAME` fallback misses and the listener's player shows an
+    empty station.
     """
     app = _make_test_app()
     app.state.config.identity.station_name = "广播 电台"
