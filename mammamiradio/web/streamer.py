@@ -15,6 +15,7 @@ import random as _random
 import re as _re
 import stat as _stat
 import time
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,7 +60,13 @@ from mammamiradio.audio.normalizer import (
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
-from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, load_model_registry
+from mammamiradio.core.config import (
+    DEFAULT_STATION_NAME,
+    MODEL_REGISTRY_FILENAME,
+    PACING_BOUNDS,
+    ModelsSection,
+    load_model_registry,
+)
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
@@ -4728,14 +4735,166 @@ async def static_files(filename: str):
     return FileResponse(filepath)
 
 
+# Typographic characters people actually type (or that macOS/iOS smart-quote
+# substitution inserts for them) mapped to their ASCII twins.
+#
+# Letters are deliberately NOT enumerated here. NFKD handles the ones that
+# decompose, and _ascii_twin() derives the rest from the Unicode name, which
+# covers 199 of the 314 Latin letters that latin-1 cannot carry. Only the named
+# letters whose Unicode name contains no base letter at all (ENG, SCHWA, KRA,
+# the ligatures, SHARP S) need a hand-written twin, and they are listed below.
+# Curating the other 199 by hand is how "Łódź" shipped as "ódz" in the first
+# place: the list is always one letter short of the next operator's name.
+_HEADER_ASCII_FOLDS = str.maketrans(
+    {
+        "‘": "'",
+        "’": "'",
+        "‚": "'",
+        "‛": "'",
+        "“": '"',
+        "”": '"',
+        "„": '"',
+        "‟": '"',
+        "‐": "-",
+        "‑": "-",
+        "‒": "-",
+        "–": "-",
+        "—": "-",
+        "―": "-",
+        "−": "-",
+        "…": "...",
+        "•": "*",
+        "Ŋ": "N",
+        "ŋ": "n",
+        "Ə": "E",
+        "ə": "e",
+        "Œ": "OE",
+        "œ": "oe",
+        "ẞ": "SS",
+        "ĸ": "k",
+    }
+)
+
+# Bytes an HTTP field value may not carry at all (RFC 9110: field-vchar is
+# %x21-7E / %x80-FF, plus interior SP and HTAB). CR and LF are the header
+# injection vector. The rest of C0 and DEL are rejected by real servers (h11
+# refuses NUL, VT and FF outright), which reproduces this function's own
+# outage class from a different direction. HTAB is legal but pointless
+# in a station name, so it goes too rather than surviving as a stray tab.
+_HEADER_FORBIDDEN_BYTES = dict.fromkeys([*range(0x20), 0x7F])
+
+# "LATIN SMALL LETTER L WITH STROKE" -> l, "LATIN SMALL LETTER DOTLESS I" -> i,
+# "LATIN LETTER SMALL CAPITAL G" -> g. The modifier words are skipped so the
+# base letter behind them is what lands.
+_LATIN_LETTER_NAME = _re.compile(
+    r"^LATIN (?:(?P<case>CAPITAL|SMALL) )?LETTER (?:SMALL CAPITAL )?"
+    r"(?:DOTLESS |TURNED |REVERSED |INSULAR |SCRIPT )?"
+    r"(?P<base>[A-Z]{1,2})\b"
+)
+
+
+def _ascii_twin(char: str) -> str:
+    """Derive an ASCII stand-in for a Latin letter latin-1 cannot carry.
+
+    Reached only when NFKD yields nothing, which is true for every Latin letter
+    formed by a stroke, bar or hook rather than by a combining accent. Dropping
+    those silently turns a name into what looks like a typo: a Turkish name
+    written with the dotless i lost every one of them, airing as ``Radyo Krmz``.
+    The Unicode name is the fallback source for the base letter. Returns "" when
+    the name carries no base letter (ENG, SCHWA, the ligatures); those are
+    hand-mapped in _HEADER_ASCII_FOLDS instead.
+    """
+    match = _LATIN_LETTER_NAME.match(unicodedata.name(char, ""))
+    if match is None:
+        return ""
+    base = match.group("base")
+    # Some names omit CAPITAL/SMALL entirely (e.g. "LATIN LETTER YR"), so fall
+    # back to the character's own case rather than guessing lowercase.
+    upper = match.group("case") == "CAPITAL" or (match.group("case") is None and char.isupper())
+    return base if upper else base.lower()
+
+
+def _fold_char(char: str) -> str:
+    """Reduce one character to something latin-1 can carry."""
+    if _is_latin1(char):
+        return char
+    decomposed = unicodedata.normalize("NFKD", char).encode("latin-1", "ignore").decode("latin-1")
+    return decomposed or _ascii_twin(char)
+
+
+def _header_safe(value: object) -> str:
+    """Reduce operator-supplied text to a legal, latin-1-encodable field value.
+
+    The guarantee is about the output, not an absolute promise about the call:
+    whatever comes back is encodable and is legal HTTP field content, so no
+    configured station name or theme can break the response. It is stated that
+    way deliberately. An earlier "cannot 500" wording was an overclaim, since a
+    caller could still hand this an object whose ``__str__`` raises. Nothing in
+    a parsed TOML config can.
+
+    Starlette encodes every response header with latin-1, so a single curly
+    apostrophe in the station name raises UnicodeEncodeError while the response
+    is being built and takes the whole /stream request down with it: no audio,
+    for every listener, until the name is changed.
+
+    The steps, each one load-bearing:
+
+    * Coerce to ``str``. ``StationSection`` is built straight from TOML with no
+      runtime coercion, so ``theme = 42`` in ``radio.toml`` reaches this
+      function as an int and used to 500 every listener the same way.
+    * Compose to NFC. macOS hands over decomposed text (``a`` + U+0300
+      combining grave) for the same ``à`` that Linux writes as one codepoint,
+      and only the composed form is latin-1. Without this the combining mark
+      alone is dropped and ``Città`` airs as ``Citta``. Before this function
+      existed it took /stream down exactly like a curly apostrophe did.
+    * Drop C0 and DEL. CR/LF are the header injection vector, and the rest of
+      that range is illegal field content that a strict server rejects, which
+      would take /stream down exactly like the encode crash did.
+    * Fold typographic punctuation to ASCII, then reduce whatever is still
+      outside latin-1 (see _fold_char) and drop what has no stand-in at all
+      (emoji, CJK).
+    * Strip the ends. Folding an emoji away leaves the space beside it, and
+      h11 rejects a field value with leading or trailing whitespace outright,
+      the same total-failure blast radius as the bug this function fixes.
+      Stripping also lets a value that folded away to nothing read as falsy so
+      the caller's default can take over.
+
+    Accented Latin letters are latin-1 once composed, so ``Radio Città`` and
+    ``Caffè`` keep their accents; only the genuinely unencodable characters
+    degrade.
+    """
+    if not isinstance(value, str):
+        value = "" if value is None else str(value)
+    cleaned = unicodedata.normalize("NFC", value)
+    cleaned = cleaned.translate(_HEADER_FORBIDDEN_BYTES).translate(_HEADER_ASCII_FOLDS)
+    try:
+        cleaned.encode("latin-1")
+    except UnicodeEncodeError:
+        # Per character, so one emoji cannot flatten the accents around it.
+        cleaned = "".join(_fold_char(char) for char in cleaned)
+    return cleaned.strip()
+
+
+def _is_latin1(char: str) -> bool:
+    try:
+        char.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 @router.get("/stream")
 async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
     headers = {
-        "icy-name": config.display_station_name.replace("\r", "").replace("\n", ""),
-        "icy-genre": config.station.theme[:64].replace("\r", "").replace("\n", ""),
+        # A name made entirely of unencodable characters folds to "", so fall
+        # back and let the player show the station rather than a blank label.
+        "icy-name": _header_safe(config.display_station_name) or DEFAULT_STATION_NAME,
+        # Strip again after the cut: a space landing at index 63 would put the
+        # trailing whitespace back and h11 refuses the whole response for it.
+        "icy-genre": _header_safe(config.station.theme)[:64].strip(),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
