@@ -70,9 +70,9 @@ else
     fail "manifest.json version is '${MANIFEST_VER:-unreadable}' but config.yaml is $ADDON_VER — bump custom_components/mammamiradio/manifest.json with the release (or fix malformed JSON)"
 fi
 
-# ── 2. ha-addon CHANGELOG covers the current version ─────────────────────────
+# ── 2. Both CHANGELOGs cover the current version ─────────────────────────────
 echo ""
-echo "2. ha-addon CHANGELOG"
+echo "2. CHANGELOGs"
 
 # Take the FIRST whitespace-delimited token of the header, then strip brackets, so a dated
 # header ("## 2.14.1 - 2026-06-21") or a bracketed one ("## [2.14.1]") both reduce to the
@@ -83,9 +83,22 @@ echo "2. ha-addon CHANGELOG"
 CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); gsub(/[[:space:]\r]+$/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
 
 if [ "$CHANGELOG_VER" = "$ADDON_VER" ]; then
-    ok "CHANGELOG latest version (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
+    ok "ha-addon CHANGELOG latest version (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
 else
-    fail "CHANGELOG latest version is ## ${CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — update ha-addon/mammamiradio/CHANGELOG.md"
+    fail "ha-addon CHANGELOG latest version is ## ${CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — update ha-addon/mammamiradio/CHANGELOG.md"
+fi
+
+# The root CHANGELOG is checked here for the same reason, using the same extractor.
+# addon-release.yml's tag pre-flight already validates it, but that fires INSIDE the
+# open cut window: a typo in "## [X.Y.Z]" passes every pre-merge gate, merges, opens
+# the window where main advertises an unpublished image, and only then fails. Catching
+# it here moves the failure to the cut PR, where the fix is an edit instead of a revert.
+ROOT_CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); gsub(/[[:space:]\r]+$/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' CHANGELOG.md)
+
+if [ "$ROOT_CHANGELOG_VER" = "$ADDON_VER" ]; then
+    ok "root CHANGELOG latest version (## $ROOT_CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
+else
+    fail "root CHANGELOG latest version is ## ${ROOT_CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — fold the changelog in the cut commit, before tagging"
 fi
 
 # ── 3. Stable release beat target ─────────────────────────────────────────────
