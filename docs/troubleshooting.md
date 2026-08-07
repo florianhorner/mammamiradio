@@ -41,6 +41,35 @@ curl http://127.0.0.1:8000/readyz
 
 `/healthz` answers "is the process and listener-facing runtime healthy?"; it normally stays HTTP `200` during an intentional Stop but returns `503` for prolonged silence with active listeners. `/readyz` answers "has this running session actually delivered audio to a listener?". Every fresh or Resumed session returns HTTP `503` with `status: "starting"` until at least one listener queue accepts audio; `Producer started`, queued work, and elapsed startup time are not sufficient. Listener acceptance changes the probe to HTTP `200` with `status: "ready"`. A confirmed Force Start remains `starting` while it rebuilds that proof, and prolonged listener silence can return an active session to `starting`. An intentional operator pause is distinct: `/readyz` returns HTTP `503` with `status: "stopped"` until explicit Resume.
 
+## The page loads but the stream itself never plays
+
+If the listener page renders normally, the dashboard looks healthy, `/healthz` returns `200`, and yet every attempt to play returns an error, check what the station is called. `/stream` announces the station to players through its `icy-name` and `icy-genre` response headers, and HTTP headers can only carry latin-1 characters. Two things put a non-latin-1 character into a station name without you noticing:
+
+- **Smart quotes.** Typing a name on a Mac or iPhone silently substitutes a typographic apostrophe (U+2019) for the straight one.
+- **Decomposed accents.** macOS often stores `à` as a plain `a` followed by a separate combining accent (U+0300). The combining mark is not latin-1 either, so a perfectly ordinary `Radio Città` could fail while the same name typed elsewhere worked.
+
+Older builds passed both straight through, so building the response failed before a single audio byte was sent and every listener got a `500` while the rest of the app kept behaving normally. Grep the add-on log for the exact text Python emits, which uses the escaped form rather than the character itself:
+
+```text
+UnicodeEncodeError: 'latin-1' codec can't encode character '\u2019' in position 3: ordinal not in range(256)
+```
+
+Emoji and CJK characters in a station name or theme did the same thing.
+
+A third trigger has nothing to do with punctuation: **any letter outside latin-1**. `Radio Łódź`, `Radio Čačak`, `Rádió Ő` and `Radyo İstanbul` all returned `500` on older builds for the same reason.
+
+Current builds compose the value to NFC and then fold it at the header boundary:
+
+- Accents survive, so `Radio Città` stays `Radio Città`.
+- Curly quotes, dashes and ellipses become plain ASCII.
+- Letters outside latin-1 decompose to their base letter (`Škoda` becomes `Skoda`). The handful that have no canonical decomposition — `Ł ł Đ đ Ħ ħ Ŧ ŧ Œ œ` — carry an explicit ASCII twin, because otherwise the latin-1 pass deletes the letter itself and `Radio Łódź` reads as `Radio ódz`, which looks like a typo rather than a degradation.
+- Emoji and CJK, which have no Latin equivalent at all, are dropped.
+- The result is stripped at both ends. Folding an emoji off the edge of a name leaves its space behind, and a header value with leading or trailing whitespace is illegal — some HTTP implementations (h11) refuse the entire response for it, which would reproduce the original outage by a different route.
+
+A name that folds away to nothing falls back to the default station name instead of sending a blank `icy-name`. `icy-genre` is folded first and truncated to 64 characters afterwards, so the cap always applies to the text that actually ships. Non-string values are coerced, so a `theme = 42` typo in `radio.toml` no longer takes the stream down either.
+
+Nothing about this reaches the listener UI: `/public-status` and the page still carry the full original name, emoji and all. Only the header is folded. If you are on an older add-on and see that error in the log, retype the apostrophe as a straight `'` in the add-on configuration as an immediate workaround; the stream recovers on the next listener connect with no restart.
+
 ## The app starts but there is no real music
 
 The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP=true`) → Jamendo (when `jamendo_client_id` is set) → packaged demo music when present → built-in demo-track metadata. A source checkout also checks its repo-local `music/` directory before the demo tiers; the stock Docker Compose and Home Assistant packages do not mount that development path. The current package contains recovery audio but no bundled song library, and built-in demo-track metadata still needs a working download path. The first tier that yields playable tracks wins. If you hear only recovery audio or placeholder tones:

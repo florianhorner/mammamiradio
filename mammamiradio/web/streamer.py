@@ -15,6 +15,7 @@ import random as _random
 import re as _re
 import stat as _stat
 import time
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,7 +60,13 @@ from mammamiradio.audio.normalizer import (
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
-from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, load_model_registry
+from mammamiradio.core.config import (
+    DEFAULT_STATION_NAME,
+    MODEL_REGISTRY_FILENAME,
+    PACING_BOUNDS,
+    ModelsSection,
+    load_model_registry,
+)
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
@@ -4728,14 +4735,110 @@ async def static_files(filename: str):
     return FileResponse(filepath)
 
 
+# Typographic characters people actually type (or that macOS/iOS smart-quote
+# substitution inserts for them) mapped to their ASCII twins. Anything not
+# listed here falls through to the NFKD backstop in _header_safe().
+_HEADER_ASCII_FOLDS = str.maketrans(
+    {
+        "‘": "'",
+        "’": "'",
+        "‚": "'",
+        "‛": "'",
+        "“": '"',
+        "”": '"',
+        "„": '"',
+        "‟": '"',
+        "–": "-",
+        "—": "-",
+        "―": "-",
+        "−": "-",
+        "…": "...",
+        "•": "*",
+        # Latin letters with no canonical decomposition: NFKD leaves them whole,
+        # so without an explicit twin the latin-1 pass deletes the letter itself
+        # and "Łódź" would air as "ódz".
+        "Ł": "L",
+        "ł": "l",
+        "Đ": "D",
+        "đ": "d",
+        "Ħ": "H",
+        "ħ": "h",
+        "Ŧ": "T",
+        "ŧ": "t",
+        "Œ": "OE",
+        "œ": "oe",
+    }
+)
+
+
+def _header_safe(value: object) -> str:
+    """Render operator-supplied text as an HTTP header value that cannot 500.
+
+    Starlette encodes every response header with latin-1, so a single curly
+    apostrophe in the station name raises UnicodeEncodeError while the response
+    is being built and takes the whole /stream request down with it — no audio,
+    for every listener, until the name is changed.
+
+    The steps, each one load-bearing:
+
+    * Coerce to ``str``. ``StationSection`` is built straight from TOML with no
+      runtime coercion, so ``theme = 42`` in ``radio.toml`` reaches this
+      function as an int and used to 500 every listener the same way.
+    * Compose to NFC. macOS hands over decomposed text (``a`` + U+0300
+      combining grave) for the same ``à`` that Linux writes as one codepoint,
+      and only the composed form is latin-1. Without this the combining mark
+      alone is dropped and ``Città`` airs as ``Citta`` — or, before this
+      function existed, took /stream down exactly like a curly apostrophe.
+    * Strip CR/LF, so operator text cannot inject a header.
+    * Fold typographic punctuation to ASCII, then drop whatever is still
+      outside latin-1 (emoji, CJK).
+    * Strip the ends. Folding an emoji away leaves the space beside it, and
+      h11 rejects a field value with leading or trailing whitespace outright —
+      the same total-failure blast radius as the bug this function fixes.
+      Stripping also lets a value that folded away to nothing read as falsy so
+      the caller's default can take over.
+
+    Accented Latin letters are latin-1 once composed, so ``Radio Città`` and
+    ``Caffè`` keep their accents; only the genuinely unencodable characters
+    degrade.
+    """
+    if not isinstance(value, str):
+        value = "" if value is None else str(value)
+    cleaned = unicodedata.normalize("NFC", value)
+    cleaned = cleaned.replace("\r", "").replace("\n", "").translate(_HEADER_ASCII_FOLDS)
+    try:
+        cleaned.encode("latin-1")
+    except UnicodeEncodeError:
+        # Per character, so one emoji cannot flatten the accents around it.
+        cleaned = "".join(
+            char
+            if _is_latin1(char)
+            else unicodedata.normalize("NFKD", char).encode("latin-1", "ignore").decode("latin-1")
+            for char in cleaned
+        )
+    return cleaned.strip()
+
+
+def _is_latin1(char: str) -> bool:
+    try:
+        char.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 @router.get("/stream")
 async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
     headers = {
-        "icy-name": config.display_station_name.replace("\r", "").replace("\n", ""),
-        "icy-genre": config.station.theme[:64].replace("\r", "").replace("\n", ""),
+        # A name made entirely of unencodable characters folds to "" — fall back
+        # so the player shows the station rather than a blank label.
+        "icy-name": _header_safe(config.display_station_name) or DEFAULT_STATION_NAME,
+        # Strip again after the cut: a space landing at index 63 would put the
+        # trailing whitespace back and h11 refuses the whole response for it.
+        "icy-genre": _header_safe(config.station.theme)[:64].strip(),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",

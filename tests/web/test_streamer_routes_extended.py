@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import time
+import unicodedata
 from pathlib import Path
 from threading import Event
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,7 +22,13 @@ from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, Stati
 from mammamiradio.playlist.playlist import ExplicitSourceError
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, _admin_track_id, router
+from mammamiradio.web.streamer import (
+    CLIP_DURATION_SECONDS,
+    LiveStreamHub,
+    _admin_track_id,
+    _header_safe,
+    router,
+)
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -3972,6 +3979,305 @@ async def test_stream_icy_name_uses_resolved_identity_and_strips_crlf():
             assert resp.headers["icy-name"] == "Radio TestX-Evil: 1"
             assert "\r" not in resp.headers["icy-name"]
             assert "\n" not in resp.headers["icy-name"]
+
+
+@pytest.mark.asyncio
+async def test_stream_survives_smart_quote_in_station_name():
+    """A curly apostrophe in the station name must not kill the stream.
+
+    Regression: HA add-on options carried a name whose apostrophe was U+2019,
+    because macOS smart-quote substitution replaces the straight one as you
+    type. Starlette encodes response headers with latin-1, so icy-name raised
+    UnicodeEncodeError and every single /stream request returned 500 — no
+    audio for any listener until the name was edited.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Let’s see how long this can get"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Let's see how long this can get"
+
+
+@pytest.mark.asyncio
+async def test_stream_theme_survives_unencodable_characters():
+    """icy-genre carries operator text too, so it needs the same guard."""
+    app = _make_test_app()
+    app.state.config.station.theme = "sole — mare … 🎵"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            # No trailing space: the folded-away emoji leaves one behind, and a
+            # field value with edge whitespace is illegal (see the h11 test below).
+            assert resp.headers["icy-genre"] == "sole - mare ..."
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_italian_accents_in_icy_name():
+    """latin-1 covers accented Latin letters, so the fix must not flatten them."""
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Città — Caffè"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Città - Caffè"
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_accents_next_to_an_unencodable_character():
+    """The fold must be per character, so an emoji cannot flatten nearby accents.
+
+    Guards the slow path specifically. A whole-string
+    ``unicodedata.normalize("NFKD", value).encode("latin-1", "ignore")`` also
+    survives an emoji and passes every other test in this suite, but it
+    decomposes ``à`` into ``a`` plus a combining accent that then gets dropped,
+    so ``Radio Città 🎵`` would silently air as ``Radio Citta`` — contradicting
+    the promise shipping in the changelog beside it.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Città 🎵"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Città"
+
+
+@pytest.mark.asyncio
+async def test_stream_every_response_header_is_latin1_encodable():
+    """No header on /stream may carry text a latin-1 encode would reject.
+
+    Asserting over the whole header set rather than icy-name alone means a NEW
+    header added later from config text fails here instead of in production,
+    without anyone having to remember this incident.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Let’s — Città 🎵"
+    app.state.config.station.theme = "sole ’ mare … 北京"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            for name, value in resp.headers.items():
+                name.encode("latin-1")
+                value.encode("latin-1")
+                assert "\r" not in value and "\n" not in value, name
+                assert value == value.strip(), name
+
+
+@pytest.mark.asyncio
+async def test_stream_icy_genre_capped_at_64_after_folding():
+    """The fold expands one ``…`` to three characters, so the cap must run after it."""
+    app = _make_test_app()
+    app.state.config.station.theme = "…" * 40
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert len(resp.headers["icy-genre"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_european_letters_outside_latin1():
+    """A Polish or Czech station name must degrade to letters, not lose them.
+
+    ``Ł`` has no canonical decomposition, so NFKD leaves it whole and the
+    latin-1 pass deletes it outright: ``Radio Łódź`` became ``Radio ódz``,
+    which reads as a typo rather than a graceful degradation.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Łódź"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Lódz"
+
+
+def test_header_safe_output_is_always_a_legal_http_field_value():
+    """Guard the class of bug, not just the one character that caused it.
+
+    The route tests above drive the app through ``httpx.ASGITransport``, which
+    calls the ASGI app directly and never serialises an HTTP response — so they
+    cannot see an illegal header value at all. h11 can: it rejects a field
+    value with leading or trailing whitespace, which is exactly what folding an
+    emoji away from the edge of a name leaves behind, and the failure is total
+    (no response reaches the listener), same as the encode crash this whole
+    function exists to prevent. Starlette hands the server latin-1 bytes, so
+    encode the same way here rather than passing str.
+    """
+    h11 = pytest.importorskip("h11")
+
+    hostile = [
+        "Let’s Radio",  # the reported outage
+        "🎵 Radio Mamma",  # fold leaves a leading space
+        "Radio Mamma 🎵",  # fold leaves a trailing space
+        "sole — mare … 🎵",
+        "Radio Città",  # NFC accents, must survive as latin-1 bytes
+        "Città",  # NFD accents
+        "Łódź Radio",  # letters with no decomposition
+        "Radio\r\nX-Evil: 1",  # header injection
+        "    ",  # exotic whitespace only
+        "广播 电台",
+        "🎵🎶",
+        "",
+    ]
+    for raw in hostile:
+        value = _header_safe(raw) or "Mamma Mi Radio"
+        h11.Response(
+            status_code=200,
+            headers=[("icy-name", value.encode("latin-1"))],
+            reason=b"OK",
+        )
+
+
+def test_header_safe_survives_non_string_config_values():
+    """`radio.toml` is not type-coerced, so a stray int must not reach a header.
+
+    `StationSection` is built straight from parsed TOML, so `theme = 42` lands
+    here as an int and used to raise before any audio was sent.
+    """
+    assert _header_safe(42) == "42"
+    assert _header_safe(None) == ""
+    assert _header_safe(3.5) == "3.5"
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_when_whitespace_only_name_folds_away():
+    """A name that folds to whitespace must not send a blank label.
+
+    `"广播 电台"` folds to a single space, which is truthy — without the strip the
+    `or DEFAULT_STATION_NAME` fallback silently misses and the listener's player
+    shows an empty station.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "广播 电台"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Mamma Mi Radio"
+
+
+@pytest.mark.asyncio
+async def test_stream_icy_name_has_no_edge_whitespace_after_folding():
+    """Folding an emoji off the front of a name must not leave its space."""
+    app = _make_test_app()
+    app.state.config.identity.station_name = "🎵 Radio Mamma 🎶"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Mamma"
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_decomposed_accents_in_icy_name():
+    """macOS writes `à` decomposed; the combining mark alone is not latin-1.
+
+    Without composing to NFC first the accent is dropped and `Città` airs as
+    `Citta`. Before `_header_safe` existed this input crashed /stream outright,
+    exactly like the curly apostrophe did.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = unicodedata.normalize("NFD", "Radio Città")
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Città"
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_when_station_name_folds_to_nothing():
+    """An all-emoji name must show the station, not an empty label."""
+    app = _make_test_app()
+    app.state.config.identity.station_name = "🎵🎶"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Mamma Mi Radio"
 
 
 @pytest.mark.asyncio
