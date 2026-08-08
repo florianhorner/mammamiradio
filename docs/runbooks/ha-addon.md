@@ -78,6 +78,25 @@ the old rolling-RC model).
 **Soaked is a judgment.** "Ready" is your plain read that the edge line you have been
 running feels healthy, not a stopwatch on one commit.
 
+**Judge it from the listener's side, not the producer's.** Ask the stream whether it
+serves, not the logs whether they are quiet:
+
+```bash
+docker exec "addon_${SLUG}" sh -c \
+  'curl -s -o /dev/null -w "stream=%{http_code} " --max-time 8 http://127.0.0.1:8000/stream;
+   curl -s -o /dev/null -w "healthz=%{http_code} readyz=" --max-time 6 http://127.0.0.1:8000/healthz;
+   curl -s -o /dev/null -w "%{http_code}\n" --max-time 6 http://127.0.0.1:8000/readyz'
+```
+
+`/stream` must be `200`. A soak judged only on producer-side symptoms — dead air,
+silence, rescue counts, queue depth — can read perfectly clean while every listener
+receives a 500, because the producer is working and the failure is at the response
+boundary. That is not hypothetical: a smart apostrophe in the station name made
+`/stream` raise on header encoding while `/healthz` stayed `200`, the admin panel
+worked, and the watchdog was satisfied. Nothing in the log grep would have shown it.
+Prolonged-silence detection cannot catch this either, because listeners fail before
+they are ever counted as listeners.
+
 **The cut — 4 steps, when the edge line feels good:**
 
 1. **Land one `chore(release): cut X.Y.Z` PR** via `/ship`:
@@ -117,7 +136,22 @@ running feels healthy, not a stopwatch on one commit.
    `advertised-version.yml` will file a drift issue if it is still open at 09:15 UTC.
    That alarm is correct, not a false positive.
 
-3. **Tag the cut commit and let CI promote:**
+3. **Confirm both arch `:sha` images exist, THEN tag.** Pre-flight checks this too, but
+   pre-flight runs *inside* the open window: a missing image there costs a revert, while
+   the same check thirty seconds earlier costs a wait.
+   ```bash
+   SHORT="$(git rev-parse --short=7 "$CUT_SHA")"
+   for arch in aarch64 amd64; do
+     TOKEN="$(curl -sSL "https://ghcr.io/token?scope=repository:florianhorner/mammamiradio-addon-$arch:pull&service=ghcr.io" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
+     echo -n "$arch: "
+     curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+       -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+       "https://ghcr.io/v2/florianhorner/mammamiradio-addon-$arch/manifests/$SHORT"
+   done
+   ```
+   Both must print `200`. The anonymous token endpoint needs no credentials.
+
+   **Tag the cut commit and let CI promote:**
    ```bash
    git tag vX.Y.Z "$CUT_SHA" && git push origin vX.Y.Z
    ```
