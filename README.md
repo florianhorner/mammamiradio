@@ -5,25 +5,31 @@
 # Mamma Mi Radio
 
 Italian radio for Home Assistant, with no AI key required. A fresh station
-opens on one real speaker with an authored 27-second mini-show: station music
-and a privacy-aware Marco/Giulia opening, followed by the live stream. Add more
-music, Home context, and generated host conversations only when you want them.
+opens with an authored 27-second mini-show ready to send to one real speaker:
+an original music bed and a privacy-aware Marco/Giulia opening, followed by a
+source-aware handoff to the live stream. Add more music, Home context, and
+generated host conversations only when you want them.
 
 ## First listen: one real speaker
 
 **Hear it before you choose what the hosts may use.** Install and start the Home
-Assistant OS app below, then install the [HACS
+Assistant OS app below. If HACS is not already installed, follow its [official
+installation guide](https://www.hacs.xyz/docs/use/download/download/). Then
+install the [HACS
 integration](docs/integrations/ha-integration.md#install-the-hacs-integration-for-speaker-playback)
 and restart Home Assistant once. Open the app's Web UI and follow the
 [first-listen speaker path](docs/integrations/ha-integration.md#play-it-on-one-speaker)
 in **First Listen**. A fresh unfinished install opens there automatically;
-afterward the same tab remains available for replay and repair:
+completed installs return to the control room, while the same tab remains
+available to review progress or repair an unfinished step:
 
-1. The opening card explains the authored 27-second mini-show: station music,
-   Marco and Giulia's privacy-aware welcome, then the live stream. It needs no
-   AI key and reads no Home context. Source readiness for live charts, Jamendo,
-   local music, and recovery cover sits underneath as supporting detail about
-   what can follow the opening.
+1. The opening card explains the authored 27-second mini-show: an original
+   music bed, Marco and Giulia's privacy-aware welcome, then a handoff to the
+   live stream. It needs no AI key and reads no Home context. Source readiness
+   for live charts, Jamendo, local music, bundled demo music, and recovery cover
+   sits underneath as supporting detail. It says whether primary music,
+   recovery cover, or a music repair is what follows; bundled demo music is not
+   presented as a song library.
 2. Select **Find my speakers**, choose one physical Home Assistant speaker,
    then select **Start Mamma Mi Radio**. The request always uses
    `media-source://mammamiradio/live`; browser playback is not counted.
@@ -50,10 +56,10 @@ Or by hand: **Settings → Apps → App store → ⋮ → Repositories**, paste 
 
 No AI key is required for your first listen: without one, the hosts use stock
 copy and fallback voices. The packaged 27-second First Listen mini-show makes
-the station music, identity, and Marco/Giulia opening audible immediately, but
-it is not a song library. A reachable music source is still required for a
-normal rotation. If music is not ready yet, packaged recovery audio can keep
-proving the speaker transport without
+the original music bed, station identity, and Marco/Giulia opening audible
+immediately, but it is not a song library.
+A reachable music source is still required for a normal rotation. If music is
+not ready yet, packaged recovery audio can keep proving the speaker transport without
 pretending that the source is healthy. The app
 tries live charts by default, which need outbound network access; for a
 predictable Home Assistant alternative, configure a Jamendo client ID in the
@@ -77,6 +83,11 @@ reads/interrupts, and Home-derived host work.
 `Producer started` in the app log and `"ready": true` from `/readyz` show that
 the app is healthy. They are operator checks, not the first-listen proof: for
 that, hear **Mamma Mi Radio Live** on the selected speaker.
+
+For branch development or repeatable manual QA, use the [disposable local Home
+Assistant lab](docs/runbooks/first-listen-local-ha.md). It preserves the local
+HA/VLC speaker setup between radio-only resets and keeps branch code and test
+state away from the live home.
 
 ### Docker alternative
 

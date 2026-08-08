@@ -29,10 +29,13 @@ Every step must succeed. A break at ANY point means the addon doesn't work.
 
 After installing the HACS integration and restarting Home Assistant once, open
 the add-on Web UI. A fresh unfinished install opens **First Listen** with an
-authored 27-second mini-show on deck: station music and a privacy-aware
-Marco/Giulia opening, then the live stream. It needs no AI key or Home context.
-Source readiness is supporting detail under that opening; verify that charts,
-Jamendo, local music, and recovery cover are described honestly.
+authored 27-second mini-show on deck: an original music bed and a privacy-aware
+Marco/Giulia opening, then a source-aware handoff to the live stream. It needs
+no AI key or Home context. Source readiness is supporting detail under that
+opening; verify that charts, Jamendo, local music, bundled demo music, and
+recovery cover are described honestly. The listening cue must distinguish a
+primary rotation, recovery cover, and music that still needs repair; bundled
+demo music must not be presented as a promised song library.
 
 Select **Find my speakers**, choose one physical `media_player`, then select
 **Start Mamma Mi Radio**. The dispatch contract is always
@@ -43,11 +46,15 @@ steps](../integrations/ha-integration.md#first-listen-repair).
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, First Listen shows a fresh filtered preview before offering
-**Keep private and continue** or **Let future hosts use this**. If only generic
-daylight is available, verify that it is disclosed as ambient-only and not
-meaningful personalization, with the private path recommended. AI-host setup
-comes later.
+audible verification, First Listen offers **Keep private and continue** without
+reading Home state, or a fresh filtered preview before **Let future hosts use
+this**. If only generic daylight is available, verify that it is disclosed as
+ambient-only and not meaningful personalization, with the private path
+recommended. AI-host setup comes later.
+
+If saving the privacy-review receipt fails, verify that the live choice remains
+truthful and AI setup stays locked: the private path retries without a preview;
+the enabled path requires a fresh preview before saving the review again.
 
 **Important:** The version-bump merge and the tag push are separate actions. The tag push promotes the already-built `:sha` images to stable tags. Wait for `addon-build.yml` to pass on the version-bump commit before pushing the tag — `addon-release.yml` fails before publishing if either per-arch `:sha` image is missing.
 
@@ -178,6 +185,12 @@ them into `secrets.env` — every later boot is file-first. The stored copies re
 replaces stored settings with only the current fields). `JAMENDO_CLIENT_ID` and `ADMIN_TOKEN`
 remain Supervisor options. `/config/secrets.env` is plaintext in the add-on config storage, not
 Home Assistant `/config/secrets.yaml`; anyone with host/add-on config access can read it.
+
+Setup treats AI-host and premium-voice readiness separately. Anthropic or
+OpenAI completes the AI-host step; OpenAI can also supply voices. Azure Speech
+and ElevenLabs are voice-only and do not unlock generated host writing. Azure
+is ready only with both its key and region; a partial pair is shown as
+incomplete.
 
 `secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,
 whitespace around keys or values, single or double quoted values, values containing `=`, UTF-8 BOM,

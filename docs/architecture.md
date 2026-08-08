@@ -30,8 +30,12 @@ Charts / Jamendo / classic eras / local files / demo tracks
           asyncio.Queue[Segment]
                 |
                 v
-   streamer.py playback loop -> LiveStreamHub -> /stream and /listen
+   streamer.py playback loop -> LiveStreamHub
                 |                    |
+                |                    +-> completed/pre-feature /stream clients
+                |                    +-> fresh + unheard /stream clients,
+                |                        after their packaged mini-show finishes
+                |
                 |                    +-> aggregate active count
                 |                              |
                 |                              v
@@ -64,6 +68,42 @@ Charts / Jamendo / classic eras / local files / demo tracks
    - `run_producer()` to fill the lookahead queue
    - `run_playback_loop()` to stream queued audio
 10. Logs a one-line boot summary with resolved config dir, audio source, API key presence, HA status, and track count.
+
+### First Listen state and source truth
+
+First Listen keeps setup progress separate from runtime authorization and from
+the shared audio queue:
+
+- `core/first_listen.py` stores policy-free facts in
+  `cache/state/first_listen_receipt_v1.json`: the selected speaker, one opaque
+  Home Assistant-accepted attempt, the human audible confirmation bound to that
+  attempt, and completion of the privacy review. The privacy choice itself is
+  stored by the normal configuration path, never in this receipt.
+- Speaker acceptance is compare-and-swap state. Verification must present the
+  current attempt id; a newer playback supersedes older proof. If acceptance
+  reached Home Assistant but the receipt write failed, the app keeps only a
+  process-local recovery handle so **Save this listening check** can retry the
+  same fact without replaying audio.
+- Feature-era install origin uses two agreeing witnesses: the owner-only
+  `cache/state/first_listen_install_origin_v1.json` sidecar and the private
+  `_mammamiradio_first_listen_install_origin_v1` SQLite table. Missing, corrupt,
+  or disagreeing evidence projects to `unknown`; only a proven pre-feature
+  install bypasses the speaker/privacy onboarding.
+- Origin migration and receipt loading run as background tasks after the
+  producer and playback tasks are scheduled. Filesystem work runs off the event
+  loop, and a failure leaves setup incomplete/narrow without delaying audio.
+- `core/first_listen_show.py` selects the reviewed packaged mini-show only for a
+  fresh install without audible proof. The `/stream` generator sends it directly
+  to that client before joining `LiveStreamHub`; it never becomes a `Segment` or
+  changes shared now-playing state.
+
+`StationState.source_readiness` is event evidence, not a filesystem scan on each
+status request. The `golden_path.source_readiness` object from `/status` and the
+`guided_setup.source_readiness` object from `/api/setup/status` project five
+human-facing rows (charts, Jamendo, local, bundled demo music, recovery) with these exact states:
+`on_air`, `playable`, `candidates_only`, `configured_unchecked`, `unavailable`,
+`not_configured`, `not_bundled`, and `cover_only`. Recovery on air proves the
+transport is audible; it never makes `programming_ready` true by itself.
 
 ### Restart handoff spool
 
@@ -765,6 +805,8 @@ Write routes that consume request details use `mammamiradio.web.json_body.read_j
 Empty, malformed, or top-level non-object bodies return `422` with
 `{"ok": false, "error": "<human message>"}` before endpoint-specific validation runs.
 Admin auth dependencies still run before body parsing on protected routes.
+`Admin (active setup)` uses that admin boundary plus the stricter local/private
+Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protection).
 
 | Route | Method | Access | Description |
 | --- | --- | --- | --- |
@@ -775,17 +817,23 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
-| `/stream` | GET | Public | Infinite MP3 stream |
+| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub |
 | `/healthz` | GET | Public | Liveness probe with process uptime |
 | `/readyz` | GET | Public | Readiness probe with queue depth and startup status |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `rescue_rotation` cached-music cooldown telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
-| `/api/setup/status` | GET | Admin | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and a render-ready `guided_setup.strip` payload |
-| `/api/setup/recheck` | POST | Admin | Re-run setup probes |
-| `/api/setup/provider-check` | POST | Admin | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
+| `/api/setup/status` | GET | Admin (active setup) | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and `first_listen`, `source_readiness`, `speaker`, `verification`, and `privacy` projections |
+| `/api/setup/recheck` | POST | Admin (active setup) | Re-run setup probes |
+| `/api/setup/first-listen/players` | POST | Admin (active setup) | Discover compatible-looking Home Assistant `media_player` targets without starting playback |
+| `/api/setup/first-listen/play` | POST | Admin (active setup) | Ask one selected player to start `media-source://mammamiradio/live` and record the accepted attempt |
+| `/api/setup/first-listen/receipt/retry` | POST | Admin (active setup) | Persist the server-owned accepted attempt after a receipt failure; never sends another playback request |
+| `/api/setup/first-listen/verify` | POST | Admin (active setup) | Record the operator's heard/not-yet result for the current accepted attempt |
+| `/api/setup/home-context-preview` | POST | Admin (active setup) | Fetch a fresh detached, filtered Home context preview without publishing it into host scripts |
+| `/api/setup/home-context-choice` | PATCH | Admin (active setup) | Apply the explicit Home-context choice and record completion of the privacy review; enabling requires a fresh preview |
+| `/api/setup/provider-check` | POST | Admin (active setup) | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
 | `/api/setup/addon-snippet` | GET | Admin | Copy-friendly Home Assistant add-on config snippet |
 | `/api/homeassistant/context-candidates` | GET | Admin | Sanitized Home Assistant context preview for onboarding; includes additive `entities` rows while preserving legacy arrays, and is never exposed on `/public-status` |
-| `/api/homeassistant/entity-policy` | PATCH | Admin | Apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response includes effective consent, policy revision, and the count of matching queued host breaks removed by a mute or a personal-moment consent revocation |
+| `/api/homeassistant/entity-policy` | PATCH | Admin (active setup) | Apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response includes effective consent, policy revision, and the count of matching queued host breaks removed by a mute or a personal-moment consent revocation |
 | `/api/shuffle` | POST | Admin | Shuffle playlist |
 | `/api/skip` | POST | Admin | Skip current segment |
 | `/api/track/ban-now-playing` | POST | Admin | Ban the airing song by identity and skip it (the one interrupting ban path) |
@@ -803,7 +851,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/hosts/{host_name}/personality/reset` | POST | Admin | Reset host personality to defaults |
 | `/api/pacing` | GET | Admin | Current pacing configuration |
 | `/api/pacing` | PATCH | Admin | Patch pacing fields (songs between banter, ad spots per break, etc.); malformed bodies return 422, values are clamped to safe floors/ceilings |
-| `/api/setup/save-keys` | POST | Admin | Save API keys via dashboard |
+| `/api/setup/save-keys` | POST | Admin (active setup) | Save API keys via dashboard |
 | `/api/capabilities` | GET | Admin | Capability flags, tier, next-step hint, connect status, and provider degradation telemetry |
 | `/api/chaos` | GET | Admin | Return `{"enabled": bool}` for Chaos Mode |
 | `/api/chaos` | POST | Admin | Toggle Chaos Mode with `{"enabled": bool}`; persists `chaos_mode_active` to `.env` or HA add-on options |
@@ -912,7 +960,9 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/core/config.py` | `radio.toml` and `.env` loading plus validation |
 | `mammamiradio/core/models.py` | shared dataclasses for tracks, segments, ads, and station state |
 | `mammamiradio/core/capabilities.py` | Capability flags, tier derivation, and next-step hints |
-| `mammamiradio/core/setup_status.py` | First-run setup status classification (legacy; retained for `/api/setup/status` compat) |
+| `mammamiradio/core/setup_status.py` | Canonical guided setup projection, including First Listen source, speaker, verification, and privacy stages |
+| `mammamiradio/core/first_listen.py` | Durable policy-free First Listen receipt and feature-era install-origin witnesses |
+| `mammamiradio/core/first_listen_show.py` | Packaged client-local mini-show eligibility and chunk iteration |
 | `mammamiradio/core/sync.py` | SQLite database initialization and schema migration |
 | `mammamiradio/playlist/playlist.py` | Charts, local, and demo playlist loading |
 | `mammamiradio/playlist/downloader.py` | local-file, yt-dlp, and unavailable-source music handling |
@@ -939,7 +989,10 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/audio/tts.py` | TTS synthesis (Edge, OpenAI, Azure Speech, ElevenLabs) |
 | `mammamiradio/audio/voice_catalog.py` | Edge, OpenAI, and curated Azure voice ID catalogs |
 | `scripts/audition_tts_voices.py` | Local audition clips and manifest generation for configured/catalog TTS voices |
+| `scripts/first-listen-lab.sh` | Isolated local Home Assistant + VLC speaker lab lifecycle and radio-only reset commands |
 | `mammamiradio/home/ha_context.py` | Home Assistant polling, heuristic mood classification, optional LLM scene-namer, reactive triggers |
+| `mammamiradio/home/ha_playback.py` | Home Assistant WebSocket speaker discovery and fixed Media Source playback dispatch |
+| `mammamiradio/home/context_value.py` | Privacy-safe classification of a detached preview as useful, ambient-only, or empty |
 | `mammamiradio/home/catalog.py` | Generated device-label catalog: curated overrides, Anthropic-backed generation, four-tier resolver |
 | `mammamiradio/home/ha_enrichment.py` | Pure HA event derivation: state diffing, event pruning, numeric passthrough |
 | `mammamiradio/web/streamer.py` | HTTP routes, playback loop, clip endpoints, listener fanout (TODO: split — see cathedral plan PR 5) |

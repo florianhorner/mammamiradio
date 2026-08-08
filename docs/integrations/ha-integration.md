@@ -50,6 +50,10 @@ integration domain, entity ID, and media-source ID stay stable:
 
 ## Install the HACS integration for speaker playback
 
+If HACS itself is not installed and configured yet, complete the [official HACS
+installation](https://www.hacs.xyz/docs/use/download/download/) first. Then add
+Mamma Mi Radio as a custom Integration repository:
+
 1. HACS → three-dot menu → **Custom repositories**.
 2. Add `https://github.com/florianhorner/mammamiradio`, category **Integration**.
 3. Install **Mamma Mi Radio**, then restart Home Assistant before adding or
@@ -94,11 +98,12 @@ The media-player ownership choice above does not change this route.
    **First Listen** automatically; completed or existing installs can select
    the same tab explicitly.
 2. The opening card puts a reviewed 27-second Mamma Mi Radio mini-show on deck:
-   station music plus a privacy-aware Marco/Giulia welcome, then the live
-   stream. It uses neither an AI key nor Home context. Source readiness for
-   live charts, Jamendo, local music, and recovery cover sits underneath as
-   supporting detail about what takes over after the opening; it never blocks
-   the speaker controls.
+   an original music bed plus a privacy-aware Marco/Giulia welcome, then a
+   handoff to the live stream. It uses neither an AI key nor Home context.
+   Source readiness for live charts, Jamendo, local music, bundled demo music,
+   and recovery cover says whether primary music, recovery cover, or a music
+   repair follows the opening; it never blocks the speaker controls. Bundled
+   demo music is reported as unavailable when this build has no song library.
 3. Select **Find my speakers**, choose one physical speaker — not
    `media_player.mammamiradio` — then select **Start Mamma Mi Radio**. The fixed
    source is `media-source://mammamiradio/live`.
@@ -138,6 +143,12 @@ send another playback request. A refresh in the same app process restores that
 recovery choice. If the app restarted and the unsaved proof is gone, First
 Listen says so and asks you to explicitly start the selected speaker once more.
 
+If the privacy choice takes effect but its setup review is not saved, the live
+choice remains in force. For the private choice, select **Save private review
+again**; this does not fetch Home state. For an enabled choice, make the required
+fresh filtered preview, then select **Save review again**. Optional AI setup
+stays locked until that local review receipt is saved.
+
 If Home Assistant accepted playback but the room is quiet:
 
 1. Give the speaker a few seconds, then check its mute and volume in Home
@@ -152,8 +163,9 @@ If Home Assistant accepted playback but the room is quiet:
    the required Home Assistant restart, recheck the HACS install and add-on
    connection.
 
-Then return to **First Listen**, select **Find my speakers**, and retry. For
-wider add-on connectivity problems, follow the [Home Assistant app recovery
+Then return to **First Listen** and use **Retry on same speaker**, or select
+**Choose another speaker** before starting again. For wider add-on connectivity
+problems, follow the [Home Assistant app recovery
 steps](../troubleshooting.md#home-assistant-app).
 
 > Migration note: if you have automations that read the old pushed

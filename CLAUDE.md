@@ -174,7 +174,7 @@ private durable system for strategy or relationship context.
 - **Restart handoff spool.** `mammamiradio/restart_handoff.py` shortens the post-update cold open: after each music segment queues, the producer best-effort copies it (hash-addressed, content-verified) into `cache/restart_handoff/segments/` and atomically publishes a `manifest.json` capping at 3 entries (6h max age). On the next boot, `main.py::_admit_restart_handoff` validates and enqueues whatever passes (existence, size, SHA-256, age, operator blocklist) before the producer/playback tasks start — so the first listener after an add-on update can reach an already-normalized track instead of an empty queue. A missing/stale/corrupt manifest is a silent no-op; the existing norm-cache/demo-asset rescue ladder in `docs/operations.md` is unchanged underneath it. Scratch files from an interrupted write (a hard kill between `mkstemp` and `os.replace`) are swept by `prune_stale_handoff_tmp_files` at the next startup (see the Runtime behavior bullet above) — never by this write path itself.
 - **Release beat campaign.** `mammamiradio/release_campaign.py` turns an optional packaged `mammamiradio/assets/release/release_beat.toml` manifest (absent/disabled by default — complete no-op) into a bounded, listener-safe on-air cold-open campaign after an update. `scripts/validate-release-beat.py` gates the manifest's schema and listener-safe copy in CI (`scripts/check-release-invariants.sh`) and against the release target in `scripts/pre-release-check.sh` / `scripts/cut-edge-release.sh`. `ReleaseCampaign` offers the scriptwriter a prompt block on the first eligible banter break; delivery counts only once a segment actually airs to a real listener (`_emit_release_campaign_result` in `web/streamer.py`, independent of whether Show Memory/the provenance ledger is enabled), and the campaign self-retires on `max_airings` (default 5) or `campaign_window_seconds` (default 72h). State persists to `cache/release_campaign_ledger.json`.
 - **Capability flags** (`llm`, `ha`, `home_context_ready`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. Connected Home requires an AI host key plus a prompt-safe Home Assistant context slice, not just a saved HA token. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
-- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/assets/demo/music/`). The playback loop rescues from packaged recovery clips, then the norm cache, then bundled demo assets, then forced banter — silence is never the terminal state. No wizard, no gates.
+- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/assets/demo/music/`). The playback loop rescues from packaged recovery clips, then the norm cache, then bundled demo assets, then forced banter — silence is never the terminal state. Audio startup remains ungated; a fresh admin visit opens First Listen, and Home-context widening waits for an accepted speaker attempt, human audible confirmation, and an explicit privacy choice.
 - If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/assets/demo/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
 - Music comes from live Italian charts (via yt-dlp), local `music/` files, or bundled demo assets under `mammamiradio/assets/demo/music/`. Queue starvation triggers packaged recovery clips, norm-cache rescue, demo-asset rescue, then forced banter — silence is never the terminal fallback.
 - Packaged recovery clips under `mammamiradio/assets/demo/` are non-ephemeral durable assets, and natural optional speech yields to music when real queued audio is below the producer runway floor while queue capacity remains.
@@ -202,11 +202,11 @@ The folder hierarchy IS the mental model (leadership principle #4). For a single
 ```text
 mammamiradio/
   main.py                   FastAPI app startup/shutdown lifecycle (kept at top — public entry)
-  core/                     config, models, capabilities, setup_status, sync (SQLite schema)
+  core/                     config, models, capabilities, guided setup, First Listen receipts/show, sync (SQLite schema)
   audio/                    normalizer (FFmpeg), audio_quality gate, tts, voice_catalog
   playlist/                 playlist source selection, downloader, song_cues, track_rationale, track_rules
   hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
-  home/                     ha_context (HA polling, mood ladder + optional scene namer), ha_enrichment (event diff/prune), catalog (generated device-label resolver)
+  home/                     HA context, preview-value classification, speaker discovery/playback, event enrichment, generated labels
   scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
   web/                      streamer (TODO: split — routes/playback loop), auth (admin auth + CSRF), pages (ingress rewrite), listener_requests, og_card, templates/, static/
   assets/                   demo/ MP3s + SFX, logo.svg
@@ -217,7 +217,10 @@ start.sh                    dev entrypoint with uvicorn and reload
 tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~3,500 LOC) and `hosts/scriptwriter.py` (~2,000 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/archive/2026-04-28-cathedral-restructure.md`).
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` and
+`hosts/scriptwriter.py`. They have postal addresses now; the actual splits land
+in PRs 5 and 6 of the cathedral plan
+(`docs/archive/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 

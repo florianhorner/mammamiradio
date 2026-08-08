@@ -34,14 +34,16 @@ does not count as First Listen proof.
 Click **Open Web UI** or use the ingress sidebar entry. A fresh unfinished
 install opens directly on **First Listen** before the control room. Follow its
 vertical path; completed and existing installs keep their normal control-room
-landing, and the First Listen tab remains available for replay and repair:
+landing, and the First Listen tab remains available to review progress or
+repair an unfinished step:
 
-1. The opening card leads with a 27-second authored mini-show: station music,
-   a privacy-aware Marco/Giulia welcome, then the live stream. No AI key or Home
-   context is used. Source truth for live charts, Jamendo, local music, bundled
-   demo audio, and recovery cover sits underneath as supporting detail about
-   what can take over after the opening. Recovery audio can keep the stream
-   audible, but it is not a music rotation.
+1. The opening card leads with a 27-second authored mini-show: an original music
+   bed, a privacy-aware Marco/Giulia welcome, then a handoff to the live stream.
+   No AI key or Home context is used. Source truth for live charts, Jamendo,
+   local music, bundled demo music, and recovery cover says whether primary
+   music, recovery cover, or a music repair follows the opening. Recovery audio
+   can keep the stream audible, but it is not a music rotation; bundled demo
+   music is not a promised song library.
 2. Select **Find my speakers**, choose one real Home Assistant speaker, then
    select **Start Mamma Mi Radio**. The app asks Home Assistant to play
    `media-source://mammamiradio/live`; it does not count browser playback.
@@ -64,10 +66,22 @@ ambient-only and not meaningful personalization; keeping it private is the
 recommended path. For a useful preview, inspect the filtered entities and mute
 any entity locally if needed. Enabling requires that fresh preview.
 
+If that live privacy choice applies but the setup review cannot be saved, the
+choice is not rolled back. The private path offers **Save private review again**
+without reading Home state. An enabled choice remains active but requires a
+fresh filtered preview before **Save review again**. AI-host setup remains
+locked until the review receipt is saved.
+
 Use **AI hosts — optional** afterward to save either `ANTHROPIC_API_KEY` or
 `OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
 admin writes the key to `/config/secrets.env`, applies it live, and checks the
 provider without interrupting audio. First audio never needs it.
+
+AI-host and premium-voice readiness are separate. Anthropic or OpenAI completes
+the AI-host step; OpenAI also provides a premium voice path. Azure Speech and
+ElevenLabs are voice-only and leave AI hosts optional. Azure is ready only when
+both its key and region are present; one without the other is reported as
+incomplete rather than ready.
 
 When Home context is enabled, casual host breaks use at most one safe rotating
 cue, while room-presence is a separate default-off **personal on-air moment**
