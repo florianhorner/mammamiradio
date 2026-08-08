@@ -716,6 +716,16 @@ Two features create the illusion of a live radio studio:
 
 `POST /api/clip` can publish only one complete bundled starter track whose path, hash, identity, and attribution still match the canonical manifest. The playback loop records that snapshot only after a clean full-track send; the endpoint revalidates the package file before copying it into `{cache_dir}/clips/`. Jamendo, local, mixed, partial, unknown, ad, and banter windows fail closed with `403 music_share_unavailable`; none of their bytes can enter the public clip store. Eligible clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back when no eligible starter window exists) and a 50-clip disk cap prevent abuse. The listener maps the structured failure code to actionable copy.
 
+The Moment Picker is a **listener-private browser protocol**, not a third-party capture API. The egress loop owns a byte-capped raw-MP3 ledger and immutable segment marks; producers stamp `clip_audio_class` as `speech`, `station_bed`, `commercial_music`, or fail-closed `unknown`. A capture worker indexes complete MPEG-1 Layer III frames (including VBR), writes only a cap-clean temporary source, and freezes the available named choices. No browser cut points, byte offsets, or metadata are accepted.
+
+| Route | Purpose | Success | Failure boundary |
+| --- | --- | --- | --- |
+| `POST /api/clip/capture` | Create a temporary audition source | `201` with `capture_id`, application-relative `audio_path`, chapters, and frozen choices | `no_audio` / `format_unavailable` (409), rate/capacity/write outcomes with a structured reason |
+| `GET /captures/{id}.mp3` | Native-audio audition source | `audio/mpeg`, `Cache-Control: no-store` | Expired/claimed captures are not replayable; active readers hold a lease |
+| `POST /api/clip/commit` | Persist one already-frozen `choice_id` | `201` final clip; same-choice retry is `200 idempotent:true` | Raw ranges, alternate choices after claim, and expired captures are refused |
+
+Temporary captures live for ten minutes, have a 20-record in-memory capacity, use `.part` plus atomic rename, and are excluded from the service worker cache. Spoken/station-bed context is bounded to 120 seconds; commercial or unknown material is capped at 60 seconds and has only the generic `Il momento` option. The listener prefixes `audio_path` with its ingress base, auditions after metadata/seek confirmation, and unlocks sharing after 0.5 seconds of selected-range playback.
+
 ### Optional standalone chart refresh
 
 When a standalone operator has deliberately enabled `external-media` and selected
@@ -1198,6 +1208,9 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 | `/api/clip` | POST | Public | Capture eligible material; music requires a complete bundled-starter-only window, otherwise `403 music_share_unavailable` |
+| `/api/clip/capture` | POST | Listener-private | Freeze a temporary, frame-aligned Moment Picker audition |
+| `/api/clip/commit` | POST | Listener-private | Commit one frozen audition choice to a normal share link |
+| `/captures/{id}.mp3` | GET | Listener-private | Serve a no-store temporary audition asset |
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |

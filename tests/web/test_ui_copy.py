@@ -181,7 +181,14 @@ def test_no_tech_lingo_reaches_the_listener():
         for key, value in COPY[lang].items():
             low = value.lower()
             for term in banned:
-                assert term not in low, f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
+                # ``Annulla`` is the ordinary Italian cancel label required by
+                # the listener dialog; it happens to contain the letters
+                # "null" without exposing the programming value. Keep the
+                # guard for the standalone machine word instead.
+                if term == "null":
+                    assert not re.search(r"\bnull\b", low), f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
+                else:
+                    assert term not in low, f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
 
 
 def test_admin_toasts_have_no_raw_error_dead_ends():

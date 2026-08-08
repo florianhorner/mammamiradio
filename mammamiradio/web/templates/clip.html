@@ -169,6 +169,7 @@
       <p class="track-title">{{ track_title }}</p>
       {% if track_artist %}<p class="track-artist">{{ track_artist }}</p>{% endif %}
     {% endif %}
+    {% if clip_label %}<p class="play-hint">{{ clip_label }}{% if chapter_summary %} · {{ chapter_summary | join(' · ') }}{% endif %}</p>{% endif %}
 
     <audio
       class="clip-audio"
@@ -184,7 +185,7 @@
   {% endif %}
 </main>
 
-<p class="footer-line">{% if expired %}{{ station_name }}{% else %}Questo momento è durato 30 secondi · {{ station_name }}{% endif %}</p>
+<p class="footer-line">{% if expired %}{{ station_name }}{% elif clip_duration_sec > 0 %}Questo momento è durato {{ '%.0f' | format(clip_duration_sec) }} secondi · {{ station_name }}{% else %}{{ station_name }}{% endif %}</p>
 
 </body>
 </html>

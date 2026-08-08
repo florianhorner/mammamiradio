@@ -1139,6 +1139,7 @@ async def test_recovery_sweeper_segment_renders_tts_with_sting(tmp_path):
         "title": "Recovery sweeper",
         "error_recovery": True,
         "rescue": True,
+        "clip_audio_class": "unknown",
     }
     mock_synthesize.assert_awaited_once()
     assert mock_synthesize.call_args.args[:2] == ("Mamma Mi Radio resta in onda.", "marin")

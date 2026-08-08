@@ -1,0 +1,131 @@
+"""Static browser-contract guards for the quiet Moment Picker.
+
+The listener client has no bundled JavaScript unit-test runtime. These guards
+pin the non-negotiable browser boundary: server-owned choices, ingress-safe
+audio URLs, an earned share action, and no accidental editor affordances.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from mammamiradio.web.ui_copy import COPY
+
+ROOT = Path(__file__).resolve().parents[2]
+LISTENER_HTML = ROOT / "mammamiradio" / "web" / "templates" / "listener.html"
+LISTENER_JS = ROOT / "mammamiradio" / "web" / "static" / "listener.js"
+LISTENER_CSS = ROOT / "mammamiradio" / "web" / "static" / "listener.css"
+SERVICE_WORKER = ROOT / "mammamiradio" / "web" / "static" / "sw.js"
+
+
+def _picker_markup() -> str:
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    start = html.index('<dialog class="mmr-moment-picker"')
+    end = html.index("</dialog>", start) + len("</dialog>")
+    return html[start:end]
+
+
+def test_picker_is_a_native_dialog_without_editor_controls() -> None:
+    markup = _picker_markup()
+
+    assert 'id="moment-picker"' in markup
+    assert 'aria-modal="true"' in markup
+    assert 'id="moment-picker-audio" preload="metadata"' in markup
+    assert 'id="moment-picker-context-toggle"' in markup
+    assert 'id="moment-picker-share"' in markup
+    audio_start = markup.index('<audio id="moment-picker-audio"')
+    audio_tag = markup[audio_start : markup.index(">", audio_start)]
+    assert " controls" not in audio_tag, "native audio transport must not expose a scrubber"
+    assert "<input" not in markup, "the picker must not grow waveform/range editor controls"
+
+
+def test_picker_uses_only_server_frozen_capture_fields_and_ingress_audio_path() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+
+    assert "fetch(_base + '/api/clip/capture'" in js
+    assert "fetch(_base + '/api/clip/commit'" in js
+    assert "momentAudio.src = _base + capture.audio_path;" in js
+    assert "JSON.stringify({ capture_id: capture.capture_id, choice_id: choice.choice_id })" in js
+    assert "typeof choice.choice_id === 'string'" in js
+    assert "choice_id: choice.choice_id" in js
+    assert "fetch(_base + '/api/clip', { method: 'POST'" not in js
+
+
+def test_picker_requires_metadata_seek_and_audible_progress_before_share() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    start = js.index("async function _startMomentAudition")
+    end = js.index("function _onMomentTimeUpdate", start)
+    audition = js[start:end]
+
+    assert "_waitForMomentMetadata(token)" in audition
+    assert "_seekMomentAudio(start, token)" in audition
+    assert audition.index("_waitForMomentMetadata(token)") < audition.index("_seekMomentAudio(start, token)")
+    assert audition.index("_seekMomentAudio(start, token)") < audition.index("await momentAudio.play()")
+    assert "'loadedmetadata'" in js
+    assert "'seeked'" in js
+    assert "addEventListener('timeupdate', _onMomentTimeUpdate)" in js
+    assert "current >= start + 0.5" in js
+    assert "momentPicker.heard = true" in js
+    assert "_setMomentShareAvailability(true)" in js
+
+
+def test_native_share_cancellation_returns_to_auditioned_picker_state() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+
+    assert "if (err && err.name === 'AbortError') return 'cancelled';" in js
+    assert "if (shareResult === 'cancelled')" in js
+    assert "momentPicker.commitInFlight = false;" in js
+    assert "moment_share_cancelled" in js
+
+
+def test_picker_closes_on_escape_and_restores_launcher_focus() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+
+    assert "momentDialog.addEventListener('cancel'" in js
+    assert "event.preventDefault();" in js
+    assert "_closeMomentPicker();" in js
+    assert "momentPicker.lastFocus" in js
+    assert "focusTarget && focusTarget.isConnected" in js
+    assert "focusTarget.focus()" in js
+
+
+def test_picker_keeps_quiet_visual_contract_and_mobile_sheet() -> None:
+    css = LISTENER_CSS.read_text(encoding="utf-8")
+
+    assert ".mmr-moment-picker__provenance" in css
+    assert "border-left: 2px solid var(--sun2)" in css
+    assert ".mmr-moment-picker__share" in css and "background: var(--ok)" in css
+    assert ".mmr-moment-picker[open]" in css
+    assert "inset: auto 0 0" in css
+    assert "safe-area-inset-bottom" in css
+
+
+def test_service_worker_never_caches_temporary_capture_audio() -> None:
+    worker = SERVICE_WORKER.read_text(encoding="utf-8")
+
+    assert "radio-itali-v7" in worker
+    capture_bypass = worker.index("path.includes('/captures/')")
+    assert capture_bypass < worker.index("const isFreshAsset")
+    assert capture_bypass < worker.index("Catch-all for any other same-origin GET")
+
+
+def test_moment_picker_copy_is_complete_in_both_listener_languages() -> None:
+    keys = (
+        "moment_title",
+        "moment_listen_title",
+        "moment_listen",
+        "moment_pause",
+        "moment_continue",
+        "moment_listen_again",
+        "moment_change_context",
+        "moment_listen_first",
+        "moment_share",
+        "moment_cancel",
+        "moment_preparing",
+        "moment_share_cancelled",
+        "moment_rate_limited",
+    )
+    for language in ("en", "it"):
+        for key in keys:
+            assert COPY[language].get(key), f"missing {key} in {language}"
+        assert "{s}" in COPY[language]["moment_rate_limited"]

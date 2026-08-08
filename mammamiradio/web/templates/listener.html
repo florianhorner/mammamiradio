@@ -324,6 +324,56 @@
 
 <audio id="radio-audio" preload="none" crossorigin="anonymous"></audio>
 
+<!--
+  Moment Picker — deliberately a confirmation sheet, not an editor. The
+  server freezes every available choice; the browser can only audition one
+  and submit its opaque choice_id. Kept at document end so native <dialog>
+  semantics work consistently above the listener page and HA Ingress shell.
+-->
+<dialog class="mmr-moment-picker" id="moment-picker" aria-modal="true"
+        aria-labelledby="moment-picker-title" aria-describedby="moment-picker-help">
+  <div class="mmr-moment-picker__surface">
+    <div class="mmr-moment-picker__topline">
+      <p class="mmr-moment-picker__eyebrow">{{ copy.get('moment_title', 'Il momento') }}</p>
+      <button class="mmr-moment-picker__close" id="moment-picker-close" type="button"
+              aria-label="{{ copy.get('moment_close_aria', 'Close moment picker') }}">&times;</button>
+    </div>
+    <h2 id="moment-picker-title">{{ copy.get('moment_listen_title', 'Listen to the moment') }}</h2>
+    <p class="mmr-moment-picker__choice" id="moment-picker-choice"></p>
+
+    <button class="mmr-moment-picker__listen" id="moment-picker-listen" type="button" disabled>
+      {{ copy.get('moment_listen', 'Listen to the moment') }}
+    </button>
+    <!-- Native transport only: no controls means no browser-side cutting or scrubbing. -->
+    <audio id="moment-picker-audio" preload="metadata"></audio>
+    <div class="mmr-moment-picker__progress" aria-hidden="true">
+      <span class="mmr-moment-picker__progress-time" id="moment-picker-progress-time">0:00 / 0:00</span>
+      <span class="mmr-moment-picker__progress-track"><span id="moment-picker-progress-fill"></span></span>
+    </div>
+
+    <div class="mmr-moment-picker__provenance" id="moment-picker-provenance"></div>
+    <button class="mmr-moment-picker__context-toggle" id="moment-picker-context-toggle" type="button"
+            aria-expanded="false" aria-controls="moment-picker-choices" disabled>
+      {{ copy.get('moment_change_context', 'Change context') }} <span aria-hidden="true">⌄</span>
+    </button>
+    <div class="mmr-moment-picker__choices" id="moment-picker-choices" hidden></div>
+    <p class="mmr-moment-picker__followup" id="moment-picker-followup" hidden></p>
+
+    <p class="mmr-moment-picker__help" id="moment-picker-help">
+      {{ copy.get('moment_listen_first', 'Listen before sharing') }}
+    </p>
+    <p class="sr-only" id="moment-picker-status" role="status" aria-live="polite" aria-atomic="true"></p>
+
+    <button class="mmr-moment-picker__share" id="moment-picker-share" type="button" disabled
+            aria-describedby="moment-picker-help">
+      {{ copy.get('moment_share', 'Share this moment') }}
+    </button>
+    <button class="mmr-moment-picker__cancel" id="moment-picker-cancel" type="button">
+      {{ copy.get('moment_cancel', 'Cancel') }}
+    </button>
+  </div>
+</dialog>
+
 <script>
   (function () {
     var radioEl = document.getElementById('mmr-radio');

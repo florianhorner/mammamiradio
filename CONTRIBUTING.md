@@ -127,6 +127,13 @@ make check
 Notes:
 
 - `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes.
+- When changing the Moment Picker capture or frame-index path, run its real-MP3 proof explicitly (normal pytest deliberately excludes `requires_ffmpeg`):
+
+```bash
+.venv/bin/pytest -m requires_ffmpeg tests/web/test_clip_capture_precision.py -v
+```
+
+  This creates CBR and VBR fixtures, verifies partial retained-frame edges, and decodes both the temporary audition and final frozen clip. Pi Smoke runs the same command on ARM.
 - Home Assistant add-on changes must also pass the local add-on build check:
 
 ```bash
@@ -338,6 +345,7 @@ After starting the app:
 4. Hit `/public-status` and confirm the upcoming list reflects only real queued segments, or returns `upcoming_mode="building"` while no render-ready segment exists yet.
 5. Use the dashboard controls for skip, shuffle, purge, and playlist reorder.
 6. Restart the app and verify the last selected source restores automatically.
+7. On the listener page, use Share to audition a Moment Picker choice, change context if offered, then share after playback unlocks the final action. Through Home Assistant ingress, confirm the temporary audio still loads under the ingress prefix.
 
 If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
 

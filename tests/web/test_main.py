@@ -2101,23 +2101,26 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
         # Verify clip ring buffer was created
         from mammamiradio.main import app
-        from mammamiradio.web.streamer import CLIP_MAX_SEGMENT_SECONDS, _stream_chunk_size
+        from mammamiradio.web.streamer import CLIP_MAX_SEGMENT_SECONDS
 
         assert hasattr(app.state, "clip_ring_buffer")
-        # Happy-path maxlen is sized for the longest shareable ad/banter segment
-        # (not the 240 fallback), and the lookback slot starts empty.
-        bytes_per_second = 192 * 1000 // 8
-        chunk_size = _stream_chunk_size(bytes_per_second)
-        expected_maxlen = max(240, -(-bytes_per_second * CLIP_MAX_SEGMENT_SECONDS // chunk_size))
-        assert app.state.clip_ring_buffer.maxlen == expected_maxlen
-        assert expected_maxlen > 240
+        # The picker uses a manually-evicted byte ledger rather than a chunk
+        # count: variable egress chunks must not make retained boundaries lie.
+        expected_max_bytes = max(240 * 4096, 192 * 1000 // 8 * CLIP_MAX_SEGMENT_SECONDS)
+        assert app.state.clip_ring_buffer.maxlen is None
+        assert app.state.clip_buffer_max_bytes == expected_max_bytes
+        assert app.state.clip_buffer_bytes == 0
+        assert app.state.clip_buffer_start_byte == 0
+        assert app.state.clip_bytes_total == 0
+        assert app.state.clip_marks == []
+        assert expected_max_bytes > 240 * 4096
         assert app.state.last_shareworthy_clip is None
         assert app.state.station_state.immediate_audio_index == {warm_norm: 180.0}
 
 
 @pytest.mark.asyncio
 async def test_startup_clip_ring_buffer_type_error(tmp_path: Path):
-    """Clip ring buffer init handles TypeError from config.audio.bitrate."""
+    """Clip byte-ledger init handles TypeError from config.audio.bitrate."""
     from mammamiradio.core.models import Track
 
     class _BadBitrate:
@@ -2151,8 +2154,9 @@ async def test_startup_clip_ring_buffer_type_error(tmp_path: Path):
         from mammamiradio.main import app, startup
 
         await startup()
-        # Should have fallen back to maxlen=240
-        assert app.state.clip_ring_buffer.maxlen == 240
+        # Should have fallen back to the legacy 240-chunk memory budget.
+        assert app.state.clip_ring_buffer.maxlen is None
+        assert app.state.clip_buffer_max_bytes == 240 * 4096
 
 
 @pytest.mark.asyncio
@@ -2449,7 +2453,7 @@ async def test_startup_fails_closed_on_playlist_fetch_exception(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
-    """Ring buffer maxlen falls back to 240 when config.audio.bitrate raises ValueError."""
+    """Byte ledger falls back to the 240-chunk budget when bitrate is invalid."""
     from mammamiradio.core.models import Track
 
     class _InvalidBitrate:
@@ -2483,7 +2487,8 @@ async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
 
         await startup()
 
-    assert app.state.clip_ring_buffer.maxlen == 240
+    assert app.state.clip_ring_buffer.maxlen is None
+    assert app.state.clip_buffer_max_bytes == 240 * 4096
 
 
 @pytest.mark.asyncio
@@ -2679,7 +2684,7 @@ async def test_lifespan_calls_startup_and_shutdown(tmp_path):
 
 @pytest.mark.asyncio
 async def test_startup_clip_ring_buffer_invalid_string_bitrate(tmp_path: Path):
-    """Ring buffer maxlen falls back to 240 when config.audio.bitrate is an unparseable string."""
+    """Byte ledger falls back to the 240-chunk budget for an unparseable bitrate."""
     from mammamiradio.core.models import Track
 
     mock_config = MagicMock()
@@ -2710,7 +2715,8 @@ async def test_startup_clip_ring_buffer_invalid_string_bitrate(tmp_path: Path):
 
         await startup()
 
-    assert app.state.clip_ring_buffer.maxlen == 240
+    assert app.state.clip_ring_buffer.maxlen is None
+    assert app.state.clip_buffer_max_bytes == 240 * 4096
 
 
 def test_read_persisted_chaos_mode_no_env_non_addon(monkeypatch):

@@ -7547,7 +7547,7 @@ async def test_sw_js_keeps_css_and_js_network_first():
 
     assert resp.status_code == 200
     text = resp.text
-    assert "radio-itali-v6" in text
+    assert "radio-itali-v7" in text
     assert "const isFreshAsset" in text
     assert "path.endsWith('.css')" in text
     assert "path.endsWith('.js')" in text
