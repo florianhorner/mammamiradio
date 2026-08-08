@@ -565,6 +565,7 @@ async def test_explicit_context_off_ledger_save_is_drained_when_shutdown_cancels
 @pytest.mark.asyncio
 async def test_first_listen_background_failures_preserve_startup_and_privacy_safe_state(tmp_path, caplog):
     from mammamiradio.core.first_listen import FirstListenInstallOriginStatus, FirstListenReceiptLoadStatus
+    from mammamiradio.core.first_listen_show import first_listen_show_required
     from mammamiradio.core.models import Track
 
     config = _privacy_startup_config(tmp_path)
@@ -598,10 +599,59 @@ async def test_first_listen_background_failures_preserve_startup_and_privacy_saf
     assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.UNKNOWN
     assert app.state.first_listen_receipt is None
     assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.UNAVAILABLE
+    assert first_listen_show_required(app.state) is False
     assert hasattr(app.state, "producer_task")
     assert hasattr(app.state, "playback_task")
     assert "First-listen install-origin migration failed" in caplog.text
     assert "First-listen receipt is unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_later_fresh_boot_receipt_load_failure_does_not_replay_prelude(tmp_path):
+    from mammamiradio.core.first_listen import (
+        FirstListenInstallOriginStatus,
+        FirstListenInstallOriginV1,
+        FirstListenReceiptLoadStatus,
+    )
+    from mammamiradio.core.first_listen_show import first_listen_show_required
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(
+            f"{MODULE}.migrate_first_listen_install_origin",
+            new_callable=AsyncMock,
+            return_value=FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH),
+        ),
+        patch(
+            f"{MODULE}.FirstListenReceiptStore.load_result",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("receipt unavailable"),
+        ),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.first_listen_cold_install is False
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
+    assert app.state.first_listen_receipt is None
+    assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.UNAVAILABLE
+    assert first_listen_show_required(app.state) is False
 
 
 @pytest.mark.asyncio

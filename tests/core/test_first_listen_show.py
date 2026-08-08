@@ -78,8 +78,16 @@ def test_later_boot_requires_a_trusted_receipt_load_outcome(load_status, heard, 
     assert first_listen_show_required(state) is expected
 
 
-@pytest.mark.parametrize("load_status", list(FirstListenReceiptLoadStatus))
-def test_cold_install_bypasses_receipt_bootstrap_without_ignoring_completion(load_status) -> None:
+@pytest.mark.parametrize(
+    ("load_status", "expected"),
+    [
+        (FirstListenReceiptLoadStatus.PENDING, True),
+        (FirstListenReceiptLoadStatus.MISSING, True),
+        (FirstListenReceiptLoadStatus.PRESENT, True),
+        (FirstListenReceiptLoadStatus.UNAVAILABLE, False),
+    ],
+)
+def test_cold_install_bypasses_only_trusted_or_pending_receipt_bootstrap(load_status, expected) -> None:
     incomplete = _state(
         FirstListenInstallOriginStatus.UNKNOWN,
         cold=True,
@@ -92,7 +100,7 @@ def test_cold_install_bypasses_receipt_bootstrap_without_ignoring_completion(loa
         load_status=load_status,
     )
 
-    assert first_listen_show_required(incomplete) is True
+    assert first_listen_show_required(incomplete) is expected
     assert first_listen_show_required(completed) is False
 
 

@@ -44,17 +44,21 @@ def first_listen_show_required(app_state: object) -> bool:
     if bool(getattr(receipt, "audio_complete", False)):
         return False
 
-    # A synchronously captured cold-install fact may select the packaged show
-    # before receipt I/O finishes.  Later boots fail closed unless startup has
-    # positively distinguished a missing receipt from an unreadable one.
-    if cold_install:
-        return True
-
     load_status = getattr(
         app_state,
         "first_listen_receipt_load_status",
         FirstListenReceiptLoadStatus.PENDING,
     )
+    if load_status is FirstListenReceiptLoadStatus.UNAVAILABLE:
+        return False
+
+    # A synchronously captured cold-install fact may select the packaged show
+    # before receipt I/O finishes. Once startup knows receipt state is
+    # unreadable, even that hint fails closed so a completed operator is not
+    # surprised by replay after partial local-state loss.
+    if cold_install:
+        return True
+
     if load_status is FirstListenReceiptLoadStatus.MISSING:
         return True
     return load_status is FirstListenReceiptLoadStatus.PRESENT and receipt is not None
