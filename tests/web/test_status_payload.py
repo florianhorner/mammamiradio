@@ -9,6 +9,7 @@ from typing import Literal
 import pytest
 
 from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     Heading,
     PlaylistSource,
     Segment,
@@ -184,6 +185,17 @@ def test_public_segment_metadata_redacts_transition_track_ref():
     payload = status_payload._public_segment_metadata(metadata)
 
     assert payload == {"source": "banter"}
+
+
+def test_public_segment_metadata_redacts_render_bound_playlist_source():
+    metadata = {
+        "source": "youtube",
+        SEGMENT_PLAYLIST_SOURCE_KIND_KEY: "charts",
+    }
+
+    payload = status_payload._public_segment_metadata(metadata)
+
+    assert payload == {"source": "youtube"}
 
 
 def test_ha_details_payload_absent_without_ha_observability():

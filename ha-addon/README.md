@@ -51,7 +51,7 @@ AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder
 ## Usage
 
 1. Start the add-on and open it from the HA sidebar / ingress entry. The mapped `:8000` port is mainly for `/stream`, `/healthz`, and direct diagnostics.
-2. Confirm the log shows `Producer started` and `/readyz` returns `"ready": true`. No provider key is required, but a full music rotation still needs live-chart access, Jamendo, or local music.
+2. Confirm the log shows `Producer started`. `/readyz` remains HTTP `503` with `status: "starting"` until a listener accepts audio, then returns HTTP `200` with `"ready": true`; queued work and elapsed startup time do not prove readiness. No provider key is required, but a full music rotation still needs live-chart access, Jamendo, or local music.
 3. If HACS is not installed, follow its [official installation
    guide](https://www.hacs.xyz/docs/use/download/download/). Then install the
    [Mamma Mi Radio
@@ -60,13 +60,21 @@ AI/TTS credentials live in `/config/secrets.env` inside the add-on config folder
    Assistant once.
 4. A fresh unfinished install opens **First Listen** automatically with an authored 27-second mini-show on deck: an original music bed and a privacy-aware Marco/Giulia opening, then a source-aware handoff to the live stream. It needs no AI key or Home context. Source readiness for charts, Jamendo, local music, bundled demo music, and recovery cover says whether primary music, recovery cover, or a music repair follows. Bundled demo music is not a promised song library.
 5. Select **Find my speakers**, choose one real Home Assistant speaker, then select **Start Mamma Mi Radio**. Confirm **Yes — that’s Mamma Mi Radio** only after the opening reaches the room. Use **Not yet** for repair and same-speaker retry. The tab remains available later, and the media source stays `media-source://mammamiradio/live`.
-6. Select **Keep private and continue** without fetching Home state, or show the fresh filtered preview before selecting **Let future hosts use this**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. Mute any useful entity the hosts should never use; room-presence stays off unless you explicitly allow it as a personal on-air moment.
+6. Select **Keep private and continue** without fetching Home state, or show the fresh filtered preview before selecting **Let future hosts use this**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. Mute any useful entity the hosts should never use; room-presence stays off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** remain separate: turning host context off keeps entity publishing while stopping full-state and timer reads, host-context polling, and Home-derived host work. Filtered context becomes useful to generated host copy after an AI host key is ready.
 7. Set **Station Name** to the name people should see and hear; entity IDs and the media-source URI stay stable.
 8. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from the now-unlocked **AI hosts — optional** step if you want generated hosts. It is never required for first audio.
 
 `/config/secrets.env` is a plaintext file in the add-on config storage, not Home Assistant's `/config/secrets.yaml`. Anyone with host/add-on config access can read it; it exists to keep provider credentials out of Supervisor options and diagnostics.
 
-The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
+Supervisor's stored app options are the durable authority for Super Italian,
+Chaos, Festival, AI Quality, On-Air Sound, and pacing. Changes from the control
+room save there before the running station changes. `/data/options.json` is a
+Supervisor-generated, read-only startup projection; the app reads it when
+starting and never writes it directly. A selection held only in memory by an
+older build cannot be recovered after an update rematerializes an older
+Supervisor value.
+
+The add-on also exposes unauthenticated `/healthz` and `/readyz` probes for monitoring. `/healthz` reports process/runtime health: an intentional Stop normally stays healthy, while prolonged silence with active listeners returns `503`. `/readyz` reports `503 starting` on a fresh or Resumed session until a listener actually accepts audio, `200 ready` after that proof, and `503 stopped` during an intentional Stop; queued work or elapsed startup time alone is not readiness. The richer setup checks live behind the admin UI at `/api/setup/status`, `/api/setup/recheck`, and `/api/setup/addon-snippet`.
 
 ### Playing on speakers
 

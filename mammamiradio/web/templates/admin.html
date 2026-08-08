@@ -262,8 +262,11 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 @keyframes tt-caret-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
 /* ── PACING ── */
-.pace-hint { font-size: 10px; color: rgba(245,237,216,0.35); margin-bottom: 4px; }
-.pace-counter { font-size: 10px; color: rgba(245,237,216,0.4); margin-top: 2px; }
+/* 0.55 alpha, not 0.35/0.4: composited over --surface (#251E19) the old values
+   measured 2.9:1 and 3.4:1, under the 4.5:1 AA floor for 10px text. Lifting the
+   foreground is the only lever here — --surface* must stay at Pi-baseline. */
+.pace-hint { font-size: 10px; color: rgba(245,237,216,0.55); margin-bottom: 4px; }
+.pace-counter { font-size: 10px; color: rgba(245,237,216,0.55); margin-top: 2px; }
 .pace-counter strong { color: var(--sun); font-weight: 600; }
 .pace-row { display: flex; align-items: center; gap: 0; margin-bottom: 6px; }
 .pace-row label { font-size: 12px; color: rgba(245,237,216,0.5); width: 65px; }
@@ -414,14 +417,20 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-key-banner[data-state="incomplete"] .setup-key-banner-label{color:var(--warning);}
 .setup-snippet { display: none; margin-top: 10px; background: rgba(20,17,15,0.35); border: 1px solid rgba(245,237,216,0.1); border-radius: 8px; padding: 10px; }
 .setup-snippet.show { display: block; }
-.setup-strip{display:none;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
+/* position+z-index are load-bearing: .setup-strip is a child of the sticky
+   .mmr-deck, whose ::before paints an opaque var(--bg) rectangle over the
+   whole deck. Its siblings .mmr-console and .mmr-tabbar each escape that
+   overlay with z-index:1; without the same lift this strip renders *under*
+   it — an invisible block that still takes layout height and still hands
+   keyboard focus to its "Add AI key" button. */
+.setup-strip{display:none;position:relative;z-index:1;align-items:center;gap:10px;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(245,237,216,0.12);border-radius:8px;background:rgba(20,17,15,0.28)}
 .setup-strip.show{display:flex}
 .setup-strip-title{font-size:12px;font-weight:800;color:var(--cream);min-width:0;white-space:nowrap}
 .setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
 .setup-strip-chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 8px;border:1px solid rgba(245,237,216,0.14);border-radius:8px;font-size:11px;color:rgba(245,237,216,0.82);background:rgba(245,237,216,0.04)}
 .setup-strip-chip[data-s="ready"]{border-color:rgba(37,99,235,0.35);color:var(--ok-text)}
 .setup-strip-chip[data-s="missing"],.setup-strip-chip[data-s="checking"],.setup-strip-chip[data-s="waiting_ai"],.setup-strip-chip[data-s="empty"],.setup-strip-chip[data-s="stale"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
-.setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"],.setup-strip-chip[data-s="stopped"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
+.setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
 .setup-strip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .setup-strip-action{min-width:44px;min-height:44px;white-space:nowrap}
 .setup-note{font-size:11px;line-height:1.45;color:rgba(245,237,216,0.66);margin-top:6px}
@@ -640,7 +649,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .lr-track { margin-left: 6px; font-style: italic; color: rgba(245,237,216,0.45); }
 
 /* ── MISC ── */
-.empty { font-size: 12px; color: rgba(245,237,216,0.35); text-align: center; padding: 16px 0; font-style: italic; }
+.empty { font-size: 12px; color: rgba(245,237,216,0.55); text-align: center; padding: 16px 0; font-style: italic; }
 .force-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 7px; border-radius: 8px; background: rgba(244,208,72,0.2); color: var(--sun); margin-left: 4px; }
 .live-dot { display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle;animation:live-pulse 2s ease-in-out infinite; }
 @keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
@@ -1350,7 +1359,16 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
      panel (4px on rgb(54,43,37)). Bump height + brighter base color.
      Uses background-color (not background shorthand) to preserve the
      gold linear-gradient fill set by --sun2. */
-  .a-sliders input[type=range] { height: 6px; background-color: rgba(245,237,216,0.14); }
+  /* 44px box, 6px visible track. `appearance:none` on the base rule throws away
+     the UA's intrinsic ~20px hit box, so the element box IS the touch target —
+     a 6px-tall one. The thumb is a pseudo-element and can't grow its host. Pad
+     to 44px and clip the paint back to the content box, so the track looks
+     identical and only the reachable area changes. */
+  .a-sliders input[type=range] {
+    height: 44px; padding: 19px 0;
+    background-color: rgba(245,237,216,0.14);
+    background-clip: content-box;
+  }
 
   /* --- everything below was originally in the early @media block, moved here so the cascade wins against base rules at lines 815/646/etc --- */
 /* Mobile fix: panel header stacks vertically so subtitle doesn't collide with wrapped h2 */
@@ -1714,9 +1732,14 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   border-top: 1px solid var(--line);
 }
 .drawer-subgroup > .ttl-eyebrow { display: block; margin-bottom: 10px; }
+/* #E8A29B, not --lancia2: as a label on the chip's own translucent backing the
+   brand red measured 2.8:1, under AA for text and under 3:1 for the border.
+   This is the lifted red the sibling danger controls already use — .btn-ban
+   above, .btn-chip-danger below, .pl-ban in the rotation list — so the purge
+   button now matches them instead of standing alone. 8.3:1 on that backing. */
 .btn-danger-outline {
-  border-color: var(--lancia2) !important;
-  color: var(--lancia2) !important;
+  border-color: #E8A29B !important;
+  color: #E8A29B !important;
 }
 .btn-danger-outline:hover {
   border-color: var(--lancia2) !important;
@@ -1812,6 +1835,8 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-air-progress .on-air-progress-track{flex:1}
 .mmr-air-controls{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:10px;min-width:0}
 .mmr-air-badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.mmr-status-freshness{max-width:100%;letter-spacing:.04em;text-transform:none;overflow-wrap:anywhere}
+.mmr-status-freshness[hidden]{display:none}
 .mmr-console.is-idle .mmr-air-title{font-size:16px;font-style:normal;color:var(--muted);margin-top:4px}
 .mmr-console.is-idle .mmr-air-artist{display:none}
 .mmr-console.is-idle .mmr-air-progress{display:none}
@@ -1986,6 +2011,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l8-5.5z"/></svg>
             </button>
             <span class="mmr-air-badge label on" id="onAirBadge">In onda</span>
+            <span class="status-dot degraded mmr-status-freshness" id="statusFreshness" role="status" aria-live="polite" aria-atomic="true" hidden>
+              <span class="dot"></span><span id="statusFreshnessText"></span>
+            </span>
             <span class="mmr-air-cost"><span class="lbl">cost</span> <b id="sidebarCost">—</b></span>
           </div>
         </div>
@@ -2084,10 +2112,10 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <span class="programme-runway-detail" id="programmeCount"></span>
           </div>
           <div class="filter-pills">
-            <button type="button" class="filter-pill active" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
-            <button type="button" class="filter-pill" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
-            <button type="button" class="filter-pill" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Hosts</button>
-            <button type="button" class="filter-pill" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
+            <button type="button" class="filter-pill active" aria-pressed="true" data-filter="all" onclick="setProgrammeFilter('all',this)">All</button>
+            <button type="button" class="filter-pill" aria-pressed="false" data-filter="music" onclick="setProgrammeFilter('music',this)">Music</button>
+            <button type="button" class="filter-pill" aria-pressed="false" data-filter="banter" onclick="setProgrammeFilter('banter',this)">Hosts</button>
+            <button type="button" class="filter-pill" aria-pressed="false" data-filter="ad" onclick="setProgrammeFilter('ad',this)">Ads</button>
           </div>
         </div>
       </header>
@@ -2284,16 +2312,16 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
       <div class="archivio-controls">
         <input type="search" class="search-input" id="logSearch" placeholder="Search archive…" autocomplete="off" aria-label="Search archive" oninput="onArchivioFilterChange()">
         <div class="archivio-chiprow" role="group" aria-label="Filter by type">
-          <button type="button" class="filter-pill active" data-logtype="all" onclick="setArchivioType('all',this)">All</button>
-          <button type="button" class="filter-pill" data-logtype="music" onclick="setArchivioType('music',this)">Music</button>
-          <button type="button" class="filter-pill" data-logtype="banter" onclick="setArchivioType('banter',this)">Hosts</button>
-          <button type="button" class="filter-pill" data-logtype="ad" onclick="setArchivioType('ad',this)">Ads</button>
-          <button type="button" class="filter-pill" data-logtype="news_flash" onclick="setArchivioType('news_flash',this)">News</button>
+          <button type="button" class="filter-pill active" aria-pressed="true" data-logtype="all" onclick="setArchivioType('all',this)">All</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="music" onclick="setArchivioType('music',this)">Music</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="banter" onclick="setArchivioType('banter',this)">Hosts</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="ad" onclick="setArchivioType('ad',this)">Ads</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logtype="news_flash" onclick="setArchivioType('news_flash',this)">News</button>
         </div>
         <div class="archivio-chiprow" role="group" aria-label="Filter by time">
-          <button type="button" class="filter-pill" data-logscope="hour" onclick="setArchivioScope('hour',this)">Last hour</button>
-          <button type="button" class="filter-pill" data-logscope="today" onclick="setArchivioScope('today',this)">Today</button>
-          <button type="button" class="filter-pill active" data-logscope="all" onclick="setArchivioScope('all',this)">All available</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logscope="hour" onclick="setArchivioScope('hour',this)">Last hour</button>
+          <button type="button" class="filter-pill" aria-pressed="false" data-logscope="today" onclick="setArchivioScope('today',this)">Today</button>
+          <button type="button" class="filter-pill active" aria-pressed="true" data-logscope="all" onclick="setArchivioScope('all',this)">All available</button>
         </div>
       </div>
       <div class="a-log" id="logBody"></div>
@@ -2354,7 +2382,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
           <div class="card-label">AI Quality</div>
           <div style="margin-bottom:14px">
-            <select id="qualityProfile" onchange="setQuality(this.value)"
+            <select id="qualityProfile" aria-label="AI Quality" onchange="setQuality(this.value)"
                     style="width:100%;padding:8px;background:var(--surface);color:var(--cream);border:1px solid var(--line-strong);border-radius:8px;font:inherit">
               <option value="premium">Premium — best hosts, highest cost</option>
               <option value="balanced" selected>Balanced — great hosts, sensible cost</option>
@@ -2696,6 +2724,13 @@ function toast(m){const e=document.getElementById('toast');e.textContent=m;e.cla
 // never reach the screen (leadership principle #5) — they stay in the logs.
 function wayOut(action){return (action?"Couldn't "+action:"That didn't go through")+" — give it a few seconds and try again.";}
 function offlineMsg(){return "Can't reach the studio right now — check the connection and try again.";}
+function metadataOnlyMutationCopy(response,subject){
+  if(response?.metadata_only!==true)return'';
+  if(response?.resume_required===true){
+    return `${subject} saved. Nothing new will air until you press Start.`;
+  }
+  return `${subject} saved without interrupting the current audio.`;
+}
 // Surface background queue-from-search failures the POST couldn't report (it
 // returned 200 before the download finished). /status carries recent notices;
 // toast any whose ts we haven't shown yet. The first poll only primes the
@@ -2834,6 +2869,24 @@ function nowTypeStatus(type){
 }
 
 async function api(m,p,b,timeoutMs){const o={method:m,headers:H()};if(b)o.body=JSON.stringify(b);let _t=null;if(timeoutMs){const c=new AbortController();o.signal=c.signal;_t=setTimeout(()=>c.abort(),timeoutMs);}try{return(await fetch(_base+p,o)).json()}finally{if(_t)clearTimeout(_t);}}
+async function apiResponse(m,p,b,timeoutMs){
+  const options={method:m,headers:H()};
+  if(b)options.body=JSON.stringify(b);
+  let deadline=null;
+  if(timeoutMs){
+    const controller=new AbortController();
+    options.signal=controller.signal;
+    deadline=setTimeout(()=>controller.abort(),timeoutMs);
+  }
+  try{
+    const response=await fetch(_base+p,options);
+    let payload=null;
+    try{payload=await response.json();}catch(_){}
+    return {response,payload};
+  }finally{
+    if(deadline)clearTimeout(deadline);
+  }
+}
 
 function preferenceToast(score,persisted){
   let msg=score>0?'Marked to play more often':score<0?'Marked to play less often':'Preference cleared';
@@ -3186,8 +3239,54 @@ async function doPurge(el){
     }
   );
 }
-async function doStop(el){flash(el);await api('POST','/api/stop');toast('Session stopped');updateStopState(true)}
-async function doResume(el){flash(el);await api('POST','/api/resume');toast('Session resumed');updateStopState(false)}
+const STOP_FAILURE_COPY="We couldn't pause the station. Give the studio a few seconds, then press Stop again.";
+const RESUME_FAILURE_COPY="We couldn't resume the station. Give the studio a few seconds, then press Start again.";
+const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? The station may be quiet briefly while the studio rebuilds.";
+// Stop and Resume answer with the precise reason they refused. Prefer it over
+// the generic line because it names the way out. An assetless Resume may also
+// offer the separately confirmed force-start below; it is never sent implicitly.
+function transportFailureCopy(payload,fallback){
+  const reported=typeof payload?.error==='string'?payload.error.trim():'';
+  return reported||fallback;
+}
+async function doStop(el){
+  flash(el);
+  try{
+    const {response,payload}=await apiResponse('POST','/api/stop');
+    if(response.ok&&payload?.ok===true)toast('Station paused');
+    else toast(transportFailureCopy(payload,STOP_FAILURE_COPY));
+  }catch(_){
+    toast(STOP_FAILURE_COPY);
+  }finally{
+    await refreshFast();
+  }
+}
+async function doResume(el){
+  flash(el);
+  try{
+    const {response,payload}=await apiResponse('POST','/api/resume');
+    if(response.ok&&payload?.ok===true){
+      toast('Station resumed');
+    }else if(response.status===503&&payload?.force_available===true){
+      if(!window.confirm(FORCE_RESUME_CONFIRM_COPY)){
+        toast('Station remains paused.');
+        return;
+      }
+      const {response:forceResponse,payload:forcePayload}=await apiResponse('POST','/api/resume?force=true');
+      if(forceResponse.ok&&forcePayload?.ok===true&&forcePayload?.recovering===true){
+        toast('Station is recovering. A host break is being prepared.');
+      }else{
+        toast(transportFailureCopy(forcePayload,RESUME_FAILURE_COPY));
+      }
+    }else{
+      toast(transportFailureCopy(payload,RESUME_FAILURE_COPY));
+    }
+  }catch(_){
+    toast(RESUME_FAILURE_COPY);
+  }finally{
+    await refreshFast();
+  }
+}
 function updateStopState(stopped){
   // Global toggle so CSS can dim animations, producer buttons, etc.
   document.body.setAttribute('data-stopped',stopped?'true':'false');
@@ -3399,7 +3498,14 @@ function updateNow(ns){
 // ── Programme Filter ──
 function setProgrammeFilter(filter, btn){
   _programmeFilter=filter;
-  document.querySelectorAll('.filter-pill').forEach(p=>p.classList.toggle('active',p.dataset.filter===filter));
+  // [data-filter], not a bare .filter-pill: the Archivio type/scope pills share
+  // the class, and an unscoped sweep cleared their state too (harmless while it
+  // was class-only, wrong once it also writes aria-pressed).
+  document.querySelectorAll('.filter-pill[data-filter]').forEach(p=>{
+    const on=p.dataset.filter===filter;
+    p.classList.toggle('active',on);
+    p.setAttribute('aria-pressed',String(on));
+  });
   renderProgramme(_st);
 }
 
@@ -3699,21 +3805,70 @@ function statusDot(state,label,title=''){
   const safeTitle=title||label;
   return `<span class="status-dot ${state}" title="${esc(safeTitle)}" aria-label="${esc(safeTitle)}"><span class="dot"></span>${esc(label)}</span>`;
 }
-function updatePipelineStatus(caps){
+function stationRuntimeVerdict(st,caps){
+  const runtime=st?.runtime_status||{};
+  const fastGoldenPath=st?.golden_path;
+  const goldenPath=fastGoldenPath||caps?.golden_path||{};
+  const guidedStream=caps?.guided_setup?.stream||{};
+  if(st?.session_stopped===true){
+    return {state:'idle',label:'Paused',detail:'Stream Engine is paused by the operator.'};
+  }
+  if(runtime.health_state==='blocked'){
+    return {state:'blocked',label:'Needs attention',detail:runtime.health_explanation||'Stream Engine needs attention.'};
+  }
+  if(runtime.recovering===true){
+    return {state:'working',label:'Starting',detail:runtime.health_explanation||'Stream Engine is rebuilding listener-audible audio.'};
+  }
+  if(runtime.station_on_air===true){
+    const degraded=runtime.health_state==='degraded';
+    return {
+      state:degraded?'degraded':'ready',
+      label:degraded?'On air with backup':'On air',
+      detail:runtime.health_explanation||'Stream Engine is on air.',
+    };
+  }
+  if(goldenPath.blocking===true||(!fastGoldenPath&&guidedStream.status==='blocked')){
+    return {state:'blocked',label:'Needs source',detail:goldenPath.headline||'Add a music source to start the stream.'};
+  }
+  if(runtime.station_on_air===false){
+    if(activeListenerCount(st)>0){
+      return {state:'working',label:'Starting',detail:runtime.health_explanation||'Stream Engine is preparing audio for the listener.'};
+    }
+    const degraded=runtime.health_state==='degraded';
+    return {
+      state:degraded?'degraded':'ready',
+      label:degraded?'Ready with backup':'Ready',
+      detail:runtime.health_explanation||'Stream Engine is ready for the next listener.',
+    };
+  }
+  if(guidedStream.status==='ready'||fastGoldenPath?.blocking===false){
+    return {state:'ready',label:'Ready',detail:goldenPath.headline||'Stream Engine is ready.'};
+  }
+  if(guidedStream.status==='checking'||st?.upcoming_mode==='building'){
+    return {state:'working',label:'Starting',detail:runtime.health_explanation||'Stream Engine is preparing the next audio.'};
+  }
+  return {state:'working',label:'Checking',detail:'Checking Stream Engine status.'};
+}
+function pipelineStreamStatus(st,caps){
+  return stationRuntimeVerdict(st,caps);
+}
+function updatePipelineStatus(caps,st){
   const el=document.getElementById('pipelineStatus');
   if(!el)return;
   const c=caps?.capabilities||{};
+  const stream=pipelineStreamStatus(st,caps);
 
   let html='<div class="srow">';
   if(!Object.keys(c).length){
-    html+=statusChip('working','Checking…')+'</div>';
+    html+=statusChip('working','Checking…');
+    html+=statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail)+'</div>';
     el.innerHTML=html; return;
   }
   if(c.anthropic_key&&c.anthropic_key_status==='rejected'){ html+=statusChip('blocked','Anthropic'); }
   else if(c.anthropic_key&&c.anthropic_degraded){ html+=statusChip('degraded','Anthropic'); }
   else if(c.anthropic_key){ html+=statusChip('ready','Anthropic'); }
   else { html+=statusChip('blocked','Anthropic'); }
-  html+=statusChip('ready','Stream');
+  html+=statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail);
   html+='</div><div class="srow">';
   if(c.ha){ html+=statusChip('ready','Home Assistant'); }
   else{ html+=statusChip('idle','HA: off'); }
@@ -3723,27 +3878,39 @@ function updatePipelineStatus(caps){
 function statusRow(title,state,label,detail){
   return `<div class="status-row"><div class="status-copy"><div class="status-title">${esc(title)}</div><div class="status-detail">${esc(detail)}</div></div>${statusChip(state,label)}</div>`;
 }
-function runtimeProviderRow(title,item){
+function runtimeProviderRow(title,item,stationOnAir){
+  const latest=item?.latest_observation||null;
+  const operational=latest||item;
   let state,label;
-  if(item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'){
+  if(operational?.recovery_mode==='circuit_breaker'||operational?.recovery_mode==='action_required'){
     state='degraded';
     label='Backup active';
-  }else if(item?.recovery_mode==='transient'){
+  }else if(operational?.recovery_mode==='transient'){
     state='working';
     label='Auto-recovering';
   }else{
-    state=item?.fallback_active?'degraded':'ready';
-    label=item?.fallback_active?'Fallback':'Primary';
+    state=operational?.fallback_active?'degraded':'ready';
+    label=operational?.fallback_active?'Fallback':'Primary';
   }
-  const reasonLine=item?.action_guidance||item?.switch_reason||'';
-  const retrySeconds=Math.max(0,Number(item?.retry_in_seconds)||0);
+  const observationLabel=stationOnAir?'Current on air':'Last heard';
+  const currentReason=item?.current_reason||'';
+  const latestLine=latest
+    ?['Latest studio observation: '+(latest.current_label||latest.current_provider||'—'),latest.current_reason||''].filter(Boolean).join(' — ')
+    :'';
+  const guidanceLine=operational?.action_guidance||'';
+  const retrySeconds=Math.max(0,Number(operational?.retry_in_seconds)||0);
   const retryLine=retrySeconds>0?'Retrying in '+(retrySeconds<60?retrySeconds+' sec':Math.ceil(retrySeconds/60)+' min'):'';
+  const switchLine=item?.last_switch_timestamp
+    ?['Last switch: '+fmtRuntimeTs(item.last_switch_timestamp),item?.switch_reason||''].filter(Boolean).join(' — ')
+    :'';
   const detail=[
-    'Current: '+(item?.current_label||item?.current_provider||'—'),
+    observationLabel+': '+(item?.current_label||item?.current_provider||'—'),
+    currentReason,
     'Primary: '+(item?.primary_label||item?.primary_provider||'—'),
-    reasonLine,
+    latestLine,
+    guidanceLine,
     retryLine,
-    item?.last_switch_timestamp?'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp):''
+    switchLine
   ].filter(Boolean).join(' · ');
   return statusRow(title,state,label,detail);
 }
@@ -3811,22 +3978,22 @@ function updateRuntimeStatus(st){
   const card=document.getElementById('runtimeStatusCard');
   const header=document.getElementById('headerHealth');
   const rs=st?.runtime_status;
+  const verdict=stationRuntimeVerdict(st,_caps);
   try{
     if(!rs){
       if(card)card.innerHTML='<div class="empty">Runtime status unavailable</div>';
       if(header){
-        header.className='status-dot working';
-        header.setAttribute('aria-label','status: working');
-        header.title='Runtime status loading';
-        header.innerHTML='<span class="dot"></span>Checking';
+        header.className='status-dot '+verdict.state;
+        header.setAttribute('aria-label',verdict.detail);
+        header.title=verdict.detail;
+        header.innerHTML='<span class="dot"></span>'+esc(verdict.label);
       }
       return;
     }
     const stationOnAir=rs.station_on_air===true;
-    const taskBlocked=rs.health_state==='blocked';
-    const headerState=taskBlocked?'blocked':stationOnAir?'ready':'degraded';
-    const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':'Paused';
-    const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel;
+    const headerState=verdict.state;
+    const headerLabel=verdict.label;
+    const headerDetail=verdict.detail;
     if(header){
       header.className='status-dot '+headerState;
       header.setAttribute('aria-label',headerDetail);
@@ -3838,7 +4005,7 @@ function updateRuntimeStatus(st){
     const failoverEvents=rs.failover_events||[];
     const lastFailover=failoverEvents[0];
     const eventLine=lastFailover
-      ? `${lastFailover.provider_class||'provider'}: ${lastFailover.from_provider||'—'} → ${lastFailover.to_provider||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
+      ? `${lastFailover.provider_class_label||'Provider'}: ${lastFailover.from_provider_label||'—'} → ${lastFailover.to_provider_label||'—'} · ${lastFailover.reason||''} · ${fmtRuntimeTs(lastFailover.timestamp)}`
       : (rs.no_failover_message||'No failover in current session.');
     // Queue rescue (#547): how often the producer is bridging a starved queue
     // with cached/canned/tone audio. Healthy = the real station; warning =
@@ -3893,6 +4060,9 @@ function updateRuntimeStatus(st){
         operator_panic:'panic stop',
         operator_purge:'queue cleared',
         operator_queue_remove:'removed from queue',
+        stale_continuity:'replaced by a newer cue',
+        stale_played_track_ref:'the song moved on first',
+        listener_session_stale:'the listener left first',
       };
       const reasonHuman=(r)=>REASON_LABELS[r]||String(r||'').replace(/_/g,' ');
       const wasteState=gw.degraded?'degraded':'ready';
@@ -3943,10 +4113,10 @@ function updateRuntimeStatus(st){
       continuityRow=statusRow('Protected continuity','ready','Reserved',`${seconds}s ready · ${sourceLabels[continuity.audio_source]||'Immediate audio'}`);
     }
     card.innerHTML=[
-      statusRow('Current health',headerState,headerLabel,rs.health_explanation||'Runtime health available'),
-      runtimeProviderRow('Audio source',providers.audio_source),
-      runtimeProviderRow('Script provider',providers.script_provider),
-      runtimeProviderRow('TTS provider',providers.tts_provider),
+      statusRow('Current health',headerState,headerLabel,headerDetail),
+      runtimeProviderRow('Audio source',providers.audio_source,stationOnAir),
+      runtimeProviderRow('Script provider',providers.script_provider,stationOnAir),
+      runtimeProviderRow('TTS provider',providers.tts_provider,stationOnAir),
       continuityRow,
       rescueRow,
       rotationRow,
@@ -5177,8 +5347,8 @@ async function copySetupSnippet(){
 function updateSystems(caps,st){
   const el=document.getElementById('systemsBody');
   const c=caps?.capabilities||{};
-  const gp=caps?.golden_path||st?.golden_path||{};
-  updatePipelineStatus(caps);
+  const gp=st?.golden_path||caps?.golden_path||{};
+  updatePipelineStatus(caps,st);
   if(!Object.keys(c).length&&!Object.keys(gp).length){
     el.innerHTML='<div class="empty">System status unavailable</div>';
     return;
@@ -5447,7 +5617,7 @@ async function enrichPlaylistSource(kind,el){
     toast(wayOut());
     return;
   }
-  toast(dispatch.toast+` (${r.added} nuovi)`);
+  toast(metadataOnlyMutationCopy(r,'Rotation change')||dispatch.toast+` (${r.added} nuovi)`);
   await refreshFast();
   updateSourceControls(_st,_caps);
 }
@@ -5463,7 +5633,10 @@ async function setHeading(kind,el){
     await refreshFast();
     return;
   }
-  toast(r.idempotent?`${dispatch.label} is already in the crate.`:`Found records for ${dispatch.label}.`);
+  toast(
+    metadataOnlyMutationCopy(r,'Record Hunt')
+      ||(r.idempotent?`${dispatch.label} is already in the crate.`:`Found records for ${dispatch.label}.`)
+  );
   await refreshFast();
 }
 let _directionPending=false;
@@ -5562,7 +5735,10 @@ async function setDirectionText(el){
       return;
     }
     const label=r.heading?.label||text;
-    if(r.idempotent){
+    const metadataOnlyCopy=metadataOnlyMutationCopy(r,'Record Hunt');
+    if(metadataOnlyCopy){
+      toast(metadataOnlyCopy);
+    }else if(r.idempotent){
       toast(`${label} is already in the crate.`);
     }else{
       // Only count songs actually confirmed in rotation; anything still
@@ -6269,7 +6445,11 @@ function renderHosts(hosts){
     }).join('');
     const sliders=AX.map(a=>{
       const val=h.personality[a];
-      return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" style="background-image:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
+      // aria-label carries host + dimension: the visible "Energy" caption is a
+      // sibling <span>, not a <label for>, so without this the slider has no
+      // accessible name and a screen-reader operator hears five identical
+      // unnamed sliders per host.
+      return `<div class="ha"><div class="ha-top"><span class="ha-axis">${AX_LABEL[a]}</span><span class="ha-word" id="hw-${nm}-${a}">${axWord(a,val)}</span></div><input type="range" min="0" max="100" value="${val}" data-a="${a}" aria-label="${esc(nm)} — ${AX_LABEL[a]}" style="background-image:${sliderBg(val)}" oninput="onSliderInput(this,'${nm}')" onchange="updHost('${nm}')"><div class="ha-labels"><span>${AX_LOW[a]}</span><span>${AX_HIGH[a]}</span></div></div>`;
     }).join('');
     return `<div class="host-block" data-h="${nm}"><div class="host-name">${nm}</div><div class="host-style">${esc(h.style)}</div><div class="host-presets-label">Character — moves all sliders</div><div class="host-presets">${presetBtns}</div>${sliders}<div class="host-preview"><div class="host-preview-label">What you'll hear</div><div class="host-preview-text"></div></div><button class="host-reset" onclick="rstHost('${nm}')">Reset to defaults</button></div>`;
   }).join('');
@@ -6440,8 +6620,16 @@ function _persistArchivio(){
 function _syncArchivioChips(){
   const q=document.getElementById('logSearch');
   if(q&&q.value!==_archivioFilters.q)q.value=_archivioFilters.q;
-  document.querySelectorAll('[data-logtype]').forEach(b=>b.classList.toggle('active',b.dataset.logtype===_archivioFilters.type));
-  document.querySelectorAll('[data-logscope]').forEach(b=>b.classList.toggle('active',b.dataset.logscope===_archivioFilters.scope));
+  document.querySelectorAll('[data-logtype]').forEach(b=>{
+    const on=b.dataset.logtype===_archivioFilters.type;
+    b.classList.toggle('active',on);
+    b.setAttribute('aria-pressed',String(on));
+  });
+  document.querySelectorAll('[data-logscope]').forEach(b=>{
+    const on=b.dataset.logscope===_archivioFilters.scope;
+    b.classList.toggle('active',on);
+    b.setAttribute('aria-pressed',String(on));
+  });
 }
 function onArchivioFilterChange(){
   _archivioFilters.q=(document.getElementById('logSearch')?.value||'').trim();
@@ -6802,6 +6990,42 @@ const FAST_POLL_INTERVAL_MS=3000;
 const FAST_STATUS_DEADLINE_MS=2400;
 const FAST_AUX_DEADLINE_MS=1200;
 let _fastPollGeneration=0;
+let _lastFastStatusSuccessAt=null;
+function formatFastStatusSuccessAt(timestamp){
+  const date=new Date(timestamp);
+  if(Number.isNaN(date.getTime()))return'unknown';
+  const pad=(part)=>String(part).padStart(2,'0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+function markFastStatusStale(){
+  const freshness=document.getElementById('statusFreshness');
+  const text=document.getElementById('statusFreshnessText');
+  if(!freshness||!text)return;
+  // Say it is still trying: the poll retries on its own, so the operator's next
+  // step is to wait, not to go looking for a control. Never print "unknown" —
+  // with no earlier success there is simply no timestamp to name.
+  const lastUpdated=_lastFastStatusSuccessAt
+    ?formatFastStatusSuccessAt(_lastFastStatusSuccessAt)
+    :'';
+  const message=lastUpdated
+    ?'Status may be out of date — still trying. Last updated '+lastUpdated
+    :'Status may be out of date — still trying.';
+  if(text.textContent!==message)text.textContent=message;
+  freshness.title=message;
+  freshness.setAttribute('aria-label',message);
+  freshness.hidden=false;
+}
+function markFastStatusFresh(){
+  _lastFastStatusSuccessAt=Date.now();
+  const freshness=document.getElementById('statusFreshness');
+  const text=document.getElementById('statusFreshnessText');
+  if(text)text.textContent='';
+  if(freshness){
+    freshness.hidden=true;
+    freshness.removeAttribute('title');
+    freshness.removeAttribute('aria-label');
+  }
+}
 async function fetchAdminJson(path,deadlineMs){
   const controller=new AbortController();
   const deadline=setTimeout(()=>controller.abort(),deadlineMs);
@@ -6830,6 +7054,7 @@ async function refreshFast(){
   }catch(e){
     if(generation!==_fastPollGeneration)return;
     console.error('refreshFast status',e);
+    markFastStatusStale();
     const _oa=document.getElementById('on-air');
     if(_oa)_oa.classList.remove('is-idle');
     renderProductionUnavailable();
@@ -6839,6 +7064,7 @@ async function refreshFast(){
   if(generation!==_fastPollGeneration)return;
   adoptAuthoritativePlaylistRevision(nextStatus?.playlist_page?.revision);
   _st=nextStatus;
+  markFastStatusFresh();
   let productionRendered=false;
   try{
     // Paint the authoritative production state before unrelated widgets. A
@@ -6874,6 +7100,7 @@ async function refreshFast(){
     updateRecent(_st);
     updatePaceCounters(_st.pacing);
     updateRuntimeStatus(_st);
+    updatePipelineStatus(_caps,_st);
     updateMoments(_st);
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);

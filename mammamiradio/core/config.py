@@ -23,8 +23,13 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-from mammamiradio.audio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
+# Voice validation reads the catalog leaf directly rather than the aliases
+# re-exported by ``audio.tts``. ``tts`` pulls in openai, edge_tts, and aiohttp,
+# and config sits in the import graph of the spawned HA projection worker
+# (``home/ha_context.py``), which needs none of them. Same values either way.
+from mammamiradio.audio.voice_catalog import EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE
 from mammamiradio.audio.voice_catalog import is_known_azure_voice, is_known_edge_voice
+from mammamiradio.audio.voice_catalog import is_openai_voice as _looks_like_openai_voice
 from mammamiradio.core.models import HostPersonality, PartyMode, PersonalityAxes
 from mammamiradio.hosts.ad_creative import AdBrand, AdCastReport, AdVoice, CampaignSpine, compile_ad_cast
 
@@ -1135,11 +1140,12 @@ def _apply_addon_options() -> None:
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
-    # Pacing (mirrors the toggles above): map persisted /data/options.json values
-    # to env for the non-run.sh add-on boot path. run.sh normally exports these
-    # first, and the `not os.getenv` guard keeps that export authoritative; the
-    # load-time override loop clamps to range, so no clamp is needed here. bool is
-    # excluded because it is an int subclass.
+    # Pacing (mirrors the toggles above): map Supervisor's generated
+    # /data/options.json startup projection to env for the non-run.sh add-on boot
+    # path. run.sh normally exports these first, and the `not os.getenv` guard
+    # keeps that export authoritative; the load-time override loop clamps to
+    # range, so no clamp is needed here. bool is excluded because it is an int
+    # subclass.
     for opt_key, env_key in (
         ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
         ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
@@ -1162,6 +1168,47 @@ def _apply_addon_options() -> None:
         os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] = str(cache_mb)
 
 
+def _parse_secret_env_lines(lines: list[str], known_keys) -> tuple[dict[str, str], list[tuple[int, str]]]:
+    """Parse KEY=VALUE env-file lines shared by the add-on secrets.env readers.
+
+    Grammar: optional BOM on line 1, `#`-comment/blank skip, optional `export ` prefix,
+    split on the first `=`, and `shlex`-aware quote handling requiring exactly one token.
+    Returns the recognized {key: value} assignments plus (line_no, reason) for every
+    skipped line, so callers can decide whether/how to warn about them.
+    """
+    values: dict[str, str] = {}
+    skipped: list[tuple[int, str]] = []
+    for line_no, raw_line in enumerate(lines, 1):
+        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].lstrip()
+        if "=" not in stripped:
+            skipped.append((line_no, "missing KEY=VALUE"))
+            continue
+        key, raw_value = stripped.split("=", 1)
+        key = key.strip()
+        if key not in known_keys:
+            skipped.append((line_no, "unsupported key"))
+            continue
+        value = raw_value.strip()
+        if value[:1] in ('"', "'"):
+            try:
+                parts = shlex.split(value, comments=False, posix=True)
+            except ValueError:
+                skipped.append((line_no, "invalid quoting"))
+                continue
+            if len(parts) != 1:
+                skipped.append((line_no, "invalid quoted value"))
+                continue
+            value = parts[0].strip()
+        if value:
+            values[key] = value
+    return values, skipped
+
+
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     """Parse /config/secrets.env without logging raw secret file contents."""
     if not path.exists():
@@ -1172,39 +1219,13 @@ def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     log = logging.getLogger(__name__)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         log.warning("Could not read /config/secrets.env")
         return {}
 
-    values: dict[str, str] = {}
-    for line_no, raw_line in enumerate(lines, 1):
-        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("export "):
-            stripped = stripped[7:].lstrip()
-        if "=" not in stripped:
-            log.warning("Ignoring /config/secrets.env line %s: missing KEY=VALUE", line_no)
-            continue
-        key, raw_value = stripped.split("=", 1)
-        key = key.strip()
-        if key not in _ADDON_PROVIDER_ENV_KEYS:
-            log.warning("Ignoring /config/secrets.env line %s: unsupported key", line_no)
-            continue
-        value = raw_value.strip()
-        if value[:1] in ('"', "'"):
-            try:
-                parts = shlex.split(value, comments=False, posix=True)
-            except ValueError:
-                log.warning("Ignoring /config/secrets.env line %s: invalid quoting", line_no)
-                continue
-            if len(parts) != 1:
-                log.warning("Ignoring /config/secrets.env line %s: invalid quoted value", line_no)
-                continue
-            value = parts[0].strip()
-        if value:
-            values[key] = value
+    values, skipped = _parse_secret_env_lines(lines, _ADDON_PROVIDER_ENV_KEYS)
+    for line_no, reason in skipped:
+        log.warning("Ignoring /config/secrets.env line %s: %s", line_no, reason)
     return values
 
 

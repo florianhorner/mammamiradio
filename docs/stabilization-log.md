@@ -49,3 +49,9 @@ The Day 8 decision itself is a deliverable. Write it to this file as a `## Week 
 - **Not** extending the rubric to credit cooldown-prevented patches like #213 — observed and noted, but kept out of the decision criteria to preserve rubric stability.
 
 **Next checkpoint:** Day 15 (W17 close, 2026-05-01 — also overdue; will be backfilled in the same cadence as this row).
+
+## Release gate exceptions
+
+| Release | Gate | Status | Rationale |
+|---------|------|--------|-----------|
+| v2.18.0 | Backup canary: restore into a disposable Home Assistant installation | Waived | No disposable instance exists; HA backups need Supervisor, so the plain container image cannot restore one. The live-copy half of the gate (SQLite integrity + ledger parse on a backup taken while playing) still applies. The round trip — a valid archive actually bringing a station back up — is unverified for this release. Stand up a disposable instance before the next backup-contract change. |

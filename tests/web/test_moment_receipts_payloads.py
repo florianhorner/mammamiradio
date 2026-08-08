@@ -278,6 +278,23 @@ def test_finalize_records_aired_on_clean_send():
     assert state.moment_store.rows[0].status == "aired"
 
 
+def test_finalize_rejects_bytes_that_no_listener_accepted():
+    state = StationState()
+    state.moment_store, moment_id = _airing_store()
+    segment = _banter_segment(ritual_moment_id=moment_id)
+
+    _finalize_moment_receipts(
+        state,
+        segment,
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=1,
+        accepted_listeners=0,
+    )
+
+    assert state.moment_store.rows[0].status == "not_streamed"
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [

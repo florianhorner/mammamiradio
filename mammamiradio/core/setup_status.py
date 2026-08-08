@@ -149,12 +149,13 @@ def _llm_key_status(config: StationConfig, provider_health: dict | None = None) 
 
 
 def _stream_status(config: StationConfig, state: StationState, golden_path: dict | None = None) -> str:
-    if state.session_stopped:
-        return "stopped"
-    if state.now_streaming or state.queued_segments or state.playlist or state.last_music_file:
-        return "ready"
+    # Setup is configuration truth, not a projection of transient playback.
+    # The golden-path source probe is authoritative when available; runtime
+    # pause/queue/selection state is surfaced separately by /status.
     if golden_path is not None:
         return "blocked" if golden_path.get("blocking") else "ready"
+    if state.playlist_source is not None or state.playlist:
+        return "ready"
     return "checking" if config.allow_ytdlp else "blocked"
 
 
@@ -175,7 +176,7 @@ def _setup_status_shape(status: str) -> dict[str, str]:
         return {"tone": "ok", "shape": "ok", "display_status": "Ready"}
     if status == "not_configured":
         return {"tone": "info", "shape": "info", "display_status": "Optional"}
-    if status in {"blocked", "rejected", "stopped"}:
+    if status in {"blocked", "rejected"}:
         return {"tone": "error", "shape": "error", "display_status": "Needs setup"}
     display = {
         "missing": "Missing",

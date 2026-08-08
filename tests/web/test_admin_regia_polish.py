@@ -273,7 +273,13 @@ def test_home_context_preview_is_mute_only_and_uses_sanitized_endpoint() -> None
 
 def test_setup_auto_collapse_wired_into_render() -> None:
     html = _html()
-    assert "motoreSetupAutoCollapse(!needsAction&&_activeTab!=='setup')" in html
+    block = html[html.index("function renderSetup") : html.index("async function setupRecheck")]
+    assert "const needsAction=setup.onboarding_required===true" in block
+    assert "motoreSetupAutoCollapse(!needsAction&&_activeTab!=='setup')" in block
+    assert "onboarding_steps" not in block[block.index("const needsAction") :]
+    assert "alertDot.style.display=needsAction?'inline-block':'none'" in block
+    assert "tabAlert.style.display=needsAction?'inline-block':'none'" in block
+    assert "getElementById('firstListenTabAlert')" in block
     js = _js()
     assert "details.dataset.userPinned" in js, "manual pin must override auto-collapse"
 

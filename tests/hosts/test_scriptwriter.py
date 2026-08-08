@@ -2791,13 +2791,11 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     assert record.prompt_tokens == 11
     assert record.completion_tokens == 7
     switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
-    assert switch_records, "expected provider switch telemetry when Anthropic falls back to OpenAI"
-    switch = switch_records[-1]
-    assert switch.provider_class == "script_provider"
-    assert switch.from_provider == "anthropic"
-    assert switch.to_provider == "openai"
-    assert switch.reason == "anthropic_exception"
-    assert state.runtime_events[-1].provider_class == "script_provider"
+    assert switch_records == []
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "anthropic_exception"
+    assert state.runtime_provider_state["script_provider"]["last_switch_timestamp"] is None
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio
@@ -2857,8 +2855,9 @@ async def test_anthropic_max_tokens_truncation_is_labelled_honestly(config, stat
     assert fallback_records[-1].fallback_reason == "anthropic_max_tokens_truncated"
 
     switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
-    assert switch_records, "expected provider switch telemetry on truncation fallback"
-    assert switch_records[-1].reason == "anthropic_max_tokens_truncated"
+    assert switch_records == []
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "anthropic_max_tokens_truncated"
+    assert state.runtime_provider_state["script_provider"]["last_switch_timestamp"] is None
     # Illusion preserved: listener still gets banter via the OpenAI fallback —
     # whose visible floor inherits the ESCALATED budget, not the original.
     assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
@@ -3705,7 +3704,7 @@ async def test_malformed_anthropic_response_does_not_mark_anthropic_active(confi
 
     assert result == {"ok": "fallback"}
     assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
-    assert [event.to_provider for event in state.runtime_events] == ["openai"]
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio

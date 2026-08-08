@@ -23,6 +23,10 @@ go-librespot/state.json
 *.app
 *.webloc
 .coverage
+# Per-process data files from [tool.coverage.run] parallel mode (needed so
+# coverage can follow the spawned HA projection worker). A completed run
+# combines and erases them; an interrupted one leaves them behind.
+.coverage.*
 coverage.json
 htmlcov/
 .playwright-cli/

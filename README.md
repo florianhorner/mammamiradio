@@ -80,9 +80,12 @@ reads/interrupts, and Home-derived host work.
 
 ### Check the app (operators)
 
-`Producer started` in the app log and `"ready": true` from `/readyz` show that
-the app is healthy. They are operator checks, not the first-listen proof: for
-that, hear **Mamma Mi Radio Live** on the selected speaker.
+`Producer started` in the app log means the engine came up. `/readyz` answers a
+stricter question: it stays `503 starting` until a listener has actually accepted
+audio (`503 stopped` while the station is deliberately paused), so
+`"ready": true` is already proof that someone heard the station, not just that
+the process booted. Neither replaces the first-listen check: hear
+**Mamma Mi Radio Live** on the selected speaker.
 
 For branch development or repeatable manual QA, use the [disposable local Home
 Assistant lab](docs/runbooks/first-listen-local-ha.md). It preserves the local

@@ -7,10 +7,11 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.first_listen import FirstListenReceiptV1
-from mammamiradio.core.models import ScoredEntityStatus, StationState, Track
+from mammamiradio.core.models import PlaylistSource, ScoredEntityStatus, StationState, Track
 from mammamiradio.core.setup_status import (
     _home_context_copy,
     _playlist_is_demo,
+    _setup_status_shape,
     _stream_status,
     build_guided_setup,
     build_setup_status,
@@ -541,21 +542,22 @@ def test_guided_setup_addon_blocked_copy_does_not_show_standalone_env_vars():
         ("last_music_file", Path("cache/song.mp3")),
     ],
 )
-def test_stream_status_playable_runtime_wins_over_blocking_golden_path(field, value):
+def test_stream_status_golden_path_wins_over_transient_runtime_state(field, value):
     config = load_config()
     config.allow_ytdlp = False
     state = StationState()
     setattr(state, field, value)
 
-    assert _stream_status(config, state, golden_path={"blocking": True}) == "ready"
+    assert _stream_status(config, state, golden_path={"blocking": True}) == "blocked"
 
 
-def test_guided_setup_stream_stopped_and_no_source_states():
+def test_guided_setup_stream_pause_is_separate_from_source_readiness():
     config = load_config()
     state = StationState()
     state.session_stopped = True
 
-    assert build_guided_setup(config, state)["stream"]["status"] == "stopped"
+    assert build_guided_setup(config, state, golden_path={"blocking": False})["stream"]["status"] == "ready"
+    assert build_guided_setup(config, state, golden_path={"blocking": True})["stream"]["status"] == "blocked"
 
     state.session_stopped = False
     config.allow_ytdlp = True
@@ -563,6 +565,38 @@ def test_guided_setup_stream_stopped_and_no_source_states():
 
     config.allow_ytdlp = False
     assert build_guided_setup(config, state)["stream"]["status"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("playlist_source", "playlist", "allow_ytdlp", "expected"),
+    [
+        (PlaylistSource(kind="charts", label="Charts"), [], False, "ready"),
+        (None, [Track(title="Loaded", artist="Artist", duration_ms=180_000)], False, "ready"),
+        (None, [], True, "checking"),
+        (None, [], False, "blocked"),
+    ],
+)
+def test_stream_status_without_golden_path_uses_source_readiness(
+    playlist_source,
+    playlist,
+    allow_ytdlp,
+    expected,
+):
+    config = load_config()
+    config.allow_ytdlp = allow_ytdlp
+    state = StationState()
+    state.playlist_source = playlist_source
+    state.playlist = playlist
+
+    assert _stream_status(config, state) == expected
+
+
+def test_setup_status_shape_does_not_classify_runtime_pause_as_setup_failure():
+    assert _setup_status_shape("stopped") == {
+        "tone": "warn",
+        "shape": "warn",
+        "display_status": "Stopped",
+    }
 
 
 def test_build_setup_status_identity_preview_uses_station_name(monkeypatch):
@@ -893,7 +927,7 @@ def test_fresh_recovery_strip_advances_through_audio_and_privacy_before_repair()
         context_choice_explicit=True,
     )
     assert repair["strip"]["primary_action"] == {
-        "kind": "add_ai_key",
-        "label": "Add AI key",
+        "kind": "fix_stream",
+        "label": "Fix stream",
         "target": "setup",
     }

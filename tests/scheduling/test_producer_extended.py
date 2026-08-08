@@ -100,7 +100,7 @@ _NO_AREA = _NoArea()
 def _scored_home_entity(
     idx: int,
     *,
-    area: str | None | _NoArea = _NO_AREA,
+    area: str | _NoArea | None = _NO_AREA,
     label_it: str | None = None,
     label_en: str | None = None,
 ) -> ScoredEntity:

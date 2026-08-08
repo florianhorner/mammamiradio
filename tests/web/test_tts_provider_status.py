@@ -41,7 +41,8 @@ def test_single_cloud_engine_missing_key_falls_back_to_edge():
     status = _status(["azure"], azure=False)
     assert status["current_provider"] == "edge"
     assert status["fallback_active"] is True
-    assert "key missing" in status["switch_reason"].lower()
+    assert "key missing" in status["current_reason"].lower()
+    assert status["switch_reason"] == ""
 
 
 def test_mixed_cloud_engines_all_keyed_reports_mixed_tts():
@@ -56,7 +57,8 @@ def test_mixed_cloud_engines_partial_keys_flags_partial_fallback():
     assert status["primary_provider"] == "mixed_tts"
     assert status["current_provider"] == "mixed_tts"
     assert status["fallback_active"] is True
-    assert "falling back to edge" in status["switch_reason"].lower()
+    assert "falling back to edge" in status["current_reason"].lower()
+    assert status["switch_reason"] == ""
 
 
 def test_all_edge_hosts_report_edge_no_fallback():

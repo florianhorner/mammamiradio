@@ -56,6 +56,7 @@ from mammamiradio.core.listener_session import (
 )
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     AdHistoryEntry,
     ChaosSubtype,
     DialogueLine,
@@ -72,6 +73,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.core.spoken_assets import (
     approved_spoken_assets,
     is_approved_packaged_audio_asset,
@@ -866,8 +868,28 @@ def _pick_recovery_clip(state: StationState) -> Path | None:
     return None
 
 
+_AUDIBLE_PROVIDER_CLASSES = frozenset({"script_provider", "tts_provider"})
+
+
+def _attach_runtime_provider_observations(
+    segment: Segment,
+    state: StationState,
+    observation_token: str,
+) -> None:
+    """Carry only this render's provider truth to listener-audible commit."""
+    render_observations = state.take_runtime_provider_observations(observation_token)
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("rescue") or metadata.get("error") or metadata.get("canned"):
+        return
+    segment.runtime_provider_observations = {
+        provider_class: observation
+        for provider_class, observation in render_observations.items()
+        if provider_class in _AUDIBLE_PROVIDER_CLASSES or provider_class.startswith("tts:")
+    }
+
+
 async def _queue_continuity_bridge(
-    queue_segment: Callable[[Segment], Awaitable[bool]],
+    queue_segment: Callable[..., Awaitable[bool]],
     state: StationState,
     config: StationConfig,
     *,
@@ -885,6 +907,35 @@ async def _queue_continuity_bridge(
     while the packaged clip pays an ffprobe in a worker thread before it can be
     queued. The clip stays as the rung below, for a cold cache.
     """
+    # Re-armed before each rung rather than captured once for the whole ladder.
+    # A rung that awaits (the packaged clip pays an ffprobe) must still be
+    # discarded if the epoch moved under it — but the rungs BELOW it are fresh
+    # work against the new timeline. Capturing once meant a single control
+    # action mid-bridge rejected every remaining rung down to the emergency
+    # tone, disarming the whole dead-air ladder in one go.
+    bridge_continuity_epoch = state.continuity_epoch
+
+    def _arm_bridge_rung() -> None:
+        nonlocal bridge_continuity_epoch
+        bridge_continuity_epoch = state.continuity_epoch
+
+    def _bridge_stale_reason() -> str | None:
+        if state.continuity_epoch == bridge_continuity_epoch:
+            return None
+        logger.warning(
+            "%s bridge discarded after continuity epoch changed captured_epoch=%d current_epoch=%d",
+            bridge_type.capitalize(),
+            bridge_continuity_epoch,
+            state.continuity_epoch,
+            extra={
+                "bridge_type": bridge_type,
+                "captured_continuity_epoch": bridge_continuity_epoch,
+                "continuity_epoch": state.continuity_epoch,
+            },
+        )
+        return GenerationWasteReason.STALE_CONTINUITY
+
+    _arm_bridge_rung()
     if music_runway and await _queue_norm_cache_bridge_segment(
         queue_segment,
         state,
@@ -896,12 +947,14 @@ async def _queue_continuity_bridge(
         # Without this a one-song warm cache queued that song back-to-back with
         # nothing in between — a worse repeat than the one this fix exists for.
         allow_recent_repeat=False,
+        stale_check=_bridge_stale_reason,
     ):
         _record_bridge_fire(state, bridge_type, "norm_cache")
         return True
 
     fallback = _pick_recovery_clip(state)
     if fallback:
+        _arm_bridge_rung()
         duration_sec = await asyncio.to_thread(_probe_segment_duration, fallback, rescue=True)
         duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
         metadata = {
@@ -923,7 +976,8 @@ async def _queue_continuity_bridge(
                 duration_sec=duration_sec,
                 metadata=metadata,
                 ephemeral=False,
-            )
+            ),
+            stale_check=_bridge_stale_reason,
         )
         if ok:
             _record_bridge_fire(state, bridge_type, "canned")
@@ -938,13 +992,18 @@ async def _queue_continuity_bridge(
                     "%s bridge: no cache music queued behind the canned clip",
                     bridge_type.capitalize(),
                 )
-        return ok
+            return True
+        if state.continuity_epoch == bridge_continuity_epoch:
+            # A capacity or admission refusal is still authoritative for this
+            # timeline. Only an epoch-stale rung is allowed to re-arm below.
+            return False
 
     # No packaged clip. Retry the cache PERMISSIVELY before the tone: at this
     # depth the only thing left is 2 seconds of emergency tone, so a song the
     # listener heard recently genuinely beats it. Every real caller passes
     # music_runway=True, so gating this rung on `not music_runway` made it dead
     # code and dropped a warm-cache station straight to the tone.
+    _arm_bridge_rung()
     ok = await _queue_norm_cache_bridge_segment(
         queue_segment,
         state,
@@ -952,6 +1011,7 @@ async def _queue_continuity_bridge(
         bridge_type=bridge_type,
         bridge_flag=bridge_flag,
         allow_recent_repeat=True,
+        stale_check=_bridge_stale_reason,
     )
     if ok:
         _record_bridge_fire(state, bridge_type, "norm_cache")
@@ -965,6 +1025,9 @@ async def _queue_continuity_bridge(
         "%s bridge: no canned clips or norm cache available — inserting packaged emergency tone",
         bridge_type.capitalize(),
     )
+    # Last rung. The tone is the floor between the listener and dead air, so it
+    # is armed against the current timeline no matter what happened above it.
+    _arm_bridge_rung()
     ok = await queue_segment(
         Segment(
             type=SegmentType.MUSIC,
@@ -979,7 +1042,8 @@ async def _queue_continuity_bridge(
                 "audio_source": "emergency_tone",
             },
             ephemeral=False,
-        )
+        ),
+        stale_check=_bridge_stale_reason,
     )
     if ok:
         _record_bridge_fire(state, bridge_type, "emergency_tone")
@@ -987,13 +1051,14 @@ async def _queue_continuity_bridge(
 
 
 async def _queue_norm_cache_bridge_segment(
-    queue_segment: Callable[[Segment], Awaitable[bool]],
+    queue_segment: Callable[..., Awaitable[bool]],
     state: StationState,
     config: StationConfig,
     *,
     bridge_type: str,
     bridge_flag: str,
     allow_recent_repeat: bool,
+    stale_check: Callable[[], bool | str | None] | None = None,
 ) -> bool:
     norm_path = select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=allow_recent_repeat)
     if not norm_path:
@@ -1016,7 +1081,8 @@ async def _queue_norm_cache_bridge_segment(
             duration_sec=_duration_sec_from_metadata(metadata),
             metadata=metadata,
             ephemeral=False,
-        )
+        ),
+        stale_check=stale_check,
     )
 
 
@@ -1131,7 +1197,7 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
 
 
 async def _queue_drain_recovery_bridge(
-    queue_segment: Callable[[Segment], Awaitable[bool]],
+    queue_segment: Callable[..., Awaitable[bool]],
     state: StationState,
     config: StationConfig,
 ) -> bool:
@@ -2309,6 +2375,18 @@ async def _enqueue_with_egress(
     entry point. FX run BEFORE the front-insert critical section so it stays a
     no-await drain→prepend→repush.
     """
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if (
+        segment.type is SegmentType.MUSIC
+        and state.playlist_source is not None
+        and SEGMENT_PLAYLIST_SOURCE_KIND_KEY not in metadata
+        and not is_fallback_active(metadata)
+    ):
+        # Bind ordinary music to the source that rendered it before the first
+        # gate or await. A metadata-only source load may deliberately preserve
+        # this queued audio while changing ``state.playlist_source``.
+        metadata[SEGMENT_PLAYLIST_SOURCE_KIND_KEY] = state.playlist_source.kind
+
     # Final pre-egress gate: stop, blocklist, and captured cutover state are all
     # reclassified by the same pure helper used after each subsequent await.
     rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
@@ -2869,7 +2947,11 @@ async def prewarm_first_segment(
                 norm_path.unlink(missing_ok=True)
             return False
         if generation_continuity_epoch != state.continuity_epoch:
-            logger.info("Discarding stale prewarm segment after a live continuity reservation")
+            logger.info(
+                "Discarding stale prewarm segment after continuity epoch changed captured_epoch=%d current_epoch=%d",
+                generation_continuity_epoch,
+                state.continuity_epoch,
+            )
             prewarm_segment = Segment(
                 type=SegmentType.MUSIC,
                 path=norm_path,
@@ -4602,6 +4684,8 @@ async def _run_producer_inner(
                 config.homeassistant.context_enabled and captured_generation == state.home_context_policy_generation
             )
 
+        generation_provider_token = uuid4().hex
+
         success_callback: Callable[[], None] | None = None
         banter_commit = None
         post_failure_backoff: float | None = None
@@ -4874,6 +4958,7 @@ async def _run_producer_inner(
             state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CHAOS)
             continue
 
+        provider_observation_scope = state.bind_runtime_provider_observation_scope(generation_provider_token)
         try:
             if seg_type == SegmentType.MUSIC:
                 track = _select_accepted_music_track(state, config)
@@ -6544,6 +6629,7 @@ async def _run_producer_inner(
                 )
             segment = await _producer_error_recovery_segment(state, config)
             if segment is None:
+                state.take_runtime_provider_observations(generation_provider_token)
                 await asyncio.sleep(0.5)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
@@ -6553,7 +6639,12 @@ async def _run_producer_inner(
             # fan-outs have finished their executor-backed siblings by here.
             # Remove their outputs before preserving cancellation semantics.
             _unlink_render_scratch(render_failure_scratch)
+            state.take_runtime_provider_observations(generation_provider_token)
             raise
+        finally:
+            state.reset_runtime_provider_observation_scope(provider_observation_scope)
+            if segment is None:
+                state.take_runtime_provider_observations(generation_provider_token)
 
         if segment:
             if (
@@ -6563,6 +6654,7 @@ async def _run_producer_inner(
                 and not segment.metadata.get("rescue")
             ):
                 segment.metadata["home_context_generation"] = generation_home_context
+            _attach_runtime_provider_observations(segment, state, generation_provider_token)
             actual_seg_type = _adjacency_type_for(segment)
             if (
                 prev_seg_type is not None
@@ -6647,7 +6739,12 @@ async def _run_producer_inner(
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
             if generation_continuity_epoch != state.continuity_epoch:
-                logger.info("Discarding stale %s segment after a live continuity reservation", seg_type.value)
+                logger.info(
+                    "Discarding stale %s segment after continuity epoch changed captured_epoch=%d current_epoch=%d",
+                    seg_type.value,
+                    generation_continuity_epoch,
+                    state.continuity_epoch,
+                )
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CONTINUITY)
                 _drop_segment_moment_receipts(
                     state, segment, GenerationWasteReason.STALE_CONTINUITY, "continuity-discard"

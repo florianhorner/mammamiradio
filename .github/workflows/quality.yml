@@ -130,6 +130,9 @@ jobs:
       - name: Cut-edge-release self-test
         run: bash tests/workflows/test_cut_edge_release.sh
 
+      - name: Advertised-version guard self-test
+        run: bash tests/workflows/test_advertised_version.sh
+
       - name: Edge add-on validation self-test
         run: bash tests/workflows/test_validate_addon_edge.sh
 
@@ -138,6 +141,9 @@ jobs:
 
       - name: Pre-ship squad gate self-test
         run: bash tests/workflows/test_preship_squad_gate.sh
+
+      - name: Pre-ship evidence self-test
+        run: bash tests/workflows/test_preship_evidence.sh
 
       - name: Landing wrapper self-test
         run: bash tests/workflows/test_land_pr.sh

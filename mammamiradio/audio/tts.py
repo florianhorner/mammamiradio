@@ -405,25 +405,46 @@ def _record_tts_runtime_state(
     if state is None or engine == "edge":
         return
     try:
-        state.update_runtime_provider(
+        engine_observation = state.observe_runtime_provider(
             f"tts:{engine}",
             current_provider=current_provider,
             primary_provider=engine,
             fallback_active=fallback_active,
             reason=reason,
         )
-        active = [
-            (provider_class.removeprefix("tts:"), details.get("reason") or "fallback active")
-            for provider_class, details in state.runtime_provider_state.items()
-            if provider_class.startswith("tts:") and details.get("fallback_active")
-        ]
-        aggregate_active = bool(active)
-        aggregate_reason = (
-            "Runtime TTS fallback: " + "; ".join(f"{provider}={details}" for provider, details in active)
-            if aggregate_active
-            else "Cloud TTS route rendered successfully"
-        )
-        state.update_runtime_provider(
+        observation_token = engine_observation.observation_token
+        if observation_token:
+            render_observations = state.snapshot_runtime_provider_observations(observation_token)
+            prior_aggregate = render_observations.get("tts_provider")
+            active = [
+                (
+                    provider_class.removeprefix("tts:"),
+                    observation.current_reason or "fallback active",
+                )
+                for provider_class, observation in render_observations.items()
+                if provider_class.startswith("tts:") and observation.fallback_active
+            ]
+            prior_fallback_reason = (
+                prior_aggregate.current_reason
+                if prior_aggregate is not None and prior_aggregate.fallback_active
+                else ""
+            )
+        else:
+            # Direct callers outside a producer render still get honest
+            # per-synthesis aggregate truth without inheriting process-wide
+            # failures from an unrelated earlier render.
+            active = [(engine, reason or "fallback active")] if fallback_active else []
+            prior_fallback_reason = ""
+        aggregate_active = bool(active) or bool(prior_fallback_reason)
+        if active:
+            aggregate_reason = "Runtime TTS fallback: " + "; ".join(
+                f"{provider}={details}" for provider, details in active
+            )
+        elif prior_fallback_reason:
+            aggregate_reason = prior_fallback_reason
+        else:
+            aggregate_reason = "Cloud TTS route rendered successfully"
+        state.observe_runtime_provider(
             "tts_provider",
             current_provider="edge" if aggregate_active else current_provider,
             primary_provider="mixed_tts",

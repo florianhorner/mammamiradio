@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     SOURCE_READINESS_KINDS,
     Heading,
     PlaylistSource,
@@ -166,7 +167,9 @@ def _source_readiness_status(config, state: StationState) -> dict:
     heading = getattr(state, "heading", None)
     if isinstance(heading, Heading) and heading.label:
         now_metadata = (getattr(state, "now_streaming", {}) or {}).get("metadata") or {}
-        heading_on_air = str(now_metadata.get("heading_id") or "") == str(heading.id)
+        heading_on_air = bool(getattr(state, "current_stream_audible", False)) and str(
+            now_metadata.get("heading_id") or ""
+        ) == str(heading.id)
         current_rotation = {
             "kind": "record_hunt",
             "label": heading.label,
@@ -691,6 +694,10 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        # Render-scoped playlist identity keeps provider truth stable across a
+        # metadata-only source swap. It is operational bookkeeping, not part of
+        # the public or frozen now-playing contract.
+        SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     }
 )
 

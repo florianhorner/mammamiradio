@@ -9,7 +9,6 @@ $0 or crashes on an unpriced model (operator honesty).
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 from pathlib import Path
@@ -174,20 +173,20 @@ async def test_post_quality_rejects_malformed_json():
 
 
 @pytest.mark.asyncio
-async def test_post_quality_addon_writes_options_json(tmp_path, monkeypatch):
+async def test_post_quality_addon_uses_supervisor_persistence(monkeypatch):
     app = _make_test_app(is_addon=True)
     monkeypatch.delenv("MAMMAMIRADIO_QUALITY", raising=False)
-    options_file = tmp_path / "options.json"
-    options_file.write_text(json.dumps({"existing": "value"}))
-    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1)), base_url="http://testserver"
         ) as client:
             resp = await client.post("/api/quality", json={"quality_profile": "economy"})
     assert resp.status_code == 200
-    options = json.loads(options_file.read_text())
-    assert options["quality_profile"] == "economy"
-    assert options["existing"] == "value"  # single-key patch, didn't clobber
+    save_addon_option.assert_called_once_with("quality_profile", "economy")
+    save_dotenv.assert_not_called()
 
 
 @pytest.mark.asyncio
