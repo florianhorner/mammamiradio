@@ -2154,6 +2154,81 @@ async def test_context_off_retires_stale_home_directive_before_no_llm_return(con
 
 
 @pytest.mark.asyncio
+async def test_context_off_retires_stale_running_gag_before_no_llm_return(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = "private-gag-moment"
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+async def test_context_off_running_gag_never_reaches_prompt_after_reenable(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    private_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag = private_gag
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = "private-gag-moment"
+    prompts: list[str] = []
+
+    async def _generate(**kwargs):
+        prompts.append(kwargs["prompt"])
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "The studio stays with the music."}],
+            "new_joke": None,
+            "home_fact_id": None,
+        }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        await write_banter(state, config)
+        # A later re-enable must start from a clean slate, not revive the
+        # gag that was observed before the disable.
+        config.homeassistant.context_enabled = True
+        await write_banter(state, config)
+
+    assert len(prompts) == 2
+    assert all(private_gag not in prompt for prompt in prompts)
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["operator", "skip_bit"])
+async def test_context_off_retires_running_gag_even_when_studio_directive_survives(config, state, source):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_pending_directive = "Play the explicit studio bit next."
+    state.ha_pending_directive_source = source
+    state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = "private-gag-moment"
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_pending_directive == "Play the explicit studio bit next."
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["operator", "skip_bit"])
 async def test_context_off_preserves_explicit_studio_directive_before_no_llm_return(config, state, source):
     config.anthropic_api_key = ""

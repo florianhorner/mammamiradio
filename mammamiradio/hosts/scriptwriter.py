@@ -2197,11 +2197,18 @@ def _retire_disabled_home_directive(state: StationState, config: StationConfig) 
     if config.homeassistant.enabled and config.homeassistant.context_enabled:
         return
     source = str(state.ha_pending_directive_source or "")
-    if source in {"operator", "skip_bit"}:
-        return
-    state.ha_pending_directive = ""
-    state.ha_pending_directive_moment_id = ""
-    state.ha_pending_directive_source = ""
+    if source not in {"operator", "skip_bit"}:
+        state.ha_pending_directive = ""
+        state.ha_pending_directive_moment_id = ""
+        state.ha_pending_directive_source = ""
+    # The evening running gag is always Home-derived and shares the directive's
+    # one-shot lifetime. Retire it in the same fail-closed step: the prompt gate
+    # below only skips it while context is disabled, so without this clear the
+    # stored gag text would stay latent for the whole disabled session and reach
+    # a provider prompt after a later re-enable.
+    state.ha_running_gag = ""
+    state.ha_running_gag_key = ""
+    state.ha_running_gag_moment_id = ""
 
 
 async def write_banter(
