@@ -12,6 +12,7 @@ import subprocess
 import time
 import uuid
 from functools import partial
+from itertools import islice
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlparse
@@ -322,6 +323,8 @@ _DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / 
 _demo_files_cache: tuple[str, list[Path]] | None = None
 _local_files_cache: dict[str, tuple[float, list[Path]]] = {}
 _LOCAL_FILES_TTL = 60.0  # seconds
+_LOCAL_FILES_LIMIT = 200
+_LOCAL_DIRECTORY_ENTRY_LIMIT = 10_000
 
 
 def _find_demo_asset(track: Track) -> Path | None:
@@ -351,7 +354,25 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
     if cached and (_time.time() - cached[0]) < _LOCAL_FILES_TTL:
         files = cached[1]
     else:
-        files = list(music_dir.glob("*.mp3"))
+        # Bound raw directory entries before filtering. A glob limited after
+        # the ``*.mp3`` filter can still scan an arbitrarily large directory
+        # containing no MP3s.
+        files = []
+        try:
+            with os.scandir(music_dir) as entries:
+                for entry in islice(entries, _LOCAL_DIRECTORY_ENTRY_LIMIT):
+                    if not entry.name.endswith(".mp3"):
+                        continue
+                    try:
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    files.append(Path(entry.path))
+                    if len(files) >= _LOCAL_FILES_LIMIT:
+                        break
+        except OSError:
+            files = []
         _local_files_cache[key] = (_time.time(), files)
     for f in files:
         name = f.stem.lower()
@@ -640,7 +661,7 @@ async def download_track(
 ) -> Path:
     """Run the synchronous download fallback chain off the event loop."""
     loop = asyncio.get_running_loop()
-    _music_dir = music_dir or Path("music")
+    _music_dir = music_dir or Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
     download_fn = partial(_download_sync, track, cache_dir, _music_dir, background=background)
     return await loop.run_in_executor(None, download_fn)
 
@@ -648,5 +669,5 @@ async def download_track(
 async def download_external_track(track: Track, cache_dir: Path, music_dir: Path | None = None) -> Path:
     """Download an explicit external request, raising on failure instead of returning silence."""
     loop = asyncio.get_running_loop()
-    _music_dir = music_dir or Path("music")
+    _music_dir = music_dir or Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
     return await loop.run_in_executor(None, _download_external_sync, track, cache_dir, _music_dir)

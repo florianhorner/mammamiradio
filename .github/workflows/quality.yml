@@ -119,6 +119,7 @@ jobs:
 
           make player-smoke
           python -m pytest tests/web/test_admin_browser_smoke.py -q
+          python -m pytest tests/web/test_first_listen_browser_smoke.py -q
 
       - name: Release cooldown gate self-test
         run: bash tests/workflows/test_cooldown_gate.sh

@@ -27,6 +27,15 @@ Every word a listener or operator reads is product copy, not a log line. No tech
 
 `branch → PR → merge → CI builds image → addon updates to new image`
 
+**Default HA development target:** First Listen and other Home Assistant-facing
+branch work runs against `scripts/first-listen-lab.sh`, the disposable local HA
+Container + VLC speaker lab. Never connect branch code to the live home, reuse
+its token or backup, or attach household/cloud/MQTT devices unless Florian
+explicitly authorizes that live action in the current message. Lab runtime and
+credentials belong only under gitignored `tmp/first-listen-ha-lab/`, never in
+`.context/` or tracked files. See
+`docs/runbooks/first-listen-local-ha.md`.
+
 The restart happens once, planned, when the addon updates. Not during the day. Not as an experiment. Not to "test the fix live."
 
 **NEVER do any of these against the running mammamiradio addon without Florian's explicit confirmation in the current message:**
@@ -66,6 +75,7 @@ Everything else lives under `docs/`:
 - `docs/troubleshooting.md` - common failures and recovery paths
 - `docs/release-process.md` - release *strategy*: themes vs versions, single-trunk cut-don't-open mental model — `main` always advertises the last **published** version, and the number changes only in the `chore(release): cut X.Y.Z` commit (the *how-to-cut* lives in the runbook below)
 - `docs/runbooks/ha-addon.md` - addon release process, config contract, pre-merge checklist
+- `docs/runbooks/first-listen-local-ha.md` - disposable local HA + real Mac speaker acceptance lab
 - `docs/runbooks/refactor-cuts.md` - god-module split: per-cut pre-flight checklist and lessons
 - `docs/runbooks/ha-upstream-watch.md` - early-warning watcher for HA upstream changes touching our HA surface
 - `docs/design/system.md` - Volare design system: colors, typography, components, motion
@@ -89,6 +99,7 @@ private durable system for strategy or relationship context.
 - Test: `pytest tests/` or `make test` (with coverage)
 - Test watch: `make test-watch` (re-runs on file save)
 - Test HA add-on build locally: `scripts/validate-addon.sh --build`
+- Run First Listen against disposable local HA: `scripts/first-listen-lab.sh start`
 - Lint: `ruff check .` (fix: `ruff check --fix .`)
 - Format: `ruff format .` (check: `ruff format --check .`)
 - Type check: `mypy mammamiradio/ tests/`
@@ -113,7 +124,7 @@ private durable system for strategy or relationship context.
 ## Environment
 
 - `MAMMAMIRADIO_BIND_HOST`, `MAMMAMIRADIO_PORT`: bind address and port
-- `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`: override cache/tmp directories (for Docker volumes)
+- `MAMMAMIRADIO_CACHE_DIR`, `MAMMAMIRADIO_TMP_DIR`, `MAMMAMIRADIO_MUSIC_DIR`: override cache, temporary-work, and operator-supplied music directories (the supplied containers keep all three under `/data`)
 - `MAMMAMIRADIO_MAX_CACHE_MB`: maximum size of the normalization cache in MB. Standalone defaults to `500`; the HA add-on defaults to `1500` through `ADDON_MAX_CACHE_SIZE_MB` in `core/config.py`. The add-on setting is **Music cache size (MB)**, mapped from `norm_cache_mb` in `run.sh`, and takes effect after the next add-on restart. For explicit environment input, `_env_clamped_int` limits values to `200` through `8000`, uses the applicable default for malformed input, and logs either correction so config loading can complete. Supervisor normally validates `norm_cache_mb` as an integer in that range before the add-on starts. If unsupported non-positive add-on input reaches internal ingestion anyway, `run.sh` and the direct fallback both treat it as malformed and silently resolve it to the `1500` add-on default. A normalized track uses about 5 MB. The add-on default therefore holds roughly 200 tracks. **On-Air Sound** adds a second bake and roughly doubles the per-track size. At startup, `_disk_safe_cache_ceiling_mb` in `main.py` combines free space, reclaimable cache bytes, and a 512 MB reserve to choose an effective limit. It never lowers the limit below 200 MB. If the mount cannot be read, the configured value stays unchanged. A limit above available free space would not trigger eviction and could fill `/data`, so the station logs a warning when it lowers the limit.
 - `LOG_LEVEL`: override log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`)
 - `MAMMAMIRADIO_HTTP_LOG_LEVEL`: log level applied to `httpx` and `httpcore` (default `WARNING`). Successful request logs from those libraries are suppressed at default; raise to `INFO` or `DEBUG` to inspect outbound HTTP traffic. Invalid values fall back to `WARNING`.
@@ -123,9 +134,9 @@ private durable system for strategy or relationship context.
 - `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`: Azure Speech TTS for host/sweeper/ad voices routed to `engine = "azure"`. Both required together; if either is absent the voice falls back to its per-voice Edge fallback (never silence). Listeners never see the downgrade.
 - `ELEVENLABS_API_KEY`: ElevenLabs TTS for voices routed to `engine = "elevenlabs"`. Absent key falls back to the per-voice Edge fallback.
 - `HA_TOKEN`: Home Assistant API token
-- `HA_URL`: Home Assistant API base URL (auto-set by HA add-on to `http://supervisor/core/api`)
+- `HA_URL`: Home Assistant API base URL (auto-set by the HA add-on to `http://supervisor/core`; direct Core installs normally use `http://host:8123`)
 - `HA_ENABLED`: force-enable HA integration (`true`/`1`/`yes`)
-- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: whether generated host segments may refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`; default **on**). The HA add-on exposes this as `ha_context_enabled`. Turn it off to keep HA entity publishing and timer interrupts while eliminating the full `/api/states` prompt-context poll.
+- `MAMMAMIRADIO_HA_CONTEXT_ENABLED`: explicit permission for generated host segments to refresh and use the filtered Home Assistant state snapshot (`true`/`1`/`yes` | `false`/`0`/`no`). On a fresh or unclassified install, omission starts **off** until First Listen audio is confirmed and the operator enables a fresh filtered preview; a proven pre-feature install may restore its legacy-on behavior after background origin migration. The HA add-on exposes the optional choice as `ha_context_enabled`. Turning it off keeps HA entity publishing but stops full-state and timer reads/interrupts plus Home-derived host generation and memory work.
 - `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`: seconds between full Home Assistant state refreshes for host prompt context (positive integer; default `300`). Maps to `[homeassistant] poll_interval` / add-on `ha_context_poll_interval`; invalid values are ignored with a warning.
 - `MAMMAMIRADIO_HA_CONTEXT_REFRESH_TIMEOUT`: foreground wall-clock wait (seconds, positive float) before a warm prompt-context refresh falls back to the last prompt-safe snapshot (default `2.0`; env > toml). It never cancels the producer-owned request: one request continues in the background for at most 30 seconds total and may be adopted only at the next `BANTER`/`AD`/`NEWS_FLASH` preparation boundary, never into audio already rendering or queued. `/api/states`, optional registry metadata, and optional weather enrichment begin together; the optional calls are individually bounded, best-effort, and cannot extend that same 30-second cap. The first cold registry/weather warm-up keeps its 20-second foreground wait (`_HA_CONTEXT_COLD_LOAD_TIMEOUT`); later segments while that request runs reuse the safe snapshot immediately. Failed attempts retry no earlier than the configured poll interval. A snapshot older than `max(2 × poll_interval, 120s)` — including a completed reply that becomes stale while waiting in the mailbox — is retained for diagnostics but withheld from prompts and delayed one-shots; the first fresh result after that gap resynchronizes ambient state without replaying delayed full-context events, directives, interrupts, ritual/radio matches, or running gags. Timer interrupts stay on their separate lightweight entity poll with `timer` provenance, so full-context stale suppression cannot erase a current timer alert. No new HA add-on option exposes the 30-second cap. A non-float or ≤0 configured foreground wait is ignored with a warning.
 - `MAMMAMIRADIO_HA_MOOD_LLM`: enable the experimental Home Assistant home-mood scene namer (`true`/`1`/`yes`; default **off**). Off means `classify_home_mood` uses the local heuristic ladder only. On means the station may ask the configured LLM for a short radio-friendly home mood from the already-budgeted HA context slice; missing keys, timeout, rejected or invalid output, disabled HA, and a tripped Anthropic circuit breaker (auth/usage failures already detected by script generation) all fall back to the heuristic ladder.
@@ -164,7 +175,7 @@ private durable system for strategy or relationship context.
 - **Restart handoff spool.** `mammamiradio/restart_handoff.py` shortens the post-update cold open: after each music segment queues, the producer best-effort copies it (hash-addressed, content-verified) into `cache/restart_handoff/segments/` and atomically publishes a `manifest.json` capping at 3 entries (6h max age). On the next boot, `main.py::_admit_restart_handoff` validates and enqueues whatever passes (existence, size, SHA-256, age, operator blocklist) before the producer/playback tasks start — so the first listener after an add-on update can reach an already-normalized track instead of an empty queue. A missing/stale/corrupt manifest is a silent no-op; the existing norm-cache/demo-asset rescue ladder in `docs/operations.md` is unchanged underneath it. Scratch files from an interrupted write (a hard kill between `mkstemp` and `os.replace`) are swept by `prune_stale_handoff_tmp_files` at the next startup (see the Runtime behavior bullet above) — never by this write path itself.
 - **Release beat campaign.** `mammamiradio/release_campaign.py` turns an optional packaged `mammamiradio/assets/release/release_beat.toml` manifest (absent/disabled by default — complete no-op) into a bounded, listener-safe on-air cold-open campaign after an update. `scripts/validate-release-beat.py` gates the manifest's schema and listener-safe copy in CI (`scripts/check-release-invariants.sh`) and against the release target in `scripts/pre-release-check.sh` / `scripts/cut-edge-release.sh`. `ReleaseCampaign` offers the scriptwriter a prompt block on the first eligible banter break; delivery counts only once a segment actually airs to a real listener (`_emit_release_campaign_result` in `web/streamer.py`, independent of whether Show Memory/the provenance ledger is enabled), and the campaign self-retires on `max_airings` (default 5) or `campaign_window_seconds` (default 72h). State persists to `cache/release_campaign_ledger.json`.
 - **Capability flags** (`llm`, `ha`, `home_context_ready`) drive a three-tier system. The dashboard derives a tier label from them: Demo Radio, Full AI Radio, Connected Home. Connected Home requires an AI host key plus a prompt-safe Home Assistant context slice, not just a saved HA token. `GET /api/capabilities` returns flags, tier, and a `next_step` hint guiding the user toward the next setup action.
-- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/assets/demo/music/`). The playback loop rescues from packaged recovery clips, then the norm cache, then bundled demo assets, then forced banter — silence is never the terminal state. No wizard, no gates.
+- Demo-first: the app boots immediately with whatever music source is available (yt-dlp charts, local `music/`, or bundled demo assets under `mammamiradio/assets/demo/music/`). The playback loop rescues from packaged recovery clips, then the norm cache, then bundled demo assets, then forced banter — silence is never the terminal state. Audio startup remains ungated; a fresh admin visit opens First Listen, and Home-context widening waits for an accepted speaker attempt, human audible confirmation, and an explicit privacy choice.
 - If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. `mammamiradio/assets/demo/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
 - Music comes from live Italian charts (via yt-dlp), local `music/` files, or bundled demo assets under `mammamiradio/assets/demo/music/`. Queue starvation triggers packaged recovery clips, norm-cache rescue, demo-asset rescue, then forced banter — silence is never the terminal fallback.
 - Packaged recovery clips under `mammamiradio/assets/demo/` are non-ephemeral durable assets, and natural optional speech yields to music when real queued audio is below the producer runway floor while queue capacity remains.
@@ -210,11 +221,11 @@ The folder hierarchy IS the mental model (leadership principle #4). For a single
 ```text
 mammamiradio/
   main.py                   FastAPI app startup/shutdown lifecycle (kept at top — public entry)
-  core/                     config, models, capabilities, setup_status, sync (SQLite schema)
+  core/                     config, models, capabilities, guided setup, First Listen receipts/show, sync (SQLite schema)
   audio/                    normalizer (FFmpeg), audio_quality gate, tts, voice_catalog
   playlist/                 playlist source selection, downloader, song_cues, track_rationale, track_rules
   hosts/                    scriptwriter (LLM banter+ads — TODO: split), persona, context_cues, ad_creative
-  home/                     ha_context (HA polling, mood ladder + optional scene namer), ha_enrichment (event diff/prune), catalog (generated device-label resolver)
+  home/                     HA context, preview-value classification, speaker discovery/playback, event enrichment, generated labels
   scheduling/               producer (async loop), scheduler (segment-type picker), clip (WTF ring buffer)
   web/                      streamer (TODO: split — routes/playback loop), auth (admin auth + CSRF), pages (ingress rewrite), listener_requests, og_card, templates/, static/
   assets/                   demo/ MP3s + SFX, logo.svg
@@ -225,7 +236,10 @@ start.sh                    dev entrypoint with uvicorn and reload
 tests/                      mirrors mammamiradio/ — tests/<nave>/test_*.py
 ```
 
-Two god modules carry a `# TODO: split` marker: `web/streamer.py` (~3,500 LOC) and `hosts/scriptwriter.py` (~2,000 LOC). They have postal addresses now; the actual splits land in PRs 5 and 6 of the cathedral plan (`docs/archive/2026-04-28-cathedral-restructure.md`).
+Two god modules carry a `# TODO: split` marker: `web/streamer.py` and
+`hosts/scriptwriter.py`. They have postal addresses now; the actual splits land
+in PRs 5 and 6 of the cathedral plan
+(`docs/archive/2026-04-28-cathedral-restructure.md`).
 
 ## Design System
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -111,6 +113,43 @@ def test_immediate_audio_index_skips_non_files_and_unknown_durations(tmp_path):
     (tmp_path / "norm_zero_duration.mp3").write_bytes(b"")
 
     assert _build_immediate_audio_index(tmp_path, bitrate_kbps=None) == {}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", True),
+        ("1", True),
+        ("YES", True),
+        ("false", False),
+        ("0", False),
+        ("No", False),
+        # Values outside config's vocabulary must read as omitted, not
+        # explicit: config loading ignores them and keeps the radio.toml
+        # setting, so treating them as an explicit choice here would let the
+        # two readers disagree (e.g. an "off" that purges the evening ledger
+        # while context stays enabled).
+        ("on", None),
+        ("off", None),
+        ("", None),
+        ("maybe", None),
+    ],
+)
+def test_explicit_bool_env_matches_config_vocabulary(monkeypatch, raw, expected):
+    from mammamiradio.main import _explicit_bool_env
+
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raw)
+
+    assert _explicit_bool_env("MAMMAMIRADIO_HA_CONTEXT_ENABLED") is expected
+
+
+def test_explicit_bool_env_shares_config_boolean_sets():
+    """Guard the single source: main must read the exact sets config loads with."""
+    from mammamiradio import main as main_module
+    from mammamiradio.core import config as config_module
+
+    assert main_module._CONFIG_TRUTHY is config_module._TRUTHY
+    assert main_module._CONFIG_FALSY is config_module._FALSY
 
 
 @pytest.mark.asyncio
@@ -221,6 +260,617 @@ async def test_startup_preexisting_database_gets_legacy_bridge_and_metadata_only
     )
     assert provenance is not None
     assert provenance.manifest_digest == LEGACY_HOME_MANIFEST_V1.entity_id_digest
+
+
+@pytest.mark.asyncio
+async def test_first_listen_fresh_addon_omission_stays_off_and_migrates_after_audio_tasks(tmp_path, monkeypatch):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    events: list[str] = []
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    async def producer(*_args, **_kwargs):
+        events.append("producer")
+
+    async def playback(*_args, **_kwargs):
+        events.append("playback")
+
+    async def migrate(*args, **kwargs):
+        events.append("migration")
+        assert config.homeassistant.context_enabled is False
+        return await real_migrate(*args, **kwargs)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", side_effect=producer),
+        patch(f"{MODULE}.run_playback_loop", side_effect=playback),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=migrate),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert events.index("producer") < events.index("migration")
+    assert events.index("playback") < events.index("migration")
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
+    assert config.homeassistant.context_enabled is False
+    assert app.state.home_context_choice_explicit is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coordinator_ready", [False, True])
+async def test_first_listen_existing_addon_omission_restores_legacy_on_only_after_proof(
+    tmp_path, monkeypatch, coordinator_ready
+):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    coordinator = MagicMock()
+    producer_ready = asyncio.Event()
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    async def producer(_queue, state, _config, **_kwargs):
+        if coordinator_ready:
+            state.ha_context_refresh_mailbox = coordinator
+        producer_ready.set()
+
+    async def migrate(*args, **kwargs):
+        await producer_ready.wait()
+        assert config.homeassistant.context_enabled is False
+        return await real_migrate(*args, **kwargs)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", side_effect=producer),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=migrate),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
+    assert config.homeassistant.context_enabled is True
+    assert app.state.home_context_choice_explicit is False
+    if coordinator_ready:
+        coordinator.enable.assert_called_once_with()
+    else:
+        coordinator.enable.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_existing_install_omitted_context_choice_preserves_evening_ledger(tmp_path, monkeypatch):
+    """Provisional First Listen off is not an operator revocation.
+
+    A proven pre-feature install must retain its durable Home-event history
+    while install-origin classification runs behind the already-started audio
+    workers.
+    """
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus, FirstListenReceiptLoadStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    seed = EveningLedger()
+    seed.buckets["legacy-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
+    assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.MISSING
+    assert config.homeassistant.context_enabled is True
+    assert app.state.home_context_off_ledger_persist_task is None
+    assert "legacy-home-event" in app.state.station_state.evening_ledger.buckets
+    assert "legacy-home-event" in EveningLedger.load(config.cache_dir).buckets
+
+
+@pytest.mark.asyncio
+async def test_explicit_context_off_purges_evening_ledger_after_audio_tasks(tmp_path, monkeypatch):
+    """An explicit privacy-off choice purges durably without delaying audio."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    seed = EveningLedger()
+    seed.buckets["private-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    events: list[str] = []
+    real_save = EveningLedger.save_if_dirty
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+
+    async def playback(*_args, **_kwargs):
+        events.append("playback")
+
+    async def producer(*_args, **_kwargs):
+        events.append("producer")
+
+    def save_after_audio(self, cache_dir):
+        events.append("persist")
+        real_save(self, cache_dir)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", side_effect=producer),
+        patch(f"{MODULE}.run_playback_loop", side_effect=playback),
+        patch.object(EveningLedger, "save_if_dirty", new=save_after_audio),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.playback_task,
+            app.state.producer_task,
+            app.state.home_context_off_ledger_persist_task,
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert events.index("playback") < events.index("persist")
+    assert events.index("producer") < events.index("persist")
+    assert app.state.station_state.evening_ledger.buckets == {}
+    assert EveningLedger.load(config.cache_dir).buckets == {}
+
+
+@pytest.mark.asyncio
+async def test_explicit_context_off_ledger_save_failure_stays_fail_closed(tmp_path, monkeypatch, caplog):
+    """A deferred disk failure must not revive Home-derived state or fail startup."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    seed = EveningLedger()
+    seed.buckets["private-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch.object(EveningLedger, "save_if_dirty", side_effect=OSError("disk unavailable")),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.home_context_off_ledger_persist_task
+        await asyncio.gather(
+            app.state.prewarm_task,
+            app.state.playback_task,
+            app.state.producer_task,
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.station_state.evening_ledger.buckets == {}
+    assert "Explicit Home-context ledger purge could not be saved" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_explicit_context_off_ledger_save_is_drained_when_shutdown_cancels(tmp_path, monkeypatch, caplog):
+    """Cancellation drains the non-cancellable filesystem worker before propagating."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    seed = EveningLedger()
+    seed.buckets["private-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+
+    def fail_after_release(*_args, **_kwargs):
+        worker_started.set()
+        assert release_worker.wait(timeout=5)
+        raise OSError("disk unavailable")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch.object(EveningLedger, "save_if_dirty", side_effect=fail_after_release),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        persist_task = app.state.home_context_off_ledger_persist_task
+        await asyncio.wait_for(asyncio.to_thread(worker_started.wait), timeout=2)
+        persist_task.cancel()
+        release_worker.set()
+        with pytest.raises(asyncio.CancelledError):
+            await persist_task
+        await asyncio.gather(
+            app.state.prewarm_task,
+            app.state.playback_task,
+            app.state.producer_task,
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.station_state.evening_ledger.buckets == {}
+    assert "Explicit Home-context ledger purge could not be saved" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_first_listen_background_failures_preserve_startup_and_privacy_safe_state(tmp_path, caplog):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus, FirstListenReceiptLoadStatus
+    from mammamiradio.core.first_listen_show import first_listen_show_required
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(
+            f"{MODULE}.migrate_first_listen_install_origin",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("origin unavailable"),
+        ),
+        patch(
+            f"{MODULE}.FirstListenReceiptStore.load_result",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("receipt unavailable"),
+        ),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.UNKNOWN
+    assert app.state.first_listen_receipt is None
+    assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.UNAVAILABLE
+    assert first_listen_show_required(app.state) is False
+    assert hasattr(app.state, "producer_task")
+    assert hasattr(app.state, "playback_task")
+    assert "First-listen install-origin migration failed" in caplog.text
+    assert "First-listen receipt is unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_later_fresh_boot_receipt_load_failure_does_not_replay_prelude(tmp_path):
+    from mammamiradio.core.first_listen import (
+        FirstListenInstallOriginStatus,
+        FirstListenInstallOriginV1,
+        FirstListenReceiptLoadStatus,
+    )
+    from mammamiradio.core.first_listen_show import first_listen_show_required
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(
+            f"{MODULE}.migrate_first_listen_install_origin",
+            new_callable=AsyncMock,
+            return_value=FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH),
+        ),
+        patch(
+            f"{MODULE}.FirstListenReceiptStore.load_result",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("receipt unavailable"),
+        ),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.first_listen_cold_install is False
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
+    assert app.state.first_listen_receipt is None
+    assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.UNAVAILABLE
+    assert first_listen_show_required(app.state) is False
+
+
+@pytest.mark.asyncio
+async def test_stalled_first_listen_bootstrap_cannot_block_audio_startup(tmp_path):
+    from mammamiradio.core.first_listen import (
+        FirstListenInstallOriginStatus,
+        FirstListenInstallOriginV1,
+        FirstListenReceiptLoadResult,
+        FirstListenReceiptLoadStatus,
+    )
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    release_bootstrap = asyncio.Event()
+    release_audio_workers = asyncio.Event()
+    origin_started = asyncio.Event()
+    receipt_started = asyncio.Event()
+    producer_started = asyncio.Event()
+    playback_started = asyncio.Event()
+
+    async def blocked_origin(*_args, **_kwargs):
+        origin_started.set()
+        await release_bootstrap.wait()
+        return FirstListenInstallOriginV1(FirstListenInstallOriginStatus.UNKNOWN)
+
+    async def blocked_receipt(*_args, **_kwargs):
+        receipt_started.set()
+        await release_bootstrap.wait()
+        return FirstListenReceiptLoadResult(FirstListenReceiptLoadStatus.MISSING)
+
+    async def blocked_producer(*_args, **_kwargs):
+        producer_started.set()
+        await release_audio_workers.wait()
+
+    async def blocked_playback(*_args, **_kwargs):
+        playback_started.set()
+        await release_audio_workers.wait()
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", side_effect=blocked_producer),
+        patch(f"{MODULE}.run_playback_loop", side_effect=blocked_playback),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=blocked_origin),
+        patch(f"{MODULE}.FirstListenReceiptStore.load_result", side_effect=blocked_receipt),
+    ):
+        from mammamiradio.main import app, startup
+
+        await asyncio.wait_for(startup(), timeout=2)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    origin_started.wait(),
+                    receipt_started.wait(),
+                    producer_started.wait(),
+                    playback_started.wait(),
+                ),
+                timeout=1,
+            )
+            assert app.state.producer_task.done() is False
+            assert app.state.playback_task.done() is False
+            assert app.state.first_listen_origin_task.done() is False
+            assert app.state.first_listen_receipt_task.done() is False
+        finally:
+            release_bootstrap.set()
+            release_audio_workers.set()
+            await asyncio.gather(
+                app.state.prewarm_task,
+                app.state.producer_task,
+                app.state.playback_task,
+                app.state.first_listen_origin_task,
+                app.state.first_listen_receipt_task,
+            )
+
+
+@pytest.mark.asyncio
+async def test_partial_cold_boot_database_never_reclassifies_as_existing(tmp_path, monkeypatch):
+    """The older pre-database cold witness vetoes a later feature-era false positive."""
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import rewrite_legacy_home_preflight_cold_v1
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = True
+    config.cache_dir.mkdir(parents=True)
+    db_path = config.cache_dir / "mammamiradio.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE partial_cold_boot (id INTEGER PRIMARY KEY)")
+    rewrite_legacy_home_preflight_cold_v1(config.cache_dir / "state")
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.UNKNOWN
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    assert config.homeassistant.context_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_first_listen_explicit_keep_off_wins_over_late_existing_install_migration(tmp_path, monkeypatch):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    migration_entered = asyncio.Event()
+    allow_migration = asyncio.Event()
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    async def migrate(*args, **kwargs):
+        migration_entered.set()
+        await allow_migration.wait()
+        return await real_migrate(*args, **kwargs)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=migrate),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await migration_entered.wait()
+        app.state.home_context_choice_explicit = True
+        config.homeassistant.context_enabled = False
+        allow_migration.set()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
+    assert config.homeassistant.context_enabled is False
+    assert app.state.home_context_choice_explicit is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("explicit", "expected"), [("false", False), ("true", True)])
+async def test_first_listen_explicit_context_choice_wins_on_fresh_addon(tmp_path, monkeypatch, explicit, expected):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = expected
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", explicit)
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
+    assert config.homeassistant.context_enabled is expected
+    assert app.state.home_context_choice_explicit is True
 
 
 @pytest.mark.asyncio
@@ -1014,6 +1664,7 @@ async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_
 
     with (
         patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}._explicit_bool_env", return_value=True),
         patch(f"{MODULE}.read_persisted_source", return_value=None),
         patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
@@ -1029,6 +1680,59 @@ async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_
     reloaded = EveningLedger.load(tmp_path)
     assert "k" not in reloaded.buckets
     assert "other" in reloaded.buckets
+
+
+@pytest.mark.asyncio
+async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(tmp_path):
+    """An off boot clears stale disk buckets in memory even when disk remains
+    unwritable, so a later in-process enable cannot resurrect private events."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+    from mammamiradio.web.streamer import _enable_home_context_runtime
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    seed = EveningLedger()
+    seed.buckets["private"] = GagBucket(
+        "switch.private_kitchen",
+        "Private kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}._explicit_bool_env", return_value=False),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch.object(EveningLedger, "save_if_dirty", return_value=None),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.home_context_off_ledger_persist_task
+
+    ledger = app.state.station_state.evening_ledger
+    assert ledger.buckets == {}
+    # The no-op save models the prior persistence failure: stale data really
+    # remains on disk, while the live runtime is nevertheless fail-closed.
+    assert "private" in EveningLedger.load(config.cache_dir).buckets
+
+    _enable_home_context_runtime(app.state)
+    assert config.homeassistant.context_enabled is True
+    assert ledger.offer_gag(now=time.time()) is None
 
 
 @pytest.mark.asyncio

@@ -188,6 +188,17 @@ def _retire_ha_projection_executor(
 
 atexit.register(_retire_ha_projection_executor)
 
+# First-listen privacy previews are operator-triggered and deliberately do not
+# share the producer's projection lane.  A slow preview must never queue ahead
+# of live-radio context work (or vice versa), and neither worker may publish
+# process-owned context state.
+_ha_preview_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="ha-preview",
+)
+atexit.register(_ha_preview_executor.shutdown, wait=False, cancel_futures=True)
+_HA_PREVIEW_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
+
 # Entities curated for maximum radio entertainment value
 GOLD_ENTITIES = [
     # Coffee machine + dad jokes
@@ -557,6 +568,26 @@ class HomeContext:
     @property
     def age_seconds(self) -> float:
         return time.time() - self.timestamp if self.timestamp else float("inf")
+
+
+@dataclass(frozen=True)
+class HomeContextPreviewResult:
+    """One detached, freshly fetched privacy-preview result.
+
+    The preview is intentionally not a ``_HomeContextFetchOutcome``: it cannot
+    be published by the producer coordinator or used as a stale fallback.
+    ``error_code`` is a fixed, UI-safe value; raw Home Assistant response data
+    and exception text never cross this boundary.
+    """
+
+    kind: Literal["fresh", "failed"]
+    context: HomeContext
+    duration_seconds: float
+    error_code: Literal["ha_auth_failed", "ha_unreachable", "preview_unavailable"] | None = None
+
+    @property
+    def is_fresh(self) -> bool:
+        return self.kind == "fresh"
 
 
 @dataclass(frozen=True)
@@ -1284,6 +1315,50 @@ def invalidate_home_context_entity_baselines(entity_ids: set[str]) -> None:
         _home_context_entity_invalidation_generations[entity_id] = invalidation_generation
     _radio_event_state_cache = _filter_matcher_baseline(_radio_event_state_cache, effective_entity_ids)
     _ritual_recipe_state_cache = _filter_matcher_baseline(_ritual_recipe_state_cache, effective_entity_ids)
+
+
+def invalidate_all_home_context(cache_dir: Path | None = None) -> int:
+    """Blank all retained Home-context process state after global revocation.
+
+    This is intentionally broader than an entity hard mute.  It leaves the
+    operator's policy file intact, but forgets every fetched snapshot,
+    transition baseline, enrichment cache, and reactive cooldown that could
+    otherwise survive a global disable.  The caller owns clearing StationState
+    and cancelling producer work before allowing another context fetch.
+    """
+    global _ha_cache
+    global _ha_registry_fetched_at
+    global _ha_registry_snapshot_cache
+    global _home_context_invalidation_generation
+    global _radio_event_state_cache
+    global _ritual_recipe_state_cache
+    global _weather_forecast_cache
+    global _weather_forecast_cache_en
+    global _weather_forecast_fetched_at
+
+    _home_context_invalidation_generation += 1
+    _ha_cache = None
+    _radio_event_state_cache = {}
+    _ritual_recipe_state_cache = {}
+    _home_context_entity_invalidation_generations.clear()
+    _ha_registry_snapshot_cache = None
+    _ha_registry_fetched_at = 0.0
+    _weather_forecast_cache = ""
+    _weather_forecast_cache_en = ""
+    _weather_forecast_fetched_at = 0.0
+    _reactive_cooldowns.clear()
+    _DIRECTIVE_COOLDOWNS.clear()
+    _RITUAL_COOLDOWNS.clear()
+
+    if cache_dir is not None:
+        try:
+            (Path(cache_dir) / _HA_REGISTRY_FILENAME).unlink(missing_ok=True)
+        except OSError:
+            # Runtime privacy is already revoked in memory.  The route reports
+            # persistence separately; a stale local enrichment cache is never
+            # consulted while context remains disabled.
+            logger.warning("Could not remove the local Home Assistant registry cache")
+    return _home_context_invalidation_generation
 
 
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
@@ -2319,6 +2394,109 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
         observed_entity_ids=frozenset(all_entity_map),
         warnings=tuple(warnings),
     )
+
+
+async def fetch_home_context_preview(
+    ha_url: str,
+    ha_token: str,
+    *,
+    cache_dir: Path | None,
+    authorization: HomeAuthorization | None = None,
+    timeout_seconds: float = 10.0,
+) -> HomeContextPreviewResult:
+    """Fetch a fresh, narrow and non-publishing Home-context preview.
+
+    This path deliberately skips registry/weather enrichment, prior snapshots,
+    event baselines, directive cooldowns, and every module cache.  The result is
+    suitable only for showing the operator what the current authorization and
+    hard-mute policy would retain.  Callers must never promote it into producer
+    state.
+    """
+    active_authorization = authorization or HomeAuthorization.narrow()
+    started = time.monotonic()
+
+    def failed(code: Literal["ha_auth_failed", "ha_unreachable", "preview_unavailable"]):
+        return HomeContextPreviewResult(
+            kind="failed",
+            context=HomeContext(authorization_mode=active_authorization.mode.value),
+            duration_seconds=max(0.0, time.monotonic() - started),
+            error_code=code,
+        )
+
+    try:
+        client = _get_ha_client()
+        async with client.stream(
+            "GET",
+            f"{ha_url.rstrip('/')}/api/states",
+            headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=max(0.1, min(float(timeout_seconds), 15.0)),
+        ) as response:
+            response.raise_for_status()
+            content_length = response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    parsed_content_length = int(content_length)
+                except ValueError as exc:
+                    raise ValueError("Home Assistant preview response has an invalid size") from exc
+                if parsed_content_length < 0:
+                    raise ValueError("Home Assistant preview response has an invalid size")
+                if parsed_content_length > _HA_PREVIEW_RESPONSE_MAX_BYTES:
+                    raise ValueError("Home Assistant preview response is too large")
+            chunks: list[bytes] = []
+            total_bytes = 0
+            async for chunk in response.aiter_bytes():
+                total_bytes += len(chunk)
+                if total_bytes > _HA_PREVIEW_RESPONSE_MAX_BYTES:
+                    raise ValueError("Home Assistant preview response is too large")
+                chunks.append(chunk)
+            response_bytes = b"".join(chunks)
+        preview_input = _HomeContextProjectionInput(
+            response_bytes=response_bytes,
+            registry_snapshot=HomeRegistrySnapshot(
+                fetched_at=time.time(),
+                source="preview_not_loaded",
+            ),
+            weather_arc="",
+            weather_arc_en="",
+            authorization_mode=active_authorization.mode.value,
+            muted_ids=frozenset(muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()),
+            effective_cache=None,
+            radio_event_rules=(),
+            radio_event_state_baseline={},
+            ritual_recipe_state_baseline={},
+            radio_event_cooldowns={},
+            ritual_recipe_cooldowns={},
+            cache_dir=Path(cache_dir) if cache_dir is not None else None,
+            timestamp=time.time(),
+        )
+        candidate = await asyncio.get_running_loop().run_in_executor(
+            _ha_preview_executor,
+            _project_home_context,
+            preview_input,
+        )
+        return HomeContextPreviewResult(
+            kind="fresh",
+            context=candidate.context,
+            duration_seconds=max(0.0, time.monotonic() - started),
+        )
+    except asyncio.CancelledError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        code: Literal["ha_auth_failed", "ha_unreachable"] = (
+            "ha_auth_failed" if status_code in {401, 403} else "ha_unreachable"
+        )
+        logger.info("Home-context preview failed with Home Assistant HTTP status %d", status_code)
+        return failed(code)
+    except (httpx.TimeoutException, httpx.RequestError):
+        logger.info("Home-context preview could not reach Home Assistant")
+        return failed("ha_unreachable")
+    except Exception:
+        logger.warning("Home-context preview could not be projected")
+        return failed("preview_unavailable")
 
 
 async def _run_home_context_projection(

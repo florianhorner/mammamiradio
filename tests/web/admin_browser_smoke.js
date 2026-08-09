@@ -46,6 +46,11 @@ async (page) => {
       .filter(({ delay }) => delay === 3000 || delay === 30000)
       .forEach(({ id }) => clearInterval(id));
   });
+  // A fresh install lands on the First Listen setup tab and keeps the producer
+  // console hidden until the operator picks a surface. This smoke exercises the
+  // producer desk, so open it the way the operator does — through the page's
+  // own tab navigation (render-free, exactly like initTabs' landing call).
+  await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
 
   const seededStoppedFirstPaint = await page.evaluate(() => {
     document.body.setAttribute('data-stopped', 'true');
@@ -93,7 +98,16 @@ async (page) => {
   const liveStatusResponse = await page.request.get(`${baseUrl}/status`);
   assert(liveStatusResponse.ok(), 'local /status was unavailable');
   const liveStatus = await liveStatusResponse.json();
-  const liveSetupResponse = await page.request.get(`${baseUrl}/api/setup/status`);
+  // /api/setup/status is an active-setup surface: it rejects bare fetches, so
+  // send the per-process CSRF token exactly like the dashboard's api() helper
+  // reads it from the admin page's meta tag.
+  const csrfToken = await page.evaluate(
+    () => document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '',
+  );
+  assert(csrfToken.length > 0, 'admin page did not embed the CSRF token meta tag');
+  const liveSetupResponse = await page.request.get(`${baseUrl}/api/setup/status`, {
+    headers: { 'X-Radio-CSRF-Token': csrfToken },
+  });
   assert(liveSetupResponse.ok(), 'local /api/setup/status was unavailable');
   const liveSetup = await liveSetupResponse.json();
   let statusScenario = 'network';

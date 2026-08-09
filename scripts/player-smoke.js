@@ -165,6 +165,39 @@ async (page) => {
   assert(identityState.footerWordmark === authoritativeName, 'footer wordmark disagrees with authoritative identity');
   assert(identityState.cached === authoritativeName, 'server identity did not repair stale localStorage');
 
+  await page.setViewportSize({ width: 320, height: 640 });
+  const mobileNavGeometry = await page.evaluate(() => {
+    const nav = document.querySelector('.mmr-nav-inner');
+    const brand = document.querySelector('.mmr-brand');
+    const status = document.getElementById('nav-cta');
+    const viewportWidth = document.documentElement.clientWidth;
+    const rect = (element) => {
+      const box = element?.getBoundingClientRect();
+      return box ? { left: box.left, right: box.right, width: box.width } : null;
+    };
+    return {
+      viewportWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      navWidth: nav?.clientWidth || 0,
+      navScrollWidth: nav?.scrollWidth || 0,
+      brand: rect(brand),
+      status: rect(status),
+    };
+  });
+  assert(
+    mobileNavGeometry.status && mobileNavGeometry.status.right <= mobileNavGeometry.viewportWidth + 1,
+    `320px nav status pill escaped viewport: ${JSON.stringify(mobileNavGeometry)}`,
+  );
+  assert(
+    mobileNavGeometry.brand && mobileNavGeometry.brand.left >= -1,
+    `320px nav brand escaped viewport: ${JSON.stringify(mobileNavGeometry)}`,
+  );
+  assert(
+    mobileNavGeometry.navScrollWidth <= mobileNavGeometry.navWidth + 1,
+    `320px nav content overflowed its inner row: ${JSON.stringify(mobileNavGeometry)}`,
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   const copy = await page.evaluate(() => {
     const el = document.getElementById('mmr-copy-bootstrap');
     return el ? JSON.parse(el.textContent) : {};
@@ -455,7 +488,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 15,
+    checks: 18,
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),

@@ -74,11 +74,14 @@ def _write_release_check_repo(
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
     _write(tmp_path / "mammamiradio/scheduling/producer.py", "# producer recovery ladder\n")
     demo_assets = ROOT / "mammamiradio/assets/demo"
-    for asset_name in REQUIRED_RECOVERY_ASSETS:
-        target = tmp_path / "mammamiradio/assets/demo/recovery" / asset_name
+    spoken_manifest_path = demo_assets / "spoken_assets.json"
+    spoken_manifest = json.loads(spoken_manifest_path.read_text(encoding="utf-8"))
+    for entry in spoken_manifest["assets"]:
+        asset_path = Path(entry["path"])
+        target = tmp_path / "mammamiradio/assets/demo" / asset_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(demo_assets / "recovery" / asset_name, target)
-    shutil.copy2(demo_assets / "spoken_assets.json", tmp_path / "mammamiradio/assets/demo/spoken_assets.json")
+        shutil.copy2(demo_assets / asset_path, target)
+    shutil.copy2(spoken_manifest_path, tmp_path / "mammamiradio/assets/demo/spoken_assets.json")
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -562,6 +565,14 @@ def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
     assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
     assert '"2.0"' in body
     assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+    # A fresh install answers first byte from the client-local First Listen
+    # prelude before joining the live hub, so both modes must also hold a
+    # draining listener and wait for /readyz before the post-stream contract.
+    assert "MAMMAMIRADIO_LAUNCH_READY_S" in body
+    assert "First Listen" in body
+    assert "_hold_listener_until_ready" in body
+    # definition + local-mode subprocess + image-mode docker exec
+    assert body.count("_HELD_LISTENER_READY_SOURCE") >= 3
     # CI can exercise the exact pulled image without overlaying repository
     # source: isolated /data volumes, the image's default /run.sh command,
     # Docker-level network denial, and listener-byte checks over loopback.
@@ -584,6 +595,13 @@ def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "soon", "must be a float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "nan", "must be a finite positive float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "inf", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "inf", "must be a finite positive float in seconds"),
+        # A budget above the packaged prelude runway would let the smoke pass
+        # after listener coverage ended.
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "30", "must stay at or under 22s"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "22.5", "must stay at or under 22s"),
     ],
 )
 def test_ha_green_launch_smoke_validates_timeout_env_vars(
@@ -605,6 +623,25 @@ def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match=r"ffmpeg is required for scripts/ha-green-launch-smoke\.py"):
         smoke._seed_warm_norm_cache(str(tmp_path))
+
+
+def test_ha_green_launch_smoke_held_listener_source_is_runnable_python() -> None:
+    smoke = _load_ha_green_launch_smoke()
+    source = smoke._HELD_LISTENER_READY_SOURCE
+
+    # Runs as `python3 -c` both locally and inside the built image, so it must
+    # be valid standalone Python that holds /stream open and gates readiness
+    # on an authoritative /readyz verdict, not on stream bytes alone.
+    compile(source, "<held-listener-ready>", "exec")
+    assert '"/stream"' in source
+    assert '"/readyz"' in source
+    assert "status == 200" in source
+    assert 'payload.get("ready") is True' in source
+    # The deadline is enforced on the response, not just the request start: a
+    # poll may never outlive the remaining budget, and a reply that lands past
+    # the deadline must not count as ready.
+    assert "min(3.0, remaining)" in source
+    assert "received after the readiness deadline" in source
 
 
 def test_ha_green_launch_smoke_env_clears_network_sources(tmp_path: Path) -> None:

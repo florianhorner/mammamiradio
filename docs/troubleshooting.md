@@ -77,6 +77,11 @@ The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP
 
 - Check that `ffmpeg` is installed
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
+- For the supplied Docker image or Home Assistant app, local MP3s belong in the
+  deployment's persistent `/data/music` directory. Populate that data area
+  through the deployment's supported storage tooling; do not patch files into
+  a running Home Assistant app container. A source checkout instead reads
+  repo-local `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
 - A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
 When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means no listener queue accepted audio, not merely that a file was selected. A station bridging an empty queue on `continuity_1.mp3` is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that prefers a song the listener has not just heard, and only re-serves a recent one when the cache holds nothing else (a song from twenty minutes ago beats the station ident on a loop), then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat; the neutral two-second `emergency_tone.mp3` remains the final packaged rung when ordinary recovery cannot supply audio. After 60 seconds without any bridge asset the station requests forced banter so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth. Connecting or reconnecting to `/stream` does not clear the persisted stop; press **Resume** explicitly.

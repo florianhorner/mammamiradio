@@ -36,6 +36,37 @@ The window is normally under an hour. Leaving it open for longer is how this rep
 
 To check whether the window is open right now, run `scripts/check-advertised-version.sh`. `advertised-version.yml` runs it daily and raises a flag if it never closed.
 
+## First-listen operator check
+
+After installing the HACS integration and restarting Home Assistant once, open
+the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+authored 27-second mini-show on deck: an original music bed and a privacy-aware
+Marco/Giulia opening, then a source-aware handoff to the live stream. It needs
+no AI key or Home context. Source readiness is supporting detail under that
+opening; verify that charts, Jamendo, local music, bundled demo music, and
+recovery cover are described honestly. The listening cue must distinguish a
+primary rotation, recovery cover, and music that still needs repair; bundled
+demo music must not be presented as a promised song library.
+
+Select **Find my speakers**, choose one physical `media_player`, then select
+**Start Mamma Mi Radio**. The dispatch contract is always
+`media-source://mammamiradio/live`. An accepted Home Assistant service call is
+not audible proof: record **Yes — that’s Mamma Mi Radio** only after the opening
+reaches the room, or use the [first-listen repair
+steps](../integrations/ha-integration.md#first-listen-repair).
+
+First audio does not require an AI key. On a fresh add-on install,
+`ha_context_enabled` is omitted and effective Home context stays off. After
+audible verification, First Listen offers **Keep private and continue** without
+reading Home state, or a fresh filtered preview before **Let future hosts use
+this**. If only generic daylight is available, verify that it is disclosed as
+ambient-only and not meaningful personalization, with the private path
+recommended. AI-host setup comes later.
+
+If saving the privacy-review receipt fails, verify that the live choice remains
+truthful and AI setup stays locked: the private path retries without a preview;
+the enabled path requires a fresh preview before saving the review again.
+
 ## Version: three files, must match
 
 | File | Field | Example |
@@ -236,7 +267,7 @@ Current config options:
 |--------|-------------|---------|
 | `station_name` | `str?` | `STATION_NAME` |
 | `enable_home_assistant` | `bool?` | `HA_ENABLED` |
-| `ha_context_enabled` | `bool?` | `MAMMAMIRADIO_HA_CONTEXT_ENABLED` (on by default; turn off to keep HA entity publishing but stop full `/api/states` prompt-context polling) |
+| `ha_context_enabled` | `bool?` | `MAMMAMIRADIO_HA_CONTEXT_ENABLED` (no declared fresh-install default; missing stays omitted/off until the First Listen privacy choice) |
 | `ha_context_poll_interval` | `int(1,3600)?` | `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL` (default 300s) |
 | `ha_media_player_push` | `bool?` | `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH` (on by default; turn off when the HACS integration owns `media_player.mammamiradio`; `run.sh` missing-key fallback true) |
 | `quality_profile` | `list(premium\|balanced\|economy)?` | `MAMMAMIRADIO_QUALITY` |
@@ -252,7 +283,7 @@ Current config options:
 | `norm_cache_mb` | `int(200,8000)?` | `MAMMAMIRADIO_MAX_CACHE_MB` (Music cache size; add-on default 1500, standalone 500. Startup computes an effective limit from available disk space. See `docs/operations.md`, "Music cache sizing".) |
 | `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` (advanced optional field) |
 
-Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
+Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`). Add-on local MP3s live at `/data/music`; `run.sh` exports that path as `MAMMAMIRADIO_MUSIC_DIR` and moves it under the temporary fallback base only when `/data` is not writable.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -286,6 +317,12 @@ successful admin mode/pacing save) before changing Configuration. `JAMENDO_CLIEN
 `ADMIN_TOKEN` remain Supervisor options. `/config/secrets.env` is plaintext in the add-on config
 storage, not Home Assistant `/config/secrets.yaml`; anyone with host/add-on config access can read it.
 
+Setup treats AI-host and premium-voice readiness separately. Anthropic or
+OpenAI completes the AI-host step; OpenAI can also supply voices. Azure Speech
+and ElevenLabs are voice-only and do not unlock generated host writing. Azure
+is ready only with both its key and region; a partial pair is shown as
+incomplete.
+
 `secrets.env` grammar is intentionally small: `KEY=VALUE` lines, optional `export KEY=VALUE`,
 whitespace around keys or values, single or double quoted values, values containing `=`, UTF-8 BOM,
 and CRLF endings are accepted. Full-line comments beginning with `#` are ignored. Inline comments are
@@ -311,7 +348,7 @@ add-on-specific registry copy. An unknown experimental `--models` candidate in
 the evaluator uses the registry's conservative fallback price and is marked
 unpriced in its JSONL output.
 
-The option extraction in run.sh uses a single guarded Python script that reads keys from Supervisor's generated, read-only `/data/options.json` startup projection and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
+The option extraction in run.sh uses a single guarded Python script that reads keys from Supervisor's generated, read-only `/data/options.json` startup projection and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, an explicitly present `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Missing `ha_context_enabled` is deliberately not exported, preserving the fresh-install privacy gate. Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
 
 1. Add to `schema:` in `config.yaml`; also add to `options:` in the same relative order only if it should be visible by default
 2. Add a translation entry in `translations/en.yaml`
@@ -463,10 +500,11 @@ the other retained files hold provider keys, station memory, and history.
 Generated downloads, normalization outputs, renders, and clips warm again after
 restore.
 
-`/data/music` is deliberately retained, but it is storage-only today. The
-current app runs from `/app` and resolves its local `music/` source there; it is
-not wired to `/data/music` as an operator-managed local library. Do not describe
-backing up that directory as enabling local-library restore behavior.
+`/data/music` is the add-on's operator-managed local music library: `run.sh`
+exports it as `MAMMAMIRADIO_MUSIC_DIR`, and the app resolves local MP3s from
+that path (moving under the temporary fallback base only when `/data` is not
+writable). Backing it up restores the local library along with the rest of the
+retained state.
 
 This is a live, file-level copy, **not a copy taken from one single exact
 moment** of the retained state. SQLite may commit while Supervisor is

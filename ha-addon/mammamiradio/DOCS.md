@@ -2,7 +2,7 @@
 
 Operational guide for the Home Assistant add-on. Covers architecture, failure modes, and recovery.
 
-## First run in 4 steps
+## First run: hear one real speaker
 
 This app requires **Home Assistant OS**. Home Assistant Container does not include Apps; if **Settings → Apps** is missing, use the [Docker alternative](../../README.md#docker-alternative) instead.
 
@@ -18,21 +18,86 @@ Click Start. Watch the log for:
 - `[mammamiradio] Home Assistant API access configured via Supervisor`
 - `Producer started`
 
-First boot can take 30-90 seconds while chart tracks are downloaded and cached. No AI key is required: without one, the hosts use stock copy and fallback voices. Music is a separate requirement — live charts need outbound access, or configure a Jamendo client ID in the app's advanced options. A successful process start shows `Producer started` in the log. `/readyz` remains HTTP `503` with `status: "starting"` until a listener actually accepts audio; queued work and elapsed startup time do not make the station ready by themselves.
+First boot can take 30-90 seconds while chart tracks are downloaded and cached. No AI key is required: without one, the hosts use stock copy and fallback voices. A normal music rotation is a separate requirement — live charts need outbound access, Jamendo needs a client ID in the app's advanced options, and operator-supplied MP3s can be placed in the persistent `/data/music` directory. Packaged recovery audio can prove the speaker transport while music is repaired, but it is not reported as a healthy source. A successful process start shows `Producer started` in the log. `/readyz` remains HTTP `503` with `status: "starting"` until a listener actually accepts audio; queued work and elapsed startup time do not make the station ready by themselves.
 
-### 3. Open the Web UI and listen
+### 3. Install the HACS integration
 
-Click Open Web UI or navigate to the ingress URL in the sidebar. In add-on mode, ingress opens the admin control room first. Use the setup strip's listener action, or open `/listen`, to hear the station before adding keys. Once a listener accepts the first audio bytes, `/readyz` returns HTTP `200` with `status: "ready"`.
+Install the [Mamma Mi Radio HACS
+integration](../../docs/integrations/ha-integration.md#install-the-hacs-integration-for-speaker-playback),
+then restart Home Assistant once. The integration registers the stable
+`media-source://mammamiradio/live` source used by the First Listen
+physical-speaker path. It is optional only for browser-only listening, which
+does not count as First Listen proof.
 
-### 4. Add one AI host key, then review home context
+The setup strip's listener action and `/listen` remain available for a
+browser-only check, but that does not count as physical-speaker proof. Once any
+listener accepts the first audio bytes, `/readyz` returns HTTP `200` with
+`status: "ready"`.
 
-Use **Motore → Setup → AI hosts** to save either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key is enough to unlock generated host banter and fake ad breaks. The admin writes the key to `/config/secrets.env`, applies it live, and checks the provider without interrupting audio.
+### 4. Follow First Listen to the room
 
-After an AI host key is ready, **Home context preview** shows the filtered Home Assistant entities the hosts may use. Supervisor access is automatic in the add-on; the preview is where you inspect what the AI can see and mute any entity locally. Casual host breaks use at most one safe rotating cue, while room-presence is a separate default-off **personal on-air moment** permission. Muted entities are kept out of future prompts, public Casa moments, reactive triggers, generated labels, and running-gag inputs; current audio finishes normally, while an unstarted queued host break carrying that entity's selected director fact is removed.
+Click **Open Web UI** or use the ingress sidebar entry. A fresh unfinished
+install opens directly on **First Listen** before the control room. Follow its
+vertical path; completed and existing installs keep their normal control-room
+landing, and the First Listen tab remains available to review progress or
+repair an unfinished step:
+
+1. The opening card leads with a 27-second authored mini-show: an original music
+   bed, a privacy-aware Marco/Giulia welcome, then a handoff to the live stream.
+   No AI key or Home context is used. Source truth for live charts, Jamendo,
+   local music, bundled demo music, and recovery cover says whether primary
+   music, recovery cover, or a music repair follows the opening. Recovery audio
+   can keep the stream audible, but it is not a music rotation; bundled demo
+   music is not a promised song library.
+2. Select **Find my speakers**, choose one real Home Assistant speaker, then
+   select **Start Mamma Mi Radio**. The app asks Home Assistant to play
+   `media-source://mammamiradio/live`; it does not count browser playback.
+3. Home Assistant accepting the request is not audible proof. Select **Yes —
+   that’s Mamma Mi Radio** only when the opening reaches the room. **Not yet**
+   opens warm repair guidance for mute, volume, entity selection, HACS, and
+   media-source checks.
+
+See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen-repair) if the room stays quiet.
+
+### 5. Make the privacy choice; add AI later
+
+On a fresh install, **Host home context** is omitted from saved add-on options
+and remains off. After the speaker is confirmed, select **Keep private and
+continue** without reading Home state, or select **Show filtered preview**
+before **Let future hosts use this**. The preview is a fresh, detached Home
+Assistant read: it is not published into host scripts and is not sent to an AI
+provider. A preview containing only generic daylight is disclosed as
+ambient-only and not meaningful personalization; keeping it private is the
+recommended path. For a useful preview, inspect the filtered entities and mute
+any entity locally if needed. Enabling requires that fresh preview.
+
+If that live privacy choice applies but the setup review cannot be saved, the
+choice is not rolled back. The private path offers **Save private review again**
+without reading Home state. An enabled choice remains active but requires a
+fresh filtered preview before **Save review again**. AI-host setup remains
+locked until the review receipt is saved.
+
+Use **AI hosts — optional** afterward to save either `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
+admin writes the key to `/config/secrets.env`, applies it live, and checks the
+provider without interrupting audio. First audio never needs it.
+
+AI-host and premium-voice readiness are separate. Anthropic or OpenAI completes
+the AI-host step; OpenAI also provides a premium voice path. Azure Speech and
+ElevenLabs are voice-only and leave AI hosts optional. Azure is ready only when
+both its key and region are present; one without the other is reported as
+incomplete rather than ready.
+
+When Home context is enabled, casual host breaks use at most one safe rotating
+cue, while room-presence is a separate default-off **personal on-air moment**
+permission. Muted entities are kept out of future prompts, public Casa moments,
+reactive triggers, generated labels, and running-gag inputs; current audio
+finishes normally, while an unstarted queued host break carrying that entity's
+selected director fact is removed.
 
 Premium voice keys are optional and separate from the first AI-host unlock.
 
-The Home Assistant controls are separate too. **Enable Home Assistant Integration** is the master connection for entity publishing, optional host context, and timer interrupts. **Host home context** controls the full filtered state polling used for AI prompts; turn it off to keep the integration, entity publishing, and timer interrupts while keeping home state out of host prompts. Both default to on, and the prompt-context refresh interval defaults to 300 seconds.
+The Home Assistant controls are separate too. **Enable Home Assistant Integration** is the master connection for entity publishing, optional host context, and timer interrupts. **Host home context** controls the filtered state and timer polling used for host programming; keep it off to retain the integration and entity publishing while suspending Home-state reads, timer interrupts, and Home-derived host work. The integration defaults on. On a fresh add-on install, Home context has no declared default and stays off until first audio is confirmed and the explicit First Listen choice is recorded; the prompt-context refresh interval defaults to 300 seconds once enabled.
 
 The admin stores provider credentials in `/config/secrets.env` inside the add-on config folder. Supported keys are
 `ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter, ads, and OpenAI
@@ -65,7 +130,7 @@ The command writes clips and a `manifest.json` under `tmp/voice-auditions/`.
 Providers without credentials are listed as skipped instead of being hidden by
 the runtime Edge fallback.
 
-Without an AI key, the station runs in Demo Mode: host writing falls back to stock copy and fallback voices. Demo Mode does not bundle a song library; in the Home Assistant app, music still comes from reachable charts or Jamendo. The bundled recovery clip covers thin-queue moments but is not a rotation.
+Without an AI key, the station runs in Demo Mode: host writing falls back to stock copy and fallback voices. The First Listen mini-show makes the station identity and both stock hosts audible immediately, but Demo Mode still does not promise a bundled song library; in the Home Assistant app, rotation music comes from reachable charts, Jamendo, or MP3s in `/data/music`. The bundled recovery clip covers thin-queue moments but is not a rotation.
 
 ## Architecture
 
@@ -84,6 +149,7 @@ HA Supervisor
   |
   +-- /data/ (persistent across restarts)
         +-- cache/   (downloaded track audio — survives restarts)
+        +-- music/   (operator-supplied MP3s)
         +-- tmp/     (rendered segments — ephemeral)
 ```
 
@@ -106,8 +172,9 @@ playing.
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.
 
-Files in `/data/music` are kept as storage, but this app version does not use
-that folder as a local music library.
+Files in `/data/music` are your local music library: the station reads MP3s
+from that folder as a music source, and a restore brings the library back
+ready to play.
 
 A hot backup copies retained files while the station is active, so it is not a
 copy taken from one single exact moment. After a restore, confirm
@@ -120,8 +187,8 @@ its files by hand.
 ## Startup sequence
 
 1. Supervisor materializes the read-only `/data/options.json` startup projection; `run.sh` reads it, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
-2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, maps **Enable Home Assistant Integration** to `HA_ENABLED`, and maps the separate Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`.
-3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`) and starts uvicorn.
+2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, maps **Enable Home Assistant Integration** to `HA_ENABLED`, and maps the separate Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`. A missing `ha_context_enabled` key remains omitted so a fresh install can start with context off until Setup records the operator's choice.
+3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`), sets `MAMMAMIRADIO_MUSIC_DIR=/data/music`, and starts uvicorn.
 4. `mammamiradio/main.py` loads `radio.toml` and validates config.
 5. `fetch_playlist()` downloads Italian chart tracks via yt-dlp (first boot: slow, cached after).
 6. Producer and playback tasks start once the first segment is ready.
@@ -263,10 +330,19 @@ Inputs to run.sh
   |     Supervisor /addons/self/info and persisted here.
   |
   +-- SUPERVISOR_TOKEN
-        |
-        +-- run.sh maps HA_TOKEN + HA_URL=http://supervisor/core
-        +-- run.sh sets bind/cache/tmp/yt-dlp add-on defaults
-        +-- config.py reads the exported environment and applies overrides
+  |
+  +-- run.sh maps Supervisor token
+  |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
+  |
+  +-- run.sh sets add-on defaults
+  |     MAMMAMIRADIO_MUSIC_DIR=/data/music
+  |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
+  |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
+  |     MAMMAMIRADIO_ALLOW_YTDLP=true
+  |
+  +-- config.py reads the exported environment and applies add-on overrides
+        homeassistant.url -> http://supervisor/core
+        ha_token <- SUPERVISOR_TOKEN (addon mode overrides HA_TOKEN)
 ```
 
 ## Ingress URL flow

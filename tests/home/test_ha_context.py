@@ -62,8 +62,10 @@ from mammamiradio.home.ha_context import (
     classify_home_mood_en,
     discard_home_context_entities,
     fetch_home_context,
+    fetch_home_context_preview,
     fetch_weather_forecast,
     get_cached_home_context,
+    invalidate_all_home_context,
     invalidate_home_context_entity_baselines,
     push_state_to_ha,
     revalidate_home_context_mutes,
@@ -1582,6 +1584,138 @@ def _mock_ha_response():
             "attributes": {"temperature": 22, "temperature_unit": "°C"},
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_home_context_preview_is_fresh_narrow_and_never_published(tmp_path):
+    import mammamiradio.home.ha_context as ha_context
+
+    states = [
+        {
+            "entity_id": "weather.home",
+            "state": "sunny",
+            "attributes": {"temperature": 21, "temperature_unit": "°C"},
+        },
+        {
+            "entity_id": "person.private_resident",
+            "state": "home",
+            "attributes": {"friendly_name": "Private resident"},
+        },
+    ]
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=json.dumps(states).encode(), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    retained = HomeContext(
+        raw_states={"switch.private": {"state": "on", "attributes": {}}},
+        authorization_mode=HomeAuthorizationMode.LEGACY.value,
+        timestamp=1.0,
+    )
+    radio_baseline = {"switch.private": {"state": "on"}}
+    ritual_baseline = {"person.private_resident": {"state": "home"}}
+
+    async with client:
+        with (
+            patch("mammamiradio.home.ha_context._get_ha_client", return_value=client),
+            patch.object(ha_context, "_ha_cache", retained),
+            patch.object(ha_context, "_radio_event_state_cache", radio_baseline),
+            patch.object(ha_context, "_ritual_recipe_state_cache", ritual_baseline),
+        ):
+            result = await fetch_home_context_preview(
+                "http://ha:8123",
+                "token",
+                cache_dir=tmp_path,
+                authorization=HomeAuthorization.narrow(),
+            )
+
+            assert result.is_fresh is True
+            assert set(result.context.raw_states) == {"weather.ambient"}
+            assert result.context.authorization_mode == HomeAuthorizationMode.NARROW.value
+            assert ha_context._ha_cache is retained
+            assert ha_context._radio_event_state_cache is radio_baseline
+            assert ha_context._ritual_recipe_state_cache is ritual_baseline
+
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_home_context_preview_maps_auth_failure_without_stale_fallback(tmp_path):
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        with patch("mammamiradio.home.ha_context._get_ha_client", return_value=client):
+            result = await fetch_home_context_preview(
+                "http://ha:8123",
+                "secret-token",
+                cache_dir=tmp_path,
+            )
+
+    assert result.kind == "failed"
+    assert result.error_code == "ha_auth_failed"
+    assert result.context.raw_states == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_length", ["not-a-size", "-1", "oversized"])
+async def test_home_context_preview_rejects_invalid_response_size_before_projection(tmp_path, invalid_length):
+    import mammamiradio.home.ha_context as ha_context
+
+    content_length = (
+        str(ha_context._HA_PREVIEW_RESPONSE_MAX_BYTES + 1) if invalid_length == "oversized" else invalid_length
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-length": content_length},
+            content=b"[]",
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        with (
+            patch("mammamiradio.home.ha_context._get_ha_client", return_value=client),
+            patch("mammamiradio.home.ha_context._project_home_context") as project,
+        ):
+            result = await fetch_home_context_preview("http://ha:8123", "token", cache_dir=tmp_path)
+
+    assert result.kind == "failed"
+    assert result.error_code == "preview_unavailable"
+    project.assert_not_called()
+
+
+def test_invalidate_all_home_context_clears_runtime_and_registry_cache(tmp_path):
+    import mammamiradio.home.ha_context as ha_context
+
+    registry_cache = tmp_path / "ha_registry.json"
+    registry_cache.write_text("{}", encoding="utf-8")
+    context = HomeContext(raw_states={"switch.private": {"state": "on", "attributes": {}}})
+
+    with (
+        patch.object(ha_context, "_ha_cache", context),
+        patch.object(ha_context, "_radio_event_state_cache", {"switch.private": {"state": "on"}}),
+        patch.object(ha_context, "_ritual_recipe_state_cache", {"switch.private": {"state": "on"}}),
+        patch.object(ha_context, "_ha_registry_snapshot_cache", HomeRegistrySnapshot(source="memory")),
+        patch.object(ha_context, "_ha_registry_fetched_at", 1.0),
+        patch.object(ha_context, "_weather_forecast_cache", "Private weather"),
+        patch.object(ha_context, "_weather_forecast_cache_en", "Private weather"),
+        patch.object(ha_context, "_weather_forecast_fetched_at", 1.0),
+        patch.object(ha_context, "_home_context_invalidation_generation", 7),
+    ):
+        generation = invalidate_all_home_context(tmp_path)
+
+        assert generation == 8
+        assert ha_context._ha_cache is None
+        assert ha_context._radio_event_state_cache == {}
+        assert ha_context._ritual_recipe_state_cache == {}
+        assert ha_context._ha_registry_snapshot_cache is None
+        assert ha_context._weather_forecast_cache == ""
+        assert ha_context._weather_forecast_cache_en == ""
+        assert not registry_cache.exists()
 
 
 @pytest.mark.asyncio

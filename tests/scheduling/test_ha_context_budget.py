@@ -713,11 +713,256 @@ async def test_shutdown_cancels_and_awaits_late_task_without_post_shutdown_state
     )
 
 
+@pytest.mark.asyncio
+async def test_revoke_cancels_inflight_fetch_clears_handoffs_and_requires_explicit_enable(tmp_path):
+    config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
+    prior = _snapshot("private prior", age=0.02)
+    state = StationState(
+        ha_pending_directive="mention the kitchen",
+        ha_pending_directive_moment_id="moment-1",
+        ha_pending_directive_source="ha",
+        ha_running_gag="the coffee machine",
+        ha_running_gag_key="coffee",
+        ha_running_gag_moment_id="moment-2",
+    )
+    state.last_banter_home_fact = MagicMock()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    calls = 0
+
+    async def _fetch(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+        return _outcome(_snapshot("fresh after enable"))
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(producer, "_fetch_home_context_outcome", _fetch),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True),
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        preparing = asyncio.create_task(coordinator.prepare_for_segment())
+        await asyncio.wait_for(started.wait(), timeout=0.1)
+
+        config.homeassistant.context_enabled = False
+        coordinator.suspend()
+        # The privacy boundary is synchronous; no cleanup await is needed to
+        # remove prompt ownership or cancel the retained request.
+        assert coordinator.current_context is None
+        assert coordinator.in_flight_task is not None
+        assert coordinator.in_flight_task.cancelling()
+        assert state.ha_pending_directive == ""
+        assert state.ha_pending_directive_moment_id == ""
+        assert state.ha_pending_directive_source == ""
+        assert state.ha_running_gag == ""
+        await coordinator.revoke()
+        revoked_context, revoked_handoff = await asyncio.wait_for(preparing, timeout=0.1)
+
+        assert cancelled.is_set()
+        assert revoked_context.summary == ""
+        assert not revoked_handoff
+        assert coordinator.current_context is None
+        assert coordinator.in_flight_task is None
+        assert state.ha_pending_directive == ""
+        assert state.ha_pending_directive_moment_id == ""
+        assert state.ha_pending_directive_source == ""
+        assert state.ha_running_gag == ""
+        assert state.ha_running_gag_key == ""
+        assert state.ha_running_gag_moment_id == ""
+        assert state.last_banter_home_fact is None
+        assert not state.ha_context_refresh_in_flight
+        assert not state.ha_context_refresh_configured
+        assert state.ha_context_refresh_last_attempt_at == 0.0
+
+        still_off, off_handoff = await coordinator.prepare_for_segment()
+        assert still_off.summary == ""
+        assert not off_handoff
+        assert calls == 1
+
+        config.homeassistant.context_enabled = True
+        coordinator.enable()
+        refreshed, fresh_handoff = await coordinator.prepare_for_segment()
+        assert refreshed.summary == "fresh after enable"
+        assert fresh_handoff
+        assert calls == 2
+        await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_suspend_discards_completed_pre_cutover_refresh_before_drain(tmp_path):
+    config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
+    prior = _snapshot("private prior", age=0.02)
+    observer = MagicMock()
+    state = StationState(home_entity_ids_observer=observer)
+    candidate = _snapshot("private completed candidate")
+    outcome = _HomeContextFetchOutcome(
+        kind="fresh",
+        context=candidate,
+        snapshot_timestamp=candidate.timestamp,
+        attempt_started_at=candidate.timestamp,
+        attempt_finished_at=candidate.timestamp,
+        duration_seconds=0.001,
+        observed_entity_ids=frozenset({"sensor.private_room"}),
+    )
+
+    async def _completed_fetch(**_kwargs):
+        return outcome
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(producer, "_fetch_home_context_outcome", _completed_fetch),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        coordinator._start_attempt()
+        task = coordinator.in_flight_task
+        assert task is not None
+        await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+        assert task.done()
+        observer.assert_not_called()
+        publish.assert_not_called()
+
+        config.homeassistant.context_enabled = False
+        coordinator.suspend()
+        # Re-enabling may authorize a new refresh, never the completed result
+        # from the privacy era that was just revoked.
+        config.homeassistant.context_enabled = True
+        coordinator.enable()
+        assert await coordinator._drain_completed_result() is None
+
+        assert coordinator.current_context is None
+        observer.assert_not_called()
+        publish.assert_not_called()
+        await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_normal_completion_rechecks_generation_after_observer_before_publish(tmp_path):
+    config = _config(tmp_path, timeout=0.05, poll_interval=0.01)
+    prior = _snapshot("private prior", age=0.02)
+    state = StationState()
+    candidate = _snapshot("private completed candidate")
+    outcome = _HomeContextFetchOutcome(
+        kind="fresh",
+        context=candidate,
+        snapshot_timestamp=candidate.timestamp,
+        attempt_started_at=candidate.timestamp,
+        attempt_finished_at=candidate.timestamp,
+        duration_seconds=0.001,
+        observed_entity_ids=frozenset({"sensor.private_room"}),
+    )
+
+    async def _completed_fetch(**_kwargs):
+        return outcome
+
+    with (
+        patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
+        patch.object(producer, "_fetch_home_context_outcome", _completed_fetch),
+        patch.object(producer, "_publish_home_context_outcome", return_value=True) as publish,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        observer = MagicMock(side_effect=lambda _entity_ids: coordinator.suspend())
+        state.home_entity_ids_observer = observer
+        coordinator._start_attempt()
+        task = coordinator.in_flight_task
+        assert task is not None
+        await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+
+        assert await coordinator._drain_completed_result() is None
+
+        observer.assert_called_once_with(frozenset({"sensor.private_room"}))
+        publish.assert_not_called()
+        assert coordinator.current_context is None
+        await coordinator.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "preserved"),
+    [
+        ("ha", False),
+        ("ha:sensor.private_room", False),
+        ("", False),
+        ("legacy_home", False),
+        ("operator", True),
+        ("skip_bit", True),
+    ],
+)
+async def test_suspend_clears_home_owned_directives_and_preserves_explicit_sources(tmp_path, source, preserved):
+    config = _config(tmp_path)
+    state = StationState(
+        ha_pending_directive="pending words",
+        ha_pending_directive_moment_id="moment-1",
+        ha_pending_directive_source=source,
+    )
+    coordinator = _HAContextRefreshCoordinator(config, state)
+
+    coordinator.suspend()
+
+    if preserved:
+        assert state.ha_pending_directive == "pending words"
+        assert state.ha_pending_directive_moment_id == "moment-1"
+        assert state.ha_pending_directive_source == source
+    else:
+        assert state.ha_pending_directive == ""
+        assert state.ha_pending_directive_moment_id == ""
+        assert state.ha_pending_directive_source == ""
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_suspend_clears_timer_directive_as_home_owned(tmp_path):
+    config = _config(tmp_path)
+    state = StationState(
+        ha_pending_directive="the pasta timer is done",
+        ha_pending_directive_moment_id="timer-moment",
+        ha_pending_directive_source="timer",
+    )
+    coordinator = _HAContextRefreshCoordinator(config, state)
+
+    coordinator.suspend()
+
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+    await coordinator.close()
+
+
 def test_has_real_home_context():
     assert not producer._has_real_home_context(None)
     assert not producer._has_real_home_context(HomeContext())
     assert producer._has_real_home_context(HomeContext(timestamp=1.0))
     assert producer._has_real_home_context(HomeContext(summary="something"))
+
+
+@pytest.mark.asyncio
+async def test_disabled_coordinator_never_seeds_or_fetches_cached_home_context(tmp_path):
+    config = _config(tmp_path)
+    config.homeassistant.context_enabled = False
+    state = StationState()
+    cached = _snapshot("private cached context")
+
+    with (
+        patch.object(producer, "get_cached_home_context", return_value=cached) as get_cached,
+        patch.object(producer, "_fetch_home_context_outcome", new_callable=AsyncMock) as fetch,
+    ):
+        coordinator = _HAContextRefreshCoordinator(config, state)
+        try:
+            context, handoff = await coordinator.prepare_for_segment()
+        finally:
+            await coordinator.close()
+
+    assert context.summary == ""
+    assert not handoff
+    get_cached.assert_not_called()
+    fetch.assert_not_called()
 
 
 @pytest.mark.asyncio

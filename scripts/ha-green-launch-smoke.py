@@ -22,6 +22,16 @@ looser 8s already-running budget); it does not claim process-spawn-to-audio
 latency. Launch-specific semantic checks then require health, readiness, and
 public status to agree after audio is accepted.
 
+Both scenarios boot as fresh installs, so ``/stream`` answers that first byte
+from the client-local First Listen prelude before the listener joins the
+shared ``LiveStreamHub`` — first byte alone no longer proves the live station
+accepted audio. After the first-byte check, the smoke therefore holds one
+listener that keeps reading past the prelude (the producer wakes for it) and
+waits for ``/readyz`` to flip ready within the held-listener budget before
+asserting the post-stream contract. That budget must stay well inside the
+packaged prelude's ~27s of runway audio: readiness has to arrive while the
+speaker is still covered, or a real listener would hear the gap.
+
 Pass ``--image IMAGE_REF`` to run the same two scenarios against an already
 built add-on image. Image mode creates isolated Docker volumes, starts the
 image's real ``/run.sh`` entrypoint with Docker networking disabled, and runs
@@ -31,6 +41,10 @@ repository source or configuration onto the image.
 Env overrides:
   MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S   strict first-byte bound (default 2.0)
   MAMMAMIRADIO_LAUNCH_STARTUP_S      boot budget before health ok (default 60)
+  MAMMAMIRADIO_LAUNCH_READY_S        held-listener readiness budget (default 15,
+                                     capped at 22 so readiness lands while the
+                                     ~27s packaged prelude still covers the
+                                     listener)
 """
 
 from __future__ import annotations
@@ -190,6 +204,82 @@ socket.socket.connect = _guarded_socket_connect
 socket.socket.connect_ex = _guarded_socket_connect_ex
 socket.create_connection = _guarded_create_connection
 """
+# A fresh install serves the client-local First Listen prelude before the
+# listener joins the shared hub, so a single first byte does not prove the
+# live station accepted audio. This held listener keeps reading past the
+# prelude — the producer wakes for it — while the main thread waits for
+# /readyz to flip ready inside the budget. argv: base_url, budget seconds.
+# Runs unchanged in local-process mode (loopback subprocess) and inside the
+# built add-on image (docker exec), so the two modes cannot drift.
+_HELD_LISTENER_READY_SOURCE = """\
+import json
+import sys
+import threading
+import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+base_url = sys.argv[1].rstrip("/")
+budget_s = float(sys.argv[2])
+deadline = time.monotonic() + budget_s
+stop_draining = threading.Event()
+
+
+def _drain_stream() -> None:
+    request = Request(base_url + "/stream", headers={"Accept": "audio/mpeg"})
+    try:
+        with urlopen(request, timeout=budget_s + 5.0) as response:
+            while not stop_draining.is_set():
+                if not response.read(65536):
+                    return
+    except Exception:
+        # The /readyz poll below owns the verdict; a dropped listener simply
+        # stops feeding it and the deadline reports the honest failure.
+        return
+
+
+listener = threading.Thread(target=_drain_stream, daemon=True)
+listener.start()
+
+last_observation = "no /readyz response before the deadline"
+ready = False
+while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        break
+    request = Request(base_url + "/readyz", headers={"Accept": "application/json"})
+    try:
+        # Never let a single poll outlive the budget: a request started just
+        # before the deadline must not return ready seconds after listener
+        # coverage ended and still count.
+        with urlopen(request, timeout=min(3.0, remaining)) as response:
+            status = response.status
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except HTTPError as exc:
+        status = exc.code
+        try:
+            payload = json.loads(exc.read().decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+    except (TimeoutError, URLError) as exc:
+        last_observation = "/readyz unavailable: " + str(exc)
+        time.sleep(0.25)
+        continue
+    last_observation = "HTTP " + str(status) + " " + json.dumps(payload)
+    if time.monotonic() >= deadline:
+        # The response arrived after the deadline. Readiness observed outside
+        # the held-listener window proves nothing about a covered speaker.
+        last_observation += " (received after the readiness deadline)"
+        break
+    if status == 200 and payload.get("ready") is True:
+        ready = True
+        break
+    time.sleep(0.25)
+
+stop_draining.set()
+print(last_observation)
+raise SystemExit(0 if ready else 1)
+"""
 
 
 def _env_float(name: str, default: str) -> float:
@@ -205,6 +295,20 @@ def _env_float(name: str, default: str) -> float:
 
 FIRST_BYTE_S = _env_float("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "2.0")
 STARTUP_S = _env_float("MAMMAMIRADIO_LAUNCH_STARTUP_S", "60")
+# Held-listener readiness budget. Must stay well under the packaged First
+# Listen prelude's ~27s of runway audio (see the module docstring): the live
+# station has to be ready while the prelude still covers the speaker. The
+# ceiling keeps a 5s safety margin under that runway, so an env override
+# cannot quietly accept readiness that lands after the speaker went silent.
+_PRELUDE_RUNWAY_S = 27.0
+_READY_BUDGET_CEILING_S = _PRELUDE_RUNWAY_S - 5.0
+READY_S = _env_float("MAMMAMIRADIO_LAUNCH_READY_S", "15")
+if READY_S > _READY_BUDGET_CEILING_S:
+    raise RuntimeError(
+        f"MAMMAMIRADIO_LAUNCH_READY_S must stay at or under {_READY_BUDGET_CEILING_S:g}s "
+        f"so readiness lands while the packaged prelude (~{_PRELUDE_RUNWAY_S:g}s) still "
+        f"covers the listener, got {READY_S:g}"
+    )
 
 
 def _free_port() -> int:
@@ -352,6 +456,28 @@ def _fetch_json_status(base_url: str, path: str) -> tuple[int, dict]:
 
 def _post_stream_statuses(base_url: str) -> dict[str, tuple[int, dict]]:
     return {path: _fetch_json_status(base_url, path) for path in ("/healthz", "/readyz", "/public-status")}
+
+
+def _hold_listener_until_ready(base_url: str, *, env: dict[str, str], cwd: str | Path) -> None:
+    """Hold one draining listener on ``/stream`` until ``/readyz`` flips ready.
+
+    The perf smoke's first-byte probe disconnects after one byte, which on a
+    fresh install is First Listen prelude audio served before the listener
+    joins the live hub — the producer never sees that listener. This runs the
+    shared held-listener source in a child process (under the same loopback
+    network guard) so the live station demonstrably wakes and accepts audio
+    inside READY_S before the post-stream contract is asserted.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _HELD_LISTENER_READY_SOURCE, base_url, str(READY_S)],
+        env=env,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stdout or result.stderr or "unknown error").strip()
+        raise RuntimeError(f"station did not accept hub audio within {READY_S:.0f}s of a held listener: {detail}")
 
 
 def _assert_post_stream_status(statuses: dict[str, tuple[int, dict]]) -> None:
@@ -584,6 +710,29 @@ def _run_image_launch_scenario(
             print(f"[FAIL] {label}: built-image first-byte smoke failed", file=sys.stderr)
             return False
 
+        # Same held-listener step as local mode, run inside the container so
+        # the network-disabled image proves hub-accepted audio over loopback.
+        held = _run_docker(
+            [
+                "exec",
+                container_name,
+                "python3",
+                "-c",
+                _HELD_LISTENER_READY_SOURCE,
+                "http://127.0.0.1:8000",
+                str(READY_S),
+            ]
+        )
+        if held.returncode != 0:
+            _print_image_logs(container_name)
+            detail = (held.stdout or held.stderr or "unknown error").strip()
+            print(
+                f"[FAIL] {label}: built image did not accept hub audio within {READY_S:.0f}s "
+                f"of a held listener: {detail}",
+                file=sys.stderr,
+            )
+            return False
+
         try:
             _assert_post_stream_status(_image_post_stream_statuses(container_name))
         except RuntimeError as exc:
@@ -672,6 +821,7 @@ def _run_launch_scenario(label: str, *, seed_warm_cache: bool, expected_sources:
                 return False
 
             try:
+                _hold_listener_until_ready(base_url, env=smoke_env, cwd=run_dir)
                 _assert_post_stream_status(_post_stream_statuses(base_url))
             except RuntimeError as exc:
                 print(f"[FAIL] {label}: {exc}", file=sys.stderr)
