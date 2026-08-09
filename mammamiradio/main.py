@@ -582,9 +582,7 @@ async def startup():
     # A proven pre-feature install may restore legacy-on after audio starts, so
     # that temporary runtime gate must not erase its durable evening history.
     explicit_home_context_off_purge_pending = False
-    if home_context_explicit_choice is False and evening_ledger.buckets:
-        evening_ledger.buckets.clear()
-        evening_ledger._dirty = True
+    if home_context_explicit_choice is False and evening_ledger.purge_all_buckets():
         explicit_home_context_off_purge_pending = True
     if not explicit_home_context_off_purge_pending:
         evening_ledger.save_if_dirty(config.cache_dir)
