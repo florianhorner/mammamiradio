@@ -2283,6 +2283,12 @@ async def write_banter(
     # SECURITY: instructions are placed OUTSIDE the data tags so injected
     # content within state values cannot override the boundary instruction.
     home_context_enabled = bool(config.homeassistant.enabled and config.homeassistant.context_enabled)
+    if not home_context_enabled:
+        # A Home-derived fact must not reach the prompt, the home_fact_id
+        # contract, or the producer handoff while context is disabled. Dropping
+        # it here keeps the schema, the HOME FACT CONTRACT, the repair check,
+        # and state.last_banter_home_fact consistent with the gated prompt.
+        prompt_fact = None
     ha_block = ""
     home_state_sections = []
     if home_context_enabled and prompt_fact is not None:

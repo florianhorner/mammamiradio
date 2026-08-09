@@ -660,7 +660,45 @@ async def test_write_banter_uses_only_selected_home_fact_and_keeps_opaque_handof
 
 
 @pytest.mark.asyncio
+async def test_context_off_drops_supplied_prompt_fact_from_prompt_contract_and_handoff(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    from mammamiradio.home.context_director import PromptFact
+
+    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    response = {
+        "lines": [
+            {"host": config.hosts[0].name, "text": "The studio stays with the music."},
+            {"host": config.hosts[1].name, "text": "Always does."},
+        ],
+        "new_joke": None,
+        "home_fact_id": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ) as generate:
+        result, _ = await write_banter(state, config, prompt_fact=fact, use_directed_home_context=True)
+
+    assert len(result) == 2
+    # One call only: the contract must expect null, not force a repair round
+    # for a cue the model never received.
+    assert generate.await_count == 1
+    prompt = generate.await_args.kwargs["prompt"]
+    assert "AMBIENT CUE" not in prompt
+    assert "Sole e 24 gradi." not in prompt
+    assert "opaque-fact-1" not in prompt
+    assert "Return home_fact_id as null." in prompt
+    # The producer handoff must not attach home-fact metadata either.
+    assert state.last_banter_home_fact is None
+
+
+@pytest.mark.asyncio
 async def test_write_banter_repairs_mismatched_home_fact_id_once(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     from mammamiradio.home.context_director import PromptFact
 
@@ -688,6 +726,8 @@ async def test_write_banter_repairs_mismatched_home_fact_id_once(config, state):
 async def test_write_banter_keeps_good_banter_when_home_fact_id_unrecoverable(config, state):
     """A model that refuses the id contract twice must NOT sink good banter to
     stock copy — the banter airs, just without an attached (tracked) home fact."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     from mammamiradio.home.context_director import HomeContextDirector, PromptFact
 
