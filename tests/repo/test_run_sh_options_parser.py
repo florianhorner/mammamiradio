@@ -183,9 +183,22 @@ def test_parser_exits_zero_on_valid_options():
 def test_addon_runtime_exports_one_music_directory_for_persistent_and_fallback_data():
     body = RUN_SH.read_text(encoding="utf-8")
 
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="/data/music"' in body
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' in body
-    assert 'mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"' in body
+    # The persistent export is the unconditional default...
+    fallback_branch_match = re.search(
+        r"(?ms)^if ! mkdir -p /data/cache /data/music /data/tmp\b.*?^fi$",
+        body,
+    )
+    assert fallback_branch_match, "run.sh lost its /data-not-writable fallback branch"
+    fallback_branch = fallback_branch_match.group(0)
+    before_branch = body[: fallback_branch_match.start()]
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="/data/music"' in before_branch
+    # ... and the fallback export must stay INSIDE the failure branch. An
+    # unconditional fallback would silently move every install off the
+    # persistent /data/music library.
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' in fallback_branch
+    assert 'mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"' in fallback_branch
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in before_branch
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in body[fallback_branch_match.end() :]
 
 
 def test_parser_exports_anthropic_api_key():
