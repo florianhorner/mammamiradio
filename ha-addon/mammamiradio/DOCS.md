@@ -172,8 +172,9 @@ playing.
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.
 
-Files in `/data/music` are kept as storage, but this app version does not use
-that folder as a local music library.
+Files in `/data/music` are your local music library: the station reads MP3s
+from that folder as a music source, and a restore brings the library back
+ready to play.
 
 A hot backup copies retained files while the station is active, so it is not a
 copy taken from one single exact moment. After a restore, confirm
