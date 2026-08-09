@@ -320,6 +320,24 @@ def test_unrecognized_install_origin_fails_closed_until_onboarding_is_complete()
     assert first_listen_onboarding_active("malformed", audio_complete=True, privacy_complete=True) is False
 
 
+def test_onboarding_is_never_mandatory_without_home_assistant_access() -> None:
+    """A standalone install cannot complete the speaker check, so it is not owed one."""
+    assert (
+        first_listen_onboarding_active("fresh", audio_complete=False, privacy_complete=False, ha_access_available=False)
+        is False
+    )
+    assert (
+        first_listen_onboarding_active(
+            "unknown", audio_complete=False, privacy_complete=False, ha_access_available=False
+        )
+        is False
+    )
+    assert (
+        first_listen_onboarding_active("fresh", audio_complete=False, privacy_complete=False, ha_access_available=True)
+        is True
+    )
+
+
 def test_build_setup_status_homeassistant_essential_requires_prompt_safe_context():
     config = load_config()
     config.anthropic_api_key = "sk-ant"

@@ -415,10 +415,17 @@ class FirstListenInstallOriginV1:
 
 @dataclass(frozen=True, slots=True)
 class FirstListenInstallOriginCapture:
-    """In-memory database-existence fact captured before schema initialization."""
+    """In-memory database-existence fact captured before schema initialization.
+
+    ``database_bare`` distinguishes a real prior install (a populated schema)
+    from the file a crashed first boot leaves behind before any table commits.
+    An unreadable preexisting file cannot prove a completed install and also
+    reads as bare.
+    """
 
     db_path: Path
     database_preexisted: bool
+    database_bare: bool = False
 
 
 class FirstListenOriginSentinelState(StrEnum):
@@ -448,10 +455,33 @@ class _InstallOriginWitnessV1:
         }
 
 
+# Every completed post-R0 boot persists this witness table (DATABASE_ORIGIN_TABLE
+# in home/migration.py — duplicated here because core must not import home; a
+# drift-guard test asserts the two spellings stay identical).
+_COMPLETED_BOOT_MARKER_TABLE = "_mammamiradio_home_install_origin_v1"
+
+
 def capture_first_listen_install_origin(db_path: Path) -> FirstListenInstallOriginCapture:
-    """Capture the only database-existence fact eligible for first-boot migration."""
+    """Capture the only database-existence facts eligible for first-boot migration."""
     path = Path(db_path)
-    return FirstListenInstallOriginCapture(db_path=path, database_preexisted=path.exists())
+    preexisted = path.exists()
+    bare = False
+    if preexisted:
+        bare = True
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=1.0)
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (_COMPLETED_BOOT_MARKER_TABLE,),
+            ).fetchone()
+            bare = row is None
+        except (OSError, sqlite3.Error, ValueError, TypeError):
+            bare = True
+        finally:
+            if conn is not None:
+                conn.close()
+    return FirstListenInstallOriginCapture(db_path=path, database_preexisted=preexisted, database_bare=bare)
 
 
 def ensure_first_listen_origin_sentinel(conn: sqlite3.Connection) -> FirstListenOriginSentinelState:

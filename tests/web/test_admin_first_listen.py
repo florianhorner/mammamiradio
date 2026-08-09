@@ -200,8 +200,11 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     assert "privacyMilestone?'complete':existingPrivacyReview?'current'" in progress
     assert "sourceKnown?'complete':priorInstall?'available':'current'" in progress
     assert "priorInstall?'complete':!sourceKnown?'locked'" in progress
-    assert "firstListenSetStep('firstListenAiStep',privacyMilestone?'current':'locked')" in progress
-    assert "aiFieldset.disabled=!privacyMilestone||!projection.showAi" in progress
+    assert (
+        "firstListenSetStep('firstListenAiStep',(privacyMilestone||!projection.haAccess)?'current':'locked')"
+        in progress
+    )
+    assert "aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi" in progress
     assert "First Listen does not make you replay it." in progress
     assert "Review Home context next." in progress
 
@@ -255,7 +258,7 @@ def test_no_ai_key_is_needed_for_first_audio() -> None:
     assert "newly generated conversations" in html
     assert 'id="firstListenAiBody" hidden aria-hidden="true" inert' in html
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    assert "aiFieldset.disabled=!privacyMilestone||!projection.showAi" in progress
+    assert "aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi" in progress
     assert "filter(e=>e.key==='llm_keys')" in progress
     start_block = _function("startFirstListen", "verifyFirstListen")
     assert "setupAnthropicKey" not in start_block

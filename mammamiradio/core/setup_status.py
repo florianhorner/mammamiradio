@@ -327,8 +327,14 @@ def first_listen_onboarding_active(
     *,
     audio_complete: bool,
     privacy_complete: bool,
+    ha_access_available: bool = True,
 ) -> bool:
     """Return whether the operator still needs the speaker-check onboarding sequence."""
+    # Without Home Assistant access the speaker check can never complete, so a
+    # standalone install must not be held in a mandatory sequence (or lose the
+    # AI-key step hidden behind it). The guided path stays offered, not owed.
+    if not ha_access_available:
+        return False
     if install_origin == "existing":
         return False
     # Only a proven pre-feature install gets the compatibility bypass. Treat
@@ -408,6 +414,7 @@ def build_guided_setup(
         install_origin,
         audio_complete=audio_complete,
         privacy_complete=privacy_complete,
+        ha_access_available=has_ha_access,
     )
     source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
     source_map = source_readiness.get("sources") if isinstance(source_readiness.get("sources"), dict) else {}
@@ -841,6 +848,7 @@ def build_setup_status(
         guided_setup["first_listen"]["install_origin"],
         audio_complete=guided_setup["first_listen"]["audio_complete"],
         privacy_complete=guided_setup["first_listen"]["privacy_complete"],
+        ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
     )
 
     signature_data = {
@@ -880,6 +888,7 @@ def build_setup_status(
                 guided_setup["first_listen"]["install_origin"],
                 audio_complete=guided_setup["first_listen"]["audio_complete"],
                 privacy_complete=guided_setup["first_listen"]["privacy_complete"],
+                ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
             )
             and not guided_setup["first_listen"]["accepted_attempt_id"]
             else "Confirm whether you hear Mamma Mi Radio on the selected speaker."
@@ -887,6 +896,7 @@ def build_setup_status(
                 guided_setup["first_listen"]["install_origin"],
                 audio_complete=guided_setup["first_listen"]["audio_complete"],
                 privacy_complete=guided_setup["first_listen"]["privacy_complete"],
+                ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
             )
             and not guided_setup["first_listen"]["audio_complete"]
             else "Review the filtered Home context preview, then enable it or keep it off."
@@ -894,6 +904,7 @@ def build_setup_status(
                 guided_setup["first_listen"]["install_origin"],
                 audio_complete=guided_setup["first_listen"]["audio_complete"],
                 privacy_complete=guided_setup["first_listen"]["privacy_complete"],
+                ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
             )
             and not guided_setup["first_listen"]["privacy_complete"]
             else "Fix stream readiness before setup continues."

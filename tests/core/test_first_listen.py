@@ -418,6 +418,56 @@ async def test_malformed_sidecar_payload_projects_unknown(tmp_path, payload):
     assert load_first_listen_install_origin(state_dir, db_path).status is FirstListenInstallOriginStatus.UNKNOWN
 
 
+def test_capture_reports_bare_preexisting_database(tmp_path):
+    """A file without the completed-boot witness is the crash-artifact signature."""
+    db_path = tmp_path / "radio.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE partial_cold_boot (id INTEGER PRIMARY KEY)")
+
+    capture = capture_first_listen_install_origin(db_path)
+
+    assert capture.database_preexisted is True
+    assert capture.database_bare is True
+
+
+def test_capture_reports_completed_prior_install_as_not_bare(tmp_path):
+    """The persisted R0 origin witness proves a completed prior boot."""
+    from mammamiradio.home.migration import LegacyHomePreflightV1, persist_legacy_home_database_preflight_v1
+
+    db_path = tmp_path / "radio.db"
+    init_db(db_path)
+    persist_legacy_home_database_preflight_v1(db_path, LegacyHomePreflightV1(database_preexisted=False, durable=True))
+
+    capture = capture_first_listen_install_origin(db_path)
+
+    assert capture.database_preexisted is True
+    assert capture.database_bare is False
+
+
+def test_completed_boot_marker_matches_home_migration_table():
+    from mammamiradio.home.migration import DATABASE_ORIGIN_TABLE
+
+    assert first_listen._COMPLETED_BOOT_MARKER_TABLE == DATABASE_ORIGIN_TABLE
+
+
+def test_capture_missing_database_is_not_bare(tmp_path):
+    capture = capture_first_listen_install_origin(tmp_path / "radio.db")
+
+    assert capture.database_preexisted is False
+    assert capture.database_bare is False
+
+
+def test_capture_unreadable_database_reads_bare(tmp_path):
+    """An unreadable preexisting file cannot prove a completed install."""
+    db_path = tmp_path / "radio.db"
+    db_path.write_bytes(b"not a sqlite file, definitely long enough to look wrong")
+
+    capture = capture_first_listen_install_origin(db_path)
+
+    assert capture.database_preexisted is True
+    assert capture.database_bare is True
+
+
 @pytest.mark.asyncio
 async def test_legacy_r0_sidecar_cannot_classify_first_listen_origin(tmp_path):
     db_path = tmp_path / "radio.db"

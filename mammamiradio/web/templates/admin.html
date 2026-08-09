@@ -4284,9 +4284,10 @@ function firstListenProjection(){
   const privacyEnabled=_firstListenUi.privacyChoice!==null
     ? _firstListenUi.privacyChoice
     : Boolean(privacy.enabled||privacy.status==='enabled');
-  const showAi=legacy||first.show_ai===true||(heard&&privacyReviewed);
+  const haAccess=(privacy||{}).homeassistant_access!==false;
+  const showAi=legacy||first.show_ai===true||(heard&&privacyReviewed)||!haAccess;
   const privacyUnlocked=heard||legacy||first.install_origin==='existing';
-  return{guided,first,verification,privacy,legacy,accepted,heard,privacyReviewed,privacyEnabled,privacyUnlocked,showAi};
+  return{guided,first,verification,privacy,legacy,accepted,heard,privacyReviewed,privacyEnabled,privacyUnlocked,showAi,haAccess};
 }
 const FIRST_LISTEN_SOURCE_ROWS=[
   {kind:'live_charts',aliases:['live_charts','charts','youtube'],label:'Live charts'},
@@ -4463,7 +4464,9 @@ function renderFirstListenProgress(){
   firstListenSetStep('firstListenVerifyStep',receiptRepairRequired?'current':!listenAccepted?'locked':listenComplete?'complete':'current');
   const privacyMilestone=projection.privacyReviewed&&(projection.heard||priorInstall);
   firstListenSetStep('firstListenPrivacyStep',privacyMilestone?'complete':existingPrivacyReview?'current':listenComplete?'current':projection.privacyUnlocked?'available':'locked');
-  firstListenSetStep('firstListenAiStep',privacyMilestone?'current':'locked');
+  // Without Home Assistant access the speaker chain can never complete, and
+  // this step holds the only AI-key form — it must stay reachable standalone.
+  firstListenSetStep('firstListenAiStep',(privacyMilestone||!projection.haAccess)?'current':'locked');
 
   const sourceSummary=document.getElementById('firstListenSourceSummary');
   const sourceRepair=document.getElementById('firstListenSourceRepair');
@@ -4635,7 +4638,7 @@ function renderFirstListenProgress(){
   const llmEssentials=(_firstListenUi.projection?.essentials||[]).filter(e=>e.key==='llm_keys');
   const configuredKeys=[...new Set(llmEssentials.flatMap(e=>e.configured_keys||[]))];
   const aiFieldset=document.getElementById('firstListenAiFieldset');
-  if(aiFieldset)aiFieldset.disabled=!privacyMilestone||!projection.showAi;
+  if(aiFieldset)aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi;
   const aiSummary=document.getElementById('firstListenAiSummary');
   if(configuredKeys.length){
     firstListenSetChip('firstListenAiChip','ready','Configured');

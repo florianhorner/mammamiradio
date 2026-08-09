@@ -871,12 +871,14 @@ async def startup():
         if (
             origin.status is FirstListenInstallOriginStatus.EXISTING
             and home_authorization.mode is not HomeAuthorizationMode.LEGACY
+            and first_listen_origin_capture.database_bare
         ):
             # A partial cold boot can leave behind a new SQLite file before the
-            # feature witnesses are committed. The older pre-database witness
-            # survives that crash, so both boundaries must agree before the
-            # compatibility path may widen Home-context use.
-            logger.error("First-listen and legacy install-origin witnesses disagree; preserving unknown state")
+            # feature witnesses are committed. That artifact's signature is a
+            # bare (or unreadable) preexisting file; a populated database is a
+            # real prior install even when its R0 authorization is narrow, so
+            # post-R0 upgraders keep their proven EXISTING classification.
+            logger.error("First-listen witnesses claim EXISTING over a bare database; preserving unknown state")
             origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.UNKNOWN)
         app.state.first_listen_install_origin = origin
         # Serialize compatibility restoration with the live privacy choice.
