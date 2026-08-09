@@ -844,12 +844,13 @@ def build_setup_status(
         ),
     }
 
-    onboarding_required = not stream_ready or first_listen_onboarding_active(
+    first_listen_active = first_listen_onboarding_active(
         guided_setup["first_listen"]["install_origin"],
         audio_complete=guided_setup["first_listen"]["audio_complete"],
         privacy_complete=guided_setup["first_listen"]["privacy_complete"],
         ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
     )
+    onboarding_required = not stream_ready or first_listen_active
 
     signature_data = {
         "mode": mode["detected"],
@@ -884,29 +885,11 @@ def build_setup_status(
         "onboarding_steps": onboarding_steps,
         "recommended_next_action": (
             "Find a Home Assistant speaker and start the live media source."
-            if first_listen_onboarding_active(
-                guided_setup["first_listen"]["install_origin"],
-                audio_complete=guided_setup["first_listen"]["audio_complete"],
-                privacy_complete=guided_setup["first_listen"]["privacy_complete"],
-                ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
-            )
-            and not guided_setup["first_listen"]["accepted_attempt_id"]
+            if first_listen_active and not guided_setup["first_listen"]["accepted_attempt_id"]
             else "Confirm whether you hear Mamma Mi Radio on the selected speaker."
-            if first_listen_onboarding_active(
-                guided_setup["first_listen"]["install_origin"],
-                audio_complete=guided_setup["first_listen"]["audio_complete"],
-                privacy_complete=guided_setup["first_listen"]["privacy_complete"],
-                ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
-            )
-            and not guided_setup["first_listen"]["audio_complete"]
+            if first_listen_active and not guided_setup["first_listen"]["audio_complete"]
             else "Review the filtered Home context preview, then enable it or keep it off."
-            if first_listen_onboarding_active(
-                guided_setup["first_listen"]["install_origin"],
-                audio_complete=guided_setup["first_listen"]["audio_complete"],
-                privacy_complete=guided_setup["first_listen"]["privacy_complete"],
-                ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
-            )
-            and not guided_setup["first_listen"]["privacy_complete"]
+            if first_listen_active and not guided_setup["first_listen"]["privacy_complete"]
             else "Fix stream readiness before setup continues."
             if not stream_ready
             else "Add an AI key to unlock full station behavior."
