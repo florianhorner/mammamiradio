@@ -2676,13 +2676,13 @@ let _lastSetupJson=null;
 const FIRST_LISTEN_MEDIA_SOURCE='media-source://mammamiradio/live';
 const FIRST_LISTEN_ERRORS={
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then find speakers again.'},
-  ha_auth_failed:{title:'Home Assistant did not accept access',message:'The current Home Assistant credentials were rejected.',action:'Repair the add-on or token access, then try again.'},
+  ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
   ha_unreachable:{title:'Home Assistant is taking a break',message:'The station could not reach Home Assistant in time.',action:'Check that Home Assistant is online, wait a moment, then retry.'},
   media_source_missing:{title:'Mamma Mi Radio Live is not loaded',message:'Home Assistant cannot see the Mamma Mi Radio media source.',action:'Check HACS, restart Home Assistant if the integration was just installed, then confirm its config entry and recheck.'},
   ambiguous_station:{title:'More than one station is connected',message:'The stable Live source cannot safely choose between multiple Mamma Mi Radio entries.',action:'Keep one active integration entry, then find speakers again.'},
   no_players:{title:'No ready speaker was found',message:'No other media player currently reports that it can play media.',action:'Bring a speaker online in Home Assistant, then find speakers again.'},
   player_unavailable:{title:'That speaker is not available now',message:'The selected player changed or went offline.',action:'Find speakers again and choose an available target.'},
-  service_rejected:{title:'Home Assistant did not start playback',message:'The speaker or media service rejected the request.',action:'Check the target and test the exact Live source in Home Assistant, then retry once.'},
+  service_rejected:{title:'Home Assistant did not start playback',message:'The speaker could not start the station this time.',action:'Check the target and test the exact Live source in Home Assistant, then retry once.'},
   request_in_flight:{title:'A speaker request is already running',message:'The first request is still being checked.',action:'Wait for it to finish; do not send a second play request.'},
   receipt_unavailable:{title:'Playback was accepted, but the attempt was not saved',message:'Home Assistant accepted the show. Only this listening check still needs saving.',action:'Use “Save this listening check”; it does not send another playback request.'},
   receipt_recovery_missing:{title:'That unsaved listening check is no longer available',message:'Nothing was replayed.',action:'Refresh Setup, then explicitly start the selected speaker once more.'},
@@ -2693,7 +2693,7 @@ const FIRST_LISTEN_ERRORS={
   privacy_persist_failed:{title:'That choice was not saved for restart',message:'Home context remains off in this running station.',action:'Repair local app storage, then save the choice again.'},
   privacy_receipt_unavailable:{title:'The choice is active, but setup progress was not saved',message:'The live privacy choice still applies.',action:'Repair local app storage, show a fresh preview, then save the review again.'},
   persistence_failed:{title:'That choice was not saved for restart',message:'The live station remains on the safer setting shown below.',action:'Repair local app storage, then save the choice again.'},
-  invalid_request:{title:'This setup view is out of date',message:'The station rejected an invalid setup request.',action:'Refresh Setup, then try the action again.'},
+  invalid_request:{title:'This setup view is out of date',message:'This setup screen no longer matches the running station.',action:'Refresh Setup, then try the action again.'},
 };
 const _firstListenUi={
   projection:null,
