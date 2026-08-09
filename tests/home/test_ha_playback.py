@@ -627,6 +627,71 @@ async def test_accepted_dispatch_waits_past_callback_timeout_for_durable_receipt
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
 
 
+async def test_resume_timeout_drains_transition_instead_of_cancelling_it() -> None:
+    """A slow resume must finish its stop-marker/memory transition, never tear it."""
+    server = _FakeHAServer()
+    resume_completed = asyncio.Event()
+    resume_cancelled = False
+
+    async def slow_resume() -> None:
+        nonlocal resume_cancelled
+        try:
+            await asyncio.sleep(0.03)
+        except asyncio.CancelledError:
+            resume_cancelled = True
+            raise
+        resume_completed.set()
+
+    error = await _reason(
+        _service(
+            server,
+            resume_station=slow_resume,
+            timeouts=HAPlaybackTimeouts(callback=0.01),
+        ).play("media_player.kitchen")
+    )
+
+    assert error.reason is HAPlaybackReason.SERVICE_REJECTED
+    assert resume_cancelled is False
+    assert resume_completed.is_set()
+    assert error.station_resumed is True
+    assert sum(message.get("type") == "call_service" for message in server.sent) == 0
+
+
+async def test_client_disconnect_during_resume_drains_transition_before_unlocking() -> None:
+    """Cancelling the play request must not cancel the resume transition itself."""
+    server = _FakeHAServer()
+    resume_started = asyncio.Event()
+    release_resume = asyncio.Event()
+    resume_cancelled = False
+    resume_completed = False
+
+    async def blocking_resume() -> None:
+        nonlocal resume_cancelled, resume_completed
+        resume_started.set()
+        try:
+            await release_resume.wait()
+        except asyncio.CancelledError:
+            resume_cancelled = True
+            raise
+        resume_completed = True
+
+    service = _service(server, resume_station=blocking_resume)
+    first = asyncio.create_task(service.play("media_player.kitchen"))
+    await asyncio.wait_for(resume_started.wait(), timeout=1)
+
+    first.cancel()
+    await asyncio.sleep(0)
+    assert not first.done()
+
+    release_resume.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(first, timeout=1)
+
+    assert resume_cancelled is False
+    assert resume_completed is True
+    assert sum(message.get("type") == "call_service" for message in server.sent) == 0
+
+
 async def test_duplicate_play_returns_request_in_flight_without_queueing_or_dispatching_twice() -> None:
     resume_started = asyncio.Event()
     release_resume = asyncio.Event()

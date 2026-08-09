@@ -488,10 +488,29 @@ class HAPlaybackService:
 
         station_resumed = False
         if self._resume_station is not None:
+            # The resume callback flips a durable stop marker and then live
+            # memory; a cancellation delivered between those steps would tear
+            # them apart. Own it like the dispatch transaction: a timeout or
+            # client disconnect fails the play attempt but the transition
+            # always drains, overshooting the deadline by at most one write.
+            resume_callback = self._resume_station
+
+            async def _run_resume() -> None:
+                await resume_callback()
+
+            resume_task: asyncio.Task[None] = asyncio.create_task(_run_resume())
             try:
-                await asyncio.wait_for(self._resume_station(), timeout=self._timeouts.callback)
+                await asyncio.wait_for(
+                    _shield_and_drain_owned_task(resume_task),
+                    timeout=self._timeouts.callback,
+                )
             except TimeoutError:
-                raise HAPlaybackError(HAPlaybackReason.SERVICE_REJECTED) from None
+                raise HAPlaybackError(
+                    HAPlaybackReason.SERVICE_REJECTED,
+                    station_resumed=(
+                        resume_task.done() and not resume_task.cancelled() and resume_task.exception() is None
+                    ),
+                ) from None
             except Exception:
                 raise HAPlaybackError(HAPlaybackReason.SERVICE_REJECTED) from None
             station_resumed = True
