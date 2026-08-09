@@ -379,6 +379,16 @@ _HA_CONTEXT_MIN_STALE_SECONDS = 120.0
 _PRIVACY_INDEPENDENT_DIRECTIVE_SOURCES = frozenset({"operator", "skip_bit"})
 
 
+def _home_owned_directive_source(source: str) -> bool:
+    """Fail closed: every provenance outside the studio-owned set is Home-owned.
+
+    The single predicate for tagging, retirement, and state clearing, so a
+    blank or unknown source can never be tagged by one rule and retired by
+    another.
+    """
+    return source not in _PRIVACY_INDEPENDENT_DIRECTIVE_SOURCES
+
+
 def _home_context_generation_is_current(
     state: StationState,
     config: StationConfig,
@@ -3076,7 +3086,10 @@ async def _fire_interrupt(
         logger.error("Interrupt bridge assets are unavailable; aborting interrupt to preserve current audio")
         return False
     state.interrupt_slot_source = directive_source
-    if directive_source == "timer" or directive_source == "ha" or directive_source.startswith("ha:"):
+    if _home_owned_directive_source(directive_source):
+        # Blank or unknown provenance fails closed as Home-owned, matching the
+        # retirement rule: only proven studio sources may cross a Home privacy
+        # cutover untagged.
         state.interrupt_slot_home_context_generation = state.home_context_policy_generation
 
     # Drain through the shared queue-mutation boundary so every segment is
@@ -3897,7 +3910,7 @@ class _HAContextRefreshCoordinator:
     def _clear_revoked_handoffs(self) -> None:
         """Clear producer-owned prompt handoffs that can carry Home details."""
         source = str(self._state.ha_pending_directive_source or "")
-        if source not in _PRIVACY_INDEPENDENT_DIRECTIVE_SOURCES:
+        if _home_owned_directive_source(source):
             self._state.ha_pending_directive = ""
             self._state.ha_pending_directive_moment_id = ""
             self._state.ha_pending_directive_source = ""

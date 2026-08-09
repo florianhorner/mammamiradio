@@ -10136,6 +10136,68 @@ def test_home_context_disable_retires_only_pending_home_interrupt(tmp_path):
     assert state.force_next is SegmentType.BANTER
 
 
+def test_home_context_disable_retires_unknown_source_interrupt_fail_closed(tmp_path):
+    from mammamiradio.web.streamer import _retire_pending_home_interrupt
+
+    state = StationState()
+    bridge = tmp_path / "pending-unknown-interrupt.mp3"
+    bridge.write_bytes(b"ID3")
+    state.interrupt_slot = bridge
+    state.interrupt_slot_ephemeral = True
+    state.interrupt_slot_source = "legacy_unknown"
+    state.interrupt_slot_home_context_generation = 4
+
+    # Unknown provenance fails closed as Home-owned, same as the tagging rule.
+    assert _retire_pending_home_interrupt(state) is True
+    assert not bridge.exists()
+    assert state.interrupt_slot is None
+    assert state.interrupt_slot_source == ""
+    assert state.interrupt_slot_home_context_generation is None
+
+
+def test_home_context_disable_without_pending_interrupt_preserves_unrelated_state():
+    from mammamiradio.core.models import ChaosSubtype
+    from mammamiradio.web.streamer import _retire_pending_home_interrupt
+
+    state = StationState()
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    state.force_next = SegmentType.BANTER
+
+    # No interrupt is pending, so the fail-closed rule must not disturb
+    # unrelated chaos or forced-banter state.
+    assert _retire_pending_home_interrupt(state) is False
+    assert state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+    assert state.force_next is SegmentType.BANTER
+
+
+def test_clear_global_home_context_runtime_state_clears_unknown_source_directive():
+    from mammamiradio.web.streamer import _clear_global_home_context_runtime_state
+
+    state = StationState()
+    state.ha_pending_directive = "Mention the private kitchen light."
+    state.ha_pending_directive_moment_id = "private-moment"
+    state.ha_pending_directive_source = "legacy_unknown"
+
+    _clear_global_home_context_runtime_state(state)
+
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+
+
+def test_clear_global_home_context_runtime_state_preserves_operator_directive():
+    from mammamiradio.web.streamer import _clear_global_home_context_runtime_state
+
+    state = StationState()
+    state.ha_pending_directive = "Play the explicit studio bit next."
+    state.ha_pending_directive_source = "operator"
+
+    _clear_global_home_context_runtime_state(state)
+
+    assert state.ha_pending_directive == "Play the explicit studio bit next."
+    assert state.ha_pending_directive_source == "operator"
+
+
 @pytest.mark.asyncio
 async def test_home_context_disable_contains_every_best_effort_cleanup_failure(tmp_path, caplog):
     from mammamiradio.web.streamer import _disable_home_context_runtime

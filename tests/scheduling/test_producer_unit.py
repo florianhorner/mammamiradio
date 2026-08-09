@@ -6756,6 +6756,41 @@ async def test_fire_interrupt_aborts_when_no_bridge_asset_available(tmp_path):
     assert state.interrupt_slot is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("directive_source", "expect_tagged"),
+    [
+        ("ha", True),
+        ("timer", True),
+        ("ha:binary_sensor.kitchen_presence", True),
+        # Blank and unknown provenance fail closed as Home-owned so the
+        # playback gate can drop the bridge after a Home privacy cutover.
+        ("", True),
+        ("legacy_unknown", True),
+        # Studio-owned sources cross a cutover untagged.
+        ("operator", False),
+        ("skip_bit", False),
+    ],
+)
+async def test_fire_interrupt_tags_home_context_generation_fail_closed(tmp_path, directive_source, expect_tagged):
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state = _make_state()
+    state.home_context_policy_generation = 7
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+
+    fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path, directive_source=directive_source)
+
+    assert fired is True
+    assert state.interrupt_slot_source == directive_source
+    if expect_tagged:
+        assert state.interrupt_slot_home_context_generation == 7
+    else:
+        assert state.interrupt_slot_home_context_generation is None
+
+
 def test_remember_rendered_music_populates_immediate_audio_index(tmp_path):
     """The live data source feeding the instant-audio continuity reservation must populate.
 

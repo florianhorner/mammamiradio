@@ -3446,9 +3446,19 @@ def _purge_global_home_segments(queue, state: StationState) -> int:
 
 
 def _retire_pending_home_interrupt(state: StationState) -> bool:
-    """Remove an unstarted HA/timer interrupt without touching operator work."""
+    """Remove an unstarted Home-owned interrupt without touching operator work.
+
+    Blank or unknown provenance fails closed as Home-owned — the same rule
+    that tags the bridge at ``_fire_interrupt`` — so no pending interrupt can
+    be tagged by one predicate and skipped by another.
+    """
+    from mammamiradio.scheduling.producer import _home_owned_directive_source
+
+    if state.interrupt_slot is None and not state.interrupt_slot_source:
+        # Nothing is pending; leave unrelated chaos/forced-banter state alone.
+        return False
     source = str(state.interrupt_slot_source or "")
-    if not (source == "timer" or source == "ha" or source.startswith("ha:")):
+    if not _home_owned_directive_source(source):
         return False
     bridge_path = state.interrupt_slot
     if bridge_path is not None and state.interrupt_slot_ephemeral:
@@ -3655,8 +3665,10 @@ def _clear_global_home_context_runtime_state(state: StationState):
         except Exception:  # pragma: no cover - receipts cannot weaken revocation
             logger.debug("Moment receipt global-off drop failed", exc_info=True)
 
+    from mammamiradio.scheduling.producer import _home_owned_directive_source
+
     directive_source = str(state.ha_pending_directive_source or "")
-    if not directive_source or directive_source in {"ha", "timer"} or directive_source.startswith("ha:"):
+    if _home_owned_directive_source(directive_source):
         state.ha_pending_directive = ""
         state.ha_pending_directive_moment_id = ""
         state.ha_pending_directive_source = ""
