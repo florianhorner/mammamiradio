@@ -18,7 +18,17 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from mammamiradio.audio.normalizer import norm_cache_duration_sec
-from mammamiradio.core.config import DEFAULT_STATION_NAME, MIN_MAX_CACHE_SIZE_MB, load_config
+from mammamiradio.core.config import (
+    _FALSY as _CONFIG_FALSY,
+)
+from mammamiradio.core.config import (
+    _TRUTHY as _CONFIG_TRUTHY,
+)
+from mammamiradio.core.config import (
+    DEFAULT_STATION_NAME,
+    MIN_MAX_CACHE_SIZE_MB,
+    load_config,
+)
 from mammamiradio.core.first_listen import (
     FirstListenInstallOriginStatus,
     FirstListenInstallOriginV1,
@@ -103,16 +113,20 @@ _producer_task: asyncio.Task | None = None
 _playback_task: asyncio.Task | None = None
 _prewarm_task: asyncio.Task | None = None
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
-_FALSY = frozenset({"0", "false", "no", "off"})
-
 
 def _explicit_bool_env(name: str) -> bool | None:
-    """Return an explicitly valid boolean environment choice, else omitted."""
+    """Return an explicitly valid boolean environment choice, else omitted.
+
+    Uses the exact vocabulary ``core/config.py`` honors when it loads the same
+    variable. A wider set here would classify a value like ``on`` as an
+    explicit choice while config loading ignores it and keeps the
+    ``radio.toml`` setting — the two readers must never disagree about what
+    counts as explicit.
+    """
     raw = os.getenv(name, "").strip().lower()
-    if raw in _TRUTHY:
+    if raw in _CONFIG_TRUTHY:
         return True
-    if raw in _FALSY:
+    if raw in _CONFIG_FALSY:
         return False
     return None
 

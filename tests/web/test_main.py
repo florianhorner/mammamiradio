@@ -115,6 +115,43 @@ def test_immediate_audio_index_skips_non_files_and_unknown_durations(tmp_path):
     assert _build_immediate_audio_index(tmp_path, bitrate_kbps=None) == {}
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", True),
+        ("1", True),
+        ("YES", True),
+        ("false", False),
+        ("0", False),
+        ("No", False),
+        # Values outside config's vocabulary must read as omitted, not
+        # explicit: config loading ignores them and keeps the radio.toml
+        # setting, so treating them as an explicit choice here would let the
+        # two readers disagree (e.g. an "off" that purges the evening ledger
+        # while context stays enabled).
+        ("on", None),
+        ("off", None),
+        ("", None),
+        ("maybe", None),
+    ],
+)
+def test_explicit_bool_env_matches_config_vocabulary(monkeypatch, raw, expected):
+    from mammamiradio.main import _explicit_bool_env
+
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raw)
+
+    assert _explicit_bool_env("MAMMAMIRADIO_HA_CONTEXT_ENABLED") is expected
+
+
+def test_explicit_bool_env_shares_config_boolean_sets():
+    """Guard the single source: main must read the exact sets config loads with."""
+    from mammamiradio import main as main_module
+    from mammamiradio.core import config as config_module
+
+    assert main_module._CONFIG_TRUTHY is config_module._TRUTHY
+    assert main_module._CONFIG_FALSY is config_module._FALSY
+
+
 @pytest.mark.asyncio
 async def test_startup_creates_state_and_tasks():
     """startup() loads config, fetches playlist, sets app.state, creates tasks."""
