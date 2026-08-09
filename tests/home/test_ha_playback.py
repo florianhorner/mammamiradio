@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from mammamiradio.home import ha_playback
 from mammamiradio.home.ha_playback import (
     MAX_AREA_LENGTH,
     MAX_CANDIDATES,
@@ -625,6 +626,36 @@ async def test_accepted_dispatch_waits_past_callback_timeout_for_durable_receipt
     assert result.attempt_id == "attempt-after-slow-fsync"
     assert persisted == ["media_player.kitchen"]
     assert sum(message.get("type") == "call_service" for message in server.sent) == 1
+
+
+@pytest.mark.parametrize(
+    ("ha_url", "expected"),
+    [
+        ("http://supervisor/core/api", "ws://supervisor/core/api/websocket"),
+        ("http://supervisor/core/api/", "ws://supervisor/core/api/websocket"),
+        ("http://supervisor", "ws://supervisor/core/websocket"),
+        ("http://ha.local:8123", "ws://ha.local:8123/api/websocket"),
+        ("https://ha.example.org", "wss://ha.example.org/api/websocket"),
+        ("https://ha.example.org/prefix", "wss://ha.example.org/prefix/api/websocket"),
+    ],
+)
+def test_websocket_url_covers_addon_supervisor_and_direct_shapes(ha_url: str, expected: str) -> None:
+    """The add-on's supervisor proxy URL must derive a registered websocket route."""
+    assert ha_playback._ha_websocket_url(ha_url) == expected
+
+
+async def test_resume_failure_maps_to_service_rejected_without_resumed_claim() -> None:
+    """A refused resume (for example: no playable runway) must not blame HA dispatch."""
+    server = _FakeHAServer()
+
+    async def failing_resume() -> None:
+        raise RuntimeError("no immediately playable runway")
+
+    error = await _reason(_service(server, resume_station=failing_resume).play("media_player.kitchen"))
+
+    assert error.reason is HAPlaybackReason.SERVICE_REJECTED
+    assert error.station_resumed is False
+    assert sum(message.get("type") == "call_service" for message in server.sent) == 0
 
 
 async def test_resume_timeout_drains_transition_instead_of_cancelling_it() -> None:

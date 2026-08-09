@@ -375,6 +375,50 @@ async def test_existing_sidecar_or_disagreement_is_never_overwritten(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_disagreeing_witnesses_project_unknown_and_never_reclassify(tmp_path, caplog):
+    """Sidecar and database both valid but conflicting must stay UNKNOWN, loudly."""
+    db_path = tmp_path / "radio.db"
+    state_dir = tmp_path / "state"
+    capture = capture_first_listen_install_origin(db_path)
+    sentinel_state = init_db(db_path)
+    await migrate_first_listen_install_origin(capture, sentinel_state, state_dir)
+    sidecar = first_listen_origin_path(state_dir)
+    sidecar.write_text(
+        json.dumps({"schema_version": 1, "database_preexisted": True}),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("WARNING"):
+        origin = load_first_listen_install_origin(state_dir, db_path)
+
+    assert origin.status is FirstListenInstallOriginStatus.UNKNOWN
+    assert any("witnesses disagree" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"schema_version": 1, "database_preexisted": False, "extra": 1},
+        {"schema_version": True, "database_preexisted": False},
+        {"schema_version": 2, "database_preexisted": False},
+        {"schema_version": 1, "database_preexisted": "no"},
+        ["schema_version", 1],
+    ],
+)
+async def test_malformed_sidecar_payload_projects_unknown(tmp_path, payload):
+    """Any off-schema sidecar reads as invalid; classification fails closed."""
+    db_path = tmp_path / "radio.db"
+    state_dir = tmp_path / "state"
+    capture = capture_first_listen_install_origin(db_path)
+    sentinel_state = init_db(db_path)
+    await migrate_first_listen_install_origin(capture, sentinel_state, state_dir)
+    first_listen_origin_path(state_dir).write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_first_listen_install_origin(state_dir, db_path).status is FirstListenInstallOriginStatus.UNKNOWN
+
+
+@pytest.mark.asyncio
 async def test_legacy_r0_sidecar_cannot_classify_first_listen_origin(tmp_path):
     db_path = tmp_path / "radio.db"
     state_dir = tmp_path / "state"

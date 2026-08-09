@@ -3958,6 +3958,45 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
 
 
 @pytest.mark.asyncio
+async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path):
+    """A truncated packaged mini-show must hand off to live audio, never silence."""
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"authored-mini-show")
+
+    def broken_chunks(_path):
+        yield b"partial-show"
+        raise OSError("truncated packaged show")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks", side_effect=broken_chunks),
+    ):
+        generator = _audio_generator(mock_request)
+        assert await anext(generator) == b"partial-show"
+
+        live_chunk = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("failed mini-show did not hand off to the live hub")
+            await asyncio.sleep(0)
+
+        await app.state.stream_hub.broadcast(b"live-station")
+        assert await live_chunk == b"live-station"
+        await generator.aclose()
+
+    assert app.state.station_state.listeners_active == 0
+
+
+@pytest.mark.asyncio
 async def test_first_listen_package_approval_timeout_falls_through_to_live_audio():
     """Slow package I/O never consumes the instant-audio startup guarantee."""
     import threading
@@ -5786,6 +5825,114 @@ async def test_resume_without_any_immediate_audio_fails_closed(tmp_path):
     assert app.state.queue.empty()
     assert state.continuity_slot is None
     assert not state.resume_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_first_listen_resume_refuses_without_playable_runway(tmp_path):
+    """The cast resume mirrors the admin Start gate: no runway, no resume."""
+    from mammamiradio.web.streamer import _resume_station
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = True
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        pytest.raises(RuntimeError, match="no immediately playable runway"),
+    ):
+        await _resume_station(app.state)
+
+    assert state.session_stopped is True
+    assert marker.exists()
+    assert not state.resume_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_first_listen_resume_with_warm_runway_clears_stop_and_signals(tmp_path):
+    """A stopped station with cached audio resumes: marker gone, event set."""
+    from mammamiradio.web.streamer import _resume_station
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = True
+    marker = tmp_path / "session_stopped.flag"
+    marker.touch()
+    cached = tmp_path / "norm_warm_song_192k.mp3"
+    cached.write_bytes(b"warm-cache-audio" * 1024)
+    (tmp_path / "norm_warm_song_192k.mp3.json").write_text(
+        '{"title":"Warm Song","artist":"Cache Artist","duration_ms":180000}'
+    )
+    state.immediate_audio_index[cached] = 180.0
+
+    with patch("mammamiradio.web.streamer.probe_duration_sec") as probe:
+        await _resume_station(app.state)
+
+    assert state.session_stopped is False
+    assert not marker.exists()
+    assert state.resume_event.is_set()
+    assert state.force_recovery_active is False
+    probe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_first_listen_resume_restores_stop_marker_when_control_changes_mid_write(tmp_path):
+    """A Stop landing during the off-loop marker write owns the newer epoch."""
+    from mammamiradio.web.streamer import _resume_station
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = True
+    cached = tmp_path / "norm_warm_song_192k.mp3"
+    cached.write_bytes(b"warm-cache-audio" * 1024)
+    (tmp_path / "norm_warm_song_192k.mp3.json").write_text(
+        '{"title":"Warm Song","artist":"Cache Artist","duration_ms":180000}'
+    )
+    state.immediate_audio_index[cached] = 180.0
+    persist_calls: list[bool] = []
+
+    def persist(config, stopped):
+        persist_calls.append(stopped)
+        if not stopped:
+            state.continuity_epoch += 1
+
+    with (
+        patch("mammamiradio.web.streamer.probe_duration_sec"),
+        patch("mammamiradio.web.streamer._persist_session_stopped", side_effect=persist),
+        pytest.raises(RuntimeError, match="station control changed"),
+    ):
+        await _resume_station(app.state)
+
+    assert persist_calls == [False, True]
+    assert state.session_stopped is True
+    assert not state.resume_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ha_playback_service_wiring_uses_real_resume_and_receipt_closures(tmp_path):
+    """The service built for routes must drive the real station state and store."""
+    from mammamiradio.web.streamer import _ha_playback_service
+
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    service = _ha_playback_service(app.state)
+
+    state.session_stopped = False
+    await service._resume_station()
+    assert state.session_stopped is False
+
+    attempt_id = await service._persist_accepted_attempt("media_player.kitchen")
+
+    assert attempt_id
+    receipt = app.state.first_listen_receipt
+    assert receipt is not None
+    assert receipt.selected_entity_id == "media_player.kitchen"
+    assert receipt.accepted_attempt_id == attempt_id
 
 
 @pytest.mark.asyncio
