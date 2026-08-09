@@ -598,6 +598,10 @@ def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
         ("MAMMAMIRADIO_LAUNCH_READY_S", "soon", "must be a float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_READY_S", "nan", "must be a finite positive float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_READY_S", "inf", "must be a finite positive float in seconds"),
+        # A budget above the packaged prelude runway would let the smoke pass
+        # after listener coverage ended.
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "30", "must stay at or under 22s"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "22.5", "must stay at or under 22s"),
     ],
 )
 def test_ha_green_launch_smoke_validates_timeout_env_vars(
@@ -633,6 +637,11 @@ def test_ha_green_launch_smoke_held_listener_source_is_runnable_python() -> None
     assert '"/readyz"' in source
     assert "status == 200" in source
     assert 'payload.get("ready") is True' in source
+    # The deadline is enforced on the response, not just the request start: a
+    # poll may never outlive the remaining budget, and a reply that lands past
+    # the deadline must not count as ready.
+    assert "min(3.0, remaining)" in source
+    assert "received after the readiness deadline" in source
 
 
 def test_ha_green_launch_smoke_env_clears_network_sources(tmp_path: Path) -> None:

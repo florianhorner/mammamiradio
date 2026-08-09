@@ -41,7 +41,10 @@ repository source or configuration onto the image.
 Env overrides:
   MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S   strict first-byte bound (default 2.0)
   MAMMAMIRADIO_LAUNCH_STARTUP_S      boot budget before health ok (default 60)
-  MAMMAMIRADIO_LAUNCH_READY_S        held-listener readiness budget (default 15)
+  MAMMAMIRADIO_LAUNCH_READY_S        held-listener readiness budget (default 15,
+                                     capped at 22 so readiness lands while the
+                                     ~27s packaged prelude still covers the
+                                     listener)
 """
 
 from __future__ import annotations
@@ -240,10 +243,16 @@ listener.start()
 
 last_observation = "no /readyz response before the deadline"
 ready = False
-while time.monotonic() < deadline:
+while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        break
     request = Request(base_url + "/readyz", headers={"Accept": "application/json"})
     try:
-        with urlopen(request, timeout=3.0) as response:
+        # Never let a single poll outlive the budget: a request started just
+        # before the deadline must not return ready seconds after listener
+        # coverage ended and still count.
+        with urlopen(request, timeout=min(3.0, remaining)) as response:
             status = response.status
             payload = json.loads(response.read().decode("utf-8") or "{}")
     except HTTPError as exc:
@@ -257,6 +266,11 @@ while time.monotonic() < deadline:
         time.sleep(0.25)
         continue
     last_observation = "HTTP " + str(status) + " " + json.dumps(payload)
+    if time.monotonic() >= deadline:
+        # The response arrived after the deadline. Readiness observed outside
+        # the held-listener window proves nothing about a covered speaker.
+        last_observation += " (received after the readiness deadline)"
+        break
     if status == 200 and payload.get("ready") is True:
         ready = True
         break
@@ -283,8 +297,18 @@ FIRST_BYTE_S = _env_float("MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S", "2.0")
 STARTUP_S = _env_float("MAMMAMIRADIO_LAUNCH_STARTUP_S", "60")
 # Held-listener readiness budget. Must stay well under the packaged First
 # Listen prelude's ~27s of runway audio (see the module docstring): the live
-# station has to be ready while the prelude still covers the speaker.
+# station has to be ready while the prelude still covers the speaker. The
+# ceiling keeps a 5s safety margin under that runway, so an env override
+# cannot quietly accept readiness that lands after the speaker went silent.
+_PRELUDE_RUNWAY_S = 27.0
+_READY_BUDGET_CEILING_S = _PRELUDE_RUNWAY_S - 5.0
 READY_S = _env_float("MAMMAMIRADIO_LAUNCH_READY_S", "15")
+if READY_S > _READY_BUDGET_CEILING_S:
+    raise RuntimeError(
+        f"MAMMAMIRADIO_LAUNCH_READY_S must stay at or under {_READY_BUDGET_CEILING_S:g}s "
+        f"so readiness lands while the packaged prelude (~{_PRELUDE_RUNWAY_S:g}s) still "
+        f"covers the listener, got {READY_S:g}"
+    )
 
 
 def _free_port() -> int:
