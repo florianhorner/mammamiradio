@@ -6,8 +6,6 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-- **Marco and Giulia can now use a more expressive ElevenLabs V3 delivery without changing what the station says.** A small, character-specific set of performance cues is applied only to selected host banter at the final voice request; transcripts, listener truth, and Edge fallback speech keep the original clean line.
-- **Host voice changes now come with a real V2-versus-V3 listening gate.** The audition tool can render matched clean and expressive samples for both regular hosts, then save an immutable, redacted proof receipt with hashes, provider outcome, audio evidence, and a human decision — never raw copy, audio paths, or credentials.
 - **First Listen now takes a fresh Home Assistant install from setup to real radio before asking for anything optional.** The opening control-room flow explains source readiness in plain language, finds one compatible-looking `media_player`, starts `media-source://mammamiradio/live`, and asks whether the station was heard. It works with stock hosts and no AI key, repairs an accepted-but-unsaved listening check without replaying audio, and keeps filtered Home context behind an explicit privacy preview; all origin and receipt work remains outside the instant-audio startup path.
 
 ## [2.18.0] - 2026-08-07
