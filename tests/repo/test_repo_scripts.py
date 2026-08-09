@@ -565,6 +565,14 @@ def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
     assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
     assert '"2.0"' in body
     assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+    # A fresh install answers first byte from the client-local First Listen
+    # prelude before joining the live hub, so both modes must also hold a
+    # draining listener and wait for /readyz before the post-stream contract.
+    assert "MAMMAMIRADIO_LAUNCH_READY_S" in body
+    assert "First Listen" in body
+    assert "_hold_listener_until_ready" in body
+    # definition + local-mode subprocess + image-mode docker exec
+    assert body.count("_HELD_LISTENER_READY_SOURCE") >= 3
     # CI can exercise the exact pulled image without overlaying repository
     # source: isolated /data volumes, the image's default /run.sh command,
     # Docker-level network denial, and listener-byte checks over loopback.
@@ -587,6 +595,9 @@ def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "soon", "must be a float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "nan", "must be a finite positive float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "inf", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "inf", "must be a finite positive float in seconds"),
     ],
 )
 def test_ha_green_launch_smoke_validates_timeout_env_vars(
@@ -608,6 +619,20 @@ def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match=r"ffmpeg is required for scripts/ha-green-launch-smoke\.py"):
         smoke._seed_warm_norm_cache(str(tmp_path))
+
+
+def test_ha_green_launch_smoke_held_listener_source_is_runnable_python() -> None:
+    smoke = _load_ha_green_launch_smoke()
+    source = smoke._HELD_LISTENER_READY_SOURCE
+
+    # Runs as `python3 -c` both locally and inside the built image, so it must
+    # be valid standalone Python that holds /stream open and gates readiness
+    # on an authoritative /readyz verdict, not on stream bytes alone.
+    compile(source, "<held-listener-ready>", "exec")
+    assert '"/stream"' in source
+    assert '"/readyz"' in source
+    assert "status == 200" in source
+    assert 'payload.get("ready") is True' in source
 
 
 def test_ha_green_launch_smoke_env_clears_network_sources(tmp_path: Path) -> None:
