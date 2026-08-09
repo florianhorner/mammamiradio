@@ -2195,13 +2195,18 @@ async def test_context_off_retires_stale_home_directive_before_no_llm_return(con
 
 @pytest.mark.asyncio
 async def test_context_off_retires_stale_running_gag_before_no_llm_return(config, state):
+    from mammamiradio.home.moment_receipts import MomentStore
+
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     config.homeassistant.enabled = True
     config.homeassistant.context_enabled = False
+    store = MomentStore()
+    gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
+    state.moment_store = store
     state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
     state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
-    state.ha_running_gag_moment_id = "private-gag-moment"
+    state.ha_running_gag_moment_id = gag_id
 
     lines, _commit = await write_banter(state, config)
 
@@ -2209,6 +2214,9 @@ async def test_context_off_retires_stale_running_gag_before_no_llm_return(config
     assert state.ha_running_gag == ""
     assert state.ha_running_gag_key == ""
     assert state.ha_running_gag_moment_id == ""
+    (row,) = store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "stale_context"
 
 
 @pytest.mark.asyncio
@@ -2456,6 +2464,10 @@ async def test_write_banter_restores_moment_id_on_fallback(config, state):
 async def test_write_banter_drops_gag_moment_row_on_fallback(config, state):
     from mammamiradio.home.moment_receipts import MomentStore
 
+    # The gag only rides a generation while home context is enabled; with
+    # context off it is retired as stale before generation starts.
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     store = MomentStore()
     gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
     state.moment_store = store

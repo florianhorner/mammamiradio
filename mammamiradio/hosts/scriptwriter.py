@@ -2205,7 +2205,14 @@ def _retire_disabled_home_directive(state: StationState, config: StationConfig) 
     # one-shot lifetime. Retire it in the same fail-closed step: the prompt gate
     # below only skips it while context is disabled, so without this clear the
     # stored gag text would stay latent for the whole disabled session and reach
-    # a provider prompt after a later re-enable.
+    # a provider prompt after a later re-enable. Its Moment Receipt row is
+    # demoted honestly first (best-effort, like the generation-failed path) so
+    # the trail never shows an elected moment that can no longer air.
+    if state.ha_running_gag_moment_id and state.moment_store is not None:
+        try:
+            state.moment_store.mark_dropped(state.ha_running_gag_moment_id, "stale_context")
+        except Exception:  # pragma: no cover - receipts must never break retirement
+            logger.debug("Moment receipt gag drop failed during context-off retirement", exc_info=True)
     state.ha_running_gag = ""
     state.ha_running_gag_key = ""
     state.ha_running_gag_moment_id = ""
