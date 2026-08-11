@@ -11,7 +11,7 @@ from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
 
 MANIFEST_FILENAME = "spoken_assets.json"
-DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter")
+DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter", "first_listen")
 
 
 @dataclass(frozen=True, slots=True)

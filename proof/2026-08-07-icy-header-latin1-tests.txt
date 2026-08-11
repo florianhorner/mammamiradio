@@ -1,0 +1,57 @@
+# icy-name latin-1 stream outage — test + runtime evidence
+#
+# Validated code state, pinned by content so this cannot go stale as the branch
+# advances. These are the exact blobs the results below were produced from:
+#   mammamiradio/web/streamer.py                 blob 91c865db38dee85480ee6a236d88e10ae4bd26dd
+#   tests/web/test_streamer_routes_extended.py   blob 59ca5b036a5351608d1116a836cf2e06651715ae
+#   parent commit                                4b8129a9365fc29a28e5ace8adda0e6691d9c623
+# date: 2026-08-07T11:33:44Z
+
+## Targeted tests for the fix
+tests/web/test_streamer_routes_extended.py::test_stream_icy_name_uses_resolved_identity_and_strips_crlf PASSED [  5%]
+tests/web/test_streamer_routes_extended.py::test_stream_survives_smart_quote_in_station_name PASSED [ 11%]
+tests/web/test_streamer_routes_extended.py::test_stream_theme_survives_unencodable_characters PASSED [ 17%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_italian_accents_in_icy_name PASSED [ 23%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_accents_next_to_an_unencodable_character PASSED [ 29%]
+tests/web/test_streamer_routes_extended.py::test_stream_every_response_header_is_latin1_encodable PASSED [ 35%]
+tests/web/test_streamer_routes_extended.py::test_stream_icy_genre_capped_at_64_after_folding PASSED [ 41%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_european_letters_outside_latin1 PASSED [ 47%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_output_is_always_a_legal_http_field_value PASSED [ 52%]
+tests/web/test_streamer_routes_extended.py::test_stream_serves_audio_after_restart_with_unicode_station_name PASSED [ 58%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_removes_control_bytes_not_just_crlf PASSED [ 64%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_derives_a_letter_rather_than_deleting_it PASSED [ 70%]
+tests/web/test_streamer_routes_extended.py::test_header_safe_survives_non_string_config_values PASSED [ 76%]
+tests/web/test_streamer_routes_extended.py::test_stream_falls_back_when_whitespace_only_name_folds_away PASSED [ 82%]
+tests/web/test_streamer_routes_extended.py::test_stream_icy_name_has_no_edge_whitespace_after_folding PASSED [ 88%]
+tests/web/test_streamer_routes_extended.py::test_stream_keeps_decomposed_accents_in_icy_name PASSED [ 94%]
+tests/web/test_streamer_routes_extended.py::test_stream_falls_back_when_station_name_folds_to_nothing PASSED [100%]
+====================== 17 passed, 281 deselected in 0.63s ======================
+
+## make check  (lint + format + typecheck + deadcode + coverage gate)
+# Run with Homebrew python3 ahead of /usr/bin/python3 on PATH. That is required on
+# macOS and is unrelated to this change: the release shell scripts invoke bare
+# `python3`, which resolves to the system 3.9.6 and cannot import
+# mammamiradio.core.spoken_assets (@dataclass(slots=True) needs 3.10+). CI pins
+# python 3.11 via setup-python and is unaffected. With a supported interpreter the
+# whole suite is green; the 5 pre_release_check failures seen otherwise are that
+# PATH issue alone, not a real red suite.
+All checks passed!
+Required test coverage of 92.0% reached. Total coverage: 92.57%
+5936 passed, 3 skipped, 21 deselected, 1 warning in 177.93s (0:02:57)
+All coverage floors held. Total: 93% (floor: 92%)
+All checks passed
+
+## Runtime QA — real uvicorn, strict h11 parser
+STATION_NAME  = 🎵 Let’s Radyo Kırmızı — Città Łódź‑Uno 🎶
+STATION_THEME = late-night<VT>radio<DEL>shock + trailing spaces
+                (control bytes; the theme never passes the load-time sanitizer.
+                 NUL is not testable this way because env vars are NUL-terminated,
+                 so the OS truncates before Python sees it. All of C0+DEL is
+                 covered by test_header_safe_removes_control_bytes_not_just_crlf.)
+'HTTP/1.1 200 OK'
+"icy-name: Let's Radyo Kirmizi - Città Lódz-Uno"
+'icy-genre: late-nightradioshock'
+'icy-br: 192'
+audio bytes: 133200
+listener page: 200
+server errors during run: 0

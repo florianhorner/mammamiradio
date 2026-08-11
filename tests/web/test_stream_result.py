@@ -96,6 +96,7 @@ def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():
         "result": "aired",
         "bytes_sent": 4096,
         "starting_listener_count": 1,
+        "accepted_listener_count": 1,
         "terminal_reason": "eof",
     }
 
@@ -106,13 +107,14 @@ def test_release_campaign_runs_even_when_ledger_disabled():
             self.calls = []
             self.saved = False
 
-        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners):
+        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners, accepted_listeners=None):
             self.calls.append(
                 {
                     "metadata": metadata,
                     "bytes_sent": bytes_sent,
                     "was_skipped": was_skipped,
                     "listeners": listeners,
+                    "accepted_listeners": accepted_listeners,
                 }
             )
 
@@ -128,6 +130,7 @@ def test_release_campaign_runs_even_when_ledger_disabled():
         bytes_sent=5000,
         was_skipped=False,
         listeners=2,
+        accepted_listener_count=1,
     )
 
     assert led.rows == []
@@ -137,6 +140,7 @@ def test_release_campaign_runs_even_when_ledger_disabled():
             "bytes_sent": 5000,
             "was_skipped": False,
             "listeners": 2,
+            "accepted_listeners": 1,
         }
     ]
     assert campaign.saved is True
@@ -144,7 +148,7 @@ def test_release_campaign_runs_even_when_ledger_disabled():
 
 def test_release_campaign_failure_does_not_block_provenance():
     class _BoomCampaign:
-        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners):
+        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners, accepted_listeners=None):
             raise RuntimeError("campaign disk gone")
 
     led = _FakeLedger()
@@ -248,6 +252,33 @@ def test_memory_extraction_not_scheduled_for_partial_or_empty_send():
     schedule.assert_not_called()
 
 
+def test_home_memory_not_scheduled_when_privacy_is_revoked_mid_air():
+    """An airing Home segment may finish, but must not submit context afterward."""
+    app_state = SimpleNamespace(background_tasks=set())
+    config = SimpleNamespace(homeassistant=SimpleNamespace(context_enabled=False))
+    state = SimpleNamespace(home_context_policy_generation=10)
+    seg = _segment(
+        {
+            "home_context_generation": 9,
+            "memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]},
+        }
+    )
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=1,
+        )
+
+    schedule.assert_not_called()
+    assert app_state.background_tasks == set()
+
+
 @pytest.mark.asyncio
 async def test_memory_extraction_not_scheduled_for_zero_listener_clean_send():
     app_state = SimpleNamespace(background_tasks=set())
@@ -268,3 +299,54 @@ async def test_memory_extraction_not_scheduled_for_zero_listener_clean_send():
 
     schedule.assert_not_called()
     assert app_state.background_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_memory_extraction_not_scheduled_when_connected_listener_rejects_send():
+    app_state = SimpleNamespace(background_tasks=set())
+    state = SimpleNamespace()
+    config = SimpleNamespace()
+    seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "unheard"}]}})
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=1,
+            accepted_listeners=0,
+        )
+
+    schedule.assert_not_called()
+    assert app_state.background_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_memory_extraction_counts_listener_that_joins_after_start_sample():
+    app_state = SimpleNamespace(background_tasks=set())
+    state = SimpleNamespace()
+    config = SimpleNamespace()
+    seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]}})
+    task = asyncio.create_task(asyncio.sleep(0))
+
+    with patch(
+        "mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction",
+        return_value=task,
+    ) as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=0,
+            accepted_listeners=1,
+        )
+
+    schedule.assert_called_once_with(config=config, state=state, metadata=seg.metadata)
+    assert task in app_state.background_tasks
+    await task

@@ -14,6 +14,12 @@ This file supplements the global instructions for the `mammamiradio` repository.
   `build`, `perf`, and `revert`.
 - Dependency commits use `chore(deps): ...`; `deps:` is not a commit type.
 - Never modify `.context/` runtime state
+- First Listen and other Home Assistant-facing development or QA use the
+  disposable local HA lab by default. Treat live Home Assistant as production:
+  never connect branch code to it, reuse its token or backup, reconfigure it,
+  or attach its household/cloud/MQTT devices without explicit authorization in
+  the current message. Keep lab state and credentials under gitignored
+  `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
 - Before opening any PR (ANY runtime — Claude, Codex, Cursor): run the pre-ship
   review squad, then `scripts/emit-review-evidence.sh`, and commit
   `proof/preship-review.json`. CI (`preship-evidence.yml`) verifies it against the

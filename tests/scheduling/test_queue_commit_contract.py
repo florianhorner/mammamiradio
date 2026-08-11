@@ -49,15 +49,26 @@ import pytest
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    GenerationWasteReason,
+    PlaylistSource,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
+    RenderedMusicTrack,
     _adjacent_music_source,
     _enqueue_with_egress,
     _normalized_cache_path,
     prewarm_first_segment,
     run_producer,
 )
+from mammamiradio.web.status_payload import _source_readiness_status
+from mammamiradio.web.streamer import _apply_ban
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -383,6 +394,62 @@ async def test_unavailable_music_render_closes_its_timing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_path):
+    """The blocklist fence cannot let a retired render undo source readiness."""
+    track = Track(
+        title="Canzone Uno",
+        artist="Artista",
+        duration_ms=200_000,
+        spotify_id="local1",
+        source="local",
+        local_path=tmp_path / "source.mp3",
+    )
+    track.local_path.write_bytes(b"audio")
+    state = StationState(playlist=[track], listeners_active=1)
+    config = _make_config(tmp_path)
+    config.music_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    rendered_path = tmp_path / "rendered.mp3"
+    rendered_path.write_bytes(b"audio")
+    render_started = asyncio.Event()
+    finish_render = asyncio.Event()
+
+    async def _render_then_finish(*_args, **_kwargs):
+        render_started.set()
+        await finish_render.wait()
+        return RenderedMusicTrack(
+            track=track,
+            path=rendered_path,
+            cache_path=rendered_path,
+            cache_hit=True,
+        )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render_then_finish),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(render_started.wait(), timeout=1.0)
+            result = _apply_ban(state, config, [track], queue=queue)
+            assert result["removed"] == 1
+            assert _source_readiness_status(config, state)["sources"]["local"]["status"] == "unavailable"
+
+            finish_render.set()
+            await _wait_for(lambda: state.discard_by_reason.get(GenerationWasteReason.BLOCKLIST_GATE, 0) >= 1)
+        finally:
+            await _cancel(task)
+
+    readiness = _source_readiness_status(config, state)
+    assert queue.empty()
+    assert state.playlist == []
+    assert readiness["sources"]["local"]["status"] == "unavailable"
+    assert readiness["sources"]["local"]["playable"] == 0
+    assert readiness["programming_ready"] is False
+
+
+@pytest.mark.asyncio
 async def test_cancelled_producer_closes_in_flight_render_timing(tmp_path):
     """Shutdown during an awaited render cannot leave timing open into a later task."""
     state = _make_state()
@@ -592,6 +659,7 @@ async def test_direct_enqueue_publishes_matching_shadow_row(tmp_path):
     egress colour pass (patch ``apply_broadcast_chain``, never ``_apply_egress`` —
     mocking the latter would hide the rescue-skip branch)."""
     state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     bridge = tmp_path / "bridge.mp3"
@@ -611,7 +679,35 @@ async def test_direct_enqueue_publishes_matching_shadow_row(tmp_path):
     assert len(state.queued_segments) == 1
     assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
     assert state.queued_segments[0]["label"] == "Resume bridge"
+    assert SEGMENT_PLAYLIST_SOURCE_KIND_KEY not in seg.metadata
     m_chain.assert_not_called()  # rescue skipped the egress colour pass
+
+
+@pytest.mark.asyncio
+async def test_direct_enqueue_binds_ordinary_music_to_active_playlist_source(tmp_path):
+    state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    audio_path = tmp_path / "chart-track.mp3"
+    audio_path.write_bytes(b"audio")
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=audio_path,
+        ephemeral=False,
+        metadata={
+            "artist": "Artist",
+            "title": "Artist – Track",
+            "title_only": "Track",
+            "audio_source": "download",
+        },
+    )
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", return_value=seg):
+        assert await _enqueue_with_egress(queue, state, config, seg) is True
+
+    queued = queue.get_nowait()
+    assert queued.metadata[SEGMENT_PLAYLIST_SOURCE_KIND_KEY] == "charts"
 
 
 @pytest.mark.asyncio
@@ -1180,6 +1276,36 @@ async def test_prewarm_discards_on_continuity_reservation_during_render(tmp_path
     assert result is False
     assert queue.empty()
     assert len(state.played_tracks) == 0
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY) == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_after_stop_resume_aba_during_render(tmp_path):
+    """A final running boolean cannot revalidate work captured before Stop."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    captured_epoch = state.continuity_epoch
+
+    async def _stop_then_resume(*_args, **_kwargs):
+        state.session_stopped = True
+        state.continuity_epoch += 1
+        state.session_stopped = False
+        return tmp_path / "fake.mp3"
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_stop_then_resume),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert state.session_stopped is False
+    assert state.continuity_epoch != captured_epoch
+    assert result is False
+    assert queue.empty()
     assert state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY) == 1
 
 

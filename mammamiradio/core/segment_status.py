@@ -64,26 +64,39 @@ def classify_stream_outcome(
     bytes_sent: int,
     listeners: int,
     fallback_active: bool = False,
+    accepted_listeners: int | None = None,
 ) -> str:
     """Classify how a segment actually reached (or did not reach) listeners.
 
     Args:
         was_skipped: the send loop broke early on a skip event.
-        bytes_sent: bytes actually broadcast during the send loop.
+        bytes_sent: bytes the send loop wrote for this segment.
         listeners: connected listeners when the segment started streaming.
         fallback_active: this was rescue / fallback audio (``is_fallback_active``),
             not the intended segment — reported as ``fallback_rescue`` once it has
             actually reached a listener.
+        accepted_listeners: listeners that accepted at least one chunk. ``None``
+            means the caller cannot tell, and acceptance is not checked.
 
     Reach problems (a skip, nothing left the box, nobody connected) take priority
     over the source distinction, then a clean air of rescue audio is
     ``fallback_rescue``, otherwise ``aired``.
+
+    An empty room and a room that rejected every chunk are different failures and
+    must not collapse into one. The first is ``no_listeners`` — normal during
+    quiet hours. The second is ``not_streamed``, which names a genuine delivery
+    failure. When acceptance is known it is authoritative: a listener that joins
+    after the start sample still counts, while zero accepted listeners uses the
+    start sample to distinguish an empty room from a rejected delivery.
     """
     if was_skipped:
         return SKIPPED
     if bytes_sent <= 0:
         return NOT_STREAMED
-    if listeners <= 0:
+    if accepted_listeners is not None:
+        if accepted_listeners <= 0:
+            return NO_LISTENERS if listeners <= 0 else NOT_STREAMED
+    elif listeners <= 0:
         return NO_LISTENERS
     if fallback_active:
         return FALLBACK_RESCUE

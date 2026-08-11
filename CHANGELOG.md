@@ -6,23 +6,21 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
-### Added
+- **First Listen never traps an install it cannot serve.** A station running without Home Assistant access keeps the guided path optional instead of mandatory and can always reach the AI-key step, and a proven prior install upgrading into this release keeps its classification and its home behavior — only a bare or unreadable leftover database file still fails closed to the cautious path.
+- **First Listen now takes a fresh Home Assistant install from setup to real radio before asking for anything optional.** The opening control-room flow explains source readiness in plain language, finds one compatible-looking `media_player`, starts `media-source://mammamiradio/live`, and asks whether the station was heard. It works with stock hosts and no AI key, repairs an accepted-but-unsaved listening check without replaying audio, and keeps filtered Home context behind an explicit privacy preview; all origin and receipt work remains outside the instant-audio startup path.
 
-- **The station can now keep a full rotation ready to play.** The normalization cache used to stop at 500 MB, roughly 100 songs. Standalone still defaults to 500 MB; the add-on now defaults to 1500 MB and exposes a **Music cache size (MB)** setting so you can match the cache to your rotation. A normalized song uses about 5 MB, and **On-Air Sound** roughly doubles that. A cache that is too small makes a few songs repeat while other tracks are rebuilt when they come around. At startup, the station checks free space and lowers the effective limit when needed, logging both values. If the disk is nearly full, the log tells you to free space.
-- **The v1 integration contract is now a frozen, machine-checked artifact.** `CONTRACT.md` documents the frozen now-playing surface, the additive-only policy, and how a contract change lands. A golden fixture rendered by the real serializer is committed at `tests/integrations/golden/v1_now_playing.json`, and a contract-drift CI check verifies on every pull request that the serializer still produces those exact bytes, that frozen paths only change with an explicit `Contract-Change:` marker, and that the fixture matches its sibling copy in the Music Assistant provider once that copy exists.
-- **A long listening stretch can now earn one honest companionship beat.** After 30 minutes of active listening in one anonymous station epoch, one naturally scheduled host break may acknowledge the shared listening moment without claiming that anyone just arrived, returned, or was identified. Empty-room time does not count, the cue is attempted at most once per epoch, and its coarse lifecycle appears only in authenticated diagnostics; `/public-status` is unchanged.
-- **The control room now shows where a slow build spent its time, and what safety audio is standing by.** The admin Engine Room gains two honest, admin-only readouts. "Last render" breaks the most recent segment down into its slowest stage — finding music, writing, voices, mixing, the on-air finish — so an operator can see why a build took a while instead of guessing. "Protected continuity" shows any ready safety audio the station is holding in reserve outside the normal queue. Both are diagnostics only: never shown to listeners, and never able to change what actually airs.
-- **Home references now rotate like radio, not a dashboard.** Casual host breaks receive at most one privacy-safe ambient cue, and the station holds that topic out until it has actually aired and rested. Weather, climate, vacuum, sun, and curated coffee cues can vary naturally without extra Home Assistant polling; room-presence moments stay off until explicitly enabled for that sensor. The control room shows a fact-free rotation state, and private director bookkeeping never reaches listener or public-status payloads.
+## [2.18.0] - 2026-08-07
 
-### Changed
+The station stops going quiet. v2.18 closes every path we could find where a control, a failure, or a busy moment became silence or a repeated song — and starts new Home Assistant installations with a deliberately small home context.
 
-- **Station memory now follows the room, not individual connections.** The live stream hub remains the only connection-membership authority; gaps shorter than 10 minutes keep one in-memory station epoch, while a gap of 10 minutes or more starts another. Legacy active, peak, total, and connection counters remain available, and durable station-session updates use commit receipts so retries cannot double-count.
-- **Normal Mode now holds the English-led balance across the whole break.** Host, news, transition, and ad speech target 75% English / 25% Italian, with one bounded repair and mode-correct deterministic fallbacks so an Italian-heavy response cannot leak through the final spoken boundary. A break that leans further into English than the target still airs in full, so a lively English-led exchange is never traded away for stock copy.
-- **Casa now makes its on-air receipt honest.** The listener card explains that it records only home moments that made it on air, not every change at home. Recent moments now read naturally as minutes, hours, yesterday, or whole days; when nothing newer has aired, Casa says so. The public view remains receipt-only, while the control room gives operators clearer reasons when a moment was held back by a playlist, music-source, or Chaos Mode change.
-- **Fresh installations now start with a deliberately small Home Assistant context.** Hosts can use only coarse daylight and—when there is exactly one unambiguous source—coarse weather; household entities, generated labels, moods, reactive moments, timers, running gags, and saved moment trails stay out. Existing stations retain their current Home behavior through a fail-closed continuity bridge, so an update does not suddenly silence a house that already chose it.
-- **The control room's Rotazione tab now leads with Record Hunt.** The rotation view opens on a single plain-language steering control — type where you want the station to go next (say, "Italian '90s electronica") and it highlights the records it will favor while keeping every song and its Next action in reach. Exact-record search moves to a secondary "find a specific record" box; source imports, shuffle, bans, and clearing the pool tuck into a "Library tools" drawer; and an empty pool now offers real recovery sources instead of a dead list.
+### The show keeps playing
 
-### Fixed
+- Every control that rebuilds the queue — source switches, purges, Panic, Chaos, Festival, everyday edits — keeps the last safe audio playing and reserves only audio that is proven playable.
+- The song on the air can no longer be picked as the song that plays next, and cached rescues rotate instead of repeating one track during a stall.
+- A curly apostrophe or an unusual letter in a station name no longer silences the stream. Typing a name on a phone or Mac substitutes a smart quote, which the stream headers could not carry, and every listener got an error while the station reported healthy.
+- If every voice provider fails, speech falls through to canned copy or music — never a silent segment. One mismatched cloud voice no longer sidelines every other voice on that provider.
+- Blocked or rejected music sources are marked unavailable before they can become silent songs, and adding songs no longer throws away the track being prepared.
+- The backup writer steps in sooner when the main AI writer is briefly busy, and delivery is cushioned so one busy moment is less likely to reach listeners.
 
 - **Song requests now stay with the artist you named.** Open-ended requests no longer cue an unrelated search result: matches are checked against the requested artist or song, and titles are cleaned of video-site clutter. The listener page follows the request while it searches, then shows the verified match or a clear next step when the station cannot find or prepare it.
 - **Admin controls and pacing now survive restarts reliably.** Saves commit durably before the running station changes, so a managed restart or update restores your selection, and a failed save leaves the station exactly as it was.
@@ -46,10 +44,27 @@ The current version source of truth is `pyproject.toml`.
 - **A canned line no longer introduces music that was ready to play anyway.** When the station reaches for safety audio and a normalized song is sitting warm in the cache, it goes straight into the song. The short branded clip stays for a cold cache, where it is the difference between a voice and silence. It also reaches first audio sooner: the cached song already knows its own length, while the clip has to be measured first.
 - **Adding songs to the rotation no longer throws away the song being prepared.** Growing, shuffling, or reordering the rotation used to discard whatever the station was in the middle of building — on a Raspberry Pi that is minutes of work binned, and it opened the very gap that then had to be covered with safety audio. Enabling Chaos Mode did this to itself, because Chaos adds its own tracks. Prepared audio is now only set aside when its song genuinely leaves the rotation, and host breaks, ads, and news are never affected by a rotation edit at all.
 
-- **Source changes now report the cutover they actually made.** A switch skips only after fresh replacement audio is admitted; if the fallback preserves prior-source audio or no runway exists, current audio finishes and the API reports `skipped: false`. Panic also fences renders already in flight even when the queue itself did not change.
-- **A host break or ad no longer airs silence if every voice provider fails.** When OpenAI, Azure, ElevenLabs, and Edge are all unavailable for a segment, the station skips it and falls back to a pre-recorded clip or its existing recovery audio instead of a synthesized silent clip. A render that gets cancelled mid-voice now waits for any in-progress audio work to actually finish before cleaning up its scratch files, closing a race that could otherwise delete audio still being written.
-- **A single mismatched cloud voice no longer silences every other voice on that same provider.** When one configured OpenAI, Azure, or ElevenLabs voice comes back not-found, only that voice steps aside to the built-in Edge voice for the rest of the session — every other character on the same provider keeps using its cloud voice normally. A busy or slow provider now also gets one automatic retry after a short cooldown instead of being sidelined for the whole show, and the control room's voice status explains what's happening in plain language instead of raw technical codes.
-- **The station's "how much safe audio is ready" count can no longer be fooled by audio that can't actually play.** Queued or reserved segments that are banned, were queued for a listener who has since moved on, or are missing, empty, or unreadable on disk are no longer counted toward the cushion of ready audio that decides whether Skip has to cut straight to fresh music. A banned song sitting at the front of the queue is now discarded before playback reaches it, and removing queued items — by ban, by a skip, or by an operator's manual removal — can no longer leave a leftover, unverified segment mistakenly reused as backing music under the next host break.
+### A smaller, more honest home layer
+
+- Fresh installations start with coarse daylight and one unambiguous weather source only; existing stations keep their current home behavior through a continuity bridge.
+- Home references rotate like radio, not a dashboard: one ambient cue per casual break, and a topic rests after airing.
+- Temperatures are read in the unit they were measured in — 68 °F is no longer announced as "sixty-eight degrees" Celsius.
+- Home Assistant context work moved off the path that keeps audio moving, and hot backups no longer omit the app when generated audio changes mid-copy.
+
+### A control room you can trust
+
+- Rotazione leads with Record Hunt: type where the station should go next and it highlights what it will favor.
+- Rotation edits carry the song's own identity, so a shifted list can never make a Ban or Next hit the wrong track.
+- Admin controls and pacing survive restarts, Stop/Resume is restart-safe, and the AI spend estimate counts a paid voice the moment the provider confirms it.
+- The control room works with a screen reader, on a phone, and in dim light; the listener page's badges, name field, and footer links are legible and comfortable to tap.
+
+### Also in this release
+
+- The add-on's music cache grows to 1500 MB by default with a new **Music cache size (MB)** setting, sized so a full rotation stays ready to play.
+- Normal Mode holds its English-led balance across the whole break, and a host can no longer end up answering themselves when a line is dropped.
+- A long listening stretch can earn one honest companionship beat; the time counter can no longer run past the end of what is playing.
+- The v1 integration contract is frozen and machine-checked on every pull request.
+- Installing and updating the add-on works again: the repository now names only published versions, with a daily check if that ever slips.
 
 ## [2.17.0] - 2026-07-12
 

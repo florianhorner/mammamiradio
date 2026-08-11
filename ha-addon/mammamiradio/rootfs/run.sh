@@ -245,9 +245,13 @@ if legacy_claude_model:
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
 print('export HA_ENABLED=' + ha_val)
-context_enabled = opts.get('ha_context_enabled', True)
-context_val = 'true' if context_enabled else 'false'
-print('export MAMMAMIRADIO_HA_CONTEXT_ENABLED=' + context_val)
+# Absence is meaningful for the First Listen privacy migration.  Export only
+# an explicit operator choice; app startup classifies omitted legacy installs
+# after audio tasks are already running.
+if 'ha_context_enabled' in opts:
+    context_enabled = opts.get('ha_context_enabled') is True
+    context_val = 'true' if context_enabled else 'false'
+    print('export MAMMAMIRADIO_HA_CONTEXT_ENABLED=' + context_val)
 context_poll = opts.get('ha_context_poll_interval', 300)
 try:
     context_poll_int = int(context_poll)
@@ -344,8 +348,9 @@ export MAMMAMIRADIO_LEDGER_ENABLED="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Point cache/tmp at persistent /data ----
+# ---- Point runtime data at persistent /data ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
+export MAMMAMIRADIO_MUSIC_DIR="/data/music"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
 
 # ---- Ensure directories exist ----
@@ -354,8 +359,9 @@ if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.e
     echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
     echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
     export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
+    export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"
     export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
-    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$FALLBACK_BASE/music" "$MAMMAMIRADIO_TMP_DIR"
+    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"
 fi
 
 # ---- Validate critical files exist ----

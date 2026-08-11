@@ -15,7 +15,7 @@ from urllib.error import URLError
 
 import pytest
 
-from mammamiradio.core.models import PlaylistSource, Track
+from mammamiradio.core.models import PlaylistSource, SourceReadinessEvidence, Track
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -698,10 +698,11 @@ def test_classic_source_year_stamp(config):
 
 
 def test_load_explicit_source_classic_url_kind_resolves(config):
-    """Normal: source.kind='url' with classic:// scheme resolves to a classic source."""
+    """Normal: a resolved classic source retains explicit attempted evidence."""
     from mammamiradio.playlist.playlist import load_explicit_source
 
     config.playlist.shuffle = False
+    readiness = SourceReadinessEvidence()
     classic_tracks = [
         Track(
             title="Vita spericolata",
@@ -717,6 +718,7 @@ def test_load_explicit_source_classic_url_kind_resolves(config):
         tracks, source = load_explicit_source(
             config,
             PlaylistSource(kind="url", source_id="", label="Anni 80", url="classic://italian/80s"),
+            readiness=readiness,
         )
 
     assert tracks[0].source == "classic"
@@ -724,12 +726,17 @@ def test_load_explicit_source_classic_url_kind_resolves(config):
     assert source.kind == "classic"
     assert source.source_id == "80s"
     assert source.url == "classic://italian/80s"
+    assert source.readiness_evidence is readiness
+    assert readiness.advanced is not None
+    assert readiness.advanced.kind == "classic"
+    assert readiness.advanced.attempted is True
 
 
 def test_load_explicit_source_classic_disabled_raises(config):
-    """Empty fallback: yt-dlp disabled yields an explicit source error, not demo fallback."""
+    """Empty fallback: a failed classic load retains explicit attempted evidence."""
     from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
 
+    readiness = SourceReadinessEvidence()
     with (
         patch("mammamiradio.playlist.downloader._ytdlp_enabled", return_value=False),
         pytest.raises(ExplicitSourceError, match="yt-dlp disabled"),
@@ -737,7 +744,13 @@ def test_load_explicit_source_classic_disabled_raises(config):
         load_explicit_source(
             config,
             PlaylistSource(kind="classic", source_id="80s", label="Anni 80", url="classic://italian/80s"),
+            readiness=readiness,
         )
+
+    assert readiness.advanced is not None
+    assert readiness.advanced.kind == "classic"
+    assert readiness.advanced.attempted is True
+    assert readiness.advanced.failure == "Classic Italian returned no playable candidates"
 
 
 def test_fetch_startup_playlist_restores_persisted_classic_source(config):

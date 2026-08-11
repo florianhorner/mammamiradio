@@ -335,10 +335,12 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
             request.app.state.config,
             excluded_track_keys={normalized_track_key(track) for track in removed_tracks},
         )
+    removed_playlist_tracks = []
     for track in removed_tracks:
         original_len = len(state.playlist)
         state.playlist = [t for t in state.playlist if t is not track]
         if len(state.playlist) != original_len:
+            removed_playlist_tracks.append(track)
             state.playlist_revision += 1
         if state.pinned_track is track:
             owned_pin_revision = pin_revisions.get(id(track))
@@ -353,6 +355,11 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
                     expected_revision=owned_force_revision,
                     expected_type=SegmentType.MUSIC,
                 )
+    if removed_playlist_tracks:
+        state.source_readiness.reconcile_active_tracks(
+            state.playlist,
+            removed_tracks=removed_playlist_tracks,
+        )
     return {"ok": True, "removed": len(removed_requests)}
 
 

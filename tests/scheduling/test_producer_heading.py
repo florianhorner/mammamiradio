@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -34,7 +35,11 @@ def _heading() -> Heading:
 
 
 def _producer_config():
-    return SimpleNamespace(playlist=SimpleNamespace(repeat_cooldown=8, artist_cooldown=3))
+    return SimpleNamespace(
+        playlist=SimpleNamespace(repeat_cooldown=8, artist_cooldown=3),
+        cache_dir=Path("cache"),
+        music_dir=Path("music"),
+    )
 
 
 def test_accepted_tagged_selection_arms_heading_once():

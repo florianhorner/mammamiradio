@@ -42,6 +42,7 @@ from mammamiradio.scheduling.producer import _adjacent_music_source, _enqueue_wi
 from mammamiradio.web.streamer import (
     _CONTINUITY_CACHE_SCAN_LIMIT,
     _FALLBACK_REASON_LABELS,
+    ANY_PLAYABLE_RUNWAY_SECONDS,
     BRIDGE_HEALTH_QUEUE_EMPTY_THRESHOLD_SECONDS,
     BRIDGE_HEALTH_THRESHOLD,
     BRIDGE_HEALTH_WINDOW_SECONDS,
@@ -63,7 +64,9 @@ from mammamiradio.web.streamer import (
     _runtime_health_snapshot,
     _runtime_status_snapshot,
     _segment_is_immediately_playable,
+    _stamp_continuity_runway_epoch,
     _sync_runtime_state,
+    panic_cut,
     router,
 )
 
@@ -506,17 +509,55 @@ class TestRuntimeStatusSnapshot:
         assert snap["providers"]["script_provider"]["current_provider"] == "anthropic"
         assert snap["no_failover_message"] == "No failover in current session."
 
-    def test_station_on_air_true_when_tasks_alive_and_no_silence(self):
+    def test_silence_with_listeners_outranks_force_recovery(self):
+        """Force Start must not mask the failure it exists to recover from.
+
+        `force_recovery_active` clears only when a listener accepts audio, so a
+        force recovery that never produces audio holds the flag forever. Ranking
+        it above the silence alarm rendered indefinite dead air, with listeners
+        connected, as a benign yellow "Starting".
+        """
+
+        app = _make_app()
+        state = app.state.station_state
+        state.force_recovery_active = True
+        req = _fake_request(app)
+
+        with patch("mammamiradio.web.streamer._silence_with_listeners", return_value=True):
+            snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "blocked"
+        assert snap["health_color"] == "red"
+        assert "listeners are waiting" in snap["health_explanation"].lower()
+
+    def test_force_recovery_still_reads_degraded_while_the_station_is_quiet(self):
+        """Without the silence alarm, an in-progress rebuild is still just yellow."""
+
+        app = _make_app()
+        app.state.station_state.force_recovery_active = True
+        req = _fake_request(app)
+
+        with patch("mammamiradio.web.streamer._silence_with_listeners", return_value=False):
+            snap = _runtime_status_snapshot(req)
+
+        assert snap["health_state"] == "degraded"
+        assert snap["recovering"] is True
+
+    def test_station_on_air_requires_listener_audible_commit(self):
         app = _make_app()
         req = _fake_request(app)
 
-        snap = _runtime_status_snapshot(req)
+        before_acceptance = _runtime_status_snapshot(req)
+        app.state.station_state.current_stream_audible = True
+        after_acceptance = _runtime_status_snapshot(req)
 
-        assert snap["station_on_air"] is True
+        assert before_acceptance["station_on_air"] is False
+        assert after_acceptance["station_on_air"] is True
 
     def test_station_on_air_true_even_when_script_fallback_active(self):
         app = _make_app()
         state = app.state.station_state
+        state.current_stream_audible = True
         app.state.config.anthropic_api_key = "anthropic-key"
         app.state.config.openai_api_key = "openai-key"
         state.update_runtime_provider(
@@ -663,7 +704,11 @@ class TestRuntimeStatusSnapshot:
         assert snap["health_state"] == "degraded"
         assert snap["providers"]["script_provider"]["current_provider"] == "openai"
         assert snap["providers"]["script_provider"]["fallback_active"] is True
-        assert snap["providers"]["script_provider"]["switch_reason"] == "anthropic_exception"
+        # The stored code is `anthropic_exception`; the operator reads words.
+        assert (
+            snap["providers"]["script_provider"]["switch_reason"]
+            == "Anthropic had a brief API error - retrying automatically"
+        )
 
     def test_status_uses_recorded_script_recovery_after_fallback(self):
         app = _make_app()
@@ -1052,33 +1097,49 @@ async def test_readyz_not_ready_when_queue_empty():
 
 
 @pytest.mark.asyncio
-async def test_readyz_ready_when_queue_has_segments():
-    """readyz returns 200 when queue_depth > 0 and tasks are alive."""
+async def test_readyz_stays_starting_when_queue_has_unheard_segments():
+    """Queued work is not proof that any listener has accepted audio."""
     app = _make_app(shadow=[_seg()], queue_items=1)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/readyz")
 
-    assert resp.status_code == 200
-    assert resp.json()["ready"] is True
+    assert resp.status_code == 503
+    assert resp.json()["ready"] is False
+    assert resp.json()["status"] == "starting"
 
 
 @pytest.mark.asyncio
-async def test_readyz_ready_after_startup_window():
-    """readyz returns 200 once uptime > 30s even with an empty queue."""
+async def test_readyz_stays_starting_after_startup_window_without_accepted_audio():
+    """Elapsed startup time cannot turn an unheard station ready."""
     app = _make_app(shadow=[], queue_items=0)
     app.state.start_time = time.time() - 31  # simulate 31s of uptime
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/readyz")
 
+    assert resp.status_code == 503
+    assert resp.json()["ready"] is False
+    assert resp.json()["status"] == "starting"
+
+
+@pytest.mark.asyncio
+async def test_readyz_ready_after_listener_accepts_audio():
+    app = _make_app(shadow=[], queue_items=0)
+    app.state.station_state.on_stream_segment(_queue_segment("Accepted", duration_sec=180.0))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/readyz")
+
     assert resp.status_code == 200
     assert resp.json()["ready"] is True
+    assert resp.json()["status"] == "ready"
 
 
 @pytest.mark.asyncio
 async def test_readyz_not_ready_when_producer_dead():
     app = _make_app(shadow=[_seg()], queue_items=1)
+    app.state.station_state.on_stream_segment(_queue_segment("Accepted", duration_sec=180.0))
     dead_task = MagicMock()
     dead_task.done.return_value = True
     app.state.producer_task = dead_task
@@ -1280,6 +1341,7 @@ def test_runtime_status_snapshot_includes_bridge_health():
 def test_runtime_status_snapshot_bridge_health_degrades_without_marking_off_air():
     app = _make_app()
     state = app.state.station_state
+    state.current_stream_audible = True
     now = 10_000.0
     for i in range(BRIDGE_HEALTH_THRESHOLD):
         state.record_bridge_fire("drain", "norm_cache", timestamp=now - i)
@@ -1409,6 +1471,167 @@ def test_continuity_reservation_evicts_only_the_ordinary_tail():
     assert queued[-1].metadata["continuity_reservation"] is True
     assert len(app.state.station_state.queued_segments) == app.state.queue.qsize()
     assert app.state.station_state.continuity_epoch == 1
+
+
+def test_minimum_runway_still_reserves_when_the_floor_is_zero():
+    """`minimum_runway_seconds` is load-bearing, not decorative.
+
+    With runway replenishment turned off (floor 0) the reservation target is also
+    0, and an empty protected set trivially "meets" it — so a caller that needs
+    *some* playable audio (Resume) would get none. Deleting the parameter looks
+    safe against the production floor of 240 and is not.
+    """
+
+    app = _make_app()
+    state = app.state.station_state
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 0):
+        assert _reserve_continuity_runway(app.state, state, app.state.config) == 0
+        assert app.state.queue.empty()
+        assert state.continuity_slot is None
+
+        _reserve_continuity_runway(
+            app.state,
+            state,
+            app.state.config,
+            minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+        )
+
+    assert _playable_runway_available(app.state.queue, state) is True
+
+
+def test_every_reservation_is_admissible_on_the_timeline_it_created():
+    """A reservation the playback loop would throw away is worse than none.
+
+    `_reserve_continuity_runway` publishes into the queue — waking any blocked
+    `queue.get()` waiter — and only then advances `continuity_epoch`. The waiter's
+    captured epoch is therefore always stale, so without the admission stamp the
+    loop discards the exact audio the control just reserved to avoid dead air, and
+    resets the rescue ladder while doing it. Every reserving control (Panic, Purge,
+    Air-Next, Shuffle, Ban, source load, Resume) depends on this.
+    """
+
+    app = _make_app()
+    state = app.state.station_state
+
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 0):
+        _reserve_continuity_runway(
+            app.state,
+            state,
+            app.state.config,
+            minimum_runway_seconds=ANY_PLAYABLE_RUNWAY_SECONDS,
+        )
+
+    reserved = [segment for segment in list(app.state.queue._queue) if segment.metadata.get("continuity_reservation")]
+    if state.continuity_slot is not None:
+        reserved.append(state.continuity_slot)
+    assert reserved, "the reservation produced no protected audio to check"
+
+    for segment in reserved:
+        assert segment.metadata.get("continuity_admission_epoch") == state.continuity_epoch, (
+            f"reserved {segment.path.name} is not admissible on the timeline that created it"
+        )
+
+
+def test_stamping_blesses_only_protected_runway():
+    """The reservation flag is the whole guard, so assert the negative too.
+
+    Drop the flag check inside `_stamp_continuity_runway_epoch` and every ordinary
+    pre-Stop segment becomes admissible on the new timeline — which is precisely
+    the stale audio the epoch fence exists to keep off the air.
+    """
+
+    app = _make_app()
+    state = app.state.station_state
+    app.state.queue = asyncio.Queue(maxsize=4)
+    ordinary = _queue_segment("Pre-Stop track", duration_sec=200.0)
+    protected = _queue_segment("Reserved runway", duration_sec=200.0)
+    protected.metadata["continuity_reservation"] = True
+    app.state.queue.put_nowait(ordinary)
+    app.state.queue.put_nowait(protected)
+    slot = _queue_segment("Reserved slot", duration_sec=4.0)
+    slot.metadata["continuity_reservation"] = True
+    state.continuity_slot = slot
+    state.continuity_epoch = 7
+
+    _stamp_continuity_runway_epoch(app.state.queue, state)
+
+    assert protected.metadata["continuity_admission_epoch"] == 7
+    assert slot.metadata["continuity_admission_epoch"] == 7
+    assert "continuity_admission_epoch" not in ordinary.metadata
+
+
+def test_discarding_a_dead_head_keeps_the_surviving_reservation_admissible(tmp_path):
+    """Bumping the epoch must not orphan the runway the same control just reserved.
+
+    Resume and Skip reserve runway (which stamps it) and then trim a dead queue
+    head. That trim advances `continuity_epoch`, so without a re-stamp the
+    survivor carries the previous epoch, `admitted_on_current_timeline` is False,
+    and the playback loop discards the exact audio the control reserved to avoid
+    dead air — after the route already answered 200.
+    """
+
+    app = _make_app()
+    state = app.state.station_state
+    app.state.queue = asyncio.Queue(maxsize=4)
+
+    real = tmp_path / "reserved.mp3"
+    real.write_bytes(b"\x00" * 4096)
+    dead = _queue_segment("Evicted head", duration_sec=200.0)
+    dead.path = tmp_path / "gone.mp3"  # never written -> unplayable
+    reserved = _queue_segment("Reserved runway", duration_sec=200.0)
+    reserved.path = real
+    reserved.metadata["continuity_reservation"] = True
+    app.state.queue.put_nowait(dead)
+    app.state.queue.put_nowait(reserved)
+    state.queued_segments = [
+        {"id": "dead", "type": "music", "label": "Evicted head"},
+        {"id": "reserved", "type": "music", "label": "Reserved runway"},
+    ]
+    state.continuity_epoch = 7
+    _stamp_continuity_runway_epoch(app.state.queue, state)
+    assert reserved.metadata["continuity_admission_epoch"] == 7
+
+    dropped = _discard_unplayable_queue_prefix(app.state.queue, state, reason=GenerationWasteReason.OPERATOR_STOP)
+
+    assert dropped == 1
+    assert state.continuity_epoch == 8
+    assert reserved.metadata["continuity_admission_epoch"] == state.continuity_epoch
+
+
+@pytest.mark.asyncio
+async def test_assetless_panic_keeps_its_own_reservation_admissible(tmp_path):
+    """Panic's own epoch bump must not orphan the runway it just reserved.
+
+    An assetless Panic leaves the queue untouched, so `_reserve_continuity_runway`
+    does not advance the epoch and `panic_cut` bumps it itself to supersede any
+    in-flight render. That bump lands after the reservation was stamped, so
+    without a re-stamp the playback loop discards the protected audio Panic was
+    protecting — on the exact path where there is least to spare.
+    """
+
+    app = _make_app()
+    state = app.state.station_state
+    app.state.queue = asyncio.Queue(maxsize=4)
+
+    real = tmp_path / "protected.mp3"
+    real.write_bytes(b"\x00" * 4096)
+    protected = _queue_segment("Protected runway", duration_sec=200.0)
+    protected.path = real
+    protected.metadata["continuity_reservation"] = True
+    app.state.queue.put_nowait(protected)
+    state.queued_segments = [{"id": "protected", "type": "music", "label": "Protected runway"}]
+    state.now_streaming = {"type": "music", "label": "On air", "metadata": {}}
+    state.current_stream_audible = True
+    state.continuity_epoch = 3
+
+    # Assetless: nothing new to reserve, so the reservation cannot bump the epoch.
+    with patch("mammamiradio.web.streamer._continuity_reservation_segments", return_value=[]):
+        response = await panic_cut(_fake_request(app), None)
+
+    assert response["ok"] is True
+    assert state.continuity_epoch == 4, "panic must supersede in-flight renders"
+    assert protected.metadata["continuity_admission_epoch"] == state.continuity_epoch
 
 
 def test_continuity_reservation_eviction_abandons_queued_companionship_cue(tmp_path):

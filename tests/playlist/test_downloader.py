@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -99,6 +100,49 @@ def test_find_local_matches_by_title(track, music_dir):
     mp3.touch()
     result = _find_local(track, music_dir)
     assert result == mp3
+
+
+def test_find_local_bounds_raw_directory_entries_before_mp3_filter(track, music_dir):
+    import mammamiradio.playlist.downloader as downloader
+
+    yielded = 0
+
+    class CountingScandir:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def __iter__(self):
+            nonlocal yielded
+            for index in range(100):
+                yielded += 1
+                yield SimpleNamespace(
+                    name=f"not-music-{index}.txt",
+                    path=str(music_dir / f"not-music-{index}.txt"),
+                    is_file=lambda: True,
+                )
+
+    downloader._local_files_cache.pop(str(music_dir), None)
+    with (
+        patch("mammamiradio.playlist.downloader.os.scandir", return_value=CountingScandir()),
+        patch("mammamiradio.playlist.downloader._LOCAL_DIRECTORY_ENTRY_LIMIT", 8),
+    ):
+        result = downloader._find_local(track, music_dir)
+
+    assert result is None
+    assert yielded == 8
+
+
+def test_find_local_treats_unreadable_directory_as_no_match(track, music_dir):
+    import mammamiradio.playlist.downloader as downloader
+
+    downloader._local_files_cache.pop(str(music_dir), None)
+    with patch("mammamiradio.playlist.downloader.os.scandir", side_effect=PermissionError("denied")):
+        result = downloader._find_local(track, music_dir)
+
+    assert result is None
 
 
 def test_find_demo_asset_matches_by_cache_key(track, tmp_path):
@@ -470,6 +514,24 @@ async def test_download_track_async(track, cache_dir, music_dir):
 
     result = await download_track(track, cache_dir, music_dir)
     assert result == cached
+
+
+@pytest.mark.asyncio
+async def test_async_download_defaults_honor_music_dir_environment(track, cache_dir, tmp_path, monkeypatch):
+    from mammamiradio.playlist.downloader import download_external_track, download_track
+
+    configured_music = tmp_path / "mounted-music"
+    monkeypatch.setenv("MAMMAMIRADIO_MUSIC_DIR", str(configured_music))
+    expected = cache_dir / "result.mp3"
+    with (
+        patch("mammamiradio.playlist.downloader._download_sync", return_value=expected) as regular,
+        patch("mammamiradio.playlist.downloader._download_external_sync", return_value=expected) as external,
+    ):
+        assert await download_track(track, cache_dir) == expected
+        assert await download_external_track(track, cache_dir) == expected
+
+    assert regular.call_args.args[2] == configured_music
+    assert external.call_args.args[2] == configured_music
 
 
 def test_download_external_sync_raises_when_ytdlp_disabled(track, cache_dir, music_dir):

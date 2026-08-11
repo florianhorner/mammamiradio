@@ -589,6 +589,139 @@ def test_listener_lang_reflects_copy_register() -> None:
     assert 'lang="{{ page_lang }}"' in html, "<html lang> must be driven by page_lang, not hardcoded to it."
 
 
+def test_listener_live_chip_label_is_not_the_brand_accent() -> None:
+    """The In Onda chip must not draw its label in `--brand-accent`.
+
+    `--brand-accent` defaults to the same Lancia red the chip is tinted with,
+    so the label rendered red-on-red at 2.8:1 — under the 4.5:1 AA floor, at
+    9px. `core/config.py` validates `accent_color` for hex validity only and
+    deliberately does not contrast-check it, on the stated grounds that it is
+    decorative and never carries body text; using it as a label broke that
+    assumption. The accent belongs on the dot. The design system specifies the
+    Lancia ground and is silent on the label colour; the sibling
+    `.mmr-live-pill` already uses cream, and this matches it.
+    """
+    css = _read_listener_css()
+    bodies = _rule_bodies_for_selector(css, ".mmr-live")
+    assert bodies, "`.mmr-live` rule not found in listener.css."
+    for body in bodies:
+        colour = re.search(r"(?<!-)\bcolor\s*:\s*([^;]+)", body)
+        assert colour, "`.mmr-live` must declare a label colour."
+        assert "--brand-accent" not in colour.group(1), (
+            "`.mmr-live` label must not use --brand-accent — it is the same red as "
+            "the chip's own background. Use --cream."
+        )
+
+
+def test_listener_hidden_elements_are_not_unhidden_by_a_display_rule() -> None:
+    """A class styled with `display` must reset `display` for `[hidden]`.
+
+    The `hidden` attribute is UA-origin `display: none`, so ANY author
+    `display` declaration on a matching selector beats it and forces the
+    element visible. This has now bitten this file twice: first `.mmr-share-btn`
+    (fixed with a `[hidden]` reset), then `.mmr-footer .foot-link-btn`, which
+    picked up `display: inline-flex` as part of a touch-target pass and
+    stranded a permanently visible, permanently dead "Install app" button in
+    the footer for every browser where `beforeinstallprompt` never fires.
+
+    Rather than pin the two known classes, derive the rule: every element that
+    ships with `hidden` in the template, whose class is given a `display`
+    somewhere in listener.css, needs a matching `[hidden]` reset.
+    """
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    css = _read_listener_css()
+
+    # Tags carrying a bare `hidden` attribute. The negative lookbehind keeps
+    # `aria-hidden="true"` (a different attribute entirely) out of the set.
+    hidden_tags = re.findall(r"<[a-zA-Z][^>]*?(?<![-\w])hidden(?=[\s/>=])[^>]*>", html)
+    elements = [set(m.split()) for tag in hidden_tags for m in re.findall(r'class="([^"]*)"', tag)]
+    assert elements, "No hidden-by-default classed elements found — has the template changed?"
+
+    def subject(selector: str) -> str:
+        """The rightmost compound — the element a selector actually styles.
+
+        `.mmr-casa .eyebrow` styles `.eyebrow`, not the hidden `.mmr-casa`
+        card, so a `display` there is not this element's problem.
+        """
+        return re.split(r"[\s>+~]+", selector.strip())[-1]
+
+    rule_re = re.compile(r"([^{}]+)\{([^}]*)\}", re.DOTALL)
+    styled: set[str] = set()  # classes given a display AS THE SUBJECT
+    reset: set[str] = set()  # classes with a [hidden] display:none reset
+    for selector_block, body in rule_re.findall(css):
+        for selector in selector_block.split(","):
+            tail = subject(selector)
+            classes = re.findall(r"\.([\w-]+)", tail)
+            if not classes:
+                continue
+            if "[hidden]" in tail:
+                if re.search(r"(?<!-)display\s*:\s*none", body):
+                    reset.update(classes)
+            elif re.search(r"(?<!-)display\s*:", body):
+                styled.update(classes)
+
+    # Evaluate per ELEMENT, not per class: an element is safe if ANY of its
+    # classes carries the reset. The share button relies on exactly that —
+    # `.btn-ghost` gives it a display, `.mmr-share-btn[hidden]` takes it back.
+    offenders: list[str] = []
+    for cls_set in elements:
+        if cls_set & styled and not (cls_set & reset):
+            offenders.append(" ".join(sorted(cls_set)))
+
+    assert not offenders, (
+        "These elements ship with `hidden` AND are given a `display` in "
+        "listener.css, which overrides the UA `[hidden] { display: none }` and "
+        "forces them visible. Add a `[hidden] { display: none }` reset for one "
+        "of each element's classes:\n" + "\n".join(f"  {c}" for c in offenders)
+    )
+
+
+def test_listener_touch_targets_meet_the_44px_floor() -> None:
+    """Listener controls that were below the 44px touch floor must declare it.
+
+    The dedica name input measured ~38px and the footer links ~20px — the
+    smallest tap targets on the page, and the only ones in their own containers
+    without the `min-height` their siblings already carry (the dedica submit
+    button and the header nav links both set 44px).
+    """
+    css = _read_listener_css()
+    for selector in (
+        ".mmr-dedica-form-input",
+        ".mmr-footer .foot-col a",
+        ".mmr-footer .foot-link-btn",
+    ):
+        bodies = _rule_bodies_for_selector(css, selector)
+        assert bodies, f"`{selector}` rule not found in listener.css."
+        assert any(re.search(r"min-height\s*:\s*(4[4-9]|[5-9]\d|\d{3,})px", body) for body in bodies), (
+            f"`{selector}` must declare min-height of at least 44px for touch."
+        )
+
+
+def test_listener_progress_text_cannot_outrun_its_own_duration() -> None:
+    """The elapsed time code must be bounded, not just the progress bar.
+
+    `renderProgress` clamped the bar with `Math.min(100, …)` but wrote the
+    elapsed *text* straight from the raw value. The server reports elapsed as
+    wall-clock since the segment started with no upper bound, so a 4-second
+    continuity clip left on air for minutes showed listeners "3:24 / 0:04".
+
+    This is a static shape check: it cannot execute the function, so it asserts
+    the two properties that failed — the raw progress value is not written
+    directly to the time code, and a bound exists.
+    """
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    body = re.search(r"function renderProgress\([^)]*\)\s*\{(.*?)\n  \}", js, re.DOTALL)
+    assert body, "renderProgress() not found in listener.js."
+    source = body.group(1)
+    assert not re.search(r"textContent\s*=\s*fmtTime\(\s*progressSec\s*\)", source), (
+        "The elapsed time code must not be written from the unbounded progressSec — "
+        "it can exceed durationSec and did ship as '3:24 / 0:04'."
+    )
+    assert "durationSec" in source and re.search(r"Math\.min|<=|<", source), (
+        "renderProgress must bound elapsed against durationSec."
+    )
+
+
 def _read_base_css() -> str:
     return _COMMENT_RE.sub("", BASE_CSS.read_text(encoding="utf-8"))
 
