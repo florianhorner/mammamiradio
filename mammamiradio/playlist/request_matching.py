@@ -400,7 +400,6 @@ class SongRequestIntent:
     """Primary request identity plus ranked, metadata-verifiable ambiguities."""
 
     primary_identity: SongRequestIdentity
-    original: str = ""
     alternative_identities: tuple[SongRequestIdentity, ...] = ()
 
     @property
@@ -715,7 +714,6 @@ def parse_song_request(message: str) -> SongRequestIntent | None:
         return None
     return SongRequestIntent(
         primary_identity=primary,
-        original=original,
         alternative_identities=alternative_identities,
     )
 
