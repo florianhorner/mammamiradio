@@ -23,6 +23,7 @@ from mammamiradio.core.models import (
     DialogueLine,
     Heading,
     HostPersonality,
+    Segment,
     SegmentType,
     StationState,
     Track,
@@ -4992,6 +4993,17 @@ def test_plan_listener_request_block_keeps_fifo_when_pin_belongs_to_later_reques
     commit.apply(state)
     state.pinned_track = None
     state.force_next = None
+    assert _plan_listener_request_block(state) == ("", None)
+    handoff_segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/first-listener-request.mp3"),
+        metadata={
+            "artist": first_track.artist,
+            "title_only": first_track.title,
+            **state.listener_request_handoff_metadata(first_track),
+        },
+    )
+    state.admit_listener_request_handoff(handoff_segment)
     later_prompt, later_commit = _plan_listener_request_block(state)
     assert "Later Request" in later_prompt
     assert later_commit is not None

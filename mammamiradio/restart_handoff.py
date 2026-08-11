@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.audio.normalizer import probe_duration_sec
-from mammamiradio.core.models import Segment, SegmentType, Track
+from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_ADMITTED_KEY, Segment, SegmentType, Track
 from mammamiradio.core.path_safety import safe_path_within
 from mammamiradio.playlist.music_admission import classify_youtube_candidate
 
@@ -64,6 +64,7 @@ _METADATA_BLOCK_FLAGS = frozenset(
         "error",
         "fallback",
         "interrupt",
+        LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
         "overlay",
         "recycled",
         "rescue",

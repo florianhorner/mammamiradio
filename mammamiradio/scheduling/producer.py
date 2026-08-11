@@ -56,6 +56,8 @@ from mammamiradio.core.listener_session import (
 )
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
     AdHistoryEntry,
     ChaosSubtype,
     DialogueLine,
@@ -517,6 +519,29 @@ def _is_session_rejected_without_concrete_source(track: Track, config: StationCo
 
 
 def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
+    handoff = state.listener_request_handoff
+    if handoff is not None and _is_session_rejected_without_concrete_source(handoff.track, config):
+        # A session-denied source has no media left to retry. Release this
+        # in-memory owner so it cannot suppress every later listener request,
+        # and make an exact-source duplicate acknowledge unavailability rather
+        # than promising the same unusable recording again.
+        for request in state.pending_requests:
+            request_track = request.get("song_track_obj")
+            if request.get("song_found") and isinstance(request_track, Track) and handoff.matches_track(request_track):
+                request["song_found"] = False
+                request["song_error"] = True
+                request["song_error_reason"] = "download_failed"
+                request["song_pinned"] = False
+        if state.pinned_track is not None and handoff.matches_track(state.pinned_track):
+            state.pinned_track = None
+        state.clear_listener_request_handoff(handoff.track)
+        handoff = None
+    # A queued dedication is stronger than reservations created by later
+    # listeners asking for the same recording. Reclaim its exact pin after a
+    # failed render; an unrelated operator pin keeps the current turn and the
+    # handoff retries on the following forced MUSIC cycle.
+    if handoff is not None and state.pinned_track is None:
+        state.pinned_track = handoff.track
     rejected_keys = {
         track.cache_key for track in state.playlist if _is_session_rejected_without_concrete_source(track, config)
     }
@@ -526,26 +551,37 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
     reserved_listener_keys = {track.cache_key for track in state.playlist if reservations.reserves_track(track)}
     if state.pinned_track is not None and reservations.reserves_track(state.pinned_track):
         reserved_listener_keys.add(state.pinned_track.cache_key)
-    excluded_keys = rejected_keys | reserved_listener_keys
-    # ``StationState.select_next_track`` consumes a pin before applying its
-    # exclusion set. Temporarily lift a same-recording listener pin out of that
-    # call so it cannot air anonymously (or be silently discarded) before the
-    # request planner transfers it into the single announced handoff. An
-    # unrelated operator/earlier pin is not listener-reserved and keeps its
-    # ordinary authority.
-    held_listener_pin = (
+    handoff_pin = (
         state.pinned_track
-        if state.pinned_track is not None and reservations.reserves_track(state.pinned_track)
+        if handoff is not None and state.pinned_track is not None and handoff.matches_track(state.pinned_track)
         else None
     )
-    if held_listener_pin is not None and state.force_next is None:
+    if handoff is not None:
+        # Remove only the recording already promised by the admitted dedication.
+        # Every other pending-request identity remains excluded.
+        reserved_listener_keys.discard(handoff.track.cache_key)
+        if handoff_pin is not None:
+            reserved_listener_keys.discard(handoff_pin.cache_key)
+    excluded_keys = rejected_keys | reserved_listener_keys
+    # ``StationState.select_next_track`` consumes a pin before applying its
+    # exclusion set. Temporarily lift a listener-reserved pin out of that call
+    # so it cannot air anonymously (or be silently discarded) before the
+    # request planner transfers it into its own announced handoff. While an
+    # older handoff is active, put its exact source in that temporary slot so
+    # ordinary rotation cannot delay a promise that has already been spoken.
+    held_listener_pin = (
+        state.pinned_track
+        if state.pinned_track is not None and handoff_pin is None and reservations.reserves_track(state.pinned_track)
+        else None
+    )
+    if held_listener_pin is not None and handoff is None and state.force_next is None:
         # The consumed MUSIC force could not safely honor this pin yet. Put the
         # dedication planning turn next; _plan_listener_request_block then
         # transfers the held recording and forces its one announced music turn.
         state.force_next = SegmentType.BANTER
     try:
         if held_listener_pin is not None:
-            state.pinned_track = None
+            state.pinned_track = handoff.track if handoff is not None else None
         try:
             candidate = state.select_next_track(
                 repeat_cooldown=config.playlist.repeat_cooldown,
@@ -1712,6 +1748,7 @@ def _schedule_restart_handoff_spool(state: StationState, config: StationConfig, 
             config.cache_dir,
             [candidate],
             blocklist=state.blocklist,
+            clear_when_empty=bool(metadata.get(LISTENER_REQUEST_HANDOFF_ADMITTED_KEY)),
             protected_paths=protected,
         )
     )
@@ -2211,7 +2248,11 @@ def _enqueue_rejection_reason(
         return GenerationWasteReason.SESSION_STOPPED
     if segment.type == SegmentType.MUSIC and state.blocklist and segment_track_key(segment) in state.blocklist:
         return GenerationWasteReason.BLOCKLIST_GATE
-    if segment.type == SegmentType.MUSIC and state.listener_track_reservations().reserves_segment(segment):
+    if (
+        segment.type == SegmentType.MUSIC
+        and state.listener_track_reservations().reserves_segment(segment)
+        and not state.listener_request_handoff_authorizes(segment)
+    ):
         return GenerationWasteReason.LISTENER_REQUEST_RESERVED
     return _stale_check_reason(stale_check)
 
@@ -4312,6 +4353,11 @@ async def _run_producer_inner(
         chaos_subtype: ChaosSubtype | None = None
         is_operator_forced = False  # operator /api/trigger -> air-next (front-insert)
         natural_banter_candidate = False
+        # A failed promised-song render retains its request-owned handoff. Arm
+        # the retry at the cycle boundary, where consuming the force and later
+        # queue admission cannot erase a newer operator directive mid-render.
+        if state.listener_request_handoff is not None and state.force_next is None:
+            state.force_next = SegmentType.MUSIC
         if state.chaos_pending is not None:
             chaos_subtype = state.chaos_pending
             state.chaos_last_degraded_reason = ""
@@ -4323,7 +4369,13 @@ async def _run_producer_inner(
             # An operator trigger (not the 60s-silence rescue or other internal
             # forces) gets air-next: it is front-inserted so it airs at the next
             # boundary instead of behind the buffered lookahead.
-            is_operator_forced = state.operator_force_pending is not None
+            pending_operator_force = state.operator_force_pending
+            is_operator_forced = pending_operator_force is seg_type
+            if pending_operator_force is not None and not is_operator_forced:
+                # A playlist move can replace force_next while an earlier Air
+                # Next render is still guarded. Keep the operator pick queued,
+                # but do not give the replacement segment front-insert status.
+                state.force_next = pending_operator_force
             # Keep operator_force_pending set through the whole render (cleared only
             # when the segment actually queues, in _front_insert_queue_and_shadow, or
             # on a discard below). That makes the second-trigger rejection hold for the
@@ -4869,6 +4921,7 @@ async def _run_producer_inner(
                         "playlist_index": playlist_idx,
                         "source_kind": getattr(track, "source", ""),
                         "heading_id": track.heading_id,
+                        **state.listener_request_handoff_metadata(track),
                     },
                     ephemeral=not norm_is_cached,
                 )
@@ -6535,7 +6588,9 @@ async def _run_producer_inner(
                     shadow_entry=shadow_entry,
                     stale_check=_enqueue_stale_reason,
                     admission_callback=(
-                        partial(_mark_companionship_segment_queued, state)
+                        state.admit_listener_request_handoff
+                        if segment.metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY)
+                        else partial(_mark_companionship_segment_queued, state)
                         if segment.metadata.get("listener_session_cue") == "companionship"
                         else None
                     ),

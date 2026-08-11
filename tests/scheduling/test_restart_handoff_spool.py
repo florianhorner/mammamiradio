@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.core.models import Segment, SegmentType, StationState
+from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.scheduling.producer import _enqueue_with_egress
 
 
@@ -63,6 +63,50 @@ async def test_enqueue_music_passes_admitted_paths_as_protected(tmp_path):
 
     _, kwargs = m_write.call_args
     assert kwargs["protected_paths"] == frozenset({admitted})
+
+
+@pytest.mark.asyncio
+async def test_listener_handoff_music_clears_older_restart_manifest(tmp_path):
+    queue: asyncio.Queue = asyncio.Queue()
+    track = Track(
+        title="Promised Song",
+        artist="Listener Artist",
+        duration_ms=120_000,
+        youtube_id="promised-song",
+    )
+    state = StationState(playlist=[track], pinned_track=track)
+    request = {"request_id": "listener-request"}
+    assert state.arm_listener_request_handoff(request, track)
+    config = SimpleNamespace(cache_dir=tmp_path, tmp_dir=tmp_path / "tmp")
+    music = tmp_path / "norm_listener_song_192k.mp3"
+    music.write_bytes(b"audio")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=music,
+        duration_sec=120.0,
+        metadata={
+            "artist": track.artist,
+            "title_only": track.title,
+            "audio_source": "download",
+            **state.listener_request_handoff_metadata(track),
+        },
+        ephemeral=False,
+    )
+
+    with patch("mammamiradio.scheduling.producer.try_write_restart_handoff_spool", return_value=True) as m_write:
+        assert await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            admission_callback=state.admit_listener_request_handoff,
+        )
+        tasks = list(state._restart_handoff_tasks)
+        assert len(tasks) == 1
+        await tasks[0]
+
+    _, kwargs = m_write.call_args
+    assert kwargs["clear_when_empty"] is True
 
 
 @pytest.mark.asyncio

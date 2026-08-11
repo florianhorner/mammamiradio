@@ -31,6 +31,20 @@ def _listener_search_ok(results: list[dict]) -> YtdlpSearchOutcome:
     return YtdlpSearchOutcome(status="ok", results=results)
 
 
+def _admit_listener_song_handoff(state: StationState, track: Track) -> Segment:
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/admitted-listener-song.mp3"),
+        metadata={
+            "artist": track.artist,
+            "title_only": track.title,
+            **state.listener_request_handoff_metadata(track),
+        },
+    )
+    state.admit_listener_request_handoff(segment)
+    return segment
+
+
 def _basic_auth_header(username: str = "admin", password: str = "secret") -> dict[str, str]:
     token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
     return {"Authorization": f"Basic {token}"}
@@ -4012,6 +4026,7 @@ async def test_queued_listener_song_waits_for_fifo_pin_before_entering_rotation(
     # The host handoff consumes the sole pin and archives an honest matched
     # receipt; it is not followed by an accidental ordinary-rotation duplicate.
     assert _select_accepted_music_track(state, app.state.config) is requested_track
+    _admit_listener_song_handoff(state, requested_track)
     state.after_music(requested_track)
     with patch("mammamiradio.core.models.random.choices", side_effect=_prefer_requested):
         assert _select_accepted_music_track(state, app.state.config) is not requested_track
@@ -4092,6 +4107,7 @@ def test_same_recording_operator_pin_waits_for_single_announced_listener_handoff
     # The announced handoff consumes exactly one pin. The same recording cannot
     # immediately re-enter ordinary rotation after the request is archived.
     assert _select_accepted_music_track(state, app.state.config) is requested_track
+    _admit_listener_song_handoff(state, requested_track)
     state.after_music(requested_track)
     with patch("mammamiradio.core.models.random.choices", side_effect=_choose_ordinary):
         assert _select_accepted_music_track(state, app.state.config).cache_key != requested_track.cache_key

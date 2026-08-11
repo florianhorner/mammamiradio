@@ -25,6 +25,7 @@ from mammamiradio.core.models import (
     normalized_track_key,
     segment_track_key,
 )
+from mammamiradio.core.song_identity import song_identity_keys_match
 from mammamiradio.playlist.preferences import PREFERENCE_UP_WEIGHT
 
 
@@ -1639,3 +1640,14 @@ def test_listener_track_reservation_uses_matcher_identity_equivalence(
     )
 
     assert state.listener_track_reservations().reserves_segment(candidate)
+
+
+def test_shared_song_identity_key_match_handles_compact_artist_and_punctuation():
+    assert song_identity_keys_match(
+        ("Toto Cutugno", "L'Italiano"),
+        ("TotoCutugno", "LItaliano"),
+    )
+    assert not song_identity_keys_match(
+        ("Toto Cutugno Tribute", "L'Italiano"),
+        ("Toto Cutugno", "LItaliano"),
+    )

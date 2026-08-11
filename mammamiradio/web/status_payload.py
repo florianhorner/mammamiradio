@@ -10,7 +10,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track
+from mammamiradio.core.models import (
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+    Heading,
+    PlaylistSource,
+    StationState,
+    Track,
+)
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
 from mammamiradio.web.assets import _ASSETS_DIR
@@ -497,6 +504,8 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         # Public status keeps its pre-feature segment schema unchanged.
         "listener_session_epoch",
         "listener_session_cue",
+        LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+        LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
         "memory_extraction",
         "ritual_recipe_match",
         "ritual_recipe_matches",

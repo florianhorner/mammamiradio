@@ -17,10 +17,15 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, NotRequired, TypedDict
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 from mammamiradio.core.listener_session import ListenerSession
 from mammamiradio.core.segment_status import is_fallback_active
-from mammamiradio.core.song_identity import normalize_artist_identity_text, normalize_song_identity_text
+from mammamiradio.core.song_identity import (
+    normalize_artist_identity_text,
+    normalize_song_identity_text,
+    song_identity_keys_match,
+)
 from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
@@ -425,6 +430,38 @@ class ListenerTrackReservations:
         return False
 
 
+LISTENER_REQUEST_HANDOFF_TOKEN_KEY = "listener_request_handoff_id"
+LISTENER_REQUEST_HANDOFF_ADMITTED_KEY = "listener_request_handoff_admitted"
+
+
+@dataclass(frozen=True)
+class ListenerRequestHandoff:
+    """Single request-owned exception to later same-recording reservations."""
+
+    token: str
+    request_id: str
+    track: Track
+
+    def matches_track(self, track: Track) -> bool:
+        """Match the exact media source, never a live/remix textual alias."""
+        return self.track.cache_key == track.cache_key
+
+    def authorizes_segment(self, segment: Segment) -> bool:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        return str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "") == self.token and song_identity_keys_match(
+            normalized_track_key(self.track), segment_track_key(segment)
+        )
+
+
+def segment_has_admitted_listener_request_handoff(segment: Segment) -> bool:
+    """Return whether producer admission marked this exact promised segment."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return bool(
+        metadata.get(LISTENER_REQUEST_HANDOFF_ADMITTED_KEY)
+        and str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "")
+    )
+
+
 @dataclass
 class SegmentLogEntry:
     """Compact log event for produced or streamed segments."""
@@ -826,6 +863,10 @@ class StationState:
     song_preferences_revision: int = 0
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
+    # One admitted dedication may carry its promised recording past equivalent
+    # reservations owned by later requests. The token is transferred to exactly
+    # one producer-built music segment and cleared at queue admission.
+    listener_request_handoff: ListenerRequestHandoff | None = None
     # Recently consumed requests kept for 5 min so the admin can see what happened
     # to a request that left Pending (sent to hosts, or song not found).
     recently_consumed_requests: list[ConsumedListenerRequest] = field(default_factory=list)
@@ -1483,6 +1524,7 @@ class StationState:
         self.pending_actions.clear()
         self._listener_request_rl.clear()
         self.pinned_track = None
+        self.listener_request_handoff = None
         self.force_next = None
         self.operator_force_pending = None
         self.heading = None
@@ -1540,6 +1582,44 @@ class StationState:
     def listener_track_reservations(self) -> ListenerTrackReservations:
         """Return the song identities still owned by pending listener requests."""
         return ListenerTrackReservations.from_pending_requests(self.pending_requests)
+
+    def arm_listener_request_handoff(self, request: dict, track: Track) -> bool:
+        """Give one queued dedication exclusive ownership of its music handoff."""
+        request_id = str(request.get("request_id") or request.get("ts") or "").strip() or uuid4().hex
+        current = self.listener_request_handoff
+        if current is not None:
+            return current.request_id == request_id and current.matches_track(track)
+        self.listener_request_handoff = ListenerRequestHandoff(
+            token=uuid4().hex,
+            request_id=request_id,
+            track=track,
+        )
+        return True
+
+    def listener_request_handoff_metadata(self, track: Track) -> dict[str, str]:
+        """Return the request token only for the handoff-owned recording."""
+        handoff = self.listener_request_handoff
+        if handoff is None or not handoff.matches_track(track):
+            return {}
+        return {LISTENER_REQUEST_HANDOFF_TOKEN_KEY: handoff.token}
+
+    def listener_request_handoff_authorizes(self, segment: Segment) -> bool:
+        """Validate a promised segment while it crosses producer admission."""
+        handoff = self.listener_request_handoff
+        return handoff is not None and handoff.authorizes_segment(segment)
+
+    def admit_listener_request_handoff(self, segment: Segment) -> None:
+        """Mark the promised segment and release the single in-memory handoff slot."""
+        if not self.listener_request_handoff_authorizes(segment):
+            raise RuntimeError("listener request handoff ownership changed before admission")
+        segment.metadata[LISTENER_REQUEST_HANDOFF_ADMITTED_KEY] = True
+        self.listener_request_handoff = None
+
+    def clear_listener_request_handoff(self, track: Track | None = None) -> None:
+        """Revoke a pending handoff, optionally only when it owns ``track``."""
+        handoff = self.listener_request_handoff
+        if handoff is not None and (track is None or handoff.matches_track(track)):
+            self.listener_request_handoff = None
 
     def _arm_heading_announcement_if_needed(self, track: Track) -> None:
         heading = self.heading

@@ -20,3 +20,10 @@ def normalize_song_identity_text(value: object) -> str:
 def normalize_artist_identity_text(value: object) -> str:
     """Normalize an artist using the compact alias equivalence accepted by matching."""
     return normalize_song_identity_text(value).replace(" ", "")
+
+
+def song_identity_keys_match(left: tuple[str, str], right: tuple[str, str]) -> bool:
+    """Return whether two ``(artist, title)`` keys identify the same song."""
+    return normalize_artist_identity_text(left[0]) == normalize_artist_identity_text(
+        right[0]
+    ) and normalize_song_identity_text(left[1]) == normalize_song_identity_text(right[1])

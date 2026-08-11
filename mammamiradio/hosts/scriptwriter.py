@@ -340,6 +340,18 @@ class ListenerRequestCommit:
             if not self.request.get("song_error_reason"):
                 self.request["song_error_reason"] = "lookup_timed_out"
         if self.consume:
+            snapshot = self._plan_snapshot
+            matched_pin = snapshot.matched_pin if snapshot is not None and snapshot.requires_matched_pin else None
+            # Queue admission made the spoken promise durable. Give its exact
+            # recording one request-scoped pass through reservations from later
+            # listeners before archiving this request.
+            if isinstance(matched_pin, Track):
+                # ``None`` can mean producer lookahead already selected the
+                # admitted pin; a different live pin means ownership changed.
+                if state.pinned_track is not None and state.pinned_track is not matched_pin:
+                    return
+                if not state.arm_listener_request_handoff(self.request, matched_pin):
+                    return
             state.archive_listener_request(
                 self.request,
                 status="song_not_found" if self.request.get("song_error") else "sent_to_hosts",
@@ -525,6 +537,12 @@ def abandon_listener_request_plan(commit: object, state: StationState) -> None:
 
 def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequestCommit | None]:
     """Build prompt text plus a deferred state mutation for the pending request."""
+    # The previous dedication owns the single promised-song handoff until its
+    # music segment reaches queue admission. Do not let the next request claim
+    # the pin or generate another promise while that transfer is in flight.
+    if state.listener_request_handoff is not None:
+        return "", None
+
     pending = state.pending_requests
     if not pending:
         return "", None

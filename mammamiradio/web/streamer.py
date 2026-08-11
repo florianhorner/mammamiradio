@@ -75,6 +75,7 @@ from mammamiradio.core.models import (
     SegmentType,
     StationState,
     Track,
+    segment_has_admitted_listener_request_handoff,
     segment_track_key,
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
@@ -85,6 +86,7 @@ from mammamiradio.core.setup_status import (
     build_setup_status,
     classify_station_mode,
 )
+from mammamiradio.core.song_identity import song_identity_keys_match
 from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
@@ -697,6 +699,8 @@ def _segment_blocklist_key(segment: Segment) -> tuple[str, str]:
 def _segment_is_listener_reserved(state: StationState, segment: Segment) -> bool:
     """Return whether pending dedication ownership keeps this music off air."""
     if segment.type is not SegmentType.MUSIC:
+        return False
+    if segment_has_admitted_listener_request_handoff(segment):
         return False
     reservations = state.listener_track_reservations()
     if reservations.reserves_segment(segment):
@@ -1513,6 +1517,13 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         if state.force_next is SegmentType.MUSIC:
             state.force_next = None
         pin_cleared = True
+    # Ban policy is intentionally broader than handoff ownership: it applies
+    # to every source with the same canonical artist/title. Revoke a promised
+    # album source even when the operator selected a live/remix source for the
+    # ban; exact-source matching remains appropriate everywhere else.
+    handoff = state.listener_request_handoff
+    if handoff is not None and normalized_track_key(handoff.track) in banned_keys:
+        state.clear_listener_request_handoff()
     if removed or pin_cleared:
         state.playlist_revision += 1
 
@@ -6200,7 +6211,6 @@ async def _commit_external_download(
         download_external_track,
         reject_cached_download,
     )
-    from mammamiradio.playlist.request_matching import normalize_match_text
 
     state = app_state.station_state
     config = app_state.config
@@ -6249,17 +6259,8 @@ async def _commit_external_download(
                 rejected_download_reason = verdict.reason
         if not rejected_download_reason:
             candidate_block_keys = {normalized_track_key(track), *blocked_identity_keys}
-
-            def _same_blocked_identity(left: tuple[str, str], right: tuple[str, str]) -> bool:
-                left_artist = normalize_match_text(left[0])
-                right_artist = normalize_match_text(right[0])
-                artists_match = left_artist == right_artist or left_artist.replace(" ", "") == right_artist.replace(
-                    " ", ""
-                )
-                return artists_match and normalize_match_text(left[1]) == normalize_match_text(right[1])
-
             if any(
-                _same_blocked_identity(candidate_key, blocked_key)
+                song_identity_keys_match(candidate_key, blocked_key)
                 for candidate_key in candidate_block_keys
                 for blocked_key in state.blocklist
             ):

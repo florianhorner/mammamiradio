@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from mammamiradio.core.models import Heading, SegmentLogEntry, StationState, Track
+from mammamiradio.core.models import (
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+    Heading,
+    SegmentLogEntry,
+    StationState,
+    Track,
+)
 from mammamiradio.web import status_payload, streamer
 
 _MOVED_HELPERS = (
@@ -169,6 +176,16 @@ def test_public_segment_metadata_redacts_transition_track_ref():
     payload = status_payload._public_segment_metadata(metadata)
 
     assert payload == {"source": "banter"}
+
+
+def test_public_segment_metadata_redacts_listener_request_handoff():
+    metadata = {
+        "title": "Song",
+        LISTENER_REQUEST_HANDOFF_TOKEN_KEY: "private-request-token",
+        LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True,
+    }
+
+    assert status_payload._public_segment_metadata(metadata) == {"title": "Song"}
 
 
 def test_ha_details_payload_absent_without_ha_observability():

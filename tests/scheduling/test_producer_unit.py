@@ -17,6 +17,7 @@ from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
     ChaosSubtype,
     DialogueLine,
     GenerationWasteReason,
@@ -207,6 +208,60 @@ async def test_music_segment_queued():
     assert "title" in seg.metadata
     assert seg.metadata["youtube_id"] in {"yt_demo1", "yt_demo2"}
     assert seg.duration_sec > 0
+
+
+@pytest.mark.asyncio
+async def test_listener_handoff_music_does_not_inherit_displaced_air_next(tmp_path):
+    requested = Track(
+        title="Canzone richiesta",
+        artist="Artista",
+        duration_ms=180_000,
+        youtube_id="listener-requested-source",
+    )
+    later_request = {
+        "request_id": "later-request",
+        "song_found": True,
+        "song_track_obj": requested,
+    }
+    state = StationState(
+        playlist=[requested],
+        pending_requests=[later_request],
+        listeners_active=1,
+        home_authorization=HomeAuthorization.legacy(),
+    )
+    assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, requested)
+    state.pinned_track = requested
+    state.force_next = SegmentType.MUSIC
+    state.operator_force_pending = SegmentType.BANTER
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"audio")
+    force_at_music_admission: list[SegmentType | None] = []
+
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"normalized audio")
+
+    def _capture_restart_spool(*_args, **_kwargs):
+        force_at_music_admission.append(state.force_next)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._schedule_restart_handoff_spool", side_effect=_capture_restart_spool),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.type is SegmentType.MUSIC
+    assert segment.metadata.get("air_next") is not True
+    assert segment.metadata.get(LISTENER_REQUEST_HANDOFF_ADMITTED_KEY) is True
+    assert state.listener_request_handoff is None
+    assert state.operator_force_pending is SegmentType.BANTER
+    assert force_at_music_admission == [SegmentType.BANTER]
 
 
 @pytest.mark.parametrize(

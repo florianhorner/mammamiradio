@@ -68,7 +68,7 @@ rematerializes an older Supervisor value.
 
 `mammamiradio/restart_handoff.py` owns a small durable spool the producer writes to and startup reads from, purely to shorten the gap between an add-on update finishing and the first listener hearing live programming again:
 
-- After each music segment is queued, the producer (`scheduling/producer.py::_schedule_restart_handoff_spool`) best-effort copies it (hash-addressed, content-verified) into `cache/restart_handoff/segments/` and atomically publishes a small `manifest.json` describing up to `DEFAULT_MAX_ENTRIES` (3) recent, already-normalized, non-ephemeral music tracks. Older/unreferenced spool files are pruned on each write; files still queued for playback this session are protected from that prune.
+- After each ordinary music segment is queued, the producer (`scheduling/producer.py::_schedule_restart_handoff_spool`) best-effort copies it (hash-addressed, content-verified) into `cache/restart_handoff/segments/` and atomically publishes a small `manifest.json` describing up to `DEFAULT_MAX_ENTRIES` (3) recent, already-normalized, non-ephemeral music tracks. One-shot listener-request handoff segments are excluded and clear any older manifest, so a promised song cannot replay without its dedication after a restart. Older/unreferenced spool files are pruned on each write; files still queued for playback this session are protected from that prune.
 - On the next boot, `main.py::_admit_restart_handoff` loads and validates the manifest (`admit_restart_handoff_entries`) — checking file existence, size, SHA-256, age (`DEFAULT_MAX_ENTRY_AGE_SEC`, 6h), and the operator blocklist — and enqueues whatever passes validation before the producer or playback loop has started. A corrupt, stale, or missing manifest is a silent no-op; the normal cold-start rescue ladder (see `docs/operations.md`) still applies underneath it.
 - Skipped entirely when `session_stopped` is set (the station was deliberately stopped, not just updated) so a stopped station doesn't quietly start playing again.
 - This is independent of, and does not replace, the norm-cache/demo-asset rescue ladder described in `docs/operations.md` — it is a *faster* first source when it has something to offer, not a new failure mode when it doesn't.
@@ -316,14 +316,19 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   dropped render (pinned by
   `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
 - The same music-eligibility gate holds every matched listener song until its
-  dedication banter is admitted and archives the pending request — including a
-  song that already owns `pinned_track`. The reservation is derived from
-  `StationState.pending_requests`, so dismissal, source change, or successful
-  acknowledgement releases it without a second registry. Ordinary selection,
-  norm-cache and last-known-good rescue, continuity reservation/slot claims,
-  enqueue admission, and playback's final queue claim all consult that shared
-  cache-key plus canonical `(artist, title)` identity; a pre-existing copy cannot
-  slip on air anonymously while the hosts still owe its dedication.
+  dedication banter is admitted — including a song that already owns
+  `pinned_track`. Reservations are derived from `StationState.pending_requests`,
+  so dismissal or source change releases them. Successful acknowledgement
+  archives the request and creates one transient, request-scoped handoff: its
+  token follows the promised recording through selection and queue admission,
+  then marks only that admitted segment as allowed past equivalent reservations
+  from later requests. A retryable render or admission failure retains the
+  handoff; a permanently unavailable source, source switch, or ban revokes it.
+  Ordinary selection, norm-cache and
+  last-known-good rescue, continuity reservation/slot claims, enqueue admission,
+  and playback's final queue claim otherwise consult the shared cache-key plus
+  canonical `(artist, title)` identity, so an unmarked copy cannot slip on air
+  anonymously while the hosts still owe its dedication.
 - † A front-insert also drops the **queue head** outright (not just the
   furthest-future tail) when it carries a `transition_track_ref` — its "just
   finished playing" claim (baked into audio, crossfaded over the prior song's
