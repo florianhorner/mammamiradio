@@ -575,7 +575,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             # same source-switch lock as the ordinary track key.
             blocked_identity_keys=frozenset(
                 (artist.strip().lower(), match.identity_title.strip().lower())
-                for artist in (match.artist, match.identity_artist)
+                for artist in match.credited_artists
                 if artist.strip()
             ),
         )

@@ -432,6 +432,24 @@ def test_featured_artist_credits_remain_strong_identity_evidence(candidate_title
     assert result.best.identity_artist == "Lady Gaga"
 
 
+def test_featured_artist_match_carries_every_verified_credit_for_policy_checks():
+    intent = parse_song_request("Play Shallow by Bradley Cooper")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": "Lady Gaga feat. Bradley Cooper - Shallow", "artist": "Generic Channel"}],
+    )
+
+    assert result.best is not None
+    assert result.best.identity_artist == "Bradley Cooper"
+    assert result.best.credited_artists == (
+        "Lady Gaga feat. Bradley Cooper",
+        "Bradley Cooper",
+        "Lady Gaga",
+    )
+
+
 @pytest.mark.parametrize(
     ("requested_title", "candidate_title"),
     [("L'Italiano", "LItaliano"), ("LItaliano", "L'Italiano")],
@@ -710,6 +728,45 @@ def test_clean_candidate_title_strips_platform_noise_but_preserves_live_identity
     assert clean_candidate_title("Il mio canto libero (Live at Teatro 1972)") == (
         "Il mio canto libero (Live at Teatro 1972)"
     )
+
+
+def test_candidate_packaging_suffix_requires_a_real_identity_boundary():
+    assert clean_candidate_title("Claudio") == "Claudio"
+    assert clean_candidate_title("Il silenzio di Claudio") == "Il silenzio di Claudio"
+    assert clean_candidate_title("Claudio (Official Audio)") == "Claudio"
+
+    wrong_request = parse_song_request("Play Cl by Example Artist")
+    exact_request = parse_song_request("Play Claudio by Example Artist")
+    assert wrong_request is not None and exact_request is not None
+    metadata = [{"title": "Example Artist - Claudio", "artist": "Example Artist"}]
+
+    assert match_song_request_candidates(wrong_request, metadata).failure_reason == "low_confidence"
+    exact = match_song_request_candidates(exact_request, metadata)
+    assert exact.best is not None
+    assert exact.best.title == "Claudio"
+
+
+@pytest.mark.parametrize("title", ["Audio", "Lyrics", "Visualizer", "HD", "HQ", "4K"])
+def test_exact_packaging_word_title_survives_display_and_structured_cleanup(title):
+    assert clean_candidate_title(title) == title
+    intent = parse_song_request(f"Play {title} by Example Artist")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {
+                "title": "Provided to YouTube by Distributor",
+                "artist": "Distributor Channel",
+                "track_title": title,
+                "track_artist": "Example Artist",
+            }
+        ],
+    )
+
+    assert result.best is not None
+    assert result.best.title == title
+    assert result.best.identity_title == title
 
 
 def test_legitimate_audio_title_is_not_erased_as_platform_noise():

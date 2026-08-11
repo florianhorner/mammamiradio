@@ -450,23 +450,30 @@ def _is_noise_group(contents: str) -> bool:
 
 def clean_candidate_title(value: object) -> str:
     """Remove video-platform packaging while retaining musical variants."""
-    title = _SPACE_RE.sub(" ", str(value or "")).strip()
+    original_title = _SPACE_RE.sub(" ", str(value or "")).strip()
+    title = original_title
     title = _BRACKET_RE.sub(lambda match: "" if _is_noise_group(match.group(1)) else match.group(0), title)
     title = re.sub(r"\bwith\s+lyrics?\b", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\b(?:4k|8k|hd|hq|sd)\b", "", title, flags=re.IGNORECASE)
     suffix = re.compile(
-        r"(?:\s*[-\u2013\u2014|]?\s*)"
+        # Platform packaging is a separate suffix, never the tail of an
+        # identity word. Without this boundary, ``Claudio`` was shortened to
+        # ``Cl`` merely because it ends in the letters ``audio``.
+        r"(?:\s+|\s*[-\u2013\u2014|]\s*)"
         r"(?:official\s+(?:(?:music|lyric)\s+)?video|official\s+audio|lyric\s+video|lyrics?|visualizer|"
         r"music\s+video|audio|(?:4|8)k|hd|hq|sd)\s*$",
         re.IGNORECASE,
     )
     previous = None
     while title != previous:
-        if normalize_match_text(title) == "audio":
-            break
         previous = title
         title = suffix.sub("", title).strip()
-    return _SPACE_RE.sub(" ", title).strip(" -\u2013\u2014|")
+    cleaned = _SPACE_RE.sub(" ", title).strip(" -\u2013\u2014|")
+    # A packaging-looking word can also be the complete, legitimate song
+    # identity (``Audio``, ``Lyrics``, ``Visualizer``, ``HD``, ``4K``). Exact
+    # structured metadata is subject to this helper too, so an empty cleanup
+    # must fall back to that trusted identity instead of making it unmatchable.
+    return cleaned or original_title.strip(" -\u2013\u2014|")
 
 
 def _split_title_credit(raw_title: str) -> tuple[str, str]:
@@ -507,6 +514,33 @@ def _matched_artist_identity(requested_artist: str, evidence: object) -> str:
         if _same_artist_identity(requested_artist, part):
             return _canonical_matched_artist(requested_artist, part)
     return ""
+
+
+def _credited_artist_identities(display_artist: str, identity_artist: str) -> tuple[str, ...]:
+    """Return candidate-backed artist identities needed by policy checks.
+
+    ``identity_artist`` is the exact collaborator segment that verified the
+    listener request. When that segment came from a compound display credit,
+    every sibling segment is equally real candidate metadata and must reach the
+    blocklist gate: requesting Bradley Cooper must not bypass a prior
+    Lady Gaga/Shallow ban on ``Lady Gaga feat. Bradley Cooper``.
+    """
+    display_artist = _clean_artist(display_artist)
+    identity_artist = _clean_artist(identity_artist)
+    candidates = [display_artist, identity_artist]
+    if display_artist and identity_artist and not _same_artist_identity(display_artist, identity_artist):
+        candidates.extend(_COLLABORATOR_RE.split(display_artist))
+
+    identities: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        cleaned = _clean_artist(candidate)
+        normalized = normalize_match_text(cleaned)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        identities.append(cleaned)
+    return tuple(identities)
 
 
 def _strip_title_variant(value: str) -> str:
@@ -569,6 +603,7 @@ class SongCandidateMatch:
     metadata: dict[str, Any]
     artist: str
     identity_artist: str
+    credited_artists: tuple[str, ...]
     title: str
     identity_title: str
     variant: str
@@ -673,6 +708,7 @@ def match_song_request_candidates(
             # request text here would bypass canonical dedupe or blocklists.
             canonical_artist = matched_artist or display_artist
             identity_artist = identity_artist or canonical_artist
+            credited_artists = _credited_artist_identities(canonical_artist, identity_artist)
             canonical_title = candidate_title
             if not canonical_title:
                 continue
@@ -684,6 +720,7 @@ def match_song_request_candidates(
                     metadata=dict(metadata),
                     artist=canonical_artist,
                     identity_artist=identity_artist,
+                    credited_artists=credited_artists,
                     title=canonical_title,
                     identity_title=identity_title,
                     variant=_variant_label(candidate_qualifiers),

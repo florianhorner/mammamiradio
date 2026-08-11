@@ -516,23 +516,53 @@ def _is_session_rejected_without_concrete_source(track: Track, config: StationCo
     )
 
 
+def _reserved_listener_track_keys(state: StationState) -> set[str]:
+    """Keep downloaded listener picks out of ordinary rotation until their FIFO handoff.
+
+    A listener download can finish while an operator or an earlier request owns
+    ``pinned_track``. The downloaded track must remain in the playlist for later
+    rotation, but it is not ordinary rotation yet: the hosts still need to
+    announce the request and claim its play-next pin. Deriving the reservation
+    from the pending request keeps its lifetime aligned with dismissal, source
+    changes, and the existing receipt commit without another mutable registry.
+
+    An explicit pin of the same recording remains authoritative. That is either
+    the listener handoff itself or a deliberate operator override, not a random
+    rotation selection.
+    """
+    reserved = {
+        track.cache_key
+        for request in state.pending_requests
+        if request.get("song_found")
+        and not request.get("song_pinned")
+        and isinstance((track := request.get("song_track_obj")), Track)
+    }
+    if state.pinned_track is not None:
+        reserved.discard(state.pinned_track.cache_key)
+    return reserved
+
+
 def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
     rejected_keys = {
         track.cache_key for track in state.playlist if _is_session_rejected_without_concrete_source(track, config)
     }
     if state.pinned_track is not None and _is_session_rejected_without_concrete_source(state.pinned_track, config):
         rejected_keys.add(state.pinned_track.cache_key)
+    reserved_listener_keys = _reserved_listener_track_keys(state)
+    excluded_keys = rejected_keys | reserved_listener_keys
     try:
         candidate = state.select_next_track(
             repeat_cooldown=config.playlist.repeat_cooldown,
             artist_cooldown=config.playlist.artist_cooldown,
-            excluded_cache_keys=rejected_keys,
+            excluded_cache_keys=excluded_keys,
         )
     except RuntimeError as exc:
         if not state.playlist or str(exc) == "Playlist is empty":
             raise
-        if rejected_keys:
-            logger.debug("No eligible music tracks remain after excluding session-rejected cache keys")
+        if excluded_keys:
+            logger.debug(
+                "No eligible music tracks remain after excluding session-rejected or listener-reserved cache keys"
+            )
             return None
         raise
     return candidate

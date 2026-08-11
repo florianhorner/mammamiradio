@@ -764,9 +764,12 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 waiting for a catalogue search or download. Its successful response additively
 includes the opaque `public_token` and `song_resolution`; existing response
 fields and the stored `song_found`, `song_error`, and lifecycle `status` fields
-remain available for compatibility. A detected song request begins with
-`song_resolution: "searching"`, which means that lookup and, when a candidate
-matches, download and admission are still pending.
+remain available for compatibility. When external downloads are available, a
+detected song request begins with `song_resolution: "searching"`, which means
+that lookup and, when a candidate matches, download and admission are still
+pending. When song downloads are disabled, the request is still classified
+honestly as a song request but returns the immediate terminal resolution
+`"failed"` instead of advertising work the station cannot perform.
 
 `GET /public-listener-requests/{public_token}` lets the submitting listener
 follow that one request without exposing the admin `request_id`, internal error
@@ -842,7 +845,7 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout; successful responses add `public_token` and the current `song_resolution` for listener-side follow-up |
-| `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
+| `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, `song_resolution`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
 | `/public-listener-requests/{public_token}` | GET | Public | Safe resolution receipt for one submission: `searching`, `matched`, `not_matched`, or `failed`, with a cleaned track on matches or a coarse actionable outcome on failures |
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical); `action: "handled"` closes a successfully queued request without retracting its committed track or matched receipt |

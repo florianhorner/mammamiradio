@@ -185,6 +185,34 @@ def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
         assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
 
 
+def test_player_smoke_executes_listener_song_receipt_state_machine() -> None:
+    """The browser smoke, rather than Python source inspection, drives receipt races."""
+    code = RUN_CODE.read_text(encoding="utf-8")
+    for needle in (
+        "page.route('**/public-listener-requests/*'",
+        "songReceiptStorageKey = 'mmr.listener.songReceipt.v1'",
+        "await page.reload(",
+        "scenario: 'song_reload_matched'",
+        "scenario: 'song_reload_not_matched'",
+        "${label} searching receipt lost its message across reload",
+        "for (const expiryStatus of [404, 410])",
+        "expiry did not restore the original input",
+        "expiry did not enable retry submit",
+        "transient receipt failure did not retry",
+        "transient poll failure erased the resumable receipt",
+        "immediate terminal POST scheduled a receipt poll",
+        "__playerSmokeFlushRequestFrames",
+        "late lift callback queued a stale searching frame",
+        "stale animation overwrote terminal outcome",
+    ):
+        assert needle in code, f"player smoke lost executable song-receipt guard: {needle}"
+
+    assert "delay === 3000 ? 40 : delay" in code, "receipt polls must stay fast and bounded in the smoke."
+    assert code.count("{ timeout:") >= code.count("waitForFunction("), (
+        "every song-receipt browser wait needs an explicit timeout."
+    )
+
+
 def test_default_listener_identity_fixture_is_canonical() -> None:
     config = tomllib.loads(RADIO_CONFIG.read_text(encoding="utf-8"))
     assert DEFAULT_STATION_NAME == "Mamma Mi Radio"

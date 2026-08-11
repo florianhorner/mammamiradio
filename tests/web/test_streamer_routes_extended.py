@@ -1213,6 +1213,80 @@ async def test_commit_external_download_purges_after_source_switch_lock(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_commit_external_download_quarantines_operator_blocklist_artifact_after_lock(tmp_path):
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+    from mammamiradio.web import streamer
+
+    class ObservedLock:
+        def __init__(self) -> None:
+            self.locked = False
+
+        async def __aenter__(self):
+            self.locked = True
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            self.locked = False
+            return False
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    lock = ObservedLock()
+    app.state.source_switch_lock = lock
+    state.blocklist = {("vasco rossi", "albachiara"): {"display": "Vasco Rossi - Albachiara"}}
+    original_playlist = list(state.playlist)
+    track = Track(
+        title="Albachiara (Live)",
+        artist="Vasco Rossi",
+        duration_ms=180_000,
+        youtube_id="operator-blocked-live",
+    )
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"blocked audio placeholder")
+    observed: dict[str, str] = {}
+
+    def _observed_reject(cache_dir, cache_key, reason):
+        assert lock.locked is False
+        observed.update(cache_key=cache_key, reason=reason)
+        return reject_cached_download(cache_dir, cache_key, reason)
+
+    clear_rejected_cache_keys()
+    try:
+        with (
+            patch(
+                "mammamiradio.playlist.downloader.download_external_track",
+                new_callable=AsyncMock,
+                return_value=raw_path,
+            ),
+            patch("mammamiradio.web.streamer.probe_duration_sec", return_value=180.0),
+            patch("mammamiradio.playlist.downloader.reject_cached_download", side_effect=_observed_reject),
+        ):
+            status = await streamer._commit_external_download(
+                track,
+                app.state,
+                state.source_revision,
+                should_commit=lambda: True,
+                should_pin=lambda: True,
+                blocked_identity_keys=frozenset({("Vasco Rossi", "Albachiara")}),
+            )
+
+        assert status == "banned"
+        assert observed == {"cache_key": track.cache_key, "reason": "operator_blocklist"}
+        assert raw_path.exists() is False
+        assert is_rejected_cache_key(track.cache_key)
+        assert state.playlist == original_playlist
+        assert state.pinned_track is None
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_commit_external_download_probe_failure_falls_back_to_metadata(tmp_path):
     from mammamiradio.web import streamer
 
@@ -3617,6 +3691,15 @@ async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
             },
             ("lady gaga", "shallow"),
         ),
+        (
+            "Play Shallow by Bradley Cooper",
+            {
+                "title": "Lady Gaga feat. Bradley Cooper - Shallow",
+                "artist": "Generic Channel",
+                "youtube_id": "sibling-featured-ban",
+            },
+            ("lady gaga", "shallow"),
+        ),
     ],
 )
 async def test_download_listener_song_equivalent_identity_cannot_bypass_blocklist(
@@ -3736,6 +3819,93 @@ async def test_download_listener_song_preserves_operator_pin(tmp_path):
     # were wrongly marked, _plan_listener_request_block would skip pinning and the
     # listener's requested song would never air (leadership #1).
     assert not req.get("song_pinned")
+
+
+@pytest.mark.asyncio
+async def test_queued_listener_song_waits_for_fifo_pin_before_entering_rotation(tmp_path):
+    """Operator A must air before requested B, and B must have one pin/play handoff."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    operator_pick = state.playlist[0]
+    state.pinned_track = operator_pick
+    req = {
+        "request_id": "listener-fifo-request",
+        "public_token": "listener-fifo-token",
+        "name": "Luca",
+        "message": "Play Requested Song by Listener Artist",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+    }
+    state.pending_requests.append(req)
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Requested Song",
+                        "artist": "Listener Artist",
+                        "duration_ms": 180_000,
+                        "youtube_id": "listener-fifo-song",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "listener-fifo-song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    requested_track = req["song_track_obj"]
+    assert state.pinned_track is operator_pick
+    assert req["song_found"] is True
+    assert req["song_pinned"] is False
+    assert requested_track in state.playlist
+
+    # The explicit operator pin is authoritative and airs first.
+    assert _select_accepted_music_track(state, app.state.config) is operator_pick
+    state.after_music(operator_pick)
+
+    # Even if weighted rotation tries to choose the freshly downloaded song,
+    # the pending FIFO request keeps it outside the candidate pool.
+    def _prefer_requested(candidates, *, weights, k):
+        assert requested_track not in candidates
+        return [candidates[0]]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_prefer_requested):
+        assert _select_accepted_music_track(state, app.state.config) is not requested_track
+
+    announcement, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in announcement
+    assert commit is not None
+    assert state.pinned_track is requested_track
+    assert req["song_pinned"] is True
+    commit.apply(state)
+
+    # The host handoff consumes the sole pin and archives an honest matched
+    # receipt; it is not followed by an accidental ordinary-rotation duplicate.
+    assert _select_accepted_music_track(state, app.state.config) is requested_track
+    state.after_music(requested_track)
+    with patch("mammamiradio.core.models.random.choices", side_effect=_prefer_requested):
+        assert _select_accepted_music_track(state, app.state.config) is not requested_track
+
+    assert req not in state.pending_requests
+    receipt = state.recently_consumed_requests[-1]
+    assert receipt["status"] == "sent_to_hosts"
+    assert receipt["song_found"] is True
+    assert receipt["song_error"] is False
+    assert receipt["public_token"] == "listener-fifo-token"
 
 
 @pytest.mark.asyncio

@@ -145,6 +145,7 @@ Public:
 - `POST /api/clip` (rate-limited, 1 per 10s per IP)
 - `GET /clips/{id}.mp3` (no auth, for sharing)
 - `POST /api/listener-request`, `GET /public-listener-requests` (sanitized feed for the on-page sidebar)
+- `GET /public-listener-requests/{public_token}` (one sanitized, read-only song-request receipt)
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
