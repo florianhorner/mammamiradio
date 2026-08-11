@@ -580,14 +580,12 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
         track_obj = req.get("song_track_obj")
         claimed_song_pinned = False
         claimed_force_next = False
-        # Pin the requested song exactly ONCE. The background download may have
-        # already claimed the play-next slot (_download_listener_song marks
-        # req["song_pinned"] when its commit returned "pinned"). The request lingers
-        # in pending_requests until THIS banter's deferred commit is applied, so a
-        # second pin here would force the song to air a SECOND time after it already
-        # played from the download pin. Setting the marker synchronously (here, at
-        # peek time — not in the deferred commit) also makes it safe against the
-        # lookahead race where two banters peek the same pending request.
+        # Establish one exact play-next claim. The background download may
+        # already own the slot; otherwise this planner claims it when available.
+        # The pending request keeps that recording out of anonymous rotation,
+        # then the admitted dedication transfers it through the one-shot
+        # handoff. Setting the marker while planning also prevents two lookahead
+        # banters from claiming the same request.
         if track_obj is not None:
             pinned_track = state.pinned_track
             same_recording_pin = pinned_track is track_obj or (

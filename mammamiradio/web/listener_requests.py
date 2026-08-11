@@ -466,14 +466,14 @@ async def listener_request(request: Request):
 
 
 async def _download_listener_song(req: dict, app_state, originating_source_revision: int) -> None:
-    """Background task: search yt-dlp for a listener song request and pin it.
+    """Verify, download, and commit a listener song request to rotation.
 
-    Stream-safe: does NOT purge the pre-buffered queue.  The pinned track
-    enters the queue naturally after the current lookahead drains, avoiding
-    any audible silence gap.  If the playlist SOURCE switched while downloading
-    or the request was already consumed, the track is dropped entirely to
-    prevent leaking old requests into the new source. Shares the download +
-    source-guard + pin core with the admin queue-from-search path.
+    Stream-safe: does not purge the pre-buffered queue. An accepted track may
+    claim the free play-next pin, but request ownership keeps it off air until
+    the dedication is admitted and transfers the exact source through its
+    one-shot handoff. If the playlist source switched while downloading or the
+    request was already consumed, the track is dropped entirely. Shares the
+    download, source guard, and optional-pin core with admin queue-from-search.
     """
     from mammamiradio.core.models import Track
     from mammamiradio.playlist.downloader import search_ytdlp_metadata_outcome
@@ -594,10 +594,10 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             req["song_error_reason"] = ""
             req["song_track"] = track.display
             req["song_track_obj"] = track
-            # Record whether the download already claimed the play-next pin so the
-            # dedication banter (_plan_listener_request_block) does NOT re-pin and
-            # air the song a second time. "queued" means the slot was busy and the
-            # dedication banter is still expected to pin it (the single pin then).
+            # Record whether the download claimed the initial play-next slot.
+            # Request reservations keep either outcome off air until the
+            # dedication planner announces and transfers the exact recording;
+            # "queued" means that planner must claim the slot later.
             if status == "pinned":
                 req["song_pinned"] = True
             logger.info("Listener song request ready: %s", track.display)
