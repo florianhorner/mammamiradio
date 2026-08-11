@@ -1783,7 +1783,7 @@ async def test_valid_local_recovery_reopens_a_session_denied_track(tmp_path):
     try:
         reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp unavailable")
         local_file.write_bytes(b"recovered audio")
-        assert _select_accepted_music_track(state, config) is track
+        assert _select_accepted_music_track(state, config, asyncio.Queue()) is track
         assert is_rejected_cache_key(track.cache_key)
 
         with (

@@ -67,6 +67,7 @@ from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
     LISTENER_REQUEST_FORCE_REVISION_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
     LISTENER_REQUEST_PIN_REVISION_KEY,
     ChaosSubtype,
     GenerationWasteReason,
@@ -1109,6 +1110,7 @@ def _reserve_continuity_runway(
     discard_reason: str = GenerationWasteReason.OPERATOR_PURGE,
     excluded_paths: set[Path] | None = None,
     excluded_track_keys: set[tuple[str, str]] | None = None,
+    preserve_queue_ids: frozenset[str] = frozenset(),
     outcome: ContinuityRunwayOutcome | None = None,
 ) -> int:
     """Reserve immediately playable runway before a live control mutates audio.
@@ -1142,6 +1144,11 @@ def _reserve_continuity_runway(
         ):
             return 0.0
         return float(getattr(segment, "duration_sec", 0.0) or 0.0)
+
+    def _must_preserve(segment: Segment) -> bool:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        queue_id = str(metadata.get("queue_id") or "")
+        return bool(queue_id and queue_id in preserve_queue_ids and _ready_duration(segment) > 0)
 
     slot = state.continuity_slot
     if slot is not None and not _segment_is_immediately_playable(
@@ -1199,24 +1206,36 @@ def _reserve_continuity_runway(
             )
             survivors: list[Segment] = []
             failure_dropped = current_queue
-            for playable_index, playable_head in enumerate(current_queue):
-                if not _segment_is_immediately_playable(
-                    state,
-                    playable_head,
-                    excluded_paths=excluded_paths,
-                    excluded_track_keys=excluded_track_keys,
-                ):
-                    continue
-                candidate_dropped = current_queue[:playable_index] + current_queue[playable_index + 1 :]
+            required_survivors = [segment for segment in current_queue if _must_preserve(segment)]
+            if required_survivors:
+                candidate_dropped = [segment for segment in current_queue if not _must_preserve(segment)]
                 candidate_dropped, candidate_survivors = settle_listener_request_queue_dependencies(
                     candidate_dropped,
-                    [playable_head],
+                    required_survivors,
                     state=state,
                 )
                 if candidate_survivors:
                     failure_dropped = candidate_dropped
                     survivors = candidate_survivors
-                    break
+            else:
+                for playable_index, playable_head in enumerate(current_queue):
+                    if not _segment_is_immediately_playable(
+                        state,
+                        playable_head,
+                        excluded_paths=excluded_paths,
+                        excluded_track_keys=excluded_track_keys,
+                    ):
+                        continue
+                    candidate_dropped = current_queue[:playable_index] + current_queue[playable_index + 1 :]
+                    candidate_dropped, candidate_survivors = settle_listener_request_queue_dependencies(
+                        candidate_dropped,
+                        [playable_head],
+                        state=state,
+                    )
+                    if candidate_survivors:
+                        failure_dropped = candidate_dropped
+                        survivors = candidate_survivors
+                        break
             if not survivors and not slot_ready:
                 return 0
             if outcome is not None:
@@ -1523,6 +1542,12 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     handoff = state.listener_request_handoff
     if handoff is not None and _is_banned_track(handoff.track):
         state.clear_listener_request_handoff()
+    if state.listener_request_retry_handoffs:
+        retained_retries = [
+            retry for retry in state.listener_request_retry_handoffs if not _is_banned_track(retry.track)
+        ]
+        state.listener_request_retry_handoffs.clear()
+        state.listener_request_retry_handoffs.extend(retained_retries)
     if removed or pin_cleared:
         state.playlist_revision += 1
 
@@ -2719,6 +2744,42 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
     }
 
 
+def _on_air_listener_promise_ownership(state: StationState, q) -> dict[str, str]:
+    """Map queued promised music to the request token owned by on-air copy.
+
+    Queue metadata alone is not authority: require the active dedication id,
+    the admitted marker, and the retained full handoff to agree. This lets an
+    assetless source switch preserve only music that must follow a promise
+    listeners may already have heard.
+    """
+    now_streaming = state.now_streaming if isinstance(state.now_streaming, dict) else {}
+    now_metadata = now_streaming.get("metadata")
+    if now_streaming.get("type") != SegmentType.BANTER.value or not isinstance(now_metadata, dict):
+        return {}
+    dedication_queue_id = str(now_metadata.get("queue_id") or "")
+    if not dedication_queue_id:
+        return {}
+
+    ownership: dict[str, str] = {}
+    for segment in getattr(q, "_queue", ()):
+        if segment.type is not SegmentType.MUSIC or not segment_has_admitted_listener_request_handoff(segment):
+            continue
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        if str(metadata.get(LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY) or "") != dedication_queue_id:
+            continue
+        token = str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "")
+        handoff = state.listener_request_admitted_reservations.get(token)
+        queue_id = str(metadata.get("queue_id") or "")
+        if (
+            handoff is not None
+            and queue_id
+            and handoff.dedication_queue_id == dedication_queue_id
+            and handoff.authorizes_segment(segment)
+        ):
+            ownership[queue_id] = token
+    return ownership
+
+
 def _apply_loaded_source(
     request,
     tracks: list,
@@ -2733,6 +2794,10 @@ def _apply_loaded_source(
     # The queue replacement and its reservation happen before the source
     # revision changes, so an in-flight render cannot win the tiny gap between
     # a destructive purge and safety audio admission.
+    on_air_promise_ownership = _on_air_listener_promise_ownership(state, request.app.state.queue)
+    on_air_promise_handoffs = {
+        token: state.listener_request_admitted_reservations[token] for token in on_air_promise_ownership.values()
+    }
     runway = ContinuityRunwayOutcome()
     purged = _reserve_continuity_runway(
         request.app.state,
@@ -2740,6 +2805,7 @@ def _apply_loaded_source(
         request.app.state.config,
         replace_queue=True,
         discard_reason=GenerationWasteReason.SOURCE_SWITCH,
+        preserve_queue_ids=frozenset(on_air_promise_ownership),
         outcome=runway,
     )
     # An assetless replacement may preserve one playable old-source head. A
@@ -2759,7 +2825,19 @@ def _apply_loaded_source(
             purged += dropped_dedication
             state.continuity_epoch += 1
             runway.preserved_existing = _playable_runway_available(request.app.state.queue, state)
+    surviving_queue_ids = {
+        str(segment.metadata.get("queue_id") or "") for segment in getattr(request.app.state.queue, "_queue", ())
+    }
+    surviving_on_air_handoffs = {
+        token: on_air_promise_handoffs[token]
+        for queue_id, token in on_air_promise_ownership.items()
+        if queue_id in surviving_queue_ids
+    }
     state.switch_playlist(tracks, resolved_source)
+    # The ordinary source switch revokes old-source requests. Retain only the
+    # admitted song still queued behind its on-air dedication, including its
+    # first-byte retry ownership.
+    state.listener_request_admitted_reservations.update(surviving_on_air_handoffs)
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
     # Immediate cutover is safe only when this action admitted fresh protected
@@ -3444,6 +3522,7 @@ async def run_playback_loop(app) -> None:
             terminal_reason = "aborted"
             companionship_discard_recorded = False
             air_start_stamped = False
+            listener_request_reservation_released = not segment_has_admitted_listener_request_handoff(segment)
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -3502,6 +3581,14 @@ async def run_playback_loop(app) -> None:
                             pacer_delivery_generation = hub.delivery_generation
 
                         accepted_listeners = await hub.broadcast(chunk)
+                        if not listener_request_reservation_released:
+                            # Publishing now-playing is intentionally earlier
+                            # than file I/O. Release the request's tombstone only
+                            # after the broadcaster emits a real chunk, whether
+                            # or not a listener remains to accept it. At that
+                            # point the admitted file has proved it can play.
+                            state.release_listener_request_admitted_reservation(segment)
+                            listener_request_reservation_released = True
                         if is_companionship_cue and not stream_started:
                             if accepted_listeners <= 0:
                                 terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
@@ -3584,6 +3671,12 @@ async def run_playback_loop(app) -> None:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
                 terminal_reason = "file_error"
+            if bytes_sent == 0 and terminal_reason in {"eof", "file_error"}:
+                # The dedication already aired, so losing its admitted file
+                # cannot silently settle the listener's promise. Reconstitute
+                # the exact handoff (or backlog it behind a newer one) while
+                # retaining the recording reservation for the retry.
+                state.restore_listener_request_handoff_before_first_byte(segment)
             if bytes_sent == 0:
                 # A readable but empty/header-only dedication is just as unheard
                 # as a missing file. Revoke its promise before any exclusively
@@ -3629,6 +3722,12 @@ async def run_playback_loop(app) -> None:
                 _persist_tasks.add(task)
                 task.add_done_callback(_persist_tasks.discard)
         finally:
+            if not listener_request_reservation_released:
+                # File-error/empty-file restoration already popped this token
+                # into an active or backlogged retry. Other pre-byte exits (an
+                # explicit skip, cancellation, or unexpected abort) are terminal
+                # for this queued segment and must not leave an orphan tombstone.
+                state.release_listener_request_admitted_reservation(segment)
             if (
                 is_companionship_cue
                 and not stream_started

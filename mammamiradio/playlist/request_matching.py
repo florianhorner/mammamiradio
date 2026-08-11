@@ -149,6 +149,7 @@ _REQUEST_FEATURE_CREDIT_RE = re.compile(
     r"^(?P<base>.+?)\s+(?P<marker>feat(?:uring)?\.?|ft\.?)\s+(?P<guest>.+)$",
     re.IGNORECASE,
 )
+_REQUEST_IDENTITY_EDGE_CHARS = " \"'.,;:!?-\u2013\u2014"
 _BY_TITLE_TAILS = frozenset({"her", "him", "his", "it", "me", "my", "our", "them", "their", "us", "you", "your"})
 _QUOTE_PAIRS = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
 _QUALITY_IDENTITY_TOKENS = frozenset({"4k", "8k", "hd", "hq", "sd"})
@@ -223,6 +224,21 @@ def _split_trailing_recording_qualifiers(value: str) -> tuple[str, str]:
     return title, " ".join(trailers)
 
 
+def _split_unbracketed_feature_credit(value: str) -> tuple[str, str, str] | None:
+    """Parse one ambiguous feature phrase while preserving its marker spelling."""
+    without_trailer, trailer = _split_trailing_recording_qualifiers(value)
+    match = _REQUEST_FEATURE_CREDIT_RE.fullmatch(without_trailer)
+    if match is None:
+        return None
+    base = match.group("base").strip(_REQUEST_IDENTITY_EDGE_CHARS)
+    guest = match.group("guest").strip(_REQUEST_IDENTITY_EDGE_CHARS)
+    if not base or not guest or re.search(r"\s+(?:by|di|da|for|per)\s+", guest, flags=re.IGNORECASE):
+        return None
+    if trailer:
+        base = f"{base} {trailer}"
+    return base, guest, match.group("marker")
+
+
 def _split_composed_title_feature_credit(value: object) -> tuple[str, str] | None:
     """Split an explicit feature credit even when a variant follows it."""
     title = clean_candidate_title(value)
@@ -248,17 +264,12 @@ def _split_contextual_candidate_feature_credit(value: object) -> tuple[str, str]
     after matching code proves the named guest; title-cased phrases such as
     ``A Feat of Strength`` and ``Welcome to Ft. Lauderdale`` remain literal.
     """
-    title = clean_candidate_title(value)
-    without_trailer, trailer = _split_trailing_recording_qualifiers(title)
-    match = _REQUEST_FEATURE_CREDIT_RE.fullmatch(without_trailer)
-    if match is None or match.group("marker") != match.group("marker").casefold():
+    parsed = _split_unbracketed_feature_credit(clean_candidate_title(value))
+    if parsed is None:
         return None
-    base = match.group("base").strip(_REQUEST_IDENTITY_EDGE_CHARS)
-    guest = match.group("guest").strip(_REQUEST_IDENTITY_EDGE_CHARS)
-    if not base or not guest or re.search(r"\s+(?:by|di|da|for|per)\s+", guest, flags=re.IGNORECASE):
+    base, guest, marker = parsed
+    if marker != marker.casefold():
         return None
-    if trailer:
-        base = f"{base} {trailer}"
     return base, guest
 
 
@@ -407,14 +418,12 @@ class SongRequestIntent:
 
     @property
     def search_query(self) -> str:
-        identity_parts = [part for part in (self.artist, self.title) if part]
-        if self.requested_feature_artist:
-            identity_parts.extend(("feat.", self.requested_feature_artist))
-        identity = " ".join(identity_parts).strip()
-        return f"{identity} official audio".strip()
-
-
-_REQUEST_IDENTITY_EDGE_CHARS = " \"'.,;:!?-\u2013\u2014"
+        primary = self.primary_identity
+        identity_parts = [part for part in (primary.artist, primary.title) if part]
+        if primary.requested_feature_artist:
+            identity_parts.extend(("feat.", primary.requested_feature_artist))
+        query_identity = " ".join(identity_parts).strip()
+        return f"{query_identity} official audio".strip()
 
 
 def _split_ambiguous_request_feature_credit(value: str) -> tuple[str, str] | None:
@@ -426,17 +435,8 @@ def _split_ambiguous_request_feature_credit(value: str) -> tuple[str, str] | Non
     """
     if _split_composed_title_feature_credit(value) is not None:
         return None
-    without_trailer, trailer = _split_trailing_recording_qualifiers(value)
-    match = _REQUEST_FEATURE_CREDIT_RE.fullmatch(without_trailer)
-    if match is None:
-        return None
-    base = match.group("base").strip(_REQUEST_IDENTITY_EDGE_CHARS)
-    guest = match.group("guest").strip(_REQUEST_IDENTITY_EDGE_CHARS)
-    if re.search(r"\s+(?:by|di|da|for|per)\s+", guest, flags=re.IGNORECASE):
-        return None
-    if trailer:
-        base = f"{base} {trailer}"
-    return (base, guest) if base and guest else None
+    parsed = _split_unbracketed_feature_credit(value)
+    return parsed[:2] if parsed is not None else None
 
 
 def _request_identity(
@@ -941,9 +941,9 @@ class _CandidateIdentity:
     artist_evidence: tuple[str, ...]
     title: str
     display_artist: str
+    authoritative_artist: str
     feature_base_artist: str
     prefix_artist: str
-    feature_artists: tuple[str, ...]
     feature_evidence: tuple[str, ...]
     explicit_feature_artists: tuple[str, ...]
     contextual_feature_credits: tuple[tuple[str, str], ...]
@@ -952,7 +952,7 @@ class _CandidateIdentity:
 
 def _platform_artist_disproving_prefix(candidate: _CandidateIdentity) -> str:
     """Return one unconflicted platform artist that contradicts a dash prefix."""
-    if not candidate.prefix_artist:
+    if candidate.authoritative_artist or not candidate.prefix_artist:
         return ""
     usable = [
         artist
@@ -971,9 +971,12 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
     prefix_artist, title_from_display = _split_title_credit(display_title)
     structured_title = clean_candidate_title(metadata.get("track_title") or "")
     title = structured_title or title_from_display
-    structured_artist = str(metadata.get("track_artist") or "")
+    structured_artist = _clean_artist(metadata.get("track_artist") or "")
+    authoritative_artist = (
+        structured_artist if normalize_match_text(structured_artist) not in _GENERIC_ARTIST_LABELS else ""
+    )
     base_artist_evidence = [
-        structured_artist,
+        authoritative_artist or structured_artist,
         prefix_artist,
         str(metadata.get("artist") or ""),
         str(metadata.get("uploader") or ""),
@@ -987,13 +990,14 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
             )
         )
     )
+    artist_credit_evidence = (
+        (authoritative_artist,)
+        if authoritative_artist
+        else (structured_artist, prefix_artist, str(metadata.get("artist") or ""))
+    )
     artist_feature_artists = tuple(
         guest
-        for value in (
-            structured_artist,
-            prefix_artist,
-            str(metadata.get("artist") or ""),
-        )
+        for value in artist_credit_evidence
         if (feature_credit := split_artist_feature_credit(_clean_artist(value))) is not None
         if (guest := _clean_artist(feature_credit[1]))
     )
@@ -1015,7 +1019,7 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
     # Structured performer metadata is best.  In its absence, a conventional
     # ``Artist - Title`` credit is more trustworthy for display than the
     # uploader/channel identity retained in the legacy ``artist`` field.
-    display_artist = _clean_artist(structured_artist) or prefix_artist
+    display_artist = structured_artist or prefix_artist
     if not display_artist:
         display_artist = next(
             (_clean_artist(value) for value in base_artist_evidence if _clean_artist(value)),
@@ -1025,19 +1029,22 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
     # primary artist for a title-side guest credit. The legacy ``artist`` field
     # may be an uploader/channel and must never become station identity merely
     # because the guest verified the listener request.
-    feature_base_artist = prefix_artist or _clean_artist(structured_artist)
+    feature_base_artist = authoritative_artist or prefix_artist or structured_artist
     title_credit_aliases = list(title_feature_artists)
     if feature_base_artist and title_feature_artists:
         title_credit_aliases.append(f"{feature_base_artist} feat. {' & '.join(title_feature_artists)}")
+    fallback_artist_evidence = (
+        prefix_artist,
+        str(metadata.get("artist") or ""),
+        str(metadata.get("uploader") or ""),
+        str(metadata.get("channel") or ""),
+    )
     artist_evidence = tuple(
         value
         for value in (
-            structured_artist,
-            prefix_artist,
+            authoritative_artist or structured_artist,
             *title_credit_aliases,
-            str(metadata.get("artist") or ""),
-            str(metadata.get("uploader") or ""),
-            str(metadata.get("channel") or ""),
+            *(fallback_artist_evidence if not authoritative_artist else ()),
         )
         if value
     )
@@ -1045,9 +1052,9 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
         artist_evidence=artist_evidence,
         title=title,
         display_artist=display_artist,
+        authoritative_artist=authoritative_artist,
         feature_base_artist=feature_base_artist,
         prefix_artist=prefix_artist,
-        feature_artists=title_feature_artists,
         feature_evidence=tuple(title_credit_aliases),
         explicit_feature_artists=explicit_feature_artists,
         contextual_feature_credits=contextual_feature_credits,
@@ -1197,12 +1204,10 @@ def match_song_request_candidates(
             title_interpretations = [(candidate.title, candidate_qualifiers)]
             if contextual_feature is not None:
                 title_interpretations = [(contextual_feature[0], candidate_qualifiers)]
-            structured_artist = _clean_artist(metadata.get("track_artist") or "")
             structured_artist_disproves_prefix = bool(
-                structured_artist
+                candidate.authoritative_artist
                 and candidate.prefix_artist
-                and normalize_match_text(structured_artist) not in _GENERIC_ARTIST_LABELS
-                and not _same_artist_identity(structured_artist, candidate.prefix_artist)
+                and not _same_artist_identity(candidate.authoritative_artist, candidate.prefix_artist)
             )
             request_artist_disproves_prefix = bool(
                 request_identity.artist

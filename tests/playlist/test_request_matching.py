@@ -531,6 +531,43 @@ def test_structured_track_identity_is_strong_evidence():
     assert (result.best.artist, result.best.title) == ("Lucio Battisti", "Il mio canto libero")
 
 
+def test_authoritative_structured_artist_rejects_contradictory_title_and_uploader_credit():
+    john_lennon = parse_song_request("Play Imagine by John Lennon")
+    ariana_grande = parse_song_request("Play Imagine by Ariana Grande")
+    assert john_lennon is not None and ariana_grande is not None
+    reproduction = {
+        "title": "John Lennon - Imagine",
+        "track_title": "Imagine",
+        "track_artist": "Ariana Grande",
+        "uploader": "John Lennon - Topic",
+    }
+
+    assert match_song_request_candidates(john_lennon, [reproduction]).best is None
+    match = match_song_request_candidates(ariana_grande, [reproduction]).best
+    assert match is not None
+    assert (match.artist, match.station_artist, match.identity_title) == (
+        "Ariana Grande",
+        "Ariana Grande",
+        "Imagine",
+    )
+
+
+@pytest.mark.parametrize("structured_artist", ["", "Various Artists"])
+def test_absent_or_generic_structured_artist_keeps_corroborated_title_prefix_evidence(structured_artist):
+    intent = parse_song_request("Play Imagine by John Lennon")
+    assert intent is not None
+    candidate = {
+        "title": "John Lennon - Imagine",
+        "track_title": "Imagine",
+        "track_artist": structured_artist,
+        "uploader": "Generic Distributor",
+    }
+
+    match = match_song_request_candidates(intent, [candidate]).best
+    assert match is not None
+    assert (match.station_artist, match.identity_title) == ("John Lennon", "Imagine")
+
+
 def test_structured_title_keeps_artist_prefix_from_display_title_as_evidence():
     intent = parse_song_request("Play Emozioni by Lucio Battisti")
     assert intent is not None

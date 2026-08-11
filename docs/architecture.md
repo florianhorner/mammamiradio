@@ -342,11 +342,15 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   from its promised song; the request waits for an adjacency-preserving ordinary
   break. If an operator MUSIC force coincides with an active handoff, the promised
   segment fulfills it through normal atomic admission behind the dedication rather
-  than front-inserting ahead of the spoken promise. If an assetless source switch preserves that exact queued dedication as continuity
-  runway, the switch drops it before revoking the requested recording, so the
-  announcement cannot survive its song promise; fallback runway selection then
-  skips any exclusive music orphaned with it and preserves the next ordinary
-  playable segment.
+  than front-inserting ahead of the spoken promise. If an assetless source switch
+  preserves that exact queued dedication as continuity runway, the switch drops it
+  before revoking the requested recording, so the announcement cannot survive its
+  song promise; fallback runway selection then skips any exclusive music orphaned
+  with it and preserves the next ordinary playable segment. Once the dedication is
+  already on air, however, its exact admitted and ready song becomes the required
+  survivor: assetless replacement drops unrelated old-source runway, lets the
+  dedication finish, and retains the song's full token ownership through its first
+  emitted byte.
   Ordinary selection, norm-cache and
   last-known-good rescue, continuity reservation/slot claims, enqueue admission,
   and playback's final queue claim otherwise consult the shared cache-key plus

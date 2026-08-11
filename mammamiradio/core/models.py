@@ -380,9 +380,10 @@ class ListenerTrackReservations:
 
     Pending requests own ordinary reservations whether or not they already own
     ``pinned_track``. After a successful dedication acknowledgement archives a
-    request, its exact promised source moves into ``ListenerRequestHandoff``
-    until queue admission. Cache-key and canonical song identities cover both
-    the downloaded object and pre-existing segments for the same recording.
+    request, its exact promised source remains reserved through handoff,
+    admission, and the first emitted byte. Cache-key and canonical song
+    identities cover both the downloaded object and pre-existing segments for
+    the same recording.
     """
 
     cache_keys: frozenset[str] = frozenset()
@@ -918,8 +919,13 @@ class StationState:
     listener_request_handoff: ListenerRequestHandoff | None = None
     # Queue admission clears the mutable handoff so the next request may plan,
     # but the promised recording must remain reserved until its marked segment
-    # actually reaches playback. Multiple lookahead promises may coexist here.
-    listener_request_admitted_reservations: dict[str, Track] = field(default_factory=dict)
+    # emits audio. Keep the full handoff so a pre-byte file failure can restore
+    # the request-owned promise. Multiple lookahead promises may coexist here.
+    listener_request_admitted_reservations: dict[str, ListenerRequestHandoff] = field(default_factory=dict)
+    # A failed admitted promise waits here only when another request already
+    # owns the single active handoff slot. The producer promotes retries before
+    # planning more request music.
+    listener_request_retry_handoffs: deque[ListenerRequestHandoff] = field(default_factory=deque)
     # Short-lived terminal receipts used by admin history and public-token lookup.
     recently_consumed_requests: list[ConsumedListenerRequest] = field(default_factory=list)
     # Operator-visible pending actions/directives. This mirrors legacy single
@@ -1579,6 +1585,7 @@ class StationState:
         self.set_pinned_track(None)
         self.listener_request_handoff = None
         self.listener_request_admitted_reservations.clear()
+        self.listener_request_retry_handoffs.clear()
         self.clear_force_next()
         self.operator_force_pending = None
         self.heading = None
@@ -1687,18 +1694,56 @@ class StationState:
     def listener_track_reservations(self) -> ListenerTrackReservations:
         """Return song identities owned anywhere in the listener-request lifecycle."""
         reservations = ListenerTrackReservations.from_pending_requests(self.pending_requests)
-        lifecycle_tracks = list(self.listener_request_admitted_reservations.values())
+        lifecycle_tracks = [handoff.track for handoff in self.listener_request_admitted_reservations.values()]
+        lifecycle_tracks.extend(handoff.track for handoff in self.listener_request_retry_handoffs)
         if self.listener_request_handoff is not None:
             lifecycle_tracks.append(self.listener_request_handoff.track)
         return reservations.including_tracks(lifecycle_tracks)
 
     def release_listener_request_admitted_reservation(self, segment: Segment) -> bool:
-        """Release the queued promise carried by one admitted music segment."""
+        """Release the promise carried by one admitted music segment."""
+        if not segment_has_admitted_listener_request_handoff(segment):
+            return False
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         token = str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "")
         if not token or token not in self.listener_request_admitted_reservations:
             return False
         del self.listener_request_admitted_reservations[token]
+        return True
+
+    @staticmethod
+    def _retry_listener_request_handoff(handoff: ListenerRequestHandoff) -> ListenerRequestHandoff:
+        """Return a clean, request-owned retry after its admitted file failed."""
+        return replace(
+            handoff,
+            force_next_revision=None,
+            pin_revision=None,
+            music_selection_exclusive=True,
+            borrowed_pin_clear_revision=None,
+            borrowed_force_clear_revision=None,
+        )
+
+    def restore_listener_request_handoff_before_first_byte(self, segment: Segment) -> bool:
+        """Restore an admitted promise whose file failed before emitting audio."""
+        if not segment_has_admitted_listener_request_handoff(segment):
+            return False
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        token = str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "")
+        handoff = self.listener_request_admitted_reservations.pop(token, None)
+        if handoff is None:
+            return False
+        retry = self._retry_listener_request_handoff(handoff)
+        if self.listener_request_handoff is None:
+            self.listener_request_handoff = retry
+        else:
+            self.listener_request_retry_handoffs.append(retry)
+        return True
+
+    def promote_listener_request_retry_handoff(self) -> bool:
+        """Promote the oldest failed promise when the active slot is free."""
+        if self.listener_request_handoff is not None or not self.listener_request_retry_handoffs:
+            return False
+        self.listener_request_handoff = self.listener_request_retry_handoffs.popleft()
         return True
 
     def arm_listener_request_handoff(
@@ -1800,7 +1845,7 @@ class StationState:
         handoff = self.listener_request_handoff
         assert handoff is not None
         segment.metadata[LISTENER_REQUEST_HANDOFF_ADMITTED_KEY] = True
-        self.listener_request_admitted_reservations[handoff.token] = handoff.track
+        self.listener_request_admitted_reservations[handoff.token] = handoff
         self.listener_request_handoff = None
 
     def clear_listener_request_handoff(self, track: Track | None = None) -> None:
@@ -1846,10 +1891,6 @@ class StationState:
     def on_stream_segment(self, segment: Segment) -> None:
         """Called by the streamer when it starts sending a segment to the listener."""
         now = time.time()
-        # Playback has claimed the exact marked promise. Equivalent unmarked
-        # audio ahead of it was fenced while this token was queued; release the
-        # tombstone now so ordinary rotation may use the recording afterwards.
-        self.release_listener_request_admitted_reservation(segment)
         try:
             director = self.home_context_director
             metadata = segment.metadata if isinstance(segment.metadata, dict) else {}

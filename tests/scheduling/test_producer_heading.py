@@ -42,7 +42,7 @@ def test_accepted_tagged_selection_arms_heading_once():
     state = StationState(playlist=[_track("Vibe", heading_id=heading.id)], heading=heading)
 
     with patch("mammamiradio.scheduling.producer.is_rejected_cache_key", return_value=False):
-        selected = _select_accepted_music_track(state, _producer_config())
+        selected = _select_accepted_music_track(state, _producer_config(), asyncio.Queue())
 
     assert selected is not None
     _arm_accepted_heading_announcement(state, selected)
@@ -52,7 +52,7 @@ def test_accepted_tagged_selection_arms_heading_once():
     state.heading_pending_announcement = ""
 
     with patch("mammamiradio.scheduling.producer.is_rejected_cache_key", return_value=False):
-        selected = _select_accepted_music_track(state, _producer_config())
+        selected = _select_accepted_music_track(state, _producer_config(), asyncio.Queue())
 
     assert selected is not None
     _arm_accepted_heading_announcement(state, selected)
@@ -75,7 +75,7 @@ def test_rejected_tagged_candidate_then_auto_track_does_not_arm_heading():
         ),
         patch("mammamiradio.core.models.random.choices", side_effect=_choose),
     ):
-        selected = _select_accepted_music_track(state, _producer_config())
+        selected = _select_accepted_music_track(state, _producer_config(), asyncio.Queue())
 
     assert selected is auto
     _arm_accepted_heading_announcement(state, selected)
@@ -100,7 +100,7 @@ def test_rejected_weighted_candidate_cannot_starve_valid_sibling():
         ),
         patch("mammamiradio.core.models.random.choices", side_effect=_choose),
     ):
-        selected = _select_accepted_music_track(state, _producer_config())
+        selected = _select_accepted_music_track(state, _producer_config(), asyncio.Queue())
 
     assert selected is accepted
     assert captured == [[accepted]]
@@ -117,7 +117,7 @@ def test_rejected_pinned_track_with_empty_playlist_raises_for_recovery():
         ),
         pytest.raises(RuntimeError, match="Playlist is empty"),
     ):
-        _select_accepted_music_track(state, _producer_config())
+        _select_accepted_music_track(state, _producer_config(), asyncio.Queue())
 
     assert state.pinned_track is rejected
 
@@ -126,7 +126,7 @@ def test_non_tagged_accepted_selection_does_not_arm_heading():
     state = StationState(playlist=[_track("Auto")], heading=_heading())
 
     with patch("mammamiradio.scheduling.producer.is_rejected_cache_key", return_value=False):
-        selected = _select_accepted_music_track(state, _producer_config())
+        selected = _select_accepted_music_track(state, _producer_config(), asyncio.Queue())
 
     assert selected is not None
     _arm_accepted_heading_announcement(state, selected)
@@ -137,7 +137,7 @@ def test_cleared_heading_does_not_arm():
     state = StationState(playlist=[_track("Old Vibe", heading_id="heading-80s")], heading=None)
 
     with patch("mammamiradio.scheduling.producer.is_rejected_cache_key", return_value=False):
-        selected = _select_accepted_music_track(state, _producer_config())
+        selected = _select_accepted_music_track(state, _producer_config(), asyncio.Queue())
 
     assert selected is not None
     _arm_accepted_heading_announcement(state, selected)

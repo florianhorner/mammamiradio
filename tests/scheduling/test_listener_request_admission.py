@@ -134,7 +134,7 @@ async def test_admitted_banter_commit_survives_following_music_pin_selection(tmp
 
 
 @pytest.mark.asyncio
-async def test_admitted_promise_reserves_unmarked_clone_ahead_of_dedication_until_playback(tmp_path):
+async def test_admitted_promise_reserves_unmarked_clone_until_audio_emission(tmp_path):
     requested = Track(
         title="Albachiara",
         artist="Vasco Rossi",
@@ -209,6 +209,12 @@ async def test_admitted_promise_reserves_unmarked_clone_ahead_of_dedication_unti
 
     state.on_stream_segment(promised)
 
+    # Now-playing publication happens before playback opens the file. It cannot
+    # settle the promise because the file may still vanish before its first byte.
+    assert state.listener_request_admitted_reservations
+    assert _segment_is_listener_reserved(state, clone) is True
+
+    assert state.release_listener_request_admitted_reservation(promised) is True
     assert state.listener_request_admitted_reservations == {}
     assert _segment_is_listener_reserved(state, clone) is False
 
@@ -243,6 +249,7 @@ async def test_later_same_recording_reservation_does_not_steal_admitted_handoff(
         listeners_active=1,
     )
     config = _config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
 
     prompt, commit = _plan_listener_request_block(state)
     assert "La canzone che stai per suonare" in prompt
@@ -255,7 +262,7 @@ async def test_later_same_recording_reservation_does_not_steal_admitted_handoff(
     assert state.listener_request_handoff.request_id == first_request["request_id"]
     assert _plan_listener_request_block(state) == ("", None)
 
-    selected = _select_accepted_music_track(state, config)
+    selected = _select_accepted_music_track(state, config, queue)
     assert selected is first
     assert state.pinned_track is None
 
@@ -271,7 +278,6 @@ async def test_later_same_recording_reservation_does_not_steal_admitted_handoff(
             **state.listener_request_handoff_metadata(first),
         },
     )
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     with patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=promised):
         admitted = await _enqueue_with_egress(
             queue,
@@ -290,7 +296,7 @@ async def test_later_same_recording_reservation_does_not_steal_admitted_handoff(
         metadata={"artist": later_alias.artist, "title_only": later_alias.title},
     )
     assert _segment_is_listener_reserved(state, unmarked_alias) is True
-    assert _select_accepted_music_track(state, config) is ordinary
+    assert _select_accepted_music_track(state, config, queue) is ordinary
 
 
 @pytest.mark.asyncio
@@ -316,11 +322,12 @@ async def test_failed_handoff_admission_retains_exact_track_for_retry(tmp_path):
         listeners_active=1,
     )
     config = _config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
 
     _, commit = _plan_listener_request_block(state)
     assert commit is not None
     commit.apply(state)
-    assert _select_accepted_music_track(state, config) is requested
+    assert _select_accepted_music_track(state, config, queue) is requested
 
     rendered = tmp_path / "rejected-promised-song.mp3"
     rendered.write_bytes(b"music")
@@ -333,7 +340,6 @@ async def test_failed_handoff_admission_retains_exact_track_for_retry(tmp_path):
             **state.listener_request_handoff_metadata(requested),
         },
     )
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     admitted = await _enqueue_with_egress(
         queue,
         state,
@@ -346,7 +352,7 @@ async def test_failed_handoff_admission_retains_exact_track_for_retry(tmp_path):
     assert admitted is False
     assert queue.empty()
     assert state.listener_request_handoff is not None
-    assert _select_accepted_music_track(state, config) is requested
+    assert _select_accepted_music_track(state, config, queue) is requested
 
 
 def test_session_rejected_handoff_releases_later_listener_request(tmp_path):
@@ -374,20 +380,36 @@ def test_session_rejected_handoff_releases_later_listener_request(tmp_path):
         listeners_active=1,
     )
     config = _config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
 
     _, commit = _plan_listener_request_block(state)
     assert commit is not None
-    commit.apply(state)
+    dedication_queue_id = "rejected-source-dedication"
+    dedication_path = tmp_path / "rejected-source-dedication.mp3"
+    dedication_path.write_bytes(b"dedication")
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        metadata={"queue_id": dedication_queue_id, "title": "Listener dedication"},
+        ephemeral=True,
+    )
+    queue.put_nowait(dedication)
+    state.queued_segments = [{"id": dedication_queue_id, "type": "banter", "label": "Listener dedication"}]
+    commit.apply(state, config, queue_id=dedication_queue_id)
     assert state.listener_request_handoff is not None
 
     clear_rejected_cache_keys()
     try:
         reject_cached_download(tmp_path, requested.cache_key, "source unavailable")
-        assert _select_accepted_music_track(state, config) is ordinary
+        assert _select_accepted_music_track(state, config, queue) is ordinary
     finally:
         clear_rejected_cache_keys()
 
     assert state.listener_request_handoff is None
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert not dedication_path.exists()
+    assert state.discard_by_reason == {GenerationWasteReason.PLAYBACK_FILE_ERROR: 1}
     later_prompt, later_commit = _plan_listener_request_block(state)
     assert "LISTENER REQUEST (SONG UNAVAILABLE):" in later_prompt
     assert later_commit is not None
@@ -438,6 +460,7 @@ def test_discarded_dedication_restores_only_unchanged_inflight_borrowed_selectio
         _select_accepted_music_track(
             state,
             config,
+            asyncio.Queue(),
             consumed_force_clear_revision=force_clear_revision,
         )
         is requested
@@ -477,7 +500,7 @@ def test_discarded_dedication_restores_only_unchanged_inflight_borrowed_selectio
         assert state.force_next is SegmentType.MUSIC
         assert state.force_next_revision > force_revision_before_revoke
         state.clear_force_next()
-        assert _select_accepted_music_track(state, config) is requested
+        assert _select_accepted_music_track(state, config, asyncio.Queue()) is requested
     else:
         assert state.pinned_track is pin_before_revoke
         assert state.pinned_track_revision == pin_revision_before_revoke
@@ -505,6 +528,7 @@ def test_same_title_different_media_cannot_bypass_listener_handoff(tmp_path):
         listeners_active=1,
     )
     config = _config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
 
     _, commit = _plan_listener_request_block(state)
     assert commit is not None
@@ -513,7 +537,7 @@ def test_same_title_different_media_cannot_bypass_listener_handoff(tmp_path):
     # Model the producer cycle after it consumes the promised MUSIC force.
     state.force_next = None
 
-    assert _select_accepted_music_track(state, config) is album_version
+    assert _select_accepted_music_track(state, config, queue) is album_version
     assert state.pinned_track is live_version
     assert state.listener_request_handoff_metadata(album_version)
     assert state.listener_request_handoff_metadata(live_version) == {}
@@ -545,6 +569,7 @@ async def test_later_reserved_alias_waits_behind_exact_active_handoff(tmp_path):
         listeners_active=1,
     )
     config = _config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
 
     _, commit = _plan_listener_request_block(state)
     assert commit is not None
@@ -553,7 +578,7 @@ async def test_later_reserved_alias_waits_behind_exact_active_handoff(tmp_path):
     state.force_next = None
 
     with patch("mammamiradio.core.models.random.choices", return_value=[ordinary]):
-        assert _select_accepted_music_track(state, config) is album_version
+        assert _select_accepted_music_track(state, config, queue) is album_version
     assert state.pinned_track is live_version
     assert state.force_next is None
     assert state.listener_request_handoff_metadata(album_version)
@@ -570,7 +595,6 @@ async def test_later_reserved_alias_waits_behind_exact_active_handoff(tmp_path):
             **state.listener_request_handoff_metadata(album_version),
         },
     )
-    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     admitted = await _enqueue_with_egress(
         queue,
         state,
@@ -585,7 +609,7 @@ async def test_later_reserved_alias_waits_behind_exact_active_handoff(tmp_path):
     assert state.pinned_track is live_version
     assert state.force_next is None
     with patch("mammamiradio.core.models.random.choices", return_value=[ordinary]):
-        assert _select_accepted_music_track(state, config) is album_version
+        assert _select_accepted_music_track(state, config, queue) is album_version
 
 
 def test_banning_textual_alias_revokes_exact_source_handoff(tmp_path):
@@ -619,7 +643,7 @@ def test_banning_textual_alias_revokes_exact_source_handoff(tmp_path):
 
     assert result["removed"] == 2
     assert state.listener_request_handoff is None
-    assert _select_accepted_music_track(state, config) is ordinary
+    assert _select_accepted_music_track(state, config, asyncio.Queue()) is ordinary
 
 
 @pytest.mark.parametrize("front_insert", [False, True])

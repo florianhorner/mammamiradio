@@ -25,7 +25,7 @@ import pytest
 from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import ListenerRequestHandoff, Segment, SegmentType, StationState, Track
 from mammamiradio.web import streamer
 from mammamiradio.web.streamer import LiveStreamHub, _admin_track_id, _apply_ban, router
 
@@ -149,6 +149,27 @@ async def test_ban_clears_matching_pin(tmp_path):
     assert state.pinned_track is None
 
 
+def test_ban_releases_matching_listener_retry_reservation(tmp_path):
+    banned = _track("Volare", "Modugno", "banned-retry")
+    retained = _track("Felicità", "Al Bano", "retained-retry")
+    app = _make_app(tmp_path, [banned, retained])
+    state = app.state.station_state
+    state.listener_request_retry_handoffs.extend(
+        (
+            ListenerRequestHandoff(token="banned", request_id="r1", track=banned),
+            ListenerRequestHandoff(token="retained", request_id="r2", track=retained),
+        )
+    )
+
+    _apply_ban(state, app.state.config, [banned], queue=app.state.queue)
+
+    assert list(state.listener_request_retry_handoffs) == [
+        ListenerRequestHandoff(token="retained", request_id="r2", track=retained)
+    ]
+    assert state.listener_track_reservations().reserves_track(banned) is False
+    assert state.listener_track_reservations().reserves_track(retained) is True
+
+
 def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path):
     from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
     from mammamiradio.scheduling.producer import _select_accepted_music_track
@@ -231,7 +252,7 @@ def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path
     assert "LISTENER REQUEST (SONG UNAVAILABLE):" in prompt
     assert commit is not None
     assert state.pinned_track is None
-    assert _select_accepted_music_track(state, app.state.config) is ordinary
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is ordinary
 
     # The ordinary unavailable acknowledgement archives the public receipt;
     # the banned recording never regains a playable object or pin.

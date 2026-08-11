@@ -527,6 +527,7 @@ def _is_session_rejected_without_concrete_source(track: Track, config: StationCo
 def _select_accepted_music_track(
     state: StationState,
     config: StationConfig,
+    queue: asyncio.Queue[Segment],
     *,
     consumed_force_clear_revision: int | None = None,
 ) -> Track | None:
@@ -544,8 +545,24 @@ def _select_accepted_music_track(
                 request["song_error_reason"] = "download_failed"
                 request["song_pinned"] = False
                 request[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+        if handoff.dedication_queue_id:
+            # The request itself was archived when this dedication entered the
+            # queue, so updating pending duplicates is not enough: the already-
+            # rendered announcement would otherwise promise a source we now know
+            # cannot play. Settle the linked queue pair through the shared
+            # no-await mutation boundary before releasing the handoff owner.
+            dedication_queue_id = handoff.dedication_queue_id
+            dropped = drop_matching_segments(
+                queue,
+                state,
+                should_drop=lambda segment: str(segment.metadata.get("queue_id") or "") == dedication_queue_id,
+                reason=GenerationWasteReason.PLAYBACK_FILE_ERROR,
+            )
+            if dropped:
+                logger.info("Removed an unheard listener dedication after its promised source became unavailable")
         if (
-            handoff.pin_revision is not None
+            state.listener_request_handoff is handoff
+            and handoff.pin_revision is not None
             and state.pinned_track is not None
             and handoff.matches_track(state.pinned_track)
         ):
@@ -553,7 +570,8 @@ def _select_accepted_music_track(
                 expected_revision=handoff.pin_revision,
                 expected_track=state.pinned_track,
             )
-        state.clear_listener_request_handoff(handoff.track)
+        if state.listener_request_handoff is handoff:
+            state.clear_listener_request_handoff(handoff.track)
         handoff = None
     # A queued dedication is stronger than reservations created by later
     # listeners asking for the same recording. Reclaim its exact pin after a
@@ -2954,7 +2972,7 @@ async def prewarm_first_segment(
         return None
 
     try:
-        track = _select_accepted_music_track(state, config)
+        track = _select_accepted_music_track(state, config, queue)
         if track is None:
             return False
         logger.info("Pre-warming first track: %s", track.display)
@@ -4480,6 +4498,10 @@ async def _run_producer_inner(
         is_operator_forced = False  # operator /api/trigger -> air-next (front-insert)
         consumed_force_clear_revision: int | None = None
         natural_banter_candidate = False
+        # An admitted promised song whose file failed before playback retains
+        # its request-owned handoff. Promote the oldest retry before arming the
+        # next music cycle so a newer request cannot strand the earlier promise.
+        state.promote_listener_request_retry_handoff()
         # A failed promised-song render retains its request-owned handoff. Arm
         # the retry at the cycle boundary, where consuming the force and later
         # queue admission cannot erase a newer operator directive mid-render.
@@ -4840,6 +4862,7 @@ async def _run_producer_inner(
                 track = _select_accepted_music_track(
                     state,
                     config,
+                    queue,
                     consumed_force_clear_revision=consumed_force_clear_revision,
                 )
                 playlist_idx: int = -1

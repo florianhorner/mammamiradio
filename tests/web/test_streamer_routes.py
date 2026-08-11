@@ -1468,6 +1468,156 @@ async def test_run_playback_loop_skips_missing_file_and_survives(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_missing_admitted_song_after_dedication_restores_promise_until_retry_emits(tmp_path):
+    """A dedication cannot silently spend its song promise on a vanished file."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    _, listener_audio = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=180_000,
+        youtube_id="listener-request-source",
+    )
+    dedication_queue_id = "aired-listener-dedication"
+    assert state.arm_listener_request_handoff(
+        {"request_id": "listener-request"},
+        requested,
+        dedication_queue_id=dedication_queue_id,
+    )
+    original_handoff = state.listener_request_handoff
+    assert original_handoff is not None
+
+    dedication_audio = b"listener dedication"
+    dedication_path = tmp_path / "listener-dedication.mp3"
+    dedication_path.write_bytes(dedication_audio)
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        metadata={"queue_id": dedication_queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    missing = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "deleted-before-playback.mp3",
+        metadata={
+            "queue_id": "first-promised-song",
+            "title": requested.display,
+            "title_only": requested.title,
+            "artist": requested.artist,
+            "youtube_id": requested.youtube_id,
+            **state.listener_request_handoff_metadata(requested),
+        },
+        ephemeral=False,
+    )
+    missing.path.write_bytes(b"promised audio")
+    state.admit_listener_request_handoff(missing)
+    state.queued_segments = [
+        {"id": dedication_queue_id, "type": "banter", "label": "Listener dedication"},
+        {"id": missing.metadata["queue_id"], "type": "music", "label": requested.display},
+    ]
+    app.state.queue.put_nowait(dedication)
+    app.state.queue.put_nowait(missing)
+    # Model eviction after admission but before playback claims the song. The
+    # dedication remains readable and therefore really airs first.
+    missing.path.unlink()
+
+    with patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+            assert listener_audio.get_nowait() == dedication_audio
+
+            # _start_stream_segment published the song before open() failed, but
+            # the admitted tombstone survived long enough to restore the exact
+            # request-owned handoff rather than silently losing the promise.
+            restored = state.listener_request_handoff
+            assert restored is not None
+            assert restored.token == original_handoff.token
+            assert restored.request_id == original_handoff.request_id
+            assert restored.dedication_queue_id == dedication_queue_id
+            assert restored.matches_track(requested)
+            assert state.listener_request_admitted_reservations == {}
+
+            retry_path = tmp_path / "retry.mp3"
+            retry_path.write_bytes(b"retry audio")
+            retry = Segment(
+                type=SegmentType.MUSIC,
+                path=retry_path,
+                metadata={
+                    "queue_id": "retried-promised-song",
+                    "title": requested.display,
+                    "title_only": requested.title,
+                    "artist": requested.artist,
+                    "youtube_id": requested.youtube_id,
+                    **state.listener_request_handoff_metadata(requested),
+                },
+                ephemeral=False,
+            )
+            state.admit_listener_request_handoff(retry)
+            state.queued_segments = [{"id": retry.metadata["queue_id"], "type": "music", "label": requested.display}]
+            app.state.queue.put_nowait(retry)
+            assert state.listener_request_admitted_reservations
+
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+            assert listener_audio.get_nowait() == b"retry audio"
+            assert state.listener_request_handoff is None
+            assert state.listener_request_admitted_reservations == {}
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_pre_byte_skip_releases_admitted_song_without_retry(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=180_000,
+        youtube_id="skipped-request-source",
+    )
+    assert state.arm_listener_request_handoff({"request_id": "skipped-request"}, requested)
+    song_path = tmp_path / "skipped-before-first-byte.mp3"
+    song_path.write_bytes(b"promised audio")
+    song = Segment(
+        type=SegmentType.MUSIC,
+        path=song_path,
+        metadata={
+            "queue_id": "skipped-promised-song",
+            "title": requested.display,
+            "title_only": requested.title,
+            "artist": requested.artist,
+            "youtube_id": requested.youtube_id,
+            **state.listener_request_handoff_metadata(requested),
+        },
+        ephemeral=False,
+    )
+    state.admit_listener_request_handoff(song)
+    state.queued_segments = [{"id": song.metadata["queue_id"], "type": "music", "label": requested.display}]
+    app.state.queue.put_nowait(song)
+
+    def _request_skip_before_read(_file) -> None:
+        app.state.skip_event.set()
+
+    with patch("mammamiradio.web.streamer._skip_id3_and_xing_header", side_effect=_request_skip_before_read):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert state.listener_request_handoff is None
+    assert state.listener_request_admitted_reservations == {}
+    assert not state.listener_request_retry_handoffs
+
+
+@pytest.mark.asyncio
 async def test_missing_dedication_revokes_pending_listener_handoff(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
@@ -4733,7 +4883,7 @@ async def test_queue_remove_settles_music_linked_to_discarded_dedication(tmp_pat
     if state.force_next is not None:
         state.clear_force_next()
 
-    selected = _select_accepted_music_track(state, app.state.config)
+    selected = _select_accepted_music_track(state, app.state.config, app.state.queue)
     assert selected is requested
     handoff_metadata = state.listener_request_handoff_metadata(selected)
     assert handoff_metadata[LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY] == dedication_queue_id

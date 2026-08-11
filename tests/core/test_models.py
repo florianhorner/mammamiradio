@@ -454,6 +454,39 @@ def test_track_display():
     assert t.display == "Artist 1 – Song 1"
 
 
+def test_pre_byte_failure_backlogs_retry_behind_existing_handoff():
+    state = StationState()
+    failed_track = _track(1)
+    newer_track = _track(2)
+    assert state.arm_listener_request_handoff({"request_id": "failed"}, failed_track)
+    failed_handoff = state.listener_request_handoff
+    assert failed_handoff is not None
+    failed_segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/failed-admitted.mp3"),
+        metadata={
+            "artist": failed_track.artist,
+            "title_only": failed_track.title,
+            **state.listener_request_handoff_metadata(failed_track),
+        },
+    )
+    state.admit_listener_request_handoff(failed_segment)
+    assert state.arm_listener_request_handoff({"request_id": "newer"}, newer_track)
+    newer_handoff = state.listener_request_handoff
+
+    assert state.restore_listener_request_handoff_before_first_byte(failed_segment) is True
+    assert state.listener_request_handoff is newer_handoff
+    assert [handoff.token for handoff in state.listener_request_retry_handoffs] == [failed_handoff.token]
+    assert state.listener_track_reservations().reserves_track(failed_track)
+
+    state.clear_listener_request_handoff()
+    assert state.promote_listener_request_retry_handoff() is True
+    assert state.listener_request_handoff is not None
+    assert state.listener_request_handoff.token == failed_handoff.token
+    assert state.listener_request_handoff.music_selection_exclusive is True
+    assert not state.listener_request_retry_handoffs
+
+
 def test_switch_playlist_clears_listener_request_state():
     state = StationState(playlist=[_track(1)])
     state.pending_requests.append({"request_id": "req-1", "name": "Luca", "message": "ciao", "type": "shoutout"})

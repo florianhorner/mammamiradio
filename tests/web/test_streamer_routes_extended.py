@@ -1400,7 +1400,7 @@ async def test_commit_external_download_reaccepts_a_recovered_denied_track(tmp_p
         assert state.pinned_track is track
         assert not is_rejected_cache_key(track.cache_key)
         assert not marker_path.exists()
-        assert _select_accepted_music_track(state, app.state.config) is track
+        assert _select_accepted_music_track(state, app.state.config, app.state.queue) is track
     finally:
         clear_rejected_cache_keys()
 
@@ -1825,6 +1825,120 @@ async def test_assetless_source_switch_drops_preserved_listener_dedication(tmp_p
     assert state.listener_request_handoff is None
     assert state.pinned_track is None
     assert state.force_next is None
+    assert state.playlist == new_tracks
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_assetless_source_switch_keeps_song_promised_by_on_air_dedication(tmp_path):
+    """An audible request promise keeps its admitted song ahead of old runway."""
+    from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_TOKEN_KEY
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": "on-air-source-switch-request",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+    prompt, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+
+    dedication_queue_id = "on-air-listener-dedication"
+    commit.apply(state, app.state.config, queue_id=dedication_queue_id)
+    handoff_metadata = state.listener_request_handoff_metadata(requested)
+    promised_path = tmp_path / "promised-song.mp3"
+    promised_path.write_bytes(b"promised-music")
+    promised = Segment(
+        type=SegmentType.MUSIC,
+        path=promised_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "promised-song-q",
+            "title": requested.display,
+            "title_only": requested.title,
+            "artist": requested.artist,
+            **handoff_metadata,
+        },
+        ephemeral=False,
+    )
+    state.admit_listener_request_handoff(promised)
+    token = str(promised.metadata[LISTENER_REQUEST_HANDOFF_TOKEN_KEY])
+
+    ordinary_path = tmp_path / "unrelated-old-source.mp3"
+    ordinary_path.write_bytes(b"ordinary-music")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "unrelated-old-source-q",
+            "title": "Unrelated old-source song",
+            "title_only": "Unrelated old-source song",
+            "artist": "Old Artist",
+        },
+        ephemeral=False,
+    )
+    for segment in (ordinary, promised):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {
+            "id": str(segment.metadata["queue_id"]),
+            "type": segment.type.value,
+            "label": str(segment.metadata["title"]),
+        }
+        for segment in (ordinary, promised)
+    ]
+    state.now_streaming = {
+        "type": "banter",
+        "label": "Listener dedication",
+        "started": time.time(),
+        "metadata": {"queue_id": dedication_queue_id, "title": "Listener dedication"},
+    }
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] is False
+    assert list(app.state.queue._queue) == [promised]
+    assert state.queued_segments == [{"id": "promised-song-q", "type": "music", "label": requested.display}]
+    assert state.listener_request_admitted_reservations[token].dedication_queue_id == dedication_queue_id
+    assert state.listener_request_admitted_reservations[token].matches_track(requested)
     assert state.playlist == new_tracks
     assert not app.state.skip_event.is_set()
 
@@ -4284,7 +4398,7 @@ async def test_downloaded_listener_pin_waits_for_dedication_after_music_force_is
 
     # run_producer consumes a force before entering its MUSIC selection branch.
     state.force_next = None
-    selected = _select_accepted_music_track(state, app.state.config)
+    selected = _select_accepted_music_track(state, app.state.config, app.state.queue)
     assert selected is not requested
     assert state.pinned_track is requested
     assert state.force_next is SegmentType.BANTER
@@ -4299,7 +4413,7 @@ async def test_downloaded_listener_pin_waits_for_dedication_after_music_force_is
     commit.apply(state)
 
     assert req not in state.pending_requests
-    assert _select_accepted_music_track(state, app.state.config) is requested
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is requested
 
 
 @pytest.mark.asyncio
@@ -4355,7 +4469,7 @@ async def test_queued_listener_song_waits_for_fifo_pin_before_entering_rotation(
     assert requested_track in state.playlist
 
     # The explicit operator pin is authoritative and airs first.
-    assert _select_accepted_music_track(state, app.state.config) is operator_pick
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is operator_pick
     state.after_music(operator_pick)
 
     # Even if weighted rotation tries to choose the freshly downloaded song,
@@ -4365,7 +4479,7 @@ async def test_queued_listener_song_waits_for_fifo_pin_before_entering_rotation(
         return [candidates[0]]
 
     with patch("mammamiradio.core.models.random.choices", side_effect=_prefer_requested):
-        assert _select_accepted_music_track(state, app.state.config) is not requested_track
+        assert _select_accepted_music_track(state, app.state.config, app.state.queue) is not requested_track
 
     announcement, commit = _plan_listener_request_block(state)
     assert "LISTENER REQUEST:" in announcement
@@ -4376,11 +4490,11 @@ async def test_queued_listener_song_waits_for_fifo_pin_before_entering_rotation(
 
     # The host handoff consumes the sole pin and archives an honest matched
     # receipt; it is not followed by an accidental ordinary-rotation duplicate.
-    assert _select_accepted_music_track(state, app.state.config) is requested_track
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is requested_track
     _admit_listener_song_handoff(state, requested_track)
     state.after_music(requested_track)
     with patch("mammamiradio.core.models.random.choices", side_effect=_prefer_requested):
-        assert _select_accepted_music_track(state, app.state.config) is not requested_track
+        assert _select_accepted_music_track(state, app.state.config, app.state.queue) is not requested_track
 
     assert req not in state.pending_requests
     receipt = state.recently_consumed_requests[-1]
@@ -4438,7 +4552,7 @@ def test_same_recording_operator_pin_waits_for_single_announced_listener_handoff
     # The producer must preserve the operator's same-recording intent while
     # keeping it off air until the dedication planner can adopt it.
     with patch("mammamiradio.core.models.random.choices", side_effect=_choose_ordinary):
-        first_track = _select_accepted_music_track(state, app.state.config)
+        first_track = _select_accepted_music_track(state, app.state.config, app.state.queue)
     assert first_track.cache_key != requested_track.cache_key
     assert state.pinned_track is operator_pin
     assert state.force_next == SegmentType.BANTER
@@ -4458,11 +4572,14 @@ def test_same_recording_operator_pin_waits_for_single_announced_listener_handoff
 
     # The announced handoff consumes exactly one pin. The same recording cannot
     # immediately re-enter ordinary rotation after the request is archived.
-    assert _select_accepted_music_track(state, app.state.config) is operator_pin
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is operator_pin
     _admit_listener_song_handoff(state, operator_pin)
     state.after_music(operator_pin)
     with patch("mammamiradio.core.models.random.choices", side_effect=_choose_ordinary):
-        assert _select_accepted_music_track(state, app.state.config).cache_key != requested_track.cache_key
+        assert (
+            _select_accepted_music_track(state, app.state.config, app.state.queue).cache_key
+            != requested_track.cache_key
+        )
     assert req not in state.pending_requests
 
 
