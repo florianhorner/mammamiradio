@@ -1689,6 +1689,40 @@ def test_continuity_reservation_honors_excluded_track_keys_not_on_blocklist(tmp_
     assert dismissed in state.immediate_audio_index
 
 
+def test_continuity_reservation_skips_pending_listener_song_identity(tmp_path):
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="new-listener-download",
+    )
+    state = StationState(
+        pending_requests=[
+            {
+                "type": "song_request",
+                "song_found": True,
+                "song_pinned": True,
+                "song_track_obj": requested,
+            }
+        ]
+    )
+    preexisting = tmp_path / "norm_youtube_preexisting_128k.mp3"
+    allowed = tmp_path / "norm_youtube_allowed_128k.mp3"
+    preexisting.write_bytes(b"requested cache")
+    allowed.write_bytes(b"ordinary cache")
+    state.immediate_audio_index = {preexisting: 240.0, allowed: 240.0}
+    sidecars = {
+        preexisting: {"artist": requested.artist, "title": requested.title},
+        allowed: {"artist": "Colapesce Dimartino", "title": "Musica leggerissima"},
+    }
+
+    with patch("mammamiradio.web.streamer.load_track_metadata", side_effect=sidecars.get):
+        selected = _continuity_reservation_segments(state, None, 240.0, max_segments=1)
+
+    assert [segment.path for segment in selected] == [allowed]
+    assert preexisting in state.immediate_audio_index  # temporary hold, not a durable prune
+
+
 def test_continuity_reservation_honors_excluded_paths(tmp_path):
     """A removed queue segment's own file cannot be reintroduced as continuity runway."""
     state = StationState()
@@ -2645,6 +2679,43 @@ def test_continuity_slot_claim_rejects_track_blocklisted_after_reservation(tmp_p
     )
     state.continuity_slot = slot
     state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
+
+    assert _claim_continuity_slot(state) is None
+    assert state.continuity_slot is None
+
+
+def test_continuity_slot_claim_rejects_track_requested_after_reservation(tmp_path):
+    """The pending dedication fence closes the reserve-then-match race."""
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="new-listener-download",
+    )
+    path = tmp_path / "norm_youtube_preexisting_128k.mp3"
+    path.write_bytes(b"ready")
+    slot = Segment(
+        type=SegmentType.MUSIC,
+        path=path,
+        duration_sec=240.0,
+        metadata={
+            "artist": requested.artist,
+            "title_only": requested.title,
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    state = StationState(
+        continuity_slot=slot,
+        pending_requests=[
+            {
+                "type": "song_request",
+                "song_found": True,
+                "song_pinned": True,
+                "song_track_obj": requested,
+            }
+        ],
+    )
 
     assert _claim_continuity_slot(state) is None
     assert state.continuity_slot is None

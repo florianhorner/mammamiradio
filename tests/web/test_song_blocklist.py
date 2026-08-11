@@ -149,8 +149,7 @@ async def test_ban_clears_matching_pin(tmp_path):
     assert state.pinned_track is None
 
 
-@pytest.mark.parametrize("match_kind", ["canonical", "same-cache-key"])
-def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path, match_kind):
+def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path):
     from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
     from mammamiradio.scheduling.producer import _select_accepted_music_track
     from mammamiradio.web.listener_requests import _public_song_status
@@ -161,20 +160,11 @@ def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path
         duration_ms=180_000,
         youtube_id="listener-request-source",
     )
-    ban_target = (
-        Track(
-            title=requested.title,
-            artist=requested.artist,
-            duration_ms=requested.duration_ms,
-            youtube_id="different-source-same-canonical-song",
-        )
-        if match_kind == "canonical"
-        else Track(
-            title="Requested Song (operator label)",
-            artist=requested.artist,
-            duration_ms=requested.duration_ms,
-            youtube_id=requested.youtube_id,
-        )
+    ban_target = Track(
+        title=requested.title,
+        artist=requested.artist,
+        duration_ms=requested.duration_ms,
+        youtube_id="different-source-same-canonical-song",
     )
     unrelated_request_track = Track(
         title="Unrelated Request",
@@ -251,6 +241,70 @@ def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path
     assert receipt["status"] == "song_not_found"
     assert _public_song_status(receipt)["song_resolution"] == "not_matched"
     assert _public_song_status(receipt)["outcome_reason"] == "not_playable"
+
+
+@pytest.mark.asyncio
+async def test_bulk_ban_keeps_distinct_same_cache_alias_in_floor_queue_and_request(tmp_path):
+    banned_track = Track(
+        title="Requested Song",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="shared-recording-source",
+    )
+    canonical_alias = Track(
+        title="Requested Song (Radio Edit)",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="shared-recording-source",
+    )
+    assert banned_track.cache_key == canonical_alias.cache_key
+    assert banned_track.normalized_key != canonical_alias.normalized_key
+
+    app = _make_app(tmp_path, [banned_track, canonical_alias])
+    state = app.state.station_state
+    alias_request = {
+        "request_id": "same-cache-alias-request",
+        "name": "Giulia",
+        "message": "Play the radio edit",
+        "type": "song_request",
+        "status": "queued",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+        "song_track": canonical_alias.display,
+        "song_track_obj": canonical_alias,
+    }
+    state.pending_requests.append(alias_request)
+    alias_request_before = dict(alias_request)
+    alias_path = tmp_path / "same-cache-alias.mp3"
+    alias_path.write_bytes(b"alias")
+    queued_alias = Segment(
+        type=SegmentType.MUSIC,
+        path=alias_path,
+        metadata={
+            "queue_id": "same-cache-alias",
+            "title": canonical_alias.display,
+            "title_only": canonical_alias.title,
+            "artist": canonical_alias.artist,
+        },
+    )
+    app.state.queue.put_nowait(queued_alias)
+    state.queued_segments.append({"id": "same-cache-alias", "type": "music", "label": canonical_alias.display})
+
+    async with _client(app) as client:
+        response = await client.post("/api/track/ban", json={"indices": [0]})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["removed"] == 1
+    # The already-small two-song pool is allowed to lose one canonical row but
+    # must not fall through its one-song floor because a media cache key happens
+    # to be shared by a differently named operator row.
+    assert state.playlist == [canonical_alias]
+    assert list(app.state.queue._queue) == [queued_alias]
+    assert state.queued_segments[0]["id"] == "same-cache-alias"
+    assert alias_request == alias_request_before
 
 
 @pytest.mark.asyncio

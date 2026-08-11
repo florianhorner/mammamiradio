@@ -25,7 +25,7 @@ import httpx
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
 from mammamiradio.audio.imaging import ImagingLibrary
-from mammamiradio.audio.norm_cache import select_norm_cache_rescue
+from mammamiradio.audio.norm_cache import is_listener_reserved_cache_file, select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
     apply_broadcast_chain,
     broadcast_chain_version,
@@ -516,38 +516,16 @@ def _is_session_rejected_without_concrete_source(track: Track, config: StationCo
     )
 
 
-def _reserved_listener_track_keys(state: StationState) -> set[str]:
-    """Keep downloaded listener picks out of ordinary rotation until their FIFO handoff.
-
-    A listener download can finish while an operator or an earlier request owns
-    ``pinned_track``. The downloaded track must remain in the playlist for later
-    rotation, but it is not ordinary rotation yet: the hosts still need to
-    announce the request and claim its play-next pin. Deriving the reservation
-    from the pending request keeps its lifetime aligned with dismissal, source
-    changes, and the existing receipt commit without another mutable registry.
-
-    A pin of the same recording is still reserved until the request planner
-    recognizes it as the listener handoff. Letting it bypass this fence would
-    air the song before its dedication and leave ``song_pinned`` false, so the
-    planner would pin and play the same recording a second time.
-    """
-    reserved = {
-        track.cache_key
-        for request in state.pending_requests
-        if request.get("song_found")
-        and not request.get("song_pinned")
-        and isinstance((track := request.get("song_track_obj")), Track)
-    }
-    return reserved
-
-
 def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
     rejected_keys = {
         track.cache_key for track in state.playlist if _is_session_rejected_without_concrete_source(track, config)
     }
     if state.pinned_track is not None and _is_session_rejected_without_concrete_source(state.pinned_track, config):
         rejected_keys.add(state.pinned_track.cache_key)
-    reserved_listener_keys = _reserved_listener_track_keys(state)
+    reservations = state.listener_track_reservations()
+    reserved_listener_keys = {track.cache_key for track in state.playlist if reservations.reserves_track(track)}
+    if state.pinned_track is not None and reservations.reserves_track(state.pinned_track):
+        reserved_listener_keys.add(state.pinned_track.cache_key)
     excluded_keys = rejected_keys | reserved_listener_keys
     # ``StationState.select_next_track`` consumes a pin before applying its
     # exclusion set. Temporarily lift a same-recording listener pin out of that
@@ -557,7 +535,7 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
     # ordinary authority.
     held_listener_pin = (
         state.pinned_track
-        if state.pinned_track is not None and state.pinned_track.cache_key in reserved_listener_keys
+        if state.pinned_track is not None and reservations.reserves_track(state.pinned_track)
         else None
     )
     if held_listener_pin is not None and state.force_next is None:
@@ -1634,6 +1612,15 @@ def _memory_extraction_metadata_from_commit(commit, script_lines: list[dict]) ->
 
 
 def _abandon_release_beat_commit(state: StationState, commit) -> None:
+    # Listener request planning may synchronously claim the song pin before a
+    # slow LLM/TTS/egress render. Any path that abandons the rendered banter must
+    # restore that marker as well as the release-beat attempt, otherwise the next
+    # truthful request plan believes the rejected dedication already owns a pin.
+    try:
+        _sw.abandon_listener_request_plan(commit, state)
+    except Exception:
+        logger.warning("Listener request plan restore failed", exc_info=True)
+
     release_commit = _release_beat_commit_from_banter(commit)
     if release_commit is None:
         return
@@ -1641,6 +1628,19 @@ def _abandon_release_beat_commit(state: StationState, commit) -> None:
         release_commit.abandon(state)
     except Exception:
         logger.warning("Release beat attempt restore failed", exc_info=True)
+
+
+def _listener_request_plan_stale_reason(state: StationState, commit: object) -> str | None:
+    """Fence generated listener copy against a changed outcome or matched pin."""
+
+    try:
+        if _sw.listener_request_plan_is_current(commit, state):
+            return None
+    except Exception:
+        # A validation failure must fail closed: stale listener promises are a
+        # worse broadcast outcome than regenerating one banter segment.
+        logger.warning("Listener request plan validation failed", exc_info=True)
+    return GenerationWasteReason.EGRESS_STALE
 
 
 def _release_campaign_abandon_in_flight(state: StationState) -> None:
@@ -1755,18 +1755,28 @@ def _blocklist_safe_last_music(
 ) -> LastGoodMusic | None:
     """Resolve state-owned last-known-good music through its durable identity.
 
-    A populated blocklist makes the norm-cache sidecar mandatory: without both
-    artist and title there is no canonical identity proving that the audio is
-    still eligible.  Recovery and speech-bed reuse share this fail-closed gate
-    so neither can reintroduce an operator-banned song through a cached path.
+    A populated blocklist or pending listener-song reservation makes the
+    norm-cache sidecar mandatory: without both artist and title there is no
+    canonical identity proving that the audio is still eligible. Recovery and
+    speech-bed reuse share this fail-closed gate so neither can reintroduce a
+    banned song or air a requested song before its dedication.
     """
     candidate = _get_last_music_file(state)
     if candidate is None:
         return None
 
     metadata = load_track_metadata(candidate) or {}
-    if not state.blocklist:
+    reservations = state.listener_track_reservations()
+    if not state.blocklist and not (reservations.cache_keys or reservations.track_keys):
         return LastGoodMusic(candidate, metadata)
+
+    if is_listener_reserved_cache_file(candidate, reservations, sidecar=metadata):
+        logger.info(
+            "%s: holding listener-requested last-known-good music for its dedication: %s",
+            purpose.capitalize(),
+            candidate.name,
+        )
+        return None
 
     title = str(metadata.get("title") or "").strip()
     artist = str(metadata.get("artist") or "").strip()
@@ -1777,7 +1787,7 @@ def _blocklist_safe_last_music(
     # — safe and rare; loosening it would mean bypassing that identity contract.)
     if not title or not artist:
         logger.warning(
-            "%s: skipping unidentified last-known-good music while blocklist is active: %s",
+            "%s: skipping unidentified last-known-good music while an identity gate is active: %s",
             purpose.capitalize(),
             candidate.name,
         )
@@ -1826,7 +1836,8 @@ def _adjacent_music_source(state: StationState) -> Path | None:
     """
     if state.last_enqueued_type not in _MUSIC_TYPES:
         return None
-    if not state.blocklist:
+    reservations = state.listener_track_reservations()
+    if not state.blocklist and not (reservations.cache_keys or reservations.track_keys):
         return _get_last_music_file(state)
     candidate = _blocklist_safe_last_music(state, purpose="speech-bed adjacency")
     return candidate.path if candidate is not None else None
@@ -2198,6 +2209,8 @@ def _enqueue_rejection_reason(
         return GenerationWasteReason.SESSION_STOPPED
     if segment.type == SegmentType.MUSIC and state.blocklist and segment_track_key(segment) in state.blocklist:
         return GenerationWasteReason.BLOCKLIST_GATE
+    if segment.type == SegmentType.MUSIC and state.listener_track_reservations().reserves_segment(segment):
+        return GenerationWasteReason.LISTENER_REQUEST_RESERVED
     return _stale_check_reason(stale_check)
 
 
@@ -4357,6 +4370,7 @@ async def _run_producer_inner(
 
         success_callback: Callable[[], None] | None = None
         banter_commit = None
+        listener_request_commit = None
         post_failure_backoff: float | None = None
         # Paths owned by this render attempt.  Parallel workers are always
         # settled before an exception reaches the outer recovery block, which
@@ -4904,7 +4918,6 @@ async def _run_producer_inner(
 
                 impossible_tts = False
                 canned = None
-                listener_request_commit = None
                 has_music_tail = False
                 trans_track_ref: str | None = None
                 loop = asyncio.get_running_loop()
@@ -5039,22 +5052,40 @@ async def _run_producer_inner(
                             _gen_ok = False
                             try:
                                 transition_task = _sw.write_transition(state, config, next_segment="banter")
-                                banter_task = _sw.write_banter(
-                                    state,
-                                    config,
-                                    prompt_fact=prompt_fact,
-                                    use_directed_home_context=use_directed_home_context,
-                                    companionship_context=(
-                                        companionship_claim.prompt_context if companionship_claim is not None else None
-                                    ),
+
+                                async def _write_banter_with_commit_handoff(
+                                    current_prompt_fact: PromptFact | None = prompt_fact,
+                                    current_use_directed_home_context: bool = use_directed_home_context,
+                                    current_companionship_claim: ListenerSessionCueClaim | None = companionship_claim,
+                                ) -> tuple[list[DialogueLine], Any]:
+                                    nonlocal listener_request_commit
+                                    result = await _sw.write_banter(
+                                        state,
+                                        config,
+                                        prompt_fact=current_prompt_fact,
+                                        use_directed_home_context=current_use_directed_home_context,
+                                        companionship_context=(
+                                            current_companionship_claim.prompt_context
+                                            if current_companionship_claim is not None
+                                            else None
+                                        ),
+                                    )
+                                    # Capture before the sibling group exposes a
+                                    # transition failure/cancellation. Planning may
+                                    # already own the listener pin even when tuple
+                                    # unpacking never runs in the caller.
+                                    listener_request_commit = result[1]
+                                    return result
+
+                                script_results = await _gather_all_settled(
+                                    transition_task,
+                                    _write_banter_with_commit_handoff(),
                                 )
-                                (
-                                    (trans_host, trans_text, trans_track_ref),
-                                    (
-                                        lines,
-                                        listener_request_commit,
-                                    ),
-                                ) = await asyncio.gather(transition_task, banter_task)
+                                _raise_first_settled_error(script_results)
+                                trans_host, trans_text, trans_track_ref = cast(
+                                    tuple[HostPersonality, str, str | None], script_results[0]
+                                )
+                                lines, listener_request_commit = cast(tuple[list[DialogueLine], Any], script_results[1])
                                 _gen_ok = True
                             finally:
                                 reset_collector(_prov_tok)
@@ -5197,6 +5228,7 @@ async def _run_producer_inner(
                         else:
                             _unlink_render_scratch(render_failure_scratch)
                             _abandon_release_beat_commit(state, listener_request_commit)
+                            listener_request_commit = None
                             _drop_unqueued_banter_receipts("generation_failed", "tts-failure")
                             _release_campaign_abandon_in_flight(state)
                             raise
@@ -5395,6 +5427,13 @@ async def _run_producer_inner(
                                 logger.debug("Humanity event skipped: %s", exc)
                                 humanity_out.unlink(missing_ok=True)
 
+                # A canned/impossible fallback carries none of the generated
+                # listener promise. Restore any synchronous request pin claimed
+                # while planning the discarded copy, and do not make admission
+                # validate or later apply that orphaned commit against the clip.
+                if (canned is not None or impossible_tts) and listener_request_commit is not None:
+                    _abandon_release_beat_commit(state, listener_request_commit)
+                    listener_request_commit = None
                 banter_commit = listener_request_commit
                 companionship_metadata = _companionship_metadata_for_generated_banter(
                     state,
@@ -6256,6 +6295,10 @@ async def _run_producer_inner(
             if companionship_claim is not None:
                 state.listener_session.abandon_companionship(companionship_claim.epoch)
                 companionship_claim = None
+            _abandon_release_beat_commit(
+                state,
+                banter_commit if banter_commit is not None else listener_request_commit,
+            )
             state.finish_render_timing("failed", reason="render_failure")
             # Commit-free: banter_commit may still be None here (e.g. a sibling
             # task raised inside the transition+banter gather before the tuple
@@ -6282,6 +6325,10 @@ async def _run_producer_inner(
             # fan-outs have finished their executor-backed siblings by here.
             # Remove their outputs before preserving cancellation semantics.
             _unlink_render_scratch(render_failure_scratch)
+            _abandon_release_beat_commit(
+                state,
+                banter_commit if banter_commit is not None else listener_request_commit,
+            )
             raise
 
         if segment:
@@ -6335,6 +6382,9 @@ async def _run_producer_inner(
             if generation_source_revision != state.source_revision:
                 logger.info("Discarding stale %s segment after playlist source switch", seg_type.value)
                 stale_reason = GenerationWasteReason.STALE_SOURCE
+            elif (listener_request_stale := _listener_request_plan_stale_reason(state, banter_commit)) is not None:
+                logger.info("Discarding stale %s segment after listener request outcome changed", seg_type.value)
+                stale_reason = listener_request_stale
             elif generation_revision != state.playlist_revision and _music_segment_left_rotation(state, segment):
                 # playlist_revision is only a cheap pre-filter here. Ten of the
                 # thirteen sites that bump it are benign (add / shuffle / move /
@@ -6396,6 +6446,7 @@ async def _run_producer_inner(
                 captured_source_revision: int = generation_source_revision,
                 captured_chaos_epoch: int = generation_chaos_epoch,
                 captured_continuity_epoch: int = generation_continuity_epoch,
+                captured_banter_commit: object = banter_commit,
             ) -> str | None:
                 if state.session_stopped:
                     return GenerationWasteReason.SESSION_STOPPED
@@ -6413,6 +6464,8 @@ async def _run_producer_inner(
                     return GenerationWasteReason.STALE_CHAOS
                 if captured_continuity_epoch != state.continuity_epoch:
                     return GenerationWasteReason.STALE_CONTINUITY
+                if listener_request_stale := _listener_request_plan_stale_reason(state, captured_banter_commit):
+                    return listener_request_stale
                 return _companionship_admission_stale_reason(state, captured_segment)
 
             # Stable per-segment id: the shared queue publication helper stamps

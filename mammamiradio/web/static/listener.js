@@ -1295,7 +1295,7 @@
               // #request-sent is aria-live="polite" — its text was set while
               // still display:none (below), which most screen readers won't
               // announce; re-assigning at reveal time makes the mutation and
-              // the visibility change coincident (adversarial review finding).
+              // the visibility change coincident.
               sentEl.textContent = text;
               sentEl.style.display = '';
               requestAnimationFrame(() => {

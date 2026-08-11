@@ -4407,6 +4407,42 @@ async def test_write_banter_defers_listener_request_mutation_until_commit(config
     assert state.pending_requests == []
 
 
+@pytest.mark.asyncio
+async def test_write_banter_generation_fallback_releases_claimed_listener_pin(config, state):
+    requested_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="failed-listener-plan",
+    )
+    request = {
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("provider unavailable"),
+    ):
+        lines, commit = await write_banter(state, config)
+
+    assert lines  # stock copy keeps the station on air
+    assert commit is None
+    assert request in state.pending_requests
+    assert request["song_pinned"] is False
+    assert state.pinned_track is None
+    assert state.force_next is None
+
+
 def test_plan_listener_request_block_empty_queue(state):
     prompt, commit = _plan_listener_request_block(state)
 

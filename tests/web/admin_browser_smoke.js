@@ -7,6 +7,116 @@ async (page) => {
     if (!condition) throw new Error(`admin-browser-smoke: ${message}`);
   }
 
+  async function exerciseListenerSongFailureRows() {
+    const failureCases = [
+      ['low_confidence', 'needs exact title + artist', 'Try exact title + artist'],
+      ['ambiguous_request', 'no match — try title + artist', 'No match — try title + artist'],
+      ['not_found', 'no match — try title + artist', 'No match — try title + artist'],
+      ['longform_audio', 'too long — choose one song', 'Too long — choose one song'],
+      ['non_music_audio', 'not playable — choose another', 'Not playable — choose another'],
+      ['banned', 'blocked — unban or choose another', 'Blocked — unban or choose another'],
+      ['downloads_disabled', 'song requests are off — enable them', 'Song requests off — enable them'],
+      ['lookup_failed', 'catalogue unavailable — retry later', 'Catalogue unavailable — retry later'],
+      ['lookup_timed_out', 'no catalogue answer — retry', 'No catalogue answer — retry'],
+      ['source_changed', 'music changed — submit again', 'Music changed — submit again'],
+      ['download_failed', 'could not prepare track — retry or add it', 'Could not prepare track — retry or add it'],
+      ['download_cancelled', 'preparation stopped — retry', 'Preparation stopped — retry'],
+    ].map(([reason, statusText, badgeText]) => ({ reason, statusText, badgeText }));
+
+    const rendered = await page.evaluate((cases) => {
+      const pending = cases.map(({ reason }, index) => ({
+        id: `admin-smoke-pending-${index}`,
+        name: `Pending ${reason}`,
+        message: `Request ${reason}`,
+        type: 'song_request',
+        song_found: false,
+        song_error: true,
+        song_error_reason: reason,
+        age_s: index,
+      }));
+      const consumed = cases.map(({ reason }, index) => ({
+        name: `Archived ${reason}`,
+        message: `Archived request ${reason}`,
+        type: 'song_request',
+        status: reason === 'source_changed' ? 'source_changed' : 'song_not_found',
+        song_error_reason: reason,
+        age_s: index,
+      }));
+      consumed.push({
+        name: 'Dismissed request',
+        message: 'Dismissed request recovery',
+        type: 'song_request',
+        status: 'dismissed',
+        song_error_reason: 'dismissed',
+        age_s: 0,
+      });
+
+      const mappings = cases.map(({ reason }) => ({
+        reason,
+        statusText: listenerSongErrorLabel(reason),
+        badgeText: listenerSongErrorBadge(reason),
+      }));
+      updateListenerRequests(pending, consumed);
+      const pendingRows = cases.map(({ reason }, index) => {
+        const row = document.getElementById(`lr-item-admin-smoke-pending-${index}`);
+        const status = row && row.querySelector('.status-inline');
+        return {
+          reason,
+          statusText: status ? status.textContent.trim() : '',
+          ariaLabel: status ? status.getAttribute('aria-label') : '',
+          blocked: Boolean(status && status.classList.contains('blocked')),
+          actions: row ? Array.from(row.querySelectorAll('button'), (button) => button.textContent.trim()) : [],
+        };
+      });
+      const archivedRows = Array.from(document.querySelectorAll('#lrBody .lr-item-consumed'), (row) => {
+        const badge = row.querySelector('.lr-badge');
+        return {
+          name: row.querySelector('.lr-name')?.textContent.trim() || '',
+          badgeText: badge ? badge.textContent.trim() : '',
+          warning: Boolean(badge && badge.classList.contains('lr-badge-warn')),
+          actions: Array.from(row.querySelectorAll('button'), (button) => button.textContent.trim()),
+        };
+      });
+      const pendingCount = document.getElementById('lrMeta')?.textContent.trim() || '';
+      updateListenerRequests([], []);
+      return { mappings, pendingRows, archivedRows, pendingCount };
+    }, failureCases);
+
+    for (const expected of failureCases) {
+      const mapping = rendered.mappings.find(({ reason }) => reason === expected.reason);
+      assert(
+        mapping && mapping.statusText === expected.statusText && mapping.badgeText === expected.badgeText,
+        `listener song error helper mapping drifted for ${expected.reason}: ${JSON.stringify(mapping)}`,
+      );
+      const pendingRow = rendered.pendingRows.find(({ reason }) => reason === expected.reason);
+      assert(
+        pendingRow && pendingRow.statusText === expected.statusText && pendingRow.blocked
+          && pendingRow.ariaLabel === `${expected.statusText}: status blocked`,
+        `pending listener row lost recovery status for ${expected.reason}: ${JSON.stringify(pendingRow)}`,
+      );
+      assert(
+        pendingRow.actions.length === 1 && pendingRow.actions[0].endsWith('Dismiss'),
+        `blocked listener row exposed the wrong actions for ${expected.reason}: ${JSON.stringify(pendingRow.actions)}`,
+      );
+      const archivedRow = rendered.archivedRows.find(({ name }) => name === `Archived ${expected.reason}`);
+      assert(
+        archivedRow && archivedRow.badgeText.includes(expected.badgeText) && archivedRow.warning
+          && archivedRow.actions.length === 0,
+        `archived listener row lost recovery badge for ${expected.reason}: ${JSON.stringify(archivedRow)}`,
+      );
+    }
+    const dismissedRow = rendered.archivedRows.find(({ name }) => name === 'Dismissed request');
+    assert(
+      dismissedRow && dismissedRow.badgeText.includes('Dismissed — resubmit if still wanted')
+        && dismissedRow.warning && dismissedRow.actions.length === 0,
+      `dismissed listener row lost its resubmit recovery: ${JSON.stringify(dismissedRow)}`,
+    );
+    assert(
+      rendered.pendingCount === `${failureCases.length} pending`,
+      `listener request summary did not count rendered failures: ${rendered.pendingCount}`,
+    );
+  }
+
   assert(/^https?:\/\//.test(baseUrl), `invalid ADMIN_BROWSER_SMOKE_URL marker: ${markerUrl}`);
   const httpOrigin = (value) => (value.match(/^https?:\/\/[^/]+/i) || [''])[0].toLowerCase();
   const baseOrigin = httpOrigin(baseUrl);
@@ -37,7 +147,9 @@ async (page) => {
 
   await page.goto(`${baseUrl}/admin`, { waitUntil: 'domcontentloaded', timeout: 10000 });
   await page.waitForFunction(
-    () => typeof renderProduction === 'function' && typeof updateStopState === 'function' && typeof updateRecent === 'function',
+    () => typeof renderProduction === 'function' && typeof updateStopState === 'function'
+      && typeof updateRecent === 'function' && typeof updateListenerRequests === 'function'
+      && typeof listenerSongErrorLabel === 'function' && typeof listenerSongErrorBadge === 'function',
     null,
     { timeout: 5000 },
   );
@@ -46,6 +158,7 @@ async (page) => {
       .filter(({ delay }) => delay === 3000 || delay === 30000)
       .forEach(({ id }) => clearInterval(id));
   });
+  await exerciseListenerSongFailureRows();
 
   const seededStoppedFirstPaint = await page.evaluate(() => {
     document.body.setAttribute('data-stopped', 'true');

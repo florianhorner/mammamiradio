@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import ListenerTrackReservations, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.downloader import is_rejected_cache_key
 
 _NORM_CACHE_KEY_RE = re.compile(r"^norm_(?P<cache_key>.+)_\d+k\.mp3$")
@@ -179,6 +179,30 @@ def _is_blocklisted(path: Path, blocklist: object) -> bool:
     return sidecar_track_key(sidecar) in blocklist
 
 
+def is_listener_reserved_cache_file(
+    path: Path,
+    reservations: ListenerTrackReservations,
+    *,
+    sidecar: dict | None = None,
+) -> bool:
+    """Keep a cached listener pick silent until its dedication is acknowledged.
+
+    The source cache key catches the exact downloaded recording without disk
+    metadata. Canonical sidecar identity also catches older or alternate-source
+    cache entries for the same song. While a reservation exists, an unidentified
+    cache file fails closed: it cannot prove that it is safe to air anonymously.
+    """
+    if not reservations.cache_keys and not reservations.track_keys:
+        return False
+    if reservations.reserves_cache_key(_norm_cache_key(path)):
+        return True
+    if sidecar is None:
+        sidecar = load_track_metadata(path) or {}
+    if not sidecar:
+        return True
+    return reservations.reserves_track_key(sidecar_track_key(sidecar))
+
+
 def _path_on_cooldown(airplay: dict[Path, float], path: Path, now: float) -> bool:
     """Single source of truth for the rescue cooldown, keyed on the cache path.
 
@@ -321,6 +345,9 @@ def select_norm_cache_rescue(
     blocklist = getattr(state, "blocklist", None)
     if blocklist:
         norm_files = [path for path in norm_files if not _is_blocklisted(path, blocklist)]
+    reservations = state.listener_track_reservations()
+    if reservations.cache_keys or reservations.track_keys:
+        norm_files = [path for path in norm_files if not is_listener_reserved_cache_file(path, reservations)]
     if not norm_files:
         return None
 

@@ -2359,6 +2359,46 @@ async def test_public_listener_request_token_projects_legacy_terminal_receipt():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("token", "status", "reason"),
+    [
+        ("31111111-1111-4111-8111-111111111111", "dismissed", "dismissed"),
+        ("32222222-2222-4222-8222-222222222222", "source_changed", "source_changed"),
+        ("33333333-3333-4333-8333-333333333333", "song_not_found", "download_cancelled"),
+        ("34444444-4444-4444-8444-444444444444", "song_not_found", "lookup_failed"),
+    ],
+)
+async def test_public_listener_request_operational_failures_are_safe_and_retryable(token, status, reason):
+    app = _make_test_app()
+    app.state.station_state.recently_consumed_requests = [
+        {
+            "id": "private-request-id",
+            "public_token": token,
+            "type": "song_request",
+            "song_track": None,
+            "status": status,
+            "song_error": True,
+            "song_error_reason": reason,
+            "consumed_at": time.time(),
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(f"/public-listener-requests/{token}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "type": "song_request",
+        "song_resolution": "failed",
+        "song_track": None,
+        "outcome_reason": "temporarily_unavailable",
+    }
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
 async def test_public_listener_request_token_projects_legacy_reasonless_miss_after_nonmatch():
     app = _make_test_app()
     token = "66666666-6666-4666-8666-666666666666"
@@ -3819,6 +3859,82 @@ async def test_download_listener_song_preserves_operator_pin(tmp_path):
     # were wrongly marked, _plan_listener_request_block would skip pinning and the
     # listener's requested song would never air (leadership #1).
     assert not req.get("song_pinned")
+
+
+@pytest.mark.asyncio
+async def test_downloaded_listener_pin_waits_for_dedication_after_music_force_is_consumed(tmp_path):
+    """A freshly pinned request cannot become anonymous ordinary music.
+
+    This follows the real handoff order: download claims the pin and forces
+    MUSIC; the producer consumes that force before selecting; selection holds
+    the recording and forces the dedication; only the accepted dedication
+    archives the request and releases its pin to the following MUSIC turn.
+    """
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "request_id": "direct-pinned-listener-request",
+        "public_token": "direct-pinned-listener-token",
+        "name": "Giulia",
+        "message": "Play Albachiara by Vasco Rossi",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+    }
+    state.pending_requests.append(req)
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Albachiara",
+                        "artist": "Vasco Rossi",
+                        "duration_ms": 240_000,
+                        "youtube_id": "direct-pinned-listener-song",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "direct-pinned-listener-song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    requested = req["song_track_obj"]
+    assert req["song_found"] is True
+    assert req["song_pinned"] is True
+    assert state.pinned_track is requested
+    assert state.force_next is SegmentType.MUSIC
+
+    # run_producer consumes a force before entering its MUSIC selection branch.
+    state.force_next = None
+    selected = _select_accepted_music_track(state, app.state.config)
+    assert selected is not requested
+    assert state.pinned_track is requested
+    assert state.force_next is SegmentType.BANTER
+    assert req in state.pending_requests
+
+    # The next forced cycle likewise consumes BANTER before planning its copy.
+    state.force_next = None
+    announcement, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in announcement
+    assert commit is not None
+    assert state.pinned_track is requested
+    commit.apply(state)
+
+    assert req not in state.pending_requests
+    assert _select_accepted_music_track(state, app.state.config) is requested
 
 
 @pytest.mark.asyncio

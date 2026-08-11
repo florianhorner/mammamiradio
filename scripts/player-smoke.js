@@ -16,6 +16,8 @@ async (page) => {
     immediate: 'smoke-immediate-terminal',
     staleFrame: 'smoke-stale-frame',
     lateLift: 'smoke-late-lift',
+    notPlayable: 'smoke-not-playable',
+    temporarilyUnavailable: 'smoke-temporarily-unavailable',
   };
   const receiptPlans = new Map();
   let requestScenario = 'success_shoutout';
@@ -66,6 +68,15 @@ async (page) => {
       type: 'song_request',
       song_resolution: 'not_matched',
       outcome_reason: 'no_verified_match',
+    };
+  }
+
+  function failedReceipt(songResolution, outcomeReason) {
+    return {
+      ok: true,
+      type: 'song_request',
+      song_resolution: songResolution,
+      outcome_reason: outcomeReason,
     };
   }
 
@@ -212,6 +223,19 @@ async (page) => {
       song_late_lift: [
         200,
         { ok: true, type: 'song_request', public_token: receiptTokens.lateLift, song_resolution: 'searching' },
+      ],
+      song_not_playable: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.notPlayable, song_resolution: 'searching' },
+      ],
+      song_temporarily_unavailable: [
+        200,
+        {
+          ok: true,
+          type: 'song_request',
+          public_token: receiptTokens.temporarilyUnavailable,
+          song_resolution: 'searching',
+        },
       ],
       rate_limited: [429, { ok: false, retry_after: 12 }],
       queue_full: [429, { ok: false, error: 'queue_full' }],
@@ -389,6 +413,38 @@ async (page) => {
       await waitForReceiptText(expectedText);
       const terminal = await receiptUiState();
       assert(terminal.stored === null, `${label} terminal receipt remained in session storage`);
+    }
+
+    async function exerciseRetryableTerminalReceipt({ scenario, token, terminalBody, expectedText, label }) {
+      stage = `${label} retryable terminal receipt`;
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      const terminalStep = { hold: true, body: terminalBody };
+      setReceiptPlan(token, { steps: [{ body: searchingReceipt() }, terminalStep] });
+      const started = await startTrackedSong(scenario, `Smoke ${label} retry`, 'Lucia');
+      await waitForRouteCount(
+        () => receiptPolls.filter((poll) => poll.token === token).length,
+        2,
+        2000,
+        `${label} terminal receipt was never polled`,
+      );
+      assert(typeof terminalStep.release === 'function', `${label} terminal receipt was not held`);
+      terminalStep.release();
+      await waitForReceiptText(expectedText);
+
+      const terminal = await receiptUiState();
+      assert(terminal.receipt === expectedText, `${label} did not use localized terminal copy`);
+      assert(terminal.name === started.name, `${label} did not restore the original name`);
+      assert(terminal.message === started.message, `${label} did not restore the original message`);
+      assert(terminal.messageVisible, `${label} left the retry input hidden`);
+      assert(!terminal.submitDisabled && !terminal.submitting, `${label} did not enable retry submit`);
+      assert(terminal.stored === null, `${label} retained a terminal tracking token`);
+
+      const pollsAtTerminal = receiptPolls.filter((poll) => poll.token === token).length;
+      await page.waitForTimeout(120);
+      assert(
+        receiptPolls.filter((poll) => poll.token === token).length === pollsAtTerminal,
+        `${label} continued polling after its terminal receipt`,
+      );
     }
 
     async function exerciseTerminalAnimationRace({ scenario, token, deferFrame }) {
@@ -569,6 +625,21 @@ async (page) => {
       const immediate = await receiptUiState();
       assert(immediate.stored === null, 'immediate terminal POST stored a tracking token');
       assert(!immediate.submitDisabled, 'immediate terminal POST left retry submit disabled');
+
+      await exerciseRetryableTerminalReceipt({
+        scenario: 'song_not_playable',
+        token: receiptTokens.notPlayable,
+        terminalBody: failedReceipt('not_matched', 'not_playable'),
+        expectedText: copy.form_song_not_playable,
+        label: 'not-playable',
+      });
+      await exerciseRetryableTerminalReceipt({
+        scenario: 'song_temporarily_unavailable',
+        token: receiptTokens.temporarilyUnavailable,
+        terminalBody: failedReceipt('failed', 'temporarily_unavailable'),
+        expectedText: copy.form_song_temporarily_unavailable,
+        label: 'temporarily-unavailable',
+      });
 
       await exerciseTerminalAnimationRace({
         scenario: 'song_stale_frame',

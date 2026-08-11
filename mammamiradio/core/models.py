@@ -71,6 +71,7 @@ class GenerationWasteReason:
     AIR_NEXT_OVERFLOW = "air_next_overflow"
     EGRESS_STALE = "egress_stale"
     BLOCKLIST_GATE = "blocklist_gate"
+    LISTENER_REQUEST_RESERVED = "listener_request_reserved"
     OPERATOR_STOP = "operator_stop"
     OPERATOR_PANIC = "operator_panic"
     OPERATOR_PURGE = "operator_purge"
@@ -365,6 +366,54 @@ def segment_track_key(segment: Segment) -> tuple[str, str]:
         str(metadata.get("artist") or "").strip().lower(),
         str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
     )
+
+
+@dataclass(frozen=True)
+class ListenerTrackReservations:
+    """Matched listener songs that must wait for their dedication handoff.
+
+    The pending request list is the ownership boundary: a match stays reserved
+    whether or not it already owns ``pinned_track``, and archiving the request
+    releases it without a second mutable registry to synchronize.  Cache-key
+    and canonical song identities cover both the exact downloaded object and
+    pre-existing cache/queue segments for the same recording.
+    """
+
+    cache_keys: frozenset[str] = frozenset()
+    track_keys: frozenset[tuple[str, str]] = frozenset()
+
+    @classmethod
+    def from_pending_requests(cls, requests: Collection[dict]) -> ListenerTrackReservations:
+        tracks = [
+            track
+            for request in requests
+            if request.get("song_found") and isinstance((track := request.get("song_track_obj")), Track)
+        ]
+        return cls(
+            cache_keys=frozenset(track.cache_key for track in tracks),
+            track_keys=frozenset(normalized_track_key(track) for track in tracks),
+        )
+
+    def reserves_cache_key(self, cache_key: object) -> bool:
+        return bool(cache_key) and str(cache_key) in self.cache_keys
+
+    def reserves_track_key(self, track_key: tuple[str, str]) -> bool:
+        return bool(track_key[0] and track_key[1]) and track_key in self.track_keys
+
+    def reserves_track(self, track: Track) -> bool:
+        return self.reserves_cache_key(track.cache_key) or self.reserves_track_key(normalized_track_key(track))
+
+    def reserves_segment(self, segment: Segment) -> bool:
+        if self.reserves_track_key(segment_track_key(segment)):
+            return True
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        if self.reserves_cache_key(metadata.get("cache_key")):
+            return True
+        youtube_id = str(metadata.get("youtube_id") or "").strip()
+        if youtube_id:
+            source_key = Track(title="", artist="", duration_ms=0, youtube_id=youtube_id).cache_key
+            return self.reserves_cache_key(source_key)
+        return False
 
 
 @dataclass
@@ -1478,6 +1527,10 @@ class StationState:
         if request in self.pending_requests:
             self.pending_requests.remove(request)
         return receipt
+
+    def listener_track_reservations(self) -> ListenerTrackReservations:
+        """Return the song identities still owned by pending listener requests."""
+        return ListenerTrackReservations.from_pending_requests(self.pending_requests)
 
     def _arm_heading_announcement_if_needed(self, track: Track) -> None:
         heading = self.heading

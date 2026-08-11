@@ -27,6 +27,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.templating import Jinja2Templates
 
 from mammamiradio.audio.norm_cache import (
+    is_listener_reserved_cache_file as _is_listener_reserved_cache_file,
+)
+from mammamiradio.audio.norm_cache import (
     is_recent_music as _is_recent_music,
 )
 from mammamiradio.audio.norm_cache import (
@@ -691,6 +694,18 @@ def _segment_blocklist_key(segment: Segment) -> tuple[str, str]:
     return segment_track_key(segment)
 
 
+def _segment_is_listener_reserved(state: StationState, segment: Segment) -> bool:
+    """Return whether pending dedication ownership keeps this music off air."""
+    if segment.type is not SegmentType.MUSIC:
+        return False
+    reservations = state.listener_track_reservations()
+    if reservations.reserves_segment(segment):
+        return True
+    if segment.path is not None and segment.path.name.startswith("norm_"):
+        return _is_listener_reserved_cache_file(segment.path, reservations)
+    return False
+
+
 def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
     """Return whether a segment carries the cue marker and its valid epoch."""
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
@@ -730,6 +745,8 @@ def _segment_is_immediately_playable(
         key = _segment_blocklist_key(segment)
         if key in state.blocklist or key in excluded_track_keys:
             return False
+        if _segment_is_listener_reserved(state, segment):
+            return False
     return _indexed_audio_path_is_file(segment.path)
 
 
@@ -752,6 +769,7 @@ def _continuity_reservation_segments(
     excluded_paths = excluded_paths or set()
     persistent_blocked_keys = set(state.blocklist)
     blocked_keys = persistent_blocked_keys | (excluded_track_keys or set())
+    listener_reservations = state.listener_track_reservations()
     recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
     emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
     reservation_id = uuid4().hex
@@ -832,6 +850,9 @@ def _continuity_reservation_segments(
                 # A durable ban makes this path unusable for the session. It can
                 # be re-indexed by a later render or the next startup after unban.
                 prune_paths.append(cached)
+            continue
+        if _is_listener_reserved_cache_file(cached, listener_reservations, sidecar=metadata):
+            logger.info("Holding cached continuity track for a pending listener dedication: %s", cached.name)
             continue
         if _is_recent_music(cached, recent_keys, sidecar=metadata):
             # The song on air right now (or one of the last few) must never be
@@ -944,15 +965,20 @@ def _continuity_slot_seconds(state: StationState, *, self_heal: bool = True) -> 
 def _claim_continuity_slot(state: StationState) -> Segment | None:
     """Claim the capacity-exempt slot only if it is still safe to broadcast.
 
-    A durable ban can land after reservation but before the queue drains. This
-    last-mile gate keeps that newly banned cached song off air without letting
-    stale slot state block the normal empty-queue recovery ladder.
+    A durable ban or listener match can land after reservation but before the
+    queue drains. This last-mile gate keeps that newly ineligible cached song
+    off air without letting stale slot state block the normal empty-queue
+    recovery ladder.
     """
     slot = state.continuity_slot
     if slot is None or _continuity_slot_seconds(state) <= 0:
         return None
     if slot.type is SegmentType.MUSIC and _segment_blocklist_key(slot) in state.blocklist:
         logger.warning("Protected continuity slot became blocklisted before playback; clearing it")
+        state.continuity_slot = None
+        return None
+    if _segment_is_listener_reserved(state, slot):
+        logger.info("Protected continuity slot now belongs to a pending listener dedication; clearing it")
         state.continuity_slot = None
         return None
     state.continuity_slot = None
@@ -1455,12 +1481,13 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     persisted = save_blocklist(config.cache_dir, state.blocklist)
 
     banned_keys = set(keys)
-    banned_cache_keys = {track.cache_key for track in tracks if isinstance(track, Track)}
 
-    def _is_banned_recording(track: object) -> bool:
-        return isinstance(track, Track) and (
-            normalized_track_key(track) in banned_keys or track.cache_key in banned_cache_keys
-        )
+    def _is_banned_track(track: object) -> bool:
+        # The durable policy is canonical artist/title identity. Cache keys are
+        # media-source identities and can legitimately be shared by distinct
+        # operator rows; broadening only this mutation path would disagree with
+        # the queue, ingest, rescue, and playback blocklist gates.
+        return isinstance(track, Track) and normalized_track_key(track) in banned_keys
 
     # A listener download may already have committed and be waiting for its
     # dedication handoff when the operator bans that recording. Keep the request
@@ -1469,7 +1496,7 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     # resurrect the removed track after this ban returns.
     for listener_request in state.pending_requests:
         request_track = listener_request.get("song_track_obj")
-        if not listener_request.get("song_found") or not _is_banned_recording(request_track):
+        if not listener_request.get("song_found") or not _is_banned_track(request_track):
             continue
         listener_request["song_found"] = False
         listener_request["song_error"] = True
@@ -1478,11 +1505,13 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         listener_request["song_track_obj"] = None
 
     before = len(state.playlist)
-    state.playlist = [track for track in state.playlist if not _is_banned_recording(track)]
+    state.playlist = [track for track in state.playlist if not _is_banned_track(track)]
     removed = before - len(state.playlist)
     pin_cleared = False
-    if state.pinned_track is not None and _is_banned_recording(state.pinned_track):
+    if state.pinned_track is not None and _is_banned_track(state.pinned_track):
         state.pinned_track = None
+        if state.force_next is SegmentType.MUSIC:
+            state.force_next = None
         pin_cleared = True
     if removed or pin_cleared:
         state.playlist_revision += 1
@@ -3311,24 +3340,31 @@ async def run_playback_loop(app) -> None:
             gap_clips_served = 0
             continue
 
+        music_discard_reason: str | None = None
         if segment.type is SegmentType.MUSIC and _segment_blocklist_key(segment) in state.blocklist:
-            # The normal queue is purged synchronously when an operator bans a
-            # track, but keep the same last-mile fence as the out-of-band slot.
-            # A future or degraded mutation path must never turn stale queued
-            # bytes into an exception to the station-wide blocklist invariant.
+            music_discard_reason = GenerationWasteReason.OPERATOR_BAN
+        elif _segment_is_listener_reserved(state, segment):
+            music_discard_reason = GenerationWasteReason.LISTENER_REQUEST_RESERVED
+        if music_discard_reason is not None:
+            # Queue purges and producer admission normally enforce these music
+            # policies earlier. Keep the same last-mile fence as the out-of-band
+            # slot so an already-queued recording cannot air after a later ban or
+            # before a newly matched listener dedication.
             state.record_discard(
                 segment,
-                reason=GenerationWasteReason.OPERATOR_BAN,
+                reason=music_discard_reason,
                 already_counted_in_produced=pulled_from_queue,
             )
-            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_BAN)
+            _drop_segment_moment_receipts(state, segment, music_discard_reason)
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()
                 remaining = list(getattr(segment_queue, "_queue", ()))
                 prior_tail = remaining[-1] if remaining else segment
                 _reconcile_queue_tail_adjacency(segment_queue, state, prior_tail=prior_tail)
-            logger.info("Discarding blocklisted queued music before playback: %s", segment.path)
+            logger.info(
+                "Discarding ineligible queued music before playback (%s): %s", music_discard_reason, segment.path
+            )
             continue
 
         stream_started = False

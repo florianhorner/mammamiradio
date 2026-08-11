@@ -201,6 +201,36 @@ _GUEST_HOST_CAMEO_PROBABILITY = 1 / 6
 _GUEST_HOST_CAMEO_COOLDOWN_BREAKS = 1
 
 
+_LISTENER_REQUEST_PLAN_FIELDS = (
+    "type",
+    "status",
+    "name",
+    "message",
+    "song_found",
+    "song_error",
+    "song_error_reason",
+    "song_track",
+    "song_pinned",
+    "banter_cycles_missed",
+)
+
+
+def _listener_request_plan_signature(request: dict) -> tuple[object, ...]:
+    """Return the request values that determine what the hosts may say."""
+
+    return tuple(request.get(field) for field in _LISTENER_REQUEST_PLAN_FIELDS)
+
+
+@dataclass(frozen=True)
+class _ListenerRequestPlanSnapshot:
+    """Exact listener outcome and pin identity used to write one banter."""
+
+    request_signature: tuple[object, ...]
+    track_obj: object | None
+    matched_pin: object | None = None
+    requires_matched_pin: bool = False
+
+
 @dataclass
 class ListenerRequestCommit:
     """Deferred listener-request state update, applied only after banter queues."""
@@ -209,10 +239,90 @@ class ListenerRequestCommit:
     banter_cycles_missed: int | None = None
     mark_song_error: bool = False
     consume: bool = False
+    _plan_snapshot: _ListenerRequestPlanSnapshot | None = None
+    _claimed_pin_track: object | None = None
+    _claimed_song_pinned: bool = False
+    _claimed_force_next: bool = False
+
+    def capture_plan(
+        self,
+        *,
+        matched_pin: object | None = None,
+        requires_matched_pin: bool = False,
+        claimed_pin_track: object | None = None,
+        claimed_song_pinned: bool = False,
+        claimed_force_next: bool = False,
+    ) -> ListenerRequestCommit:
+        """Freeze the request truth that the generated copy is allowed to air."""
+
+        self._plan_snapshot = _ListenerRequestPlanSnapshot(
+            request_signature=_listener_request_plan_signature(self.request),
+            track_obj=self.request.get("song_track_obj"),
+            matched_pin=matched_pin,
+            requires_matched_pin=requires_matched_pin,
+        )
+        self._claimed_pin_track = claimed_pin_track
+        self._claimed_song_pinned = claimed_song_pinned
+        self._claimed_force_next = claimed_force_next
+        return self
+
+    def is_plan_current(self, state: StationState, *, require_matched_pin: bool = True) -> bool:
+        """Return whether this banter still describes the pending head exactly.
+
+        Admission additionally requires the promised song pin. Once banter is
+        admitted, producer lookahead may legitimately consume that pin while
+        selecting the following MUSIC segment; the deferred request commit must
+        then validate request truth without demanding an already-spent handoff.
+        """
+
+        snapshot = self._plan_snapshot
+        if snapshot is None:
+            # Invisible missed-cycle commits and legacy/directly-created commits do
+            # not carry listener copy, so there is no spoken plan to invalidate.
+            return True
+        if not state.pending_requests or state.pending_requests[0] is not self.request:
+            return False
+        if _listener_request_plan_signature(self.request) != snapshot.request_signature:
+            return False
+        if self.request.get("song_track_obj") is not snapshot.track_obj:
+            return False
+        return not (
+            require_matched_pin and snapshot.requires_matched_pin and state.pinned_track is not snapshot.matched_pin
+        )
+
+    def abandon(self, state: StationState) -> None:
+        """Release only the synchronous request pin claimed by this failed plan."""
+
+        claimed_track = self._claimed_pin_track
+        if not self._claimed_song_pinned or claimed_track is None:
+            return
+
+        if (
+            any(pending is self.request for pending in state.pending_requests)
+            and self.request.get("song_track_obj") is claimed_track
+            and self.request.get("song_pinned")
+        ):
+            self.request["song_pinned"] = False
+
+        # Pin identity is the ownership token. A newer operator pin must survive
+        # this plan's rejection, along with the MUSIC force that belongs to it.
+        owns_current_pin = state.pinned_track is claimed_track
+        if owns_current_pin:
+            state.pinned_track = None
+            if self._claimed_force_next and state.force_next is SegmentType.MUSIC:
+                state.force_next = None
+
+        # Idempotence matters because a rendered segment can be rejected in a
+        # nested failure path and then pass through the outer cleanup belt.
+        self._claimed_pin_track = None
+        self._claimed_song_pinned = False
+        self._claimed_force_next = False
 
     def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
         del config, queue_id
-        if self.request not in state.pending_requests:
+        if not any(pending is self.request for pending in state.pending_requests):
+            return
+        if not self.is_plan_current(state, require_matched_pin=False):
             return
         if self.banter_cycles_missed is not None:
             self.request["banter_cycles_missed"] = self.banter_cycles_missed
@@ -391,6 +501,28 @@ def _banter_commit(
     )
 
 
+def _listener_request_commit_from_banter(commit: object) -> ListenerRequestCommit | None:
+    if isinstance(commit, ListenerRequestCommit):
+        return commit
+    listener_request = getattr(commit, "listener_request", None)
+    return listener_request if isinstance(listener_request, ListenerRequestCommit) else None
+
+
+def listener_request_plan_is_current(commit: object, state: StationState) -> bool:
+    """Facade used by producer admission without depending on commit shape."""
+
+    listener_request = _listener_request_commit_from_banter(commit)
+    return listener_request is None or listener_request.is_plan_current(state)
+
+
+def abandon_listener_request_plan(commit: object, state: StationState) -> None:
+    """Restore a synchronously claimed listener pin after a plan is discarded."""
+
+    listener_request = _listener_request_commit_from_banter(commit)
+    if listener_request is not None:
+        listener_request.abandon(state)
+
+
 def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequestCommit | None]:
     """Build prompt text plus a deferred state mutation for the pending request."""
     pending = state.pending_requests
@@ -428,6 +560,8 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     song_track = _sanitize_prompt_data(str(req.get("song_track") or ""), max_len=120)
     if is_song and req.get("song_found") and req.get("song_track"):
         track_obj = req.get("song_track_obj")
+        claimed_song_pinned = False
+        claimed_force_next = False
         # Pin the requested song exactly ONCE. The background download may have
         # already claimed the play-next slot (_download_listener_song marks
         # req["song_pinned"] when its commit returned "pinned"). The request lingers
@@ -468,7 +602,16 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
             state.pinned_track = track_obj
             if state.force_next is None:
                 state.force_next = SegmentType.MUSIC
+                claimed_force_next = True
             req["song_pinned"] = True
+            claimed_song_pinned = True
+        commit.capture_plan(
+            matched_pin=track_obj,
+            requires_matched_pin=True,
+            claimed_pin_track=track_obj if claimed_song_pinned else None,
+            claimed_song_pinned=claimed_song_pinned,
+            claimed_force_next=claimed_force_next,
+        )
         return (
             f"""
 LISTENER REQUEST:
@@ -479,6 +622,7 @@ Sii caldo, divertente, fai sentire {name} speciale. Questa è la magia della rad
             commit,
         )
     if is_song and req.get("song_error"):
+        commit.capture_plan()
         return (
             f"""
 LISTENER REQUEST (SONG UNAVAILABLE):
@@ -491,6 +635,7 @@ Non è stato possibile preparare la richiesta per la messa in onda. Non dire che
         # Fifth-cycle lookup timeout. The background task can still resolve
         # before this deferred commit applies, so the script must be truthful in
         # either outcome and avoid announcing a catalogue miss.
+        commit.capture_plan()
         return (
             f"""
 LISTENER REQUEST (LOOKUP STILL PENDING):
@@ -499,6 +644,7 @@ Non dare alcun esito sulla canzone e non promettere che andrà in onda. Dedica c
 """,
             commit,
         )
+    commit.capture_plan()
     return (
         f"""
 LISTENER REQUEST:
@@ -2968,6 +3114,12 @@ Return JSON:
             pending_joke,
         )
 
+    except asyncio.CancelledError:
+        if listener_request_commit is not None:
+            listener_request_commit.abandon(state)
+        if release_beat_commit is not None:
+            release_beat_commit.abandon(state)
+        raise
     except Exception as e:
         state.last_banter_home_fact = None
         state.last_banter_return_authority = None
@@ -2977,6 +3129,8 @@ Return JSON:
             if director is not None:
                 director.note_fact_free_fallback()
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
+        if listener_request_commit is not None:
+            listener_request_commit.abandon(state)
         if release_beat_commit is not None:
             release_beat_commit.abandon(state)
         # The stock-copy fallback below does NOT carry the home directive, so

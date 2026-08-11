@@ -279,6 +279,7 @@ def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> 
     assert "const gw=rs.generation_waste" in block
     assert "statusRow('Generated waste'" in block
     assert "const wasteState=gw.degraded?'degraded':'ready'" in block
+    assert "listener_request_reserved:'held for its dedication'" in block
     assert "wasteRow," in block
 
 

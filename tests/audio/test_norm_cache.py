@@ -124,6 +124,69 @@ def test_select_norm_cache_rescue_skips_blocklisted_cache_file(tmp_path):
     choice.assert_called_once_with([allowed])
 
 
+def test_select_norm_cache_rescue_holds_every_cache_identity_owned_by_pending_dedication(tmp_path):
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="new-listener-download",
+    )
+    state = StationState(
+        pending_requests=[
+            {
+                "type": "song_request",
+                "song_found": True,
+                "song_pinned": True,
+                "song_track_obj": requested,
+            }
+        ]
+    )
+    # The first file is the new download's exact cache key. The second is an
+    # older source for the same canonical song. Neither may rescue anonymously.
+    _write_norm(
+        tmp_path,
+        f"norm_{requested.cache_key}_128k.mp3",
+        title=requested.title,
+        artist=requested.artist,
+    )
+    _write_norm(
+        tmp_path,
+        "norm_youtube_older_source_128k.mp3",
+        title=requested.title,
+        artist=requested.artist,
+    )
+    allowed = _write_norm(
+        tmp_path,
+        "norm_youtube_unrelated_128k.mp3",
+        title="Musica leggerissima",
+        artist="Colapesce Dimartino",
+    )
+
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=_choose_first) as choice:
+        rescue = select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True)
+
+    assert rescue == allowed
+    choice.assert_called_once_with([allowed])
+
+
+def test_select_norm_cache_rescue_fails_closed_on_unidentified_cache_while_dedication_is_pending(tmp_path):
+    requested = Track(title="Audio", artist="LSD", duration_ms=180_000, youtube_id="listener-audio")
+    state = StationState(
+        pending_requests=[
+            {
+                "type": "song_request",
+                "song_found": True,
+                "song_pinned": True,
+                "song_track_obj": requested,
+            }
+        ]
+    )
+    unidentified = tmp_path / "norm_unknown_source_128k.mp3"
+    unidentified.write_bytes(b"audio without identity sidecar")
+
+    assert select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True) is None
+
+
 def test_select_norm_cache_rescue_ignores_preferences_on_hot_path(tmp_path):
     state = StationState(
         song_preferences={

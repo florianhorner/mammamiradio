@@ -196,6 +196,15 @@ def test_player_smoke_wires_listener_song_receipt_scenarios() -> None:
     assert helper in code
     assert invocation in code
     assert code.index(helper) < code.index(invocation)
+    for retryable_outcome in (
+        "async function exerciseRetryableTerminalReceipt",
+        "song_not_playable",
+        "form_song_not_playable",
+        "song_temporarily_unavailable",
+        "form_song_temporarily_unavailable",
+        "continued polling after its terminal receipt",
+    ):
+        assert retryable_outcome in code
 
 
 def test_default_listener_identity_fixture_is_canonical() -> None:

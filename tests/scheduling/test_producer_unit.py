@@ -40,6 +40,7 @@ from mammamiradio.hosts.scriptwriter import (
     BanterCommit,
     CompanionshipBanterCommit,
     ListenerRequestCommit,
+    _plan_listener_request_block,
 )
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
@@ -1900,6 +1901,67 @@ async def test_banter_with_listener_request_commit_applies_on_queue():
 
 
 @pytest.mark.asyncio
+async def test_transition_failure_recovers_listener_pin_from_successful_banter_sibling():
+    state = _make_state()
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    requested_track = state.playlist[0]
+    request = {
+        "name": "Luca",
+        "message": f"Play {requested_track.title}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+    host = config.hosts[0]
+    planned = asyncio.Event()
+
+    async def _write_banter(*_args, **_kwargs):
+        _, commit = _plan_listener_request_block(state)
+        assert commit is not None
+        assert request["song_pinned"] is True
+        assert state.pinned_track is requested_track
+        planned.set()
+        return [(host, "Dedicato a Luca.")], commit
+
+    async def _failed_transition(*_args, **_kwargs):
+        await planned.wait()
+        state.session_stopped = True
+        raise RuntimeError("transition failed")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", side_effect=_write_banter),
+        patch(f"{SCRIPTWRITER_MODULE}.write_transition", side_effect=_failed_transition),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(planned.wait(), timeout=1.0)
+            deadline = asyncio.get_running_loop().time() + 1.0
+            while request["song_pinned"] or state.pinned_track is not None:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError("failed sibling did not release the listener pin")
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert queue.empty()
+    assert request in state.pending_requests
+    assert request["song_pinned"] is False
+    assert state.pinned_track is None
+    assert state.force_next is None
+
+
+@pytest.mark.asyncio
 async def test_banter_canned_path_does_not_apply_listener_request_commit():
     """When a canned clip is used, the ListenerRequestCommit is never applied."""
     state = _make_state()
@@ -2644,6 +2706,19 @@ async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(t
 
     state = _make_state()
     state.moment_store = _moment_store()
+    requested_track = state.playlist[0]
+    listener_request = {
+        "name": "Luca",
+        "message": f"Play {requested_track.title}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
     row_id = state.moment_store.record(lane="directive", family="morning_launch", public_label="Morning launch")
     gag_row_id = state.moment_store.record(
         lane="running_gag", family="fridge_freezer_raid", public_label="Kitchen ritual"
@@ -2659,7 +2734,8 @@ async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(t
     async def _write_banter(*_args, **_kwargs):
         state.last_banter_ritual_moment_id = row_id
         state.ha_running_gag_moment_id = gag_row_id
-        return [(host, "La macchina del caffe si e svegliata.")], None
+        _, listener_commit = _plan_listener_request_block(state)
+        return [(host, "La macchina del caffe si e svegliata.")], listener_commit
 
     quality_calls = 0
 
@@ -2691,6 +2767,9 @@ async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(t
     assert seg.metadata.get("canned") is True
     assert seg.metadata.get("ritual_moment_id") is None
     assert seg.metadata.get("gag_moment_id") is None
+    assert listener_request in state.pending_requests
+    assert listener_request["song_pinned"] is False
+    assert state.pinned_track is None
     rows_by_id = {row.id: row for row in state.moment_store.rows}
     assert rows_by_id[row_id].status == "dropped"
     assert rows_by_id[row_id].drop_reason == "canned_fallback"
@@ -4340,6 +4419,37 @@ def test_adjacent_music_source_enforces_active_blocklist_identity(tmp_path, side
     result = _adjacent_music_source(state)
 
     assert result == (song if expected == "song" else None)
+
+
+def test_adjacent_music_source_holds_requested_song_until_dedication_archive(tmp_path):
+    from mammamiradio.scheduling.producer import _adjacent_music_source
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"music")
+    save_track_metadata(song, title="Albachiara", artist="Vasco Rossi")
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="listener-requested-song",
+    )
+    request = {
+        "request_id": "listener-request",
+        "type": "song_request",
+        "song_found": True,
+        "song_pinned": True,
+        "song_track_obj": requested,
+    }
+    state = StationState(
+        last_music_file=song,
+        last_enqueued_type=SegmentType.MUSIC,
+        pending_requests=[request],
+    )
+
+    assert _adjacent_music_source(state) is None
+
+    state.archive_listener_request(request, status="sent_to_hosts")
+    assert _adjacent_music_source(state) == song
 
 
 @pytest.mark.parametrize(
@@ -6052,6 +6162,58 @@ async def test_enqueue_funnel_drops_a_banned_music_segment(tmp_path):
     # The non-banned song reaches the queue and flips the timeline-tail type. (last_music_file
     # for normally-rendered music is owned by _remember_rendered_music, not the funnel.)
     assert state.last_enqueued_type == SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_enqueue_funnel_holds_listener_song_until_dedication_archive(tmp_path):
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="listener-requested-song",
+    )
+    request = {
+        "request_id": "listener-request",
+        "type": "song_request",
+        "song_found": True,
+        "song_pinned": True,
+        "song_track_obj": requested,
+    }
+    state = _make_state()
+    state.pending_requests.append(request)
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    reserved_path = tmp_path / "preexisting-requested.mp3"
+    reserved_path.write_bytes(b"requested")
+    reserved = Segment(
+        type=SegmentType.MUSIC,
+        path=reserved_path,
+        ephemeral=True,
+        metadata={"artist": requested.artist, "title_only": requested.title},
+    )
+
+    assert await _enqueue_with_egress(queue, state, config, reserved) is False
+    assert queue.empty()
+    assert not reserved_path.exists()
+    assert state.discard_by_reason == {GenerationWasteReason.LISTENER_REQUEST_RESERVED: 1}
+
+    state.archive_listener_request(request, status="sent_to_hosts")
+    released_path = tmp_path / "released-requested.mp3"
+    released_path.write_bytes(b"requested")
+    released = Segment(
+        type=SegmentType.MUSIC,
+        path=released_path,
+        ephemeral=False,
+        metadata={"artist": requested.artist, "title_only": requested.title},
+    )
+    with patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=released):
+        assert await _enqueue_with_egress(queue, state, config, released) is True
+
+    assert queue.get_nowait() is released
+    queue.task_done()
 
 
 @pytest.mark.asyncio

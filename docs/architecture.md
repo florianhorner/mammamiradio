@@ -277,7 +277,7 @@ main-loop epilogue (the `if segment:` block); bridges and the startup prewarm
 enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
 `tests/scheduling/test_queue_commit_contract.py`.
 
-| Commit path | stopped discard | stale gate (playlist / chaos) | blocklist gate | egress (FM) | queue op | up-next shadow row |
+| Commit path | stopped discard | stale gate (playlist / chaos) | music eligibility gate | egress (FM) | queue op | up-next shadow row |
 |---|---|---|---|---|---|---|
 | Main-loop commit (music + all generated speech: banter, news flash, ad, station-id, sweeper, time-check) | yes | **yes — pre-egress, shared epilogue** | yes\* (music only) | yes | append | **yes** |
 | Operator air-next (forced trigger) | yes | **yes — same epilogue; a discard releases `operator_force_pending`** | yes | yes | **front-insert** (may drop the furthest-future tail, and unconditionally drops a stale-claim head†) | yes (at head) |
@@ -315,6 +315,15 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   must all continue to reference the last successfully committed music track, not the
   dropped render (pinned by
   `test_blocklist_drop_on_main_loop_does_not_append_shadow_row`, #664).
+- The same music-eligibility gate holds every matched listener song until its
+  dedication banter is admitted and archives the pending request — including a
+  song that already owns `pinned_track`. The reservation is derived from
+  `StationState.pending_requests`, so dismissal, source change, or successful
+  acknowledgement releases it without a second registry. Ordinary selection,
+  norm-cache and last-known-good rescue, continuity reservation/slot claims,
+  enqueue admission, and playback's final queue claim all consult that shared
+  cache-key plus canonical `(artist, title)` identity; a pre-existing copy cannot
+  slip on air anonymously while the hosts still owe its dedication.
 - † A front-insert also drops the **queue head** outright (not just the
   furthest-future tail) when it carries a `transition_track_ref` — its "just
   finished playing" claim (baked into audio, crossfaded over the prior song's

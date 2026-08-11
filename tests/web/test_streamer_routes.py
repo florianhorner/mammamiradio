@@ -2040,6 +2040,80 @@ async def test_playback_rejects_late_blocklisted_music_from_normal_queue(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_playback_rejects_queued_song_claimed_by_late_listener_match(tmp_path):
+    """A request matched after queueing still owns the song at the last mile."""
+    app = _make_test_app()
+    _, listener_queue = app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    requested_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="listener-requested-song",
+    )
+    request = {
+        "request_id": "late-matched-listener-request",
+        "type": "song_request",
+        "song_found": True,
+        "song_pinned": True,
+        "song_track_obj": requested_track,
+    }
+    state.pending_requests.append(request)
+
+    requested_audio = b"anonymous-requested-audio" * 512
+    requested_path = tmp_path / "already-queued-request.mp3"
+    requested_path.write_bytes(requested_audio)
+    requested = Segment(
+        type=SegmentType.MUSIC,
+        path=requested_path,
+        duration_sec=240.0,
+        metadata={
+            "queue_id": "already-queued-request",
+            "artist": requested_track.artist,
+            "title_only": requested_track.title,
+        },
+        ephemeral=False,
+    )
+    safe_audio = b"safe-queued-audio" * 512
+    safe_path = tmp_path / "safe-after-request.mp3"
+    safe_path.write_bytes(safe_audio)
+    safe = Segment(
+        type=SegmentType.MUSIC,
+        path=safe_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "safe-after-request",
+            "artist": "Safe Artist",
+            "title_only": "Safe Song",
+        },
+        ephemeral=False,
+    )
+    for segment in (requested, safe):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": "already-queued-request", "type": "music", "label": requested_track.display},
+        {"id": "safe-after-request", "type": "music", "label": "Safe Artist - Safe Song"},
+    ]
+    state.last_music_file = safe_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        heard = await asyncio.wait_for(listener_queue.get(), timeout=3.0)
+        assert safe_audio.startswith(heard)
+        assert not heard.startswith(requested_audio[:32])
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert request in state.pending_requests
+    assert state.discard_by_reason[GenerationWasteReason.LISTENER_REQUEST_RESERVED] == 1
+    assert all(entry.metadata.get("title_only") != requested_track.title for entry in state.stream_log)
+    assert app.state.queue._unfinished_tasks == 0
+    await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_playback_rejects_blocklisted_demo_fallback_without_queue_task(tmp_path):
     """A non-queue rescue obeys the ban fence without unbalancing task accounting."""
     app = _make_test_app()

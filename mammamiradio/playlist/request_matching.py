@@ -97,12 +97,13 @@ _SEMANTIC_QUALIFIERS = {
     "acoustic": ("acoustic", "acustico", "acustica", "unplugged"),
     "remix": ("remix", "remixed"),
     "remaster": ("remaster", "remastered", "rimasterizzato", "rimasterizzata"),
+    "radio_edit": ("radio edit",),
 }
 _ALL_QUALIFIERS = {**_FORBIDDEN_QUALIFIERS, **_SEMANTIC_QUALIFIERS}
 _VARIANT_PREFIX_RE = re.compile(
     r"^(?:a\s+)?(?:live|dal\s+vivo|acoustic|acustic[ao]|unplugged|karaoke|instrumental|cover|"
     r"tribute|tributo|reaction|reazione|remix(?:ed)?|remaster(?:ed)?|rimasterizzat[ao]|"
-    r"sped\s+up|speed\s+up|slowed(?:\s+down)?|nightcore)"
+    r"radio\s+edit|sped\s+up|speed\s+up|slowed(?:\s+down)?|nightcore)"
     r"\s+(?:version\s+|versione\s+)?(?:of|di)\s+",
     re.IGNORECASE,
 )
@@ -111,7 +112,7 @@ _VARIANT_SUFFIX_RE = re.compile(
     r"(?:live(?:\b.*)?|dal\s+vivo(?:\b.*)?|acoustic(?:\s+version)?|acustic[ao](?:\s+versione)?|"
     r"unplugged|(?:[^-\u2013\u2014|()]*\s+)?remix|(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?|"
     r"(?:\d{4}\s+)?rimasterizzat[ao](?:\s+\d{4})?|"
-    r"karaoke|instrumental|cover|tribute|tributo|reaction|reazione|sped\s+up|speed\s+up|"
+    r"radio\s+edit|karaoke|instrumental|cover|tribute|tributo|reaction|reazione|sped\s+up|speed\s+up|"
     r"slowed(?:\s+down)?|nightcore)\s*$",
     re.IGNORECASE,
 )
@@ -128,6 +129,7 @@ _FEATURE_SUFFIX_RE = re.compile(
 )
 _INTRA_WORD_PUNCTUATION_RE = re.compile(r"(?<=\w)['\u2019\u02bc./\-]+(?=\w)", re.UNICODE)
 _QUOTE_PAIRS = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
+_QUALITY_IDENTITY_TOKENS = frozenset({"4k", "8k", "hd", "hq", "sd"})
 
 
 def normalize_match_text(value: object) -> str:
@@ -448,12 +450,37 @@ def _is_noise_group(contents: str) -> bool:
     return bool(words) and words <= _NOISE_WORDS
 
 
+def _is_quality_identity_with_variant(value: str) -> bool:
+    """True when a quality-looking token is the song beneath a real variant."""
+    title = _SPACE_RE.sub(" ", value).strip()
+    prefix = _VARIANT_PREFIX_RE.match(title)
+    if prefix and normalize_match_text(title[prefix.end() :]) in _QUALITY_IDENTITY_TOKENS:
+        return True
+
+    found_variant = False
+
+    def _remove_variant_group(match: re.Match[str]) -> str:
+        nonlocal found_variant
+        if _qualifiers(match.group(1)):
+            found_variant = True
+            return ""
+        return match.group(0)
+
+    base = _BRACKET_RE.sub(_remove_variant_group, title).strip()
+    without_suffix = _VARIANT_SUFFIX_RE.sub("", base).strip()
+    if without_suffix != base:
+        found_variant = True
+        base = without_suffix
+    return found_variant and normalize_match_text(base) in _QUALITY_IDENTITY_TOKENS
+
+
 def clean_candidate_title(value: object) -> str:
     """Remove video-platform packaging while retaining musical variants."""
     original_title = _SPACE_RE.sub(" ", str(value or "")).strip()
     title = original_title
     title = _BRACKET_RE.sub(lambda match: "" if _is_noise_group(match.group(1)) else match.group(0), title)
     title = re.sub(r"\bwith\s+lyrics?\b", "", title, flags=re.IGNORECASE)
+    preserve_quality_variant = _is_quality_identity_with_variant(title)
     suffix = re.compile(
         # Platform packaging is a separate suffix, never the tail of an
         # identity word. Without this boundary, ``Claudio`` was shortened to
@@ -466,11 +493,16 @@ def clean_candidate_title(value: object) -> str:
     previous = None
     while title != previous:
         previous = title
-        title = suffix.sub("", title).strip()
+        candidate = suffix.sub("", title).strip()
+        # In ``live version of HD`` the final token resembles a platform label
+        # but is the whole song identity beneath explicit variant syntax.
+        if preserve_quality_variant and not _is_quality_identity_with_variant(candidate):
+            break
+        title = candidate
     # Quality labels are normally platform noise, but they can also be the
     # complete song identity. Remove an adjacent wrapper first so ``HD
     # (Official Audio)`` keeps ``HD``; quality labels elsewhere remain noise.
-    if normalize_match_text(title) in {"4k", "8k", "hd", "hq", "sd"}:
+    if normalize_match_text(title) in _QUALITY_IDENTITY_TOKENS or _is_quality_identity_with_variant(title):
         return _SPACE_RE.sub(" ", title).strip(" -\u2013\u2014|")
     title = re.sub(r"\b(?:4k|8k|hd|hq|sd)\b", "", title, flags=re.IGNORECASE)
     cleaned = _SPACE_RE.sub(" ", title).strip(" -\u2013\u2014|")
@@ -643,6 +675,7 @@ def _variant_label(qualifiers: frozenset[str]) -> str:
         "acoustic",
         "remix",
         "remaster",
+        "radio_edit",
         "cover",
         "karaoke",
         "tribute",

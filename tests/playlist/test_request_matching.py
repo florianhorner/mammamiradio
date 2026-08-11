@@ -793,6 +793,73 @@ def test_quality_word_title_survives_wrapped_direct_candidate_metadata(title, pa
     assert result.best.identity_title == title
 
 
+@pytest.mark.parametrize(
+    ("title", "variant"),
+    [
+        ("HD (Live)", "live"),
+        ("4K (Remastered)", "remaster"),
+        ("HQ - Acoustic", "acoustic"),
+        ("SD (Radio Edit)", "radio_edit"),
+    ],
+)
+def test_quality_word_title_keeps_explicit_musical_variant_identity(title, variant):
+    assert clean_candidate_title(title) == title
+    intent = parse_song_request(f'Play "{title}" by Example Artist')
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {
+                "title": "Provided to YouTube by Distributor",
+                "artist": "Distributor Channel",
+                "track_title": title,
+                "track_artist": "Example Artist",
+            }
+        ],
+    )
+
+    assert result.best is not None
+    assert result.best.title == title
+    assert result.best.identity_title in {"HD", "4K", "HQ", "SD"}
+    assert result.best.variant == variant
+
+
+@pytest.mark.parametrize(
+    ("ordinary_title", "cleaned"),
+    [
+        ("Emozioni HD (Live)", "Emozioni (Live)"),
+        ("Città vuota 4K (Remastered)", "Città vuota (Remastered)"),
+        ("Albachiara HQ - Acoustic", "Albachiara - Acoustic"),
+        ("Futura SD (Radio Edit)", "Futura (Radio Edit)"),
+    ],
+)
+def test_quality_labels_remain_noise_when_an_ordinary_title_identity_exists(ordinary_title, cleaned):
+    assert clean_candidate_title(ordinary_title) == cleaned
+
+
+@pytest.mark.parametrize(
+    ("requested_title", "candidate_title"),
+    [
+        ("HD (Live)", "Summer HD (Live)"),
+        ("4K (Remastered)", "Resolution 4K (Remastered)"),
+        ("HQ - Acoustic", "Signal HQ - Acoustic"),
+        ("SD (Radio Edit)", "Broadcast SD (Radio Edit)"),
+    ],
+)
+def test_quality_variant_identity_does_not_match_a_longer_ordinary_title(requested_title, candidate_title):
+    intent = parse_song_request(f'Play "{requested_title}" by Example Artist')
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": f"Example Artist - {candidate_title}", "artist": "Example Artist"}],
+    )
+
+    assert result.best is None
+    assert result.failure_reason == "low_confidence"
+
+
 def test_legitimate_audio_title_is_not_erased_as_platform_noise():
     intent = parse_song_request("Play Audio by Sia")
     assert intent is not None

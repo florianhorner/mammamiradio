@@ -1494,6 +1494,7 @@ def test_generation_waste_reason_string_values_are_stable():
     assert GenerationWasteReason.QUALITY_GATE_REJECT == "quality_gate_reject"
     assert GenerationWasteReason.STALE_PLAYLIST == "stale_playlist"
     assert GenerationWasteReason.STALE_SOURCE == "stale_source"
+    assert GenerationWasteReason.LISTENER_REQUEST_RESERVED == "listener_request_reserved"
 
 
 # ---------------------------------------------------------------------------
@@ -1559,3 +1560,44 @@ def test_segment_track_key_coalesces_an_explicit_none_artist():
     )
     assert segment_track_key(nulled) == ("", "senza nome")
     assert "none" not in segment_track_key(nulled)
+
+
+@pytest.mark.parametrize("song_pinned", [False, True], ids=["waiting-for-pin", "already-pinned"])
+def test_listener_track_reservation_lifetime_is_the_pending_request(song_pinned):
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="listener-requested-recording",
+    )
+    same_song_other_source = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="older-cached-recording",
+    )
+    request = {
+        "request_id": "listener-request",
+        "type": "song_request",
+        "song_found": True,
+        "song_pinned": song_pinned,
+        "song_track_obj": requested,
+    }
+    state = StationState(pending_requests=[request])
+
+    reservations = state.listener_track_reservations()
+
+    assert reservations.reserves_track(requested)
+    assert reservations.reserves_track(same_song_other_source)
+    assert reservations.reserves_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/cache/preexisting.mp3"),
+            metadata={"artist": "Vasco Rossi", "title_only": "Albachiara"},
+        )
+    )
+
+    state.archive_listener_request(request, status="sent_to_hosts")
+    released = state.listener_track_reservations()
+    assert not released.reserves_track(requested)
+    assert not released.reserves_track(same_song_other_source)
