@@ -1060,12 +1060,12 @@
       if (!track) {
         return _t(
           'form_song_matched_generic',
-          'We found a match. It’s queued behind the audio already prepared for the station.',
+          'We found a match. It’s ready for the hosts to introduce.',
         );
       }
       return _t(
         'form_song_matched',
-        'We found {track}. It’s queued behind the audio already prepared for the station.',
+        'We found {track}. It’s ready for the hosts to introduce.',
       ).replace('{track}', track);
     }
     if (payload.outcome_reason === 'not_playable') {

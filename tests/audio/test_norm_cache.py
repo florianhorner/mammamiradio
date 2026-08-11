@@ -126,8 +126,8 @@ def test_select_norm_cache_rescue_skips_blocklisted_cache_file(tmp_path):
 
 def test_select_norm_cache_rescue_holds_every_cache_identity_owned_by_pending_dedication(tmp_path):
     requested = Track(
-        title="Albachiara",
-        artist="Vasco Rossi",
+        title="LItaliano",
+        artist="Toto Cutugno",
         duration_ms=240_000,
         youtube_id="new-listener-download",
     )
@@ -152,7 +152,7 @@ def test_select_norm_cache_rescue_holds_every_cache_identity_owned_by_pending_de
     _write_norm(
         tmp_path,
         "norm_youtube_older_source_128k.mp3",
-        title=requested.title,
+        title="L'Italiano",
         artist=requested.artist,
     )
     allowed = _write_norm(

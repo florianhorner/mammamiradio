@@ -1601,3 +1601,41 @@ def test_listener_track_reservation_lifetime_is_the_pending_request(song_pinned)
     released = state.listener_track_reservations()
     assert not released.reserves_track(requested)
     assert not released.reserves_track(same_song_other_source)
+
+
+@pytest.mark.parametrize(
+    ("requested_artist", "requested_title", "candidate_artist", "candidate_title"),
+    [
+        ("Toto Cutugno", "LItaliano", "Toto Cutugno", "L'Italiano"),
+        ("Lucio Battìsti", "Emozioni", "Lucio Battisti", "Emozioni"),
+        ("TotoCutugno", "L'Italiano", "Toto Cutugno", "LItaliano"),
+    ],
+)
+def test_listener_track_reservation_uses_matcher_identity_equivalence(
+    requested_artist,
+    requested_title,
+    candidate_artist,
+    candidate_title,
+):
+    requested = Track(
+        title=requested_title,
+        artist=requested_artist,
+        duration_ms=180_000,
+        youtube_id="listener-requested-recording",
+    )
+    state = StationState(
+        pending_requests=[
+            {
+                "type": "song_request",
+                "song_found": True,
+                "song_track_obj": requested,
+            }
+        ]
+    )
+    candidate = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/equivalent-recording.mp3"),
+        metadata={"artist": candidate_artist, "title_only": candidate_title},
+    )
+
+    assert state.listener_track_reservations().reserves_segment(candidate)

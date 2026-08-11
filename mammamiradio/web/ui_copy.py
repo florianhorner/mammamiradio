@@ -52,8 +52,8 @@ COPY: dict[str, dict[str, str]] = {
         "form_success_song": "Request received. We’re checking the catalogue for a matching recording…",
         "form_success_shoutout": "Dedication received! The hosts will read it soon.",
         "form_song_searching": "Request received. We’re checking the catalogue for a matching recording…",
-        "form_song_matched": "We found {track}. It’s queued behind the audio already prepared for the station.",
-        "form_song_matched_generic": "We found a match. It’s queued behind the audio already prepared for the station.",
+        "form_song_matched": "We found {track}. It’s ready for the hosts to introduce.",
+        "form_song_matched_generic": "We found a match. It’s ready for the hosts to introduce.",
         "form_song_no_verified_match": (
             "We couldn’t find a clear match for that request. Try again with the exact song title and artist."
         ),
@@ -143,10 +143,8 @@ COPY: dict[str, dict[str, str]] = {
         "form_success_song": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
         "form_success_shoutout": "Dedica ricevuta! I conduttori la leggeranno presto.",
         "form_song_searching": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
-        "form_song_matched": ("Abbiamo trovato {track}. È in coda dopo l’audio già preparato per la radio."),
-        "form_song_matched_generic": (
-            "Abbiamo trovato una corrispondenza. È in coda dopo l’audio già preparato per la radio."
-        ),
+        "form_song_matched": "Abbiamo trovato {track}. I conduttori ora possono presentarla.",
+        "form_song_matched_generic": "Abbiamo trovato una corrispondenza. I conduttori ora possono presentarla.",
         "form_song_no_verified_match": (
             "Non abbiamo trovato una corrispondenza chiara per questa richiesta. "
             "Riprova indicando titolo esatto e artista."

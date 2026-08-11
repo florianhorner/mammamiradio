@@ -696,6 +696,52 @@ def test_exact_match_accepts_unbracketed_semantic_variant_labels():
     assert [match.variant for match in result.matches] == ["remaster", "live"]
 
 
+@pytest.mark.parametrize(
+    ("request_text", "candidate_title", "expected_identity", "expected_variant"),
+    [
+        ("Play High by Lighthouse Family", "High - Live", "High", "live"),
+        (
+            'Play "Bang Bang - My Baby Shot Me Down" by Nancy Sinatra',
+            "Bang Bang - My Baby Shot Me Down",
+            "Bang Bang - My Baby Shot Me Down",
+            "standard",
+        ),
+    ],
+)
+def test_separate_artist_evidence_keeps_a_title_only_dash(
+    request_text,
+    candidate_title,
+    expected_identity,
+    expected_variant,
+):
+    intent = parse_song_request(request_text)
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": candidate_title, "artist": intent.artist}],
+    )
+
+    assert result.best is not None
+    assert result.best.artist == intent.artist
+    assert result.best.title == candidate_title
+    assert result.best.identity_title == expected_identity
+    assert result.best.variant == expected_variant
+
+
+def test_uncorroborated_dash_prefix_is_not_a_second_title_candidate():
+    intent = parse_song_request("Play Live by Lighthouse Family")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": "High - Live", "artist": "Lighthouse Family"}],
+    )
+
+    assert result.best is None
+    assert result.failure_reason == "low_confidence"
+
+
 def test_relevant_longform_identity_survives_for_downstream_admission():
     intent = parse_song_request("Play Il mio canto libero by Lucio Battisti")
     assert intent is not None

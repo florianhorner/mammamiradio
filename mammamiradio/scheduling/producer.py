@@ -1611,7 +1611,9 @@ def _memory_extraction_metadata_from_commit(commit, script_lines: list[dict]) ->
         return {}
 
 
-def _abandon_release_beat_commit(state: StationState, commit) -> None:
+def _abandon_banter_commit(state: StationState, commit) -> None:
+    """Restore listener and release-beat state owned by rejected banter."""
+
     # Listener request planning may synchronously claim the song pin before a
     # slow LLM/TTS/egress render. Any path that abandons the rendered banter must
     # restore that marker as well as the release-beat attempt, otherwise the next
@@ -5017,7 +5019,7 @@ async def _run_producer_inner(
                                 _transition_replaced,
                             ) = await _listener_truth_guard(state, config, lines)
                             if truth_changed:
-                                _abandon_release_beat_commit(state, listener_request_commit)
+                                _abandon_banter_commit(state, listener_request_commit)
                                 _release_campaign_abandon_in_flight(state)
                                 _drop_unqueued_banter_receipts("generation_failed", "listener-truth-repair")
                                 listener_request_commit = None
@@ -5099,7 +5101,7 @@ async def _run_producer_inner(
                             assert guarded_transition is not None
                             trans_text = guarded_transition
                             if truth_changed:
-                                _abandon_release_beat_commit(state, listener_request_commit)
+                                _abandon_banter_commit(state, listener_request_commit)
                                 _release_campaign_abandon_in_flight(state)
                                 _drop_unqueued_banter_receipts("generation_failed", "listener-truth-repair")
                                 listener_request_commit = None
@@ -5227,7 +5229,7 @@ async def _run_producer_inner(
                             ]
                         else:
                             _unlink_render_scratch(render_failure_scratch)
-                            _abandon_release_beat_commit(state, listener_request_commit)
+                            _abandon_banter_commit(state, listener_request_commit)
                             listener_request_commit = None
                             _drop_unqueued_banter_receipts("generation_failed", "tts-failure")
                             _release_campaign_abandon_in_flight(state)
@@ -5273,7 +5275,7 @@ async def _run_producer_inner(
                                 continue
                         else:
                             logger.warning("Banter TTS failed, skipping segment: %s", exc)
-                            _abandon_release_beat_commit(state, listener_request_commit)
+                            _abandon_banter_commit(state, listener_request_commit)
                             _drop_unqueued_banter_receipts("generation_failed", "tts-failure")
                             # Commit-free net: on a transition+banter gather failure
                             # the tuple never unpacks, so listener_request_commit is
@@ -5306,7 +5308,7 @@ async def _run_producer_inner(
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
                         if canned is None:
-                            _abandon_release_beat_commit(state, listener_request_commit)
+                            _abandon_banter_commit(state, listener_request_commit)
                             _record_generated_waste(
                                 state,
                                 SegmentType.BANTER,
@@ -5432,7 +5434,7 @@ async def _run_producer_inner(
                 # while planning the discarded copy, and do not make admission
                 # validate or later apply that orphaned commit against the clip.
                 if (canned is not None or impossible_tts) and listener_request_commit is not None:
-                    _abandon_release_beat_commit(state, listener_request_commit)
+                    _abandon_banter_commit(state, listener_request_commit)
                     listener_request_commit = None
                 banter_commit = listener_request_commit
                 companionship_metadata = _companionship_metadata_for_generated_banter(
@@ -6295,7 +6297,7 @@ async def _run_producer_inner(
             if companionship_claim is not None:
                 state.listener_session.abandon_companionship(companionship_claim.epoch)
                 companionship_claim = None
-            _abandon_release_beat_commit(
+            _abandon_banter_commit(
                 state,
                 banter_commit if banter_commit is not None else listener_request_commit,
             )
@@ -6325,7 +6327,7 @@ async def _run_producer_inner(
             # fan-outs have finished their executor-backed siblings by here.
             # Remove their outputs before preserving cancellation semantics.
             _unlink_render_scratch(render_failure_scratch)
-            _abandon_release_beat_commit(
+            _abandon_banter_commit(
                 state,
                 banter_commit if banter_commit is not None else listener_request_commit,
             )
@@ -6400,7 +6402,7 @@ async def _run_producer_inner(
             if stale_reason is not None:
                 state.record_discard(segment, reason=stale_reason)
                 _drop_segment_moment_receipts(state, segment, str(stale_reason), "stale-discard")
-                _abandon_release_beat_commit(state, banter_commit)
+                _abandon_banter_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 state.finish_render_timing("discarded", reason=stale_reason)
                 if is_operator_forced:
@@ -6411,7 +6413,7 @@ async def _run_producer_inner(
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CHAOS)
                 _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_CHAOS, "chaos-discard")
-                _abandon_release_beat_commit(state, banter_commit)
+                _abandon_banter_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CHAOS)
                 if is_operator_forced:
@@ -6424,7 +6426,7 @@ async def _run_producer_inner(
                 _drop_segment_moment_receipts(
                     state, segment, GenerationWasteReason.STALE_CONTINUITY, "continuity-discard"
                 )
-                _abandon_release_beat_commit(state, banter_commit)
+                _abandon_banter_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CONTINUITY)
                 if is_operator_forced:
@@ -6435,7 +6437,7 @@ async def _run_producer_inner(
                 logger.info("Discarding stale banter after Home Context policy change")
                 state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
                 _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-policy")
-                _abandon_release_beat_commit(state, banter_commit)
+                _abandon_banter_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
@@ -6490,7 +6492,7 @@ async def _run_producer_inner(
                 _drop_segment_moment_receipts(
                     state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-reserve-rejected"
                 )
-                _abandon_release_beat_commit(state, banter_commit)
+                _abandon_banter_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
@@ -6516,7 +6518,7 @@ async def _run_producer_inner(
                     if _home_fact_id and _home_fact_director is not None:
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
-                    _abandon_release_beat_commit(state, banter_commit)
+                    _abandon_banter_commit(state, banter_commit)
                     state.operator_force_pending = None
                     state.finish_render_timing(
                         "discarded",
@@ -6541,7 +6543,7 @@ async def _run_producer_inner(
                     if _home_fact_id and _home_fact_director is not None:
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")
-                    _abandon_release_beat_commit(state, banter_commit)
+                    _abandon_banter_commit(state, banter_commit)
                     state.finish_render_timing(
                         "discarded",
                         reason=_enqueue_rejection_reason(state, segment, _enqueue_stale_reason)

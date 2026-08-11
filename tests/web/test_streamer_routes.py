@@ -2046,8 +2046,8 @@ async def test_playback_rejects_queued_song_claimed_by_late_listener_match(tmp_p
     _, listener_queue = app.state.stream_hub.subscribe()
     state = app.state.station_state
     requested_track = Track(
-        title="Albachiara",
-        artist="Vasco Rossi",
+        title="LItaliano",
+        artist="Toto Cutugno",
         duration_ms=240_000,
         youtube_id="listener-requested-song",
     )
@@ -2070,7 +2070,7 @@ async def test_playback_rejects_queued_song_claimed_by_late_listener_match(tmp_p
         metadata={
             "queue_id": "already-queued-request",
             "artist": requested_track.artist,
-            "title_only": requested_track.title,
+            "title_only": "L'Italiano",
         },
         ephemeral=False,
     )

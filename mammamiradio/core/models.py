@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from mammamiradio.core.listener_session import ListenerSession
 from mammamiradio.core.segment_status import is_fallback_active
+from mammamiradio.core.song_identity import normalize_artist_identity_text, normalize_song_identity_text
 from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
@@ -382,6 +383,13 @@ class ListenerTrackReservations:
     cache_keys: frozenset[str] = frozenset()
     track_keys: frozenset[tuple[str, str]] = frozenset()
 
+    @staticmethod
+    def _equivalence_key(track_key: tuple[str, str]) -> tuple[str, str]:
+        return (
+            normalize_artist_identity_text(track_key[0]),
+            normalize_song_identity_text(track_key[1]),
+        )
+
     @classmethod
     def from_pending_requests(cls, requests: Collection[dict]) -> ListenerTrackReservations:
         tracks = [
@@ -391,14 +399,15 @@ class ListenerTrackReservations:
         ]
         return cls(
             cache_keys=frozenset(track.cache_key for track in tracks),
-            track_keys=frozenset(normalized_track_key(track) for track in tracks),
+            track_keys=frozenset(cls._equivalence_key(normalized_track_key(track)) for track in tracks),
         )
 
     def reserves_cache_key(self, cache_key: object) -> bool:
         return bool(cache_key) and str(cache_key) in self.cache_keys
 
     def reserves_track_key(self, track_key: tuple[str, str]) -> bool:
-        return bool(track_key[0] and track_key[1]) and track_key in self.track_keys
+        equivalence_key = self._equivalence_key(track_key)
+        return bool(equivalence_key[0] and equivalence_key[1]) and equivalence_key in self.track_keys
 
     def reserves_track(self, track: Track) -> bool:
         return self.reserves_cache_key(track.cache_key) or self.reserves_track_key(normalized_track_key(track))

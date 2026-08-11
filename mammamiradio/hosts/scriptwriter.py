@@ -570,12 +570,27 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
         # played from the download pin. Setting the marker synchronously (here, at
         # peek time — not in the deferred commit) also makes it safe against the
         # lookahead race where two banters peek the same pending request.
-        if track_obj is not None and not req.get("song_pinned") and state.pinned_track is not None:
+        if track_obj is not None:
             pinned_track = state.pinned_track
             same_recording_pin = pinned_track is track_obj or (
-                isinstance(track_obj, Track) and pinned_track.cache_key == track_obj.cache_key
+                isinstance(track_obj, Track)
+                and isinstance(pinned_track, Track)
+                and pinned_track.cache_key == track_obj.cache_key
             )
-            if not same_recording_pin:
+            if req.get("song_pinned"):
+                if not same_recording_pin:
+                    # An operator can replace a download-owned pin before this
+                    # request reaches the head. The marker is only an ownership
+                    # claim, so losing that exact recording must make the
+                    # request wait for or reclaim the slot instead of promising
+                    # a handoff that admission can never validate.
+                    req["song_pinned"] = False
+                elif pinned_track is not track_obj:
+                    # Keep the request's verified Track object authoritative
+                    # when an equivalent cache-key object owns the same slot.
+                    state.pinned_track = track_obj
+                    pinned_track = track_obj
+            if not req.get("song_pinned") and pinned_track is not None and not same_recording_pin:
                 pin_belongs_to_later_listener_request = any(
                     later_req is not req
                     and later_req.get("song_found")

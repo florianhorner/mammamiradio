@@ -4774,10 +4774,7 @@ def test_plan_listener_request_block_song_found_announcement(state):
 
 
 def test_plan_listener_request_block_does_not_repin_already_pinned_song(state):
-    """A request whose song was already pinned at download time (song_pinned) must
-    NOT be re-pinned by the dedication banter — re-pinning aired the song a SECOND
-    time (the 2026-06-19 Linkin Park double-play). The dedication still airs and the
-    request still consumes; only the duplicate pin is suppressed."""
+    """A live download-owned pin remains the request's single handoff."""
     requested_track = Track(
         title="Somewhere I Belong",
         artist="Linkin Park",
@@ -4796,6 +4793,8 @@ def test_plan_listener_request_block_does_not_repin_already_pinned_song(state):
         "banter_cycles_missed": 0,
     }
     state.pending_requests.append(req)
+    state.pinned_track = requested_track
+    state.force_next = SegmentType.MUSIC
 
     prompt, commit = _plan_listener_request_block(state)
 
@@ -4803,8 +4802,8 @@ def test_plan_listener_request_block_does_not_repin_already_pinned_song(state):
     assert "Linkin Park - Somewhere I Belong" in prompt
     assert commit is not None
     assert commit.consume is True
-    assert state.pinned_track is None
-    assert state.force_next is None
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
 
 
 def test_plan_listener_request_block_pins_once_and_is_race_safe(state):
@@ -4837,13 +4836,60 @@ def test_plan_listener_request_block_pins_once_and_is_race_safe(state):
     # Locks the immediate-play contract: the dedication forces the next slot to music.
     assert state.force_next is not None and state.force_next.value == "music"
 
-    # Simulate the next music slot consuming the pin (request still pending — the
-    # deferred commit has not applied), then a second banter peeking the same req.
+    # A second banter peek before the deferred commit applies recognizes the
+    # same live ownership token and cannot create another pin.
+    _plan_listener_request_block(state)
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
+
+
+def test_plan_listener_request_block_recovers_download_pin_replaced_by_operator(state):
+    requested_track = Track(
+        title="Somewhere I Belong",
+        artist="Linkin Park",
+        duration_ms=200000,
+        youtube_id="listener-pick",
+    )
+    operator_pick = Track(
+        title="Operator Pick",
+        artist="Operator",
+        duration_ms=180000,
+        youtube_id="operator-pick",
+    )
+    req = {
+        "name": "fanfan",
+        "message": "play some Linkin Park",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": True,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+    state.pinned_track = operator_pick
+    state.force_next = SegmentType.MUSIC
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is None
+    assert req["song_pinned"] is False
+    assert state.pinned_track is operator_pick
+    assert state.force_next is SegmentType.MUSIC
+
+    # Once the operator pick is consumed, the listener request can reclaim its
+    # own pin and produce copy that passes the exact admission snapshot.
     state.pinned_track = None
     state.force_next = None
-    _plan_listener_request_block(state)
-    assert state.pinned_track is None  # not re-pinned -> no double-play
-    assert state.force_next is None
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None and commit.is_plan_current(state)
+    assert req["song_pinned"] is True
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
 
 
 def test_plan_listener_request_block_waits_for_occupied_pin(state):

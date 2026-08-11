@@ -1691,8 +1691,8 @@ def test_continuity_reservation_honors_excluded_track_keys_not_on_blocklist(tmp_
 
 def test_continuity_reservation_skips_pending_listener_song_identity(tmp_path):
     requested = Track(
-        title="Albachiara",
-        artist="Vasco Rossi",
+        title="LItaliano",
+        artist="Toto Cutugno",
         duration_ms=240_000,
         youtube_id="new-listener-download",
     )
@@ -1712,7 +1712,7 @@ def test_continuity_reservation_skips_pending_listener_song_identity(tmp_path):
     allowed.write_bytes(b"ordinary cache")
     state.immediate_audio_index = {preexisting: 240.0, allowed: 240.0}
     sidecars = {
-        preexisting: {"artist": requested.artist, "title": requested.title},
+        preexisting: {"artist": requested.artist, "title": "L'Italiano"},
         allowed: {"artist": "Colapesce Dimartino", "title": "Musica leggerissima"},
     }
 

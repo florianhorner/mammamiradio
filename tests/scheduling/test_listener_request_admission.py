@@ -12,7 +12,7 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
 from mammamiradio.scheduling.producer import (
-    _abandon_release_beat_commit,
+    _abandon_banter_commit,
     _enqueue_with_egress,
     _listener_request_plan_stale_reason,
 )
@@ -138,7 +138,7 @@ async def test_ban_during_matched_promise_rejects_normal_and_front_insert_admiss
     assert admitted is False
     assert queue.empty()
     assert state.discard_by_reason == {GenerationWasteReason.EGRESS_STALE: 1}
-    _abandon_release_beat_commit(state, commit)
+    _abandon_banter_commit(state, commit)
     assert request in state.pending_requests
     assert request["song_found"] is False
     assert request["song_error"] is True
@@ -215,7 +215,7 @@ async def test_fifth_timeout_late_match_then_ban_stays_pending_for_truthful_ack(
 
     assert admitted is False
     egress.assert_not_awaited()  # rejected at the final pre-egress admission gate
-    _abandon_release_beat_commit(state, timeout_commit)
+    _abandon_banter_commit(state, timeout_commit)
     assert request in state.pending_requests
     assert state.recently_consumed_requests == []
     assert request["song_error_reason"] == "banned"
@@ -295,7 +295,7 @@ async def test_post_capacity_pin_change_retracts_copy_and_preserves_newer_operat
     assert queue.empty()
     assert state.queued_segments == []
     assert state.discard_by_reason == {GenerationWasteReason.EGRESS_STALE: 1}
-    _abandon_release_beat_commit(state, commit)
+    _abandon_banter_commit(state, commit)
     assert request in state.pending_requests
     assert request["song_pinned"] is False
     assert state.pinned_track is operator_pick

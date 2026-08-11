@@ -95,9 +95,13 @@ def test_request_outcome_copy_is_complete_in_both_modes():
     premature_promises = (
         "The hosts will cue it soon",
         "metteranno presto la canzone in scaletta",
+        "queued behind the audio",
+        "in coda dopo l’audio",
     )
     listener_copy = "\n".join((*COPY["en"].values(), *COPY["it"].values()))
     assert not any(promise in text or promise in listener_copy for promise in premature_promises)
+    assert "hosts to introduce" in COPY["en"]["form_song_matched"]
+    assert "conduttori" in COPY["it"]["form_song_matched"]
 
     infrastructure_claims = (
         "catalogue isn’t reachable",

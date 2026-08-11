@@ -13,6 +13,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from mammamiradio.core.song_identity import normalize_artist_identity_text
+from mammamiradio.core.song_identity import normalize_song_identity_text as normalize_match_text
+
 RequestMode = Literal["artist", "artist_title", "title"]
 
 
@@ -127,17 +130,8 @@ _FEATURE_SUFFIX_RE = re.compile(
     r"\s+(?:[-\u2013\u2014|]\s*)?(?:feat(?:uring)?\.?|ft\.?)\s+.+$",
     re.IGNORECASE,
 )
-_INTRA_WORD_PUNCTUATION_RE = re.compile(r"(?<=\w)['\u2019\u02bc./\-]+(?=\w)", re.UNICODE)
 _QUOTE_PAIRS = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
 _QUALITY_IDENTITY_TOKENS = frozenset({"4k", "8k", "hd", "hq", "sd"})
-
-
-def normalize_match_text(value: object) -> str:
-    """Normalize identity text without fuzzy or transliteration guesses."""
-    decomposed = unicodedata.normalize("NFKD", str(value or ""))
-    unaccented = "".join(char for char in decomposed if not unicodedata.combining(char))
-    joined = _INTRA_WORD_PUNCTUATION_RE.sub("", unaccented)
-    return _SPACE_RE.sub(" ", re.sub(r"[^\w]+", " ", joined.casefold(), flags=re.UNICODE)).strip()
 
 
 def _contains_phrase(normalized_text: str, phrase: str) -> bool:
@@ -521,12 +515,8 @@ def _split_title_credit(raw_title: str) -> tuple[str, str]:
 
 
 def _same_artist_identity(requested: str, candidate: str) -> bool:
-    normalized_requested = normalize_match_text(requested)
-    normalized_candidate = normalize_match_text(candidate)
-    return bool(normalized_requested) and (
-        normalized_candidate == normalized_requested
-        or normalized_candidate.replace(" ", "") == normalized_requested.replace(" ", "")
-    )
+    normalized_requested = normalize_artist_identity_text(requested)
+    return bool(normalized_requested) and normalize_artist_identity_text(candidate) == normalized_requested
 
 
 def _matched_artist_identity(requested_artist: str, evidence: object) -> str:
@@ -606,7 +596,7 @@ def _strip_title_variant(value: str) -> str:
     return title.strip(" -\u2013\u2014|")
 
 
-def _candidate_identity(metadata: dict[str, Any]) -> tuple[list[str], str, str]:
+def _candidate_identity(metadata: dict[str, Any]) -> tuple[list[str], str, str, str]:
     display_title = str(metadata.get("title") or metadata.get("track_title") or "").strip()
     prefix_artist, title_from_display = _split_title_credit(display_title)
     structured_title = clean_candidate_title(metadata.get("track_title") or "")
@@ -626,7 +616,7 @@ def _candidate_identity(metadata: dict[str, Any]) -> tuple[list[str], str, str]:
     display_artist = _clean_artist(structured_artist) or prefix_artist
     if not display_artist:
         display_artist = next((_clean_artist(value) for value in artist_evidence if _clean_artist(value)), "")
-    return artist_evidence, title, display_artist
+    return artist_evidence, title, display_artist, prefix_artist
 
 
 @dataclass(frozen=True)
@@ -706,7 +696,7 @@ def match_song_request_candidates(
     if intent.alternative_identity is not None:
         request_identities.append(intent.alternative_identity)
     for index, metadata in enumerate(metadata_results):
-        artist_evidence, candidate_title, display_artist = _candidate_identity(metadata)
+        artist_evidence, candidate_title, display_artist, prefix_artist = _candidate_identity(metadata)
         # Recording variants belong to the recording title. Artist/channel
         # names such as "Live Nation" are identity evidence, never proof that a
         # standard upload is a live performance.
@@ -715,12 +705,9 @@ def match_song_request_candidates(
             _recording_qualifiers(display_title_evidence),
             _recording_qualifiers(metadata.get("track_title") or ""),
         )
+        structured_title = clean_candidate_title(metadata.get("track_title") or "")
+        full_display_title = clean_candidate_title(metadata.get("title") or "")
         for identity_rank, request_identity in enumerate(request_identities):
-            requested_qualifiers = request_identity.requested_qualifiers
-            if (candidate_qualifiers & _FORBIDDEN_QUALIFIERS.keys()) - requested_qualifiers:
-                continue
-            if requested_qualifiers and not requested_qualifiers <= candidate_qualifiers:
-                continue
             matched_artist = ""
             identity_artist = ""
             if request_identity.artist:
@@ -731,11 +718,42 @@ def match_song_request_candidates(
                         break
                 if not matched_artist:
                     continue
-            if request_identity.title:
-                requested_base_title = normalize_match_text(_strip_title_variant(request_identity.title))
-                candidate_base_title = normalize_match_text(_strip_title_variant(candidate_title))
-                if not requested_base_title or candidate_base_title != requested_base_title:
+
+            title_interpretations = [(candidate_title, candidate_qualifiers)]
+            if (
+                request_identity.artist
+                and matched_artist
+                and not structured_title
+                and full_display_title
+                and full_display_title != candidate_title
+                and not _matched_artist_identity(request_identity.artist, prefix_artist)
+            ):
+                # A separately verified performer means the first dash can
+                # belong to the title (``High - Live`` or ``Bang Bang - My
+                # Baby Shot Me Down``), rather than an uncorroborated artist
+                # prefix. The uncorroborated split is not a second candidate:
+                # accepting it would let a request for "Live" match "High -
+                # Live" merely because the real performer arrived separately.
+                title_interpretations = [(full_display_title, _recording_qualifiers(full_display_title))]
+
+            matched_title = ""
+            matched_qualifiers: frozenset[str] = frozenset()
+            requested_qualifiers = request_identity.requested_qualifiers
+            requested_base_title = normalize_match_text(_strip_title_variant(request_identity.title))
+            for interpreted_title, interpreted_qualifiers in title_interpretations:
+                if (interpreted_qualifiers & _FORBIDDEN_QUALIFIERS.keys()) - requested_qualifiers:
                     continue
+                if requested_qualifiers and not requested_qualifiers <= interpreted_qualifiers:
+                    continue
+                if request_identity.title:
+                    candidate_base_title = normalize_match_text(_strip_title_variant(interpreted_title))
+                    if not requested_base_title or candidate_base_title != requested_base_title:
+                        continue
+                matched_title = interpreted_title
+                matched_qualifiers = interpreted_qualifiers
+                break
+            if not matched_title:
+                continue
 
             # Never carry listener spelling into station identity. The matcher
             # may equate accents/punctuation/compact channel names; retaining
@@ -743,10 +761,7 @@ def match_song_request_candidates(
             canonical_artist = matched_artist or display_artist
             identity_artist = identity_artist or canonical_artist
             credited_artists = _credited_artist_identities(canonical_artist, identity_artist)
-            canonical_title = candidate_title
-            if not canonical_title:
-                continue
-            identity_title = _strip_title_variant(candidate_title)
+            identity_title = _strip_title_variant(matched_title)
             if not identity_title:
                 continue
             matches.append(
@@ -755,10 +770,10 @@ def match_song_request_candidates(
                     artist=canonical_artist,
                     identity_artist=identity_artist,
                     credited_artists=credited_artists,
-                    title=canonical_title,
+                    title=matched_title,
                     identity_title=identity_title,
-                    variant=_variant_label(candidate_qualifiers),
-                    rank=(identity_rank, _variant_rank(candidate_qualifiers), index),
+                    variant=_variant_label(matched_qualifiers),
+                    rank=(identity_rank, _variant_rank(matched_qualifiers), index),
                 )
             )
             # One search result represents one recording. If it validates both
