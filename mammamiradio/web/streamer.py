@@ -1111,6 +1111,8 @@ def _reserve_continuity_runway(
     excluded_paths: set[Path] | None = None,
     excluded_track_keys: set[tuple[str, str]] | None = None,
     preserve_queue_ids: frozenset[str] = frozenset(),
+    prefer_capacity_slot: bool = False,
+    capacity_slot_excluded_queue_ids: frozenset[str] = frozenset(),
     outcome: ContinuityRunwayOutcome | None = None,
 ) -> int:
     """Reserve immediately playable runway before a live control mutates audio.
@@ -1118,7 +1120,9 @@ def _reserve_continuity_runway(
     The function has no await points.  It may discard only ordinary far-future
     queue items to make room; an existing protected reservation is reused.  A
     full queue with no ordinary tail retains its own audio and stores the short
-    packaged clip in a capacity-exempt fallback slot.
+    packaged clip in a capacity-exempt fallback slot. A preferred slot leaves
+    the real queue open for stronger ownership; excluded queue ids remain there
+    so the caller can settle their dependencies by id.
     """
     from mammamiradio.scheduling.producer import RUNWAY_FLOOR_SECONDS
 
@@ -1208,6 +1212,7 @@ def _reserve_continuity_runway(
                 )
             )
             survivors: list[Segment] = []
+            preserved_slot: Segment | None = None
             failure_dropped = current_queue
             if required_survivors:
                 candidate_dropped = [segment for segment in current_queue if id(segment) not in required_survivor_ids]
@@ -1219,7 +1224,7 @@ def _reserve_continuity_runway(
                 if candidate_survivors:
                     failure_dropped = candidate_dropped
                     survivors = candidate_survivors
-            else:
+            elif not (prefer_capacity_slot and slot_ready):
                 for playable_index, playable_head in enumerate(current_queue):
                     if not _segment_is_immediately_playable(
                         state,
@@ -1228,6 +1233,14 @@ def _reserve_continuity_runway(
                         excluded_track_keys=excluded_track_keys,
                     ):
                         continue
+                    playable_metadata = playable_head.metadata if isinstance(playable_head.metadata, dict) else {}
+                    if prefer_capacity_slot and str(playable_metadata.get("queue_id") or "") in (
+                        capacity_slot_excluded_queue_ids
+                    ):
+                        # Queue-only listener cancellation cannot see a segment
+                        # after it moves out of band. Leave linked dedications in
+                        # the real queue for the caller's dependency settlement.
+                        break
                     candidate_dropped = current_queue[:playable_index] + current_queue[playable_index + 1 :]
                     candidate_dropped, candidate_survivors = settle_listener_request_queue_dependencies(
                         candidate_dropped,
@@ -1235,10 +1248,13 @@ def _reserve_continuity_runway(
                         state=state,
                     )
                     if candidate_survivors:
+                        if prefer_capacity_slot:
+                            preserved_slot = candidate_survivors[0]
+                        else:
+                            survivors = candidate_survivors
                         failure_dropped = candidate_dropped
-                        survivors = candidate_survivors
                         break
-            if not survivors and not slot_ready:
+            if not survivors and preserved_slot is None and not slot_ready:
                 return 0
             if outcome is not None:
                 outcome.preserved_existing = True
@@ -1247,7 +1263,7 @@ def _reserve_continuity_runway(
                 state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
                 _drop_segment_moment_receipts(state, segment, discard_reason)
                 _unlink_ephemeral_best_effort(segment)
-            if failure_dropped:
+            if failure_dropped or preserved_slot is not None:
                 _rebuild_queue_shadow(q, state, survivors)
                 # Queue capacity has changed, so producer work captured before
                 # this conservative rebuild must not refill the freed tail.
@@ -1258,6 +1274,8 @@ def _reserve_continuity_runway(
                 # tail. With no queued survivor, the previous queue-tail type is
                 # no longer adjacent and must not supply a speech bed.
                 state.last_enqueued_type = None
+            if preserved_slot is not None:
+                state.continuity_slot = preserved_slot
             return len(failure_dropped)
         return 0
 
@@ -1289,6 +1307,9 @@ def _reserve_continuity_runway(
         existing = required_survivors
         # The replacement is fully built before the prior slot is superseded.
         state.continuity_slot = None
+        if prefer_capacity_slot and not existing:
+            planned_slot = reservation[0]
+            reservation = []
     else:
         existing = ordinary
     combined = existing + reservation
@@ -2807,10 +2828,13 @@ def _apply_loaded_source(
     # revision changes, so an in-flight render cannot win the tiny gap between
     # a destructive purge and safety audio admission.
     on_air_promise_ownership = _on_air_listener_promise_ownership(state, request.app.state.queue)
+    active_on_air_handoff = state.active_listener_request_handoff_on_air()
     on_air_promise_handoffs = {
         token: state.listener_request_admitted_reservations[token] for token in on_air_promise_ownership.values()
     }
     preserved_on_air_tokens = frozenset(on_air_promise_handoffs)
+    if active_on_air_handoff is not None:
+        preserved_on_air_tokens |= {active_on_air_handoff.token}
     listener_handoffs = (
         state.listener_request_handoff,
         *state.listener_request_admitted_reservations.values(),
@@ -2828,6 +2852,8 @@ def _apply_loaded_source(
         replace_queue=True,
         discard_reason=GenerationWasteReason.SOURCE_SWITCH,
         preserve_queue_ids=frozenset(on_air_promise_ownership),
+        prefer_capacity_slot=active_on_air_handoff is not None,
+        capacity_slot_excluded_queue_ids=cancelled_dedication_queue_ids,
         outcome=runway,
     )
     # An assetless replacement may preserve existing old-source runway. A
@@ -2864,6 +2890,8 @@ def _apply_loaded_source(
     # admitted song still queued behind its on-air dedication, including its
     # first-byte retry ownership.
     state.listener_request_admitted_reservations.update(surviving_on_air_handoffs)
+    if active_on_air_handoff is not None:
+        state.restore_listener_request_handoff_after_source_switch(active_on_air_handoff)
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
     # Immediate cutover is safe only when this action admitted fresh protected
@@ -2872,7 +2900,7 @@ def _apply_loaded_source(
     # runway prevents dead air but must not trigger a cutover into prior-source
     # audio.
     skipped = False
-    preserved_on_air_promise = bool(surviving_on_air_handoffs)
+    preserved_on_air_promise = bool(surviving_on_air_handoffs or active_on_air_handoff)
     if (
         state.now_streaming
         and not preserved_on_air_promise

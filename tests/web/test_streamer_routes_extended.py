@@ -4163,6 +4163,18 @@ async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
             ("vasco rossi", "albachiara"),
         ),
         (
+            "Play Imagine",
+            {
+                "title": "John Lennon - Imagine",
+                "track_title": "Imagine",
+                "track_artist": "Generic Distributor",
+                "artist": "Generic Distributor",
+                "uploader": "Generic Distributor",
+                "youtube_id": "generic-metadata-ban",
+            },
+            ("john lennon", "imagine"),
+        ),
+        (
             "Play Shallow by Lady Gaga",
             {
                 "title": "Lady Gaga feat. Bradley Cooper - Shallow",

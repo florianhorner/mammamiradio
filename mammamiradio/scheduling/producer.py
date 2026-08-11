@@ -4431,10 +4431,15 @@ async def _run_producer_inner(
         # (after at least one real segment has been produced), insert a canned clip
         # to bridge the gap while the producer or prefetch task catches up.
         # _drain_guard_queued prevents re-firing until a real segment lands.
+        # A listener handoff is the one exception: once its dedication has been
+        # queued, the promised song owns this producer boundary even if playback
+        # has just claimed fallback audio. The continuity slot and playback
+        # recovery ladder still cover a render that cannot finish in time.
         if (
             queue.empty()
             and _segments_produced > 0
             and not _drain_guard_queued
+            and state.listener_request_handoff is None
             and await _queue_drain_recovery_bridge(_queue_segment, state, config)
         ):
             _drain_guard_queued = True

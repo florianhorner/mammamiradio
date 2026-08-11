@@ -538,6 +538,28 @@ def test_title_only_uses_title_prefix_as_station_identity_over_generic_metadata(
     assert match.credited_artists == ("John Lennon",)
 
 
+@pytest.mark.parametrize("generic_artist", ["Various Artists", "Generic Distributor"])
+def test_generic_metadata_cannot_prove_an_explicit_performer_request(generic_artist):
+    intent = parse_song_request(f"Play Imagine by {generic_artist}")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {
+                "title": "John Lennon - Imagine",
+                "track_title": "Imagine",
+                "track_artist": generic_artist,
+                "uploader": generic_artist,
+                "artist": generic_artist,
+            }
+        ],
+    )
+
+    assert result.best is None
+    assert result.failure_reason == "low_confidence"
+
+
 def test_title_only_keeps_specific_uploader_when_it_disproves_title_prefix():
     intent = parse_song_request("Play Imagine")
     assert intent is not None

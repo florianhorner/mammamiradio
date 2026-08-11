@@ -724,6 +724,11 @@ def _clean_artist(value: object) -> str:
     return strip_platform_artist_wrapper(value)
 
 
+def _is_generic_artist_label(value: object) -> bool:
+    """Return whether metadata names a collection/channel, not a performer."""
+    return normalize_match_text(_clean_artist(value)) in _GENERIC_ARTIST_LABELS
+
+
 def _station_artist_identity(value: object) -> str:
     """Return the candidate-backed primary artist for station identity.
 
@@ -871,6 +876,8 @@ def _matched_artist_identity(requested_artist: str, evidence: object) -> str:
     checks need the exact collaborator segment that established relevance so a
     base-artist blocklist entry cannot be bypassed.
     """
+    if _is_generic_artist_label(requested_artist):
+        return ""
     requested = normalize_match_text(requested_artist)
     candidate = _clean_artist(evidence)
     if not requested or not candidate:
@@ -980,9 +987,7 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
     structured_title = clean_candidate_title(metadata.get("track_title") or "")
     title = structured_title or title_from_display
     structured_artist = _clean_artist(metadata.get("track_artist") or "")
-    authoritative_artist = (
-        structured_artist if normalize_match_text(structured_artist) not in _GENERIC_ARTIST_LABELS else ""
-    )
+    authoritative_artist = structured_artist if not _is_generic_artist_label(structured_artist) else ""
     base_artist_evidence = [
         authoritative_artist or structured_artist,
         prefix_artist,
@@ -1038,7 +1043,7 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
     # primary artist for a title-side guest credit. The legacy ``artist`` field
     # may be an uploader/channel and must never become station identity merely
     # because the guest verified the listener request.
-    feature_base_artist = authoritative_artist or prefix_artist or structured_artist
+    feature_base_artist = authoritative_artist or prefix_artist
     title_credit_aliases = list(title_feature_artists)
     if feature_base_artist and title_feature_artists:
         title_credit_aliases.append(f"{feature_base_artist} feat. {' & '.join(title_feature_artists)}")
@@ -1055,7 +1060,7 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
             *title_credit_aliases,
             *(fallback_artist_evidence if not authoritative_artist else ()),
         )
-        if value
+        if value and not _is_generic_artist_label(value)
     )
     return _CandidateIdentity(
         artist_evidence=artist_evidence,

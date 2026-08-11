@@ -325,7 +325,8 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   segment as allowed through, and retains the reservation until playback claims
   it. Queue discard and borrowed-metadata stripping release the same tombstone.
   A retryable render or admission failure retains the handoff; a permanently
-  unavailable source, source switch, or ban revokes it.
+  unavailable source, a source switch without its matching dedication already
+  on air, or a ban revokes it.
   `pinned_track` has its own monotonic ownership revision. A listener plan may
   borrow an independently owned same-recording operator pin, but its abandon,
   dismissal, and handoff-revocation paths can clear only the revision that the
@@ -347,11 +348,16 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   before revoking the requested recording, so the announcement cannot survive its
   song promise; fallback runway selection then skips any exclusive music orphaned
   with it and preserves the next ordinary playable segment. Once the dedication is
-  already on air, however, its exact admitted and ready song becomes the required
-  survivor: replacement drops unrelated old-source runway, places any fresh
-  continuity behind the promised song (or in the capacity-exempt slot), lets the
-  dedication finish, and retains the song's full token ownership through its first
-  emitted byte.
+  already on air, however, its exact song owns the boundary even before queue
+  admission. An admitted and ready song becomes the required survivor at the
+  queue head. An active render is fenced by the source/continuity revisions, then
+  the same token, track, and dedication id are restored with fresh force/pin
+  ownership for a retry under the new revision. Fresh or preserved fallback audio
+  stays in the capacity-exempt slot so the retried song can enter the real queue
+  first; the producer drain guard yields to this owner, while the slot and playback
+  recovery ladder still cover a retry that misses the dedication boundary. In
+  both cases the dedication finishes without a source-switch skip, and ownership
+  remains until the promised song emits its first byte.
   Ordinary selection, norm-cache and
   last-known-good rescue, continuity reservation/slot claims, enqueue admission,
   and playback's final queue claim otherwise consult the shared cache-key plus
@@ -408,8 +414,9 @@ fed only when a rescue is actually heard by a listener and resets on restart.
 A successful replacement control supersedes an earlier reservation: it clears
 ordinary and protected queued audio, clears any out-of-band `continuity_slot`,
 and creates a fresh reservation for the new action. The one stronger owner is an
-exact admitted song promised by a dedication already on air; that song stays at
-the queue head, with fresh continuity fitted behind it or held out of band. The
+exact song promised by a dedication already on air. An admitted song stays at
+the queue head; an active in-flight handoff is restored for a revision-clean
+retry, with fresh continuity held out of band so the real queue remains open. The
 resulting queue and shadow projection therefore describe exactly the same final
 order. If no fresh reservation can be built, the control fails closed instead:
 it keeps the first immediately playable queued segment and any valid

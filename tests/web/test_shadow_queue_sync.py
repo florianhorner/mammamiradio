@@ -1925,6 +1925,43 @@ def test_replace_continuity_reservation_preserves_ready_head_and_slot_when_no_au
     assert len(app.state.station_state.queued_segments) == 1
 
 
+def test_preferred_capacity_slot_does_not_hide_excluded_listener_dedication(tmp_path):
+    """Queue-only cancellation must retain sight of a linked dedication."""
+    app = _make_app()
+    dedication_path = tmp_path / "cancelled_listener_dedication.mp3"
+    dedication_path.write_bytes(b"dedication")
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        duration_sec=20.0,
+        metadata={"queue_id": "cancelled-dedication-q", "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(dedication)
+    app.state.station_state.queued_segments = [
+        {"id": "cancelled-dedication-q", "type": "banter", "label": "Listener dedication"}
+    ]
+    initial_epoch = app.state.station_state.continuity_epoch
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            app.state.station_state,
+            app.state.config,
+            replace_queue=True,
+            prefer_capacity_slot=True,
+            capacity_slot_excluded_queue_ids=frozenset({"cancelled-dedication-q"}),
+        )
+
+    assert dropped == 0
+    assert list(app.state.queue._queue) == [dedication]
+    assert app.state.station_state.queued_segments == [
+        {"id": "cancelled-dedication-q", "type": "banter", "label": "Listener dedication"}
+    ]
+    assert app.state.station_state.continuity_slot is None
+    assert app.state.station_state.continuity_epoch == initial_epoch
+
+
 def test_failed_replacement_with_no_playable_queue_is_a_noop(tmp_path):
     """An assetless replacement must not mutate an entirely unusable queue."""
     app = _make_app()

@@ -1739,6 +1739,23 @@ class StationState:
             self.listener_request_retry_handoffs.append(retry)
         return True
 
+    def restore_listener_request_handoff_after_source_switch(self, handoff: ListenerRequestHandoff) -> None:
+        """Restore an audible promise after a source switch cleared ownership."""
+        if self.listener_request_handoff is not None:
+            raise RuntimeError("source-switch retry restore requires an empty active handoff slot")
+        self.listener_request_handoff = self._retry_listener_request_handoff(handoff)
+        self.force_listener_request_handoff_music()
+
+    def active_listener_request_handoff_on_air(self) -> ListenerRequestHandoff | None:
+        """Return the active handoff only when its dedication is currently airing."""
+        handoff = self.listener_request_handoff
+        now_streaming = self.now_streaming if isinstance(self.now_streaming, dict) else {}
+        metadata = now_streaming.get("metadata")
+        if handoff is None or now_streaming.get("type") != SegmentType.BANTER.value or not isinstance(metadata, dict):
+            return None
+        queue_id = str(metadata.get("queue_id") or "")
+        return handoff if queue_id and queue_id == handoff.dedication_queue_id else None
+
     def promote_listener_request_retry_handoff(self) -> bool:
         """Promote the oldest failed promise when the active slot is free."""
         if self.listener_request_handoff is not None or not self.listener_request_retry_handoffs:

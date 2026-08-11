@@ -67,7 +67,7 @@ atexit.register(_listener_dl_executor.shutdown, wait=False, cancel_futures=True)
 
 router = APIRouter()
 
-_SONG_NO_MATCH_REASONS = frozenset({"ambiguous_request", "low_confidence", "not_found"})
+_SONG_NO_MATCH_REASONS = frozenset({"low_confidence", "not_found"})
 _SONG_NOT_PLAYABLE_REASONS = frozenset({"banned", "longform_audio", "non_music_audio"})
 
 

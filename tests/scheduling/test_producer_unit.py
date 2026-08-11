@@ -1094,6 +1094,209 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fresh_continuity", [False, True], ids=["assetless", "fresh-runway"])
+async def test_on_air_listener_promise_retries_after_source_switch(tmp_path, fresh_continuity):
+    """The audible dedication owns its song across an in-flight source cutover."""
+    from mammamiradio.core.models import (
+        LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+        LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+    )
+    from mammamiradio.scheduling.producer import RenderedMusicTrack
+    from mammamiradio.web.streamer import _apply_loaded_source
+
+    seed = Track(title="Seed Song", artist="Seed Artist", duration_ms=180_000, spotify_id="seed1")
+    requested = Track(
+        title="Promised Song",
+        artist="Requested Artist",
+        duration_ms=200_000,
+        spotify_id="promise1",
+    )
+    replacement = Track(
+        title="New Source Song",
+        artist="New Artist",
+        duration_ms=190_000,
+        spotify_id="new-source1",
+    )
+    state = StationState(
+        playlist=[seed, requested],
+        listeners_active=1,
+        home_authorization=HomeAuthorization.legacy(),
+    )
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    assert config.pacing.lookahead_segments == 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=2)
+    skip_event = asyncio.Event()
+    app_state = SimpleNamespace(
+        queue=queue,
+        station_state=state,
+        config=config,
+        skip_event=skip_event,
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=app_state))
+
+    state.set_pinned_track(seed)
+    first_promise_render_started = asyncio.Event()
+    release_first_promise_render = asyncio.Event()
+    retry_render_started = asyncio.Event()
+    release_retry_render = asyncio.Event()
+    promised_render_count = 0
+    rendered_tracks: list[Track] = []
+
+    async def fake_render(track, *_args, **_kwargs):
+        nonlocal promised_render_count
+        rendered_tracks.append(track)
+        if track is requested:
+            promised_render_count += 1
+            if promised_render_count == 1:
+                first_promise_render_started.set()
+                await release_first_promise_render.wait()
+            else:
+                retry_render_started.set()
+                await release_retry_render.wait()
+        path = tmp_path / f"render-{len(rendered_tracks)}.mp3"
+        path.write_bytes(track.display.encode())
+        return RenderedMusicTrack(track=track, path=path, cache_path=path, cache_hit=True)
+
+    fresh_path = tmp_path / "fresh-continuity.mp3"
+    fresh_path.write_bytes(b"fresh continuity")
+    fresh = Segment(
+        type=SegmentType.BANTER,
+        path=fresh_path,
+        duration_sec=20.0,
+        metadata={
+            "queue_id": "fresh-continuity-q",
+            "title": "Fresh continuity",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    drain_bridge = AsyncMock(return_value=True)
+    producer_task = None
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=fake_render),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=180.0),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=lambda segment, *_: segment),
+        patch(f"{PRODUCER_MODULE}._prefetch_next", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._queue_drain_recovery_bridge", drain_bridge),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(
+            "mammamiradio.web.streamer._continuity_reservation_segments",
+            return_value=[fresh] if fresh_continuity else [],
+        ),
+    ):
+        producer_task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while queue.qsize() < config.pacing.lookahead_segments:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise TimeoutError("Seed segment did not fill the structural lookahead window")
+                await asyncio.sleep(0.01)
+            assert next(iter(queue._queue)).metadata["title_only"] == seed.title
+
+            dedication_queue_id = "on-air-dedication-q"
+            assert state.arm_listener_request_handoff(
+                {"request_id": "source-switch-active-handoff"},
+                requested,
+                dedication_queue_id=dedication_queue_id,
+            )
+            state.force_listener_request_handoff_music()
+            token = state.listener_request_handoff.token
+
+            await asyncio.wait_for(first_promise_render_started.wait(), timeout=3.0)
+            seed_segment = queue.get_nowait()
+            queue.task_done()
+            state.queued_segments.clear()
+            state.now_streaming = {
+                "type": SegmentType.BANTER.value,
+                "label": "Listener dedication",
+                "started": time.time(),
+                "metadata": {"queue_id": dedication_queue_id, "title": "Listener dedication"},
+            }
+            active_before_switch = state.listener_request_handoff
+            assert active_before_switch is not None
+            assert active_before_switch.pin_revision is not None
+            assert active_before_switch.force_next_revision is not None
+            old_pin_revision = active_before_switch.pin_revision
+            old_force_revision = active_before_switch.force_next_revision
+            old_source_revision = state.source_revision
+            old_continuity_epoch = state.continuity_epoch
+
+            result = _apply_loaded_source(
+                request,
+                [replacement],
+                PlaylistSource(kind="url", source_id="new-source", label="New source"),
+            )
+
+            assert result["skipped"] is False
+            assert not skip_event.is_set()
+            assert queue.empty()
+            assert state.continuity_slot is (fresh if fresh_continuity else None)
+            assert state.source_revision > old_source_revision
+            assert (state.continuity_epoch > old_continuity_epoch) is fresh_continuity
+            restored = state.listener_request_handoff
+            assert restored is not None
+            assert restored.token == token
+            assert restored.track is requested
+            assert restored.dedication_queue_id == dedication_queue_id
+            assert restored.pin_revision is None
+            assert restored.force_next_revision is not None
+            assert restored.force_next_revision > old_force_revision
+            assert restored.music_selection_exclusive is True
+            assert restored.borrowed_pin_clear_revision is None
+            assert restored.borrowed_force_clear_revision is None
+            assert state.force_next is SegmentType.MUSIC
+
+            # The dedication may finish before the stale render unwinds. Its
+            # still-owned retry must remain ahead of another producer bridge.
+            state.now_streaming = {
+                "type": SegmentType.BANTER.value,
+                "label": "Fallback audio",
+                "started": time.time(),
+                "metadata": {"queue_id": "post-dedication-fallback-q"},
+            }
+            release_first_promise_render.set()
+            await asyncio.wait_for(retry_render_started.wait(), timeout=3.0)
+            retrying = state.listener_request_handoff
+            assert retrying is not None
+            assert retrying.token == token
+            assert retrying.pin_revision is not None
+            assert retrying.pin_revision > old_pin_revision
+            assert retrying.force_next_revision == restored.force_next_revision
+            assert retrying.music_selection_exclusive is True
+            drain_bridge.assert_not_awaited()
+
+            release_retry_render.set()
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while token not in state.listener_request_admitted_reservations:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise TimeoutError("Retried promise did not reach queue admission")
+                await asyncio.sleep(0.01)
+
+            assert state.listener_request_handoff is None
+            assert queue.qsize() == config.pacing.lookahead_segments
+            (promised,) = list(queue._queue)
+            assert promised.type is SegmentType.MUSIC
+            assert promised.metadata["title_only"] == requested.title
+            assert promised.metadata[LISTENER_REQUEST_HANDOFF_TOKEN_KEY] == token
+            assert promised.metadata[LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY] == dedication_queue_id
+            assert state.discard_by_reason[GenerationWasteReason.STALE_SOURCE] == 1
+            assert state.continuity_slot is (fresh if fresh_continuity else None)
+            assert rendered_tracks == [seed, requested, requested]
+            assert seed_segment.metadata["title_only"] == seed.title
+        finally:
+            release_first_promise_render.set()
+            release_retry_render.set()
+            producer_task.cancel()
+            try:
+                await producer_task
+            except asyncio.CancelledError:
+                pass
+
+
+@pytest.mark.asyncio
 async def test_stopped_session_discards_finished_segment_without_advancing_state(tmp_path):
     """A segment finished after /stop should be dropped without mutating playback state."""
     track = Track(title="Late Song", artist="Late Artist", duration_ms=200_000, spotify_id="late1")

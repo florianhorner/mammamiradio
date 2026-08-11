@@ -10,7 +10,6 @@ async (page) => {
   async function exerciseListenerSongFailureRows() {
     const failureCases = [
       ['low_confidence', 'needs exact title + artist', 'Try exact title + artist'],
-      ['ambiguous_request', 'no match — try title + artist', 'No match — try title + artist'],
       ['not_found', 'no match — try title + artist', 'No match — try title + artist'],
       ['longform_audio', 'too long — choose one song', 'Too long — choose one song'],
       ['non_music_audio', 'not playable — choose another', 'Not playable — choose another'],
