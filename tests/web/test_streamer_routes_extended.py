@@ -18,11 +18,12 @@ from fastapi import FastAPI
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
+from mammamiradio.playlist.blocklist import load_blocklist
 from mammamiradio.playlist.downloader import YtdlpSearchOutcome
-from mammamiradio.playlist.playlist import ExplicitSourceError
+from mammamiradio.playlist.playlist import ExplicitSourceError, normalized_track_key
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, _admin_track_id, router
+from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, _admin_track_id, _apply_ban, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -3787,6 +3788,110 @@ async def test_download_listener_song_equivalent_identity_cannot_bypass_blocklis
     assert req["song_error_reason"] == "banned"
     assert req["song_found"] is False
     assert state.playlist == original_playlist
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_layout", "first_receipt", "second_layout"),
+    [
+        (
+            "Lady Gaga feat. Bradley Cooper - Shallow",
+            "Lady Gaga feat. Bradley Cooper – Shallow",
+            "Lady Gaga - Shallow (feat. Bradley Cooper)",
+        ),
+        (
+            "Lady Gaga - Shallow (feat. Bradley Cooper)",
+            "Lady Gaga – Shallow (feat. Bradley Cooper)",
+            "Lady Gaga feat. Bradley Cooper - Shallow",
+        ),
+    ],
+)
+async def test_listener_feature_credit_ban_survives_restart_and_blocks_alternate_layout(
+    tmp_path,
+    first_layout,
+    first_receipt,
+    second_layout,
+):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    first_request = {
+        "type": "song_request",
+        "message": "Play Shallow by Lady Gaga",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(first_request)
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": first_layout,
+                        "artist": "Generic Channel",
+                        "duration_ms": 180_000,
+                        "youtube_id": "shallow-first-layout",
+                        "album_art": "",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "shallow-first.mp3",
+        ),
+    ):
+        await _download_listener_song(first_request, app.state, state.source_revision)
+
+    accepted_track = first_request["song_track_obj"]
+    assert normalized_track_key(accepted_track) == ("lady gaga", "shallow")
+    assert first_request["song_track"] == first_receipt
+
+    ban_result = _apply_ban(state, app.state.config, [accepted_track], queue=app.state.queue)
+
+    assert ban_result["persisted"] is True
+    state.blocklist = load_blocklist(tmp_path)
+    assert ("lady gaga", "shallow") in state.blocklist
+    state.pending_requests.remove(first_request)
+
+    second_request = {
+        "type": "song_request",
+        "message": "Play Shallow by Lady Gaga",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(second_request)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": second_layout,
+                        "artist": "Generic Channel",
+                        "duration_ms": 180_000,
+                        "youtube_id": "shallow-second-layout",
+                        "album_art": "",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "shallow-second.mp3",
+        ),
+    ):
+        await _download_listener_song(second_request, app.state, state.source_revision)
+
+    assert second_request["song_found"] is False
+    assert second_request["song_error"] is True
+    assert second_request["song_error_reason"] == "banned"
+    assert all(normalized_track_key(track) != ("lady gaga", "shallow") for track in state.playlist)
     assert state.pinned_track is None
 
 

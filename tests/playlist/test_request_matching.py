@@ -428,7 +428,7 @@ def test_featured_artist_credits_remain_strong_identity_evidence(candidate_title
     )
 
     assert result.best is not None
-    assert result.best.identity_title == "Shallow"
+    assert (result.best.station_artist, result.best.identity_title) == ("Lady Gaga", "Shallow")
     assert result.best.identity_artist == "Lady Gaga"
 
 
@@ -442,12 +442,61 @@ def test_featured_artist_match_carries_every_verified_credit_for_policy_checks()
     )
 
     assert result.best is not None
+    assert result.best.artist == "Lady Gaga feat. Bradley Cooper"
+    assert result.best.station_artist == "Lady Gaga"
     assert result.best.identity_artist == "Bradley Cooper"
     assert result.best.credited_artists == (
         "Lady Gaga feat. Bradley Cooper",
         "Bradley Cooper",
         "Lady Gaga",
     )
+
+
+@pytest.mark.parametrize("credit", ["feat. Bradley Cooper", "ft. Bradley Cooper", "featuring Bradley Cooper"])
+def test_artist_side_feature_credit_uses_request_independent_station_artist(credit):
+    lady_gaga = parse_song_request("Play Shallow by Lady Gaga")
+    bradley_cooper = parse_song_request("Play Shallow by Bradley Cooper")
+    assert lady_gaga is not None and bradley_cooper is not None
+    metadata = [{"title": f"Lady Gaga {credit} - Shallow", "artist": "Generic Channel"}]
+
+    lady_gaga_match = match_song_request_candidates(lady_gaga, metadata).best
+    bradley_cooper_match = match_song_request_candidates(bradley_cooper, metadata).best
+
+    assert lady_gaga_match is not None and bradley_cooper_match is not None
+    assert (lady_gaga_match.station_artist, lady_gaga_match.identity_title) == ("Lady Gaga", "Shallow")
+    assert (bradley_cooper_match.station_artist, bradley_cooper_match.identity_title) == ("Lady Gaga", "Shallow")
+
+
+def test_feature_credit_layouts_share_one_station_identity():
+    intent = parse_song_request("Play Shallow by Lady Gaga")
+    assert intent is not None
+
+    matches = [
+        match_song_request_candidates(intent, [{"title": title, "artist": "Generic Channel"}]).best
+        for title in (
+            "Lady Gaga feat. Bradley Cooper - Shallow",
+            "Lady Gaga - Shallow (feat. Bradley Cooper)",
+        )
+    ]
+
+    assert all(match is not None for match in matches)
+    assert {(match.station_artist, match.identity_title) for match in matches if match is not None} == {
+        ("Lady Gaga", "Shallow")
+    }
+
+
+def test_station_artist_keeps_equal_billing_collaborators_intact():
+    intent = parse_song_request("Play Shallow by Lady Gaga")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": "Lady Gaga & Bradley Cooper - Shallow", "artist": "Generic Channel"}],
+    )
+
+    assert result.best is not None
+    assert result.best.artist == "Lady Gaga & Bradley Cooper"
+    assert result.best.station_artist == "Lady Gaga & Bradley Cooper"
 
 
 @pytest.mark.parametrize(

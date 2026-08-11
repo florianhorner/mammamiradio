@@ -411,6 +411,18 @@ def _clean_artist(value: object) -> str:
     return artist.strip(" -\u2013\u2014")
 
 
+def _station_artist_identity(value: object) -> str:
+    """Return the candidate-backed primary artist for station identity.
+
+    A conventional ``feat.`` credit names a guest without changing the base
+    artist used by bans, dedupe, queue admission, and cache rescue. Co-billed
+    artists joined by ``&``, ``x``, commas, or ``and`` remain intact.
+    """
+    artist = _clean_artist(value)
+    primary = _FEATURE_SUFFIX_RE.sub("", artist).strip(" -\u2013\u2014")
+    return primary or artist
+
+
 def _canonical_matched_artist(requested: str, evidence: str) -> str:
     """Keep candidate spelling while restoring separators hidden by channel branding."""
     candidate = _clean_artist(evidence)
@@ -621,10 +633,15 @@ def _candidate_identity(metadata: dict[str, Any]) -> tuple[list[str], str, str, 
 
 @dataclass(frozen=True)
 class SongCandidateMatch:
-    """A relevant search candidate with safe canonical display metadata."""
+    """A relevant result with separate display and station identities.
+
+    ``artist``/``title`` retain candidate-backed credits for listener copy.
+    ``station_artist``/``identity_title`` are the stable Track identity.
+    """
 
     metadata: dict[str, Any]
     artist: str
+    station_artist: str
     identity_artist: str
     credited_artists: tuple[str, ...]
     title: str
@@ -758,16 +775,18 @@ def match_song_request_candidates(
             # Never carry listener spelling into station identity. The matcher
             # may equate accents/punctuation/compact channel names; retaining
             # request text here would bypass canonical dedupe or blocklists.
-            canonical_artist = matched_artist or display_artist
-            identity_artist = identity_artist or canonical_artist
-            credited_artists = _credited_artist_identities(canonical_artist, identity_artist)
+            candidate_artist = matched_artist or display_artist
+            identity_artist = identity_artist or candidate_artist
+            credited_artists = _credited_artist_identities(candidate_artist, identity_artist)
+            station_artist = _station_artist_identity(candidate_artist)
             identity_title = _strip_title_variant(matched_title)
             if not identity_title:
                 continue
             matches.append(
                 SongCandidateMatch(
                     metadata=dict(metadata),
-                    artist=canonical_artist,
+                    artist=candidate_artist,
+                    station_artist=station_artist,
                     identity_artist=identity_artist,
                     credited_artists=credited_artists,
                     title=matched_title,

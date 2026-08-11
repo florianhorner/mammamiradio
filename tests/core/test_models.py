@@ -462,7 +462,7 @@ def test_switch_playlist_clears_listener_request_state():
     promised = _track(99)
     state.pinned_track = promised
     assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, promised)
-    state.force_next = SegmentType.BANTER
+    force_revision = state.set_force_next(SegmentType.BANTER)
 
     state.switch_playlist([_track(2)])
 
@@ -480,6 +480,29 @@ def test_switch_playlist_clears_listener_request_state():
     assert state.pinned_track is None
     assert state.listener_request_handoff is None
     assert state.force_next is None
+    assert state.force_next_revision == force_revision + 1
+
+
+def test_force_next_revision_protects_same_valued_replacement():
+    state = StationState()
+
+    listener_revision = state.set_force_next(SegmentType.MUSIC)
+    panic_revision = state.set_force_next(SegmentType.MUSIC)
+
+    assert panic_revision == listener_revision + 1
+    assert not state.clear_force_next(
+        expected_revision=listener_revision,
+        expected_type=SegmentType.MUSIC,
+    )
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision == panic_revision
+
+    assert state.clear_force_next(
+        expected_revision=panic_revision,
+        expected_type=SegmentType.MUSIC,
+    )
+    assert state.force_next is None
+    assert state.force_next_revision == panic_revision + 1
 
 
 def test_pending_actions_are_bounded():

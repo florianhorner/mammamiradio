@@ -825,6 +825,11 @@ class StationState:
     ha_ritual_recipe_audit: list[dict[str, object]] = field(default_factory=list)
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Monotonic ownership generation for ``force_next``. Every semantic writer,
+    # including a same-valued replacement, advances this counter so cleanup for
+    # an older render cannot erase a newer operator/internal directive merely
+    # because both happen to request the same SegmentType.
+    force_next_revision: int = 0
     # Operator-attributed pending trigger: set ONLY by the /api/trigger endpoint so the
     # admin panel can honestly surface "you triggered X" without false-lighting on internal
     # forces — the 60s-silence dead-air rescue and stop/skip/resume all set force_next too.
@@ -1525,13 +1530,38 @@ class StationState:
         self._listener_request_rl.clear()
         self.pinned_track = None
         self.listener_request_handoff = None
-        self.force_next = None
+        self.clear_force_next()
         self.operator_force_pending = None
         self.heading = None
         self.heading_revision += 1
         self.heading_pending_announcement = ""
         self.heading_pending_narration_kind = ""
         self.heading_announced_id = ""
+
+    def set_force_next(self, value: SegmentType | None) -> int:
+        """Replace the next-segment directive and return its ownership revision.
+
+        A same-valued write is still a new directive. Advancing the revision on
+        every call lets deferred cleanup distinguish its own force from a newer
+        Panic Cut, move-to-next, or other writer that selected the same type.
+        """
+        self.force_next = value
+        self.force_next_revision += 1
+        return self.force_next_revision
+
+    def clear_force_next(
+        self,
+        *,
+        expected_revision: int | None = None,
+        expected_type: SegmentType | None = None,
+    ) -> bool:
+        """Clear ``force_next`` only when optional ownership checks still match."""
+        if expected_revision is not None and self.force_next_revision != expected_revision:
+            return False
+        if expected_type is not None and self.force_next is not expected_type:
+            return False
+        self.set_force_next(None)
+        return True
 
     def _mark_pending_requests_source_changed(self) -> None:
         if not self.pending_requests:

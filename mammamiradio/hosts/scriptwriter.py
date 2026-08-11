@@ -242,7 +242,7 @@ class ListenerRequestCommit:
     _plan_snapshot: _ListenerRequestPlanSnapshot | None = None
     _claimed_pin_track: object | None = None
     _claimed_song_pinned: bool = False
-    _claimed_force_next: bool = False
+    _claimed_force_next_revision: int | None = None
 
     def capture_plan(
         self,
@@ -251,7 +251,7 @@ class ListenerRequestCommit:
         requires_matched_pin: bool = False,
         claimed_pin_track: object | None = None,
         claimed_song_pinned: bool = False,
-        claimed_force_next: bool = False,
+        claimed_force_next_revision: int | None = None,
     ) -> ListenerRequestCommit:
         """Freeze the request truth that the generated copy is allowed to air."""
 
@@ -263,7 +263,7 @@ class ListenerRequestCommit:
         )
         self._claimed_pin_track = claimed_pin_track
         self._claimed_song_pinned = claimed_song_pinned
-        self._claimed_force_next = claimed_force_next
+        self._claimed_force_next_revision = claimed_force_next_revision
         return self
 
     def is_plan_current(self, state: StationState, *, require_matched_pin: bool = True) -> bool:
@@ -309,14 +309,18 @@ class ListenerRequestCommit:
         owns_current_pin = state.pinned_track is claimed_track
         if owns_current_pin:
             state.pinned_track = None
-            if self._claimed_force_next and state.force_next is SegmentType.MUSIC:
-                state.force_next = None
+            claimed_force_revision = self._claimed_force_next_revision
+            if claimed_force_revision is not None:
+                state.clear_force_next(
+                    expected_revision=claimed_force_revision,
+                    expected_type=SegmentType.MUSIC,
+                )
 
         # Idempotence matters because a rendered segment can be rejected in a
         # nested failure path and then pass through the outer cleanup belt.
         self._claimed_pin_track = None
         self._claimed_song_pinned = False
-        self._claimed_force_next = False
+        self._claimed_force_next_revision = None
 
     def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
         del config, queue_id
@@ -579,7 +583,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     if is_song and req.get("song_found") and req.get("song_track"):
         track_obj = req.get("song_track_obj")
         claimed_song_pinned = False
-        claimed_force_next = False
+        claimed_force_next_revision: int | None = None
         # Establish one exact play-next claim. The background download may
         # already own the slot; otherwise this planner claims it when available.
         # The pending request keeps that recording out of anonymous rotation,
@@ -632,8 +636,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
             # recording keeps the downloaded request metadata authoritative.
             state.pinned_track = track_obj
             if state.force_next is None:
-                state.force_next = SegmentType.MUSIC
-                claimed_force_next = True
+                claimed_force_next_revision = state.set_force_next(SegmentType.MUSIC)
             req["song_pinned"] = True
             claimed_song_pinned = True
         commit.capture_plan(
@@ -641,7 +644,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
             requires_matched_pin=True,
             claimed_pin_track=track_obj if claimed_song_pinned else None,
             claimed_song_pinned=claimed_song_pinned,
-            claimed_force_next=claimed_force_next,
+            claimed_force_next_revision=claimed_force_next_revision,
         )
         return (
             f"""

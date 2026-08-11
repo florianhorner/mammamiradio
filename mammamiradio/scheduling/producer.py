@@ -578,7 +578,7 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
         # The consumed MUSIC force could not safely honor this pin yet. Put the
         # dedication planning turn next; _plan_listener_request_block then
         # transfers the held recording and forces its one announced music turn.
-        state.force_next = SegmentType.BANTER
+        state.set_force_next(SegmentType.BANTER)
     try:
         if held_listener_pin is not None:
             state.pinned_track = handoff.track if handoff is not None else None
@@ -3055,7 +3055,7 @@ async def _fire_interrupt(
     state.ha_pending_directive_moment_id = ""
     state.ha_pending_directive_source = directive_source
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
-    state.force_next = SegmentType.BANTER  # safety belt if chaos_pending is raced
+    state.set_force_next(SegmentType.BANTER)  # safety belt if chaos_pending is raced
     state.chaos_cutover_epoch += 1
     if skip_event is not None:
         skip_event.set()
@@ -3916,7 +3916,7 @@ def _maybe_arm_first_home_context_moment(
     state.ha_pending_directive_moment_id = ""  # not a ritual moment — no receipt
     state.ha_pending_directive_source = "ha"
     if seg_type != SegmentType.BANTER:
-        state.force_next = SegmentType.BANTER
+        state.set_force_next(SegmentType.BANTER)
 
 
 def _cache_eviction_protected_paths(queue: asyncio.Queue[Segment], state: StationState) -> set[Path]:
@@ -4357,7 +4357,7 @@ async def _run_producer_inner(
         # the retry at the cycle boundary, where consuming the force and later
         # queue admission cannot erase a newer operator directive mid-render.
         if state.listener_request_handoff is not None and state.force_next is None:
-            state.force_next = SegmentType.MUSIC
+            state.set_force_next(SegmentType.MUSIC)
         if state.chaos_pending is not None:
             chaos_subtype = state.chaos_pending
             state.chaos_last_degraded_reason = ""
@@ -4365,7 +4365,7 @@ async def _run_producer_inner(
             logger.info("Chaos first-strike: %s", chaos_subtype.value)
         elif state.force_next is not None:
             seg_type = state.force_next
-            state.force_next = None
+            state.clear_force_next()
             # An operator trigger (not the 60s-silence rescue or other internal
             # forces) gets air-next: it is front-inserted so it airs at the next
             # boundary instead of behind the buffered lookahead.
@@ -4375,7 +4375,7 @@ async def _run_producer_inner(
                 # A playlist move can replace force_next while an earlier Air
                 # Next render is still guarded. Keep the operator pick queued,
                 # but do not give the replacement segment front-insert status.
-                state.force_next = pending_operator_force
+                state.set_force_next(pending_operator_force)
             # Keep operator_force_pending set through the whole render (cleared only
             # when the segment actually queues, in _front_insert_queue_and_shadow, or
             # on a discard below). That makes the second-trigger rejection hold for the
@@ -6632,7 +6632,7 @@ async def _run_producer_inner(
                 # chaos_pending already produced the banter; clearing here
                 # prevents the producer from queueing an extra banter next cycle.
                 if state.force_next == SegmentType.BANTER:
-                    state.force_next = None
+                    state.clear_force_next()
             _segments_produced += 1
             # Queue appended → up_next changed → integration consumers polling
             # ``changed_at`` need to see this even without a segment transition.

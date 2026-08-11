@@ -353,7 +353,7 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
         if state.pinned_track is track:
             state.pinned_track = None
             if state.force_next == SegmentType.MUSIC:
-                state.force_next = None
+                state.clear_force_next()
     return {"ok": True, "removed": len(removed_requests)}
 
 
@@ -530,12 +530,13 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             return
 
         track: Track | None = None
+        track_display = ""
         held_notice_reason = ""
         for match in relevance.matches:
             meta = match.metadata
             candidate = Track(
-                title=match.title,
-                artist=match.artist,
+                title=match.identity_title,
+                artist=match.station_artist,
                 duration_ms=int(meta.get("duration_ms") or 0),
                 youtube_id=str(meta.get("youtube_id") or ""),
                 album_art=_safe_external_album_art(meta.get("album_art")),
@@ -543,6 +544,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             verdict = classify_youtube_candidate(candidate, state.playlist, app_state.config.pacing, metadata=meta)
             if verdict.accepted:
                 track = candidate
+                track_display = " \u2013 ".join(part for part in (match.artist, match.title) if part)
                 break
             if not held_notice_reason and verdict.notice_reason:
                 held_notice_reason = verdict.notice_reason
@@ -592,7 +594,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             req["song_found"] = True
             req["song_error"] = False
             req["song_error_reason"] = ""
-            req["song_track"] = track.display
+            req["song_track"] = track_display or track.display
             req["song_track_obj"] = track
             # Record whether the download claimed the initial play-next slot.
             # Request reservations keep either outcome off air until the

@@ -4315,6 +4315,59 @@ async def test_panic_cut_while_streaming():
 
 
 @pytest.mark.asyncio
+async def test_panic_music_force_survives_stale_listener_plan_abandon():
+    """A newer same-valued Panic force must outlive listener-plan cleanup."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _abandon_banter_commit
+
+    app = _make_test_app()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": "panic-listener-plan",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+    state.now_streaming = {"type": "music", "label": "Current song", "started": time.time()}
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+    assert state.pinned_track is requested
+    assert state.force_next is SegmentType.MUSIC
+    listener_force_revision = state.force_next_revision
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/panic")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert state.force_next is SegmentType.MUSIC
+    panic_force_revision = state.force_next_revision
+    assert panic_force_revision > listener_force_revision
+
+    # Panic invalidates the in-flight dedication through continuity_epoch. Its
+    # cleanup owns the listener pin, but not Panic's newer same-valued force.
+    _abandon_banter_commit(state, commit)
+
+    assert listener_request["song_pinned"] is False
+    assert state.pinned_track is None
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision == panic_force_revision
+
+
+@pytest.mark.asyncio
 async def test_panic_cut_does_not_skip_when_no_ready_runway(tmp_path):
     """Panic still steers recovery, but never cuts current audio into an empty queue."""
     app = _make_test_app()

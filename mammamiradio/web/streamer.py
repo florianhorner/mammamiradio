@@ -1515,7 +1515,7 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     if state.pinned_track is not None and _is_banned_track(state.pinned_track):
         state.pinned_track = None
         if state.force_next is SegmentType.MUSIC:
-            state.force_next = None
+            state.clear_force_next()
         pin_cleared = True
     # Ban policy is intentionally broader than handoff ownership: it applies
     # to every source with the same canonical artist/title. Revoke a promised
@@ -3298,7 +3298,7 @@ async def run_playback_loop(app) -> None:
                         # queue_empty_since is intentionally NOT reset — the silence gate on
                         # /healthz and /readyz must stay active until real audio resumes.
                         if state.force_next is None:
-                            state.force_next = SegmentType.BANTER
+                            state.set_force_next(SegmentType.BANTER)
                             logger.error(
                                 "Queue empty %ds with %d active listeners - requesting forced banter from producer",
                                 int(elapsed),
@@ -4601,7 +4601,7 @@ async def _request_skip(
 
     bridged = False
     if not _playable_runway_available(app_state.queue, state):
-        state.force_next = SegmentType.MUSIC
+        state.set_force_next(SegmentType.MUSIC)
         bridged = True
         state.pending_actions.append(
             {
@@ -4697,7 +4697,7 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
         logger.warning("Panic cut withheld because no playable runway is ready; current audio will finish")
     # force_next is set AFTER skip_event to avoid the producer consuming it
     # before the current segment has been cut.
-    state.force_next = SegmentType.MUSIC
+    state.set_force_next(SegmentType.MUSIC)
     logger.warning(
         "Panic action completed by admin — purged %d segments, skipped=%s, forcing next=music",
         purged,
@@ -4833,7 +4833,7 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state.interrupt_slot = None
     state.interrupt_slot_ephemeral = False
     state.continuity_slot = None
-    state.force_next = None
+    state.clear_force_next()
     state.operator_force_pending = None
     # Skip current segment
     if state.now_streaming:
@@ -4891,7 +4891,7 @@ async def trigger_segment(request: Request, _: None = Depends(require_admin_acce
         request.app.state.config,
         discard_reason=GenerationWasteReason.OPERATOR_PURGE,
     )
-    state.force_next = valid[seg_type]
+    state.set_force_next(valid[seg_type])
     # Attribute this force to the operator so the admin panel can surface it as a
     # deliberate trigger (internal forces never set this — see StationState).
     state.operator_force_pending = valid[seg_type]
@@ -5639,7 +5639,7 @@ async def set_party(request: Request, _: None = Depends(require_admin_access)):
                 discard_reason=GenerationWasteReason.OPERATOR_PURGE,
             )
             state.playlist_revision += 1
-            state.force_next = SegmentType.BANTER
+            state.set_force_next(SegmentType.BANTER)
 
     logger.info("Festival Mode %s by admin", "enabled" if target_mode else "disabled")
     _record_operator_action(request, "festival_mode", old_on, target_mode == "festival")
@@ -5693,7 +5693,7 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
             discard_reason=GenerationWasteReason.OPERATOR_PURGE,
         )
         state.switch_playlist([], None)
-        state.force_next = SegmentType.BANTER
+        state.set_force_next(SegmentType.BANTER)
         persisted = _delete_persisted_source(config.cache_dir)
     logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments, forced banter", purged)
     return {"ok": True, "purged": purged, "persisted": persisted}
@@ -6287,7 +6287,7 @@ async def _commit_external_download(
             # (banter/ad/news) or a mode change may have set force_next; that directive
             # plays first, then the pinned track lands on the next music slot.
             if state.force_next is None:
-                state.force_next = SegmentType.MUSIC
+                state.set_force_next(SegmentType.MUSIC)
             return "pinned"
 
     await asyncio.to_thread(reject_cached_download, config.cache_dir, track.cache_key, rejected_download_reason)
@@ -7222,7 +7222,7 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
         # The pinned track will play after the buffered segments drain (≤1-2
         # songs), which is correct behaviour for "move to upcoming".
         state.playlist_revision += 1
-        state.force_next = SegmentType.MUSIC
+        state.set_force_next(SegmentType.MUSIC)
         return {
             "ok": True,
             "moved": track.display,
