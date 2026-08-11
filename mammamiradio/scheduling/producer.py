@@ -526,9 +526,10 @@ def _reserved_listener_track_keys(state: StationState) -> set[str]:
     from the pending request keeps its lifetime aligned with dismissal, source
     changes, and the existing receipt commit without another mutable registry.
 
-    An explicit pin of the same recording remains authoritative. That is either
-    the listener handoff itself or a deliberate operator override, not a random
-    rotation selection.
+    A pin of the same recording is still reserved until the request planner
+    recognizes it as the listener handoff. Letting it bypass this fence would
+    air the song before its dedication and leave ``song_pinned`` false, so the
+    planner would pin and play the same recording a second time.
     """
     reserved = {
         track.cache_key
@@ -537,8 +538,6 @@ def _reserved_listener_track_keys(state: StationState) -> set[str]:
         and not request.get("song_pinned")
         and isinstance((track := request.get("song_track_obj")), Track)
     }
-    if state.pinned_track is not None:
-        reserved.discard(state.pinned_track.cache_key)
     return reserved
 
 
@@ -550,12 +549,34 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
         rejected_keys.add(state.pinned_track.cache_key)
     reserved_listener_keys = _reserved_listener_track_keys(state)
     excluded_keys = rejected_keys | reserved_listener_keys
+    # ``StationState.select_next_track`` consumes a pin before applying its
+    # exclusion set. Temporarily lift a same-recording listener pin out of that
+    # call so it cannot air anonymously (or be silently discarded) before the
+    # request planner transfers it into the single announced handoff. An
+    # unrelated operator/earlier pin is not listener-reserved and keeps its
+    # ordinary authority.
+    held_listener_pin = (
+        state.pinned_track
+        if state.pinned_track is not None and state.pinned_track.cache_key in reserved_listener_keys
+        else None
+    )
+    if held_listener_pin is not None and state.force_next is None:
+        # The consumed MUSIC force could not safely honor this pin yet. Put the
+        # dedication planning turn next; _plan_listener_request_block then
+        # transfers the held recording and forces its one announced music turn.
+        state.force_next = SegmentType.BANTER
     try:
-        candidate = state.select_next_track(
-            repeat_cooldown=config.playlist.repeat_cooldown,
-            artist_cooldown=config.playlist.artist_cooldown,
-            excluded_cache_keys=excluded_keys,
-        )
+        if held_listener_pin is not None:
+            state.pinned_track = None
+        try:
+            candidate = state.select_next_track(
+                repeat_cooldown=config.playlist.repeat_cooldown,
+                artist_cooldown=config.playlist.artist_cooldown,
+                excluded_cache_keys=excluded_keys,
+            )
+        finally:
+            if held_listener_pin is not None:
+                state.pinned_track = held_listener_pin
     except RuntimeError as exc:
         if not state.playlist or str(exc) == "Playlist is empty":
             raise

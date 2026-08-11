@@ -4861,6 +4861,62 @@ def test_plan_listener_request_block_waits_for_occupied_pin(state):
     assert req["song_pinned"] is True
 
 
+def test_plan_listener_request_block_keeps_fifo_when_pin_belongs_to_later_request(state):
+    first_track = Track(
+        title="First Request",
+        artist="First Artist",
+        duration_ms=180000,
+        youtube_id="listener-first",
+    )
+    later_track = Track(
+        title="Later Request",
+        artist="Later Artist",
+        duration_ms=180000,
+        youtube_id="listener-later",
+    )
+    first_req = {
+        "name": "Luca",
+        "message": "play First Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": first_track.display,
+        "song_track_obj": first_track,
+        "song_pinned": False,
+    }
+    later_req = {
+        "name": "Giulia",
+        "message": "play Later Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": later_track.display,
+        "song_track_obj": later_track,
+        "song_pinned": False,
+    }
+    state.pending_requests.extend([first_req, later_req])
+    state.pinned_track = later_track
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "First Request" in prompt
+    assert commit is not None
+    assert state.pinned_track is first_track
+    assert first_req["song_pinned"] is True
+    assert later_req["song_pinned"] is False
+
+    # Once the first handoff is committed and consumed, the later request still
+    # owns its reserved recording and reclaims the shared pin on its own turn.
+    commit.apply(state)
+    state.pinned_track = None
+    state.force_next = None
+    later_prompt, later_commit = _plan_listener_request_block(state)
+    assert "Later Request" in later_prompt
+    assert later_commit is not None
+    assert state.pinned_track is later_track
+    assert later_req["song_pinned"] is True
+
+
 def test_plan_listener_request_block_ignores_ready_second_song_until_it_reaches_head(state):
     first_req = {
         "name": "Luca",

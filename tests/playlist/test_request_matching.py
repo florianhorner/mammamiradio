@@ -769,6 +769,30 @@ def test_exact_packaging_word_title_survives_display_and_structured_cleanup(titl
     assert result.best.identity_title == title
 
 
+@pytest.mark.parametrize(
+    ("title", "packaged_title"),
+    [
+        ("HD", "HD (Official Audio)"),
+        ("HQ", "HQ - Official Audio"),
+        ("4K", "4K (Official Video)"),
+        ("SD", "SD | Lyrics"),
+    ],
+)
+def test_quality_word_title_survives_wrapped_direct_candidate_metadata(title, packaged_title):
+    assert clean_candidate_title(packaged_title) == title
+    intent = parse_song_request(f"Play {title} by Example Artist")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": f"Example Artist - {packaged_title}", "artist": "Example Artist"}],
+    )
+
+    assert result.best is not None
+    assert result.best.title == title
+    assert result.best.identity_title == title
+
+
 def test_legitimate_audio_title_is_not_erased_as_platform_noise():
     intent = parse_song_request("Play Audio by Sia")
     assert intent is not None

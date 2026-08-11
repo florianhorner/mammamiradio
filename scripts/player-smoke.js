@@ -349,6 +349,246 @@ async (page) => {
     return { pollsBefore, message, name };
   }
 
+  async function exerciseSongReceiptScenarios() {
+    let stage = 'reload terminal outcomes';
+
+    async function exerciseReloadedReceipt({ scenario, token, terminalBody, expectedText, label }) {
+      stage = `${label} receipt reload`;
+      let reloaded = false;
+      const terminalStep = { hold: true, body: terminalBody };
+      setReceiptPlan(token, {
+        next: () => (reloaded ? terminalStep : { body: searchingReceipt() }),
+      });
+      const started = await startTrackedSong(scenario, `Smoke ${label} request`);
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        started.pollsBefore + 1,
+        2000,
+        `${label} searching receipt was never polled before reload`,
+      );
+      await reloadPage();
+      await waitForReceiptText(copy.form_song_searching);
+      const restored = await receiptUiState();
+      assert(restored.message === started.message, `${label} searching receipt lost its message across reload`);
+      assert(restored.submitDisabled, `${label} searching receipt enabled duplicate submission after reload`);
+      assert(
+        restored.stored && JSON.parse(restored.stored).public_token === token,
+        `${label} receipt token did not survive reload`,
+      );
+
+      reloaded = true;
+      const pollsAfterReload = receiptPolls.length;
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        pollsAfterReload + 1,
+        2000,
+        `${label} receipt did not resume polling after reload`,
+      );
+      assert(typeof terminalStep.release === 'function', `${label} terminal poll was not held`);
+      terminalStep.release();
+      await waitForReceiptText(expectedText);
+      const terminal = await receiptUiState();
+      assert(terminal.stored === null, `${label} terminal receipt remained in session storage`);
+    }
+
+    async function exerciseTerminalAnimationRace({ scenario, token, deferFrame }) {
+      stage = `${scenario} animation race`;
+      const terminalStep = { hold: true, body: matchedReceipt('Franco Battiato – Centro di gravità permanente') };
+      setReceiptPlan(token, { steps: [terminalStep] });
+      requestScenario = scenario;
+      await page.evaluate((storageKey) => sessionStorage.removeItem(storageKey), songReceiptStorageKey);
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await loadFreshPage();
+      assert(
+        !(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)),
+        `${scenario} could not enable the animated receipt path`,
+      );
+      await page.addStyleTag({
+        content: '.mmr-dedica-form.is-sending { animation-play-state: paused !important; }',
+      });
+      const pollsBefore = receiptPolls.length;
+      const postsBefore = requestPosts.length;
+      await page.locator('#req-msg').fill(`Smoke ${scenario}`);
+      await page.locator('#request-form button[type="submit"]').click();
+      await waitForRouteCount(
+        () => requestPosts.length,
+        postsBefore + 1,
+        2000,
+        `${scenario} POST was never requested`,
+      );
+
+      stage = `${scenario} animation start`;
+      try {
+        await page.waitForFunction(
+          () => document.getElementById('request-form').classList.contains('is-sending'),
+          null,
+          { timeout: 2000 },
+        );
+      } catch (error) {
+        const formState = await page.evaluate(() => {
+          const form = document.getElementById('request-form');
+          const receipt = document.getElementById('request-sent');
+          return {
+            className: form ? form.className : '',
+            submitting: form ? form.dataset.submitting || '' : '',
+            receipt: receipt ? receipt.textContent.trim() : '',
+          };
+        });
+        throw new Error(`${error.message}; form=${JSON.stringify(formState)}`);
+      }
+      await page.evaluate(() => { window.__playerSmokeHoldRequestFrames = true; });
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        pollsBefore + 1,
+        2000,
+        `${scenario} terminal poll was never requested`,
+      );
+
+      if (deferFrame) {
+        await page.locator('#request-form').evaluate((form) => {
+          form.dispatchEvent(new AnimationEvent('animationend', { animationName: 'tt-card-lift', bubbles: true }));
+        });
+        stage = `${scenario} deferred searching frame`;
+        await page.waitForFunction(
+          () => window.__playerSmokeHeldRequestFrameCount() === 1,
+          null,
+          { timeout: 2000, polling: 20 },
+        );
+      }
+
+      terminalStep.release();
+      stage = `${scenario} terminal completion`;
+      await page.waitForFunction(
+        (storageKey) => sessionStorage.getItem(storageKey) === null,
+        songReceiptStorageKey,
+        { timeout: 2000, polling: 20 },
+      );
+
+      if (!deferFrame) {
+        stage = `${scenario} terminal frame`;
+        await page.waitForFunction(
+          () => window.__playerSmokeHeldRequestFrameCount() === 1,
+          null,
+          { timeout: 2000, polling: 20 },
+        );
+        await page.locator('#request-form').evaluate((form) => {
+          form.dispatchEvent(new AnimationEvent('animationend', { animationName: 'tt-card-lift', bubbles: true }));
+        });
+        assert(
+          await page.evaluate(() => window.__playerSmokeHeldRequestFrameCount()) === 1,
+          'late lift callback queued a stale searching frame',
+        );
+      } else {
+        stage = `${scenario} terminal frame after stale frame`;
+        await page.waitForFunction(
+          () => window.__playerSmokeHeldRequestFrameCount() === 2,
+          null,
+          { timeout: 2000, polling: 20 },
+        );
+      }
+
+      await page.evaluate(() => window.__playerSmokeFlushRequestFrames());
+      const expected = copy.form_song_matched.replace(
+        '{track}',
+        'Franco Battiato – Centro di gravità permanente',
+      );
+      await waitForReceiptText(expected);
+      await page.waitForTimeout(80);
+      assert((await receiptUiState()).receipt === expected, `${scenario} stale animation overwrote terminal outcome`);
+      await page.evaluate(() => { window.__playerSmokeHoldRequestFrames = false; });
+    }
+
+    try {
+      const matchedTrack = 'Mina – Città vuota';
+      await exerciseReloadedReceipt({
+        scenario: 'song_reload_matched',
+        token: receiptTokens.reloadMatched,
+        terminalBody: matchedReceipt(matchedTrack),
+        expectedText: copy.form_song_matched.replace('{track}', matchedTrack),
+        label: 'matched',
+      });
+      await exerciseReloadedReceipt({
+        scenario: 'song_reload_not_matched',
+        token: receiptTokens.reloadNotMatched,
+        terminalBody: notMatchedReceipt(),
+        expectedText: copy.form_song_no_verified_match,
+        label: 'not-matched',
+      });
+
+      for (const expiryStatus of [404, 410]) {
+        stage = `${expiryStatus} expired receipt`;
+        const token = expiryStatus === 404 ? receiptTokens.expired404 : receiptTokens.expired410;
+        const scenario = expiryStatus === 404 ? 'song_expired_404' : 'song_expired_410';
+        const expiryStep = { hold: true, status: expiryStatus };
+        setReceiptPlan(token, { steps: [expiryStep] });
+        const started = await startTrackedSong(scenario, `Smoke expiry ${expiryStatus}`, 'Lucia');
+        await waitForRouteCount(
+          () => receiptPolls.length,
+          started.pollsBefore + 1,
+          2000,
+          `${expiryStatus} expiry was never polled`,
+        );
+        expiryStep.release();
+        await waitForReceiptText(copy.form_song_tracking_expired);
+        const expired = await receiptUiState();
+        assert(expired.name === started.name, `${expiryStatus} expiry did not restore the original name`);
+        assert(expired.message === started.message, `${expiryStatus} expiry did not restore the original input`);
+        assert(expired.messageVisible, `${expiryStatus} expiry left the retry input hidden`);
+        assert(!expired.submitDisabled && !expired.submitting, `${expiryStatus} expiry did not enable retry submit`);
+        assert(expired.stored === null, `${expiryStatus} expiry retained a dead tracking token`);
+      }
+
+      stage = 'transient receipt retry';
+      const transientRetry = { hold: true, body: matchedReceipt('Lucio Dalla – Anna e Marco') };
+      setReceiptPlan(receiptTokens.transient, {
+        steps: [{ abort: true }, transientRetry],
+      });
+      const transientStart = await startTrackedSong('song_transient', 'Smoke transient retry');
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        transientStart.pollsBefore + 2,
+        3000,
+        'transient receipt failure did not retry',
+      );
+      const retrying = await receiptUiState();
+      assert(retrying.receipt === copy.form_song_searching, 'transient poll failure replaced the searching receipt');
+      assert(retrying.stored !== null, 'transient poll failure erased the resumable receipt');
+      transientRetry.release();
+      await waitForReceiptText(copy.form_song_matched.replace('{track}', 'Lucio Dalla – Anna e Marco'));
+
+      stage = 'immediate terminal POST';
+      const immediatePollCount = receiptPolls.length;
+      await startTrackedSong(
+        'song_immediate_terminal',
+        'Smoke immediate terminal',
+        'Anna',
+        copy.form_song_no_verified_match,
+      );
+      await page.waitForTimeout(120);
+      assert(receiptPolls.length === immediatePollCount, 'immediate terminal POST scheduled a receipt poll');
+      const immediate = await receiptUiState();
+      assert(immediate.stored === null, 'immediate terminal POST stored a tracking token');
+      assert(!immediate.submitDisabled, 'immediate terminal POST left retry submit disabled');
+
+      await exerciseTerminalAnimationRace({
+        scenario: 'song_stale_frame',
+        token: receiptTokens.staleFrame,
+        deferFrame: true,
+      });
+      await exerciseTerminalAnimationRace({
+        scenario: 'song_late_lift',
+        token: receiptTokens.lateLift,
+        deferFrame: false,
+      });
+      stage = 'receipt scenario reset';
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await loadFreshPage();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`player-smoke: ${stage}: ${detail}`);
+    }
+  }
+
   async function casaState() {
     await page.waitForFunction(
       () => {
@@ -463,233 +703,7 @@ async (page) => {
   await submitScenario('declined', copy.form_declined);
   await submitScenario('network', copy.form_network_error, { verifyReset: true });
 
-  let receiptStage = 'reload terminal outcomes';
-  try {
-  async function exerciseReloadedReceipt({ scenario, token, terminalBody, expectedText, label }) {
-    receiptStage = `${label} receipt reload`;
-    let reloaded = false;
-    const terminalStep = { hold: true, body: terminalBody };
-    setReceiptPlan(token, {
-      next: () => (reloaded ? terminalStep : { body: searchingReceipt() }),
-    });
-    const started = await startTrackedSong(scenario, `Smoke ${label} request`);
-    await waitForRouteCount(
-      () => receiptPolls.length,
-      started.pollsBefore + 1,
-      2000,
-      `${label} searching receipt was never polled before reload`,
-    );
-    await reloadPage();
-    await waitForReceiptText(copy.form_song_searching);
-    const restored = await receiptUiState();
-    assert(restored.message === started.message, `${label} searching receipt lost its message across reload`);
-    assert(restored.submitDisabled, `${label} searching receipt enabled duplicate submission after reload`);
-    assert(restored.stored && JSON.parse(restored.stored).public_token === token, `${label} receipt token did not survive reload`);
-
-    reloaded = true;
-    const pollsAfterReload = receiptPolls.length;
-    await waitForRouteCount(
-      () => receiptPolls.length,
-      pollsAfterReload + 1,
-      2000,
-      `${label} receipt did not resume polling after reload`,
-    );
-    assert(typeof terminalStep.release === 'function', `${label} terminal poll was not held`);
-    terminalStep.release();
-    await waitForReceiptText(expectedText);
-    const terminal = await receiptUiState();
-    assert(terminal.stored === null, `${label} terminal receipt remained in session storage`);
-  }
-
-  const matchedTrack = 'Mina – Città vuota';
-  await exerciseReloadedReceipt({
-    scenario: 'song_reload_matched',
-    token: receiptTokens.reloadMatched,
-    terminalBody: matchedReceipt(matchedTrack),
-    expectedText: copy.form_song_matched.replace('{track}', matchedTrack),
-    label: 'matched',
-  });
-  await exerciseReloadedReceipt({
-    scenario: 'song_reload_not_matched',
-    token: receiptTokens.reloadNotMatched,
-    terminalBody: notMatchedReceipt(),
-    expectedText: copy.form_song_no_verified_match,
-    label: 'not-matched',
-  });
-
-  for (const expiryStatus of [404, 410]) {
-    receiptStage = `${expiryStatus} expired receipt`;
-    const token = expiryStatus === 404 ? receiptTokens.expired404 : receiptTokens.expired410;
-    const scenario = expiryStatus === 404 ? 'song_expired_404' : 'song_expired_410';
-    const expiryStep = { hold: true, status: expiryStatus };
-    setReceiptPlan(token, { steps: [expiryStep] });
-    const started = await startTrackedSong(scenario, `Smoke expiry ${expiryStatus}`, 'Lucia');
-    await waitForRouteCount(
-      () => receiptPolls.length,
-      started.pollsBefore + 1,
-      2000,
-      `${expiryStatus} expiry was never polled`,
-    );
-    expiryStep.release();
-    await waitForReceiptText(copy.form_song_tracking_expired);
-    const expired = await receiptUiState();
-    assert(expired.name === started.name, `${expiryStatus} expiry did not restore the original name`);
-    assert(expired.message === started.message, `${expiryStatus} expiry did not restore the original input`);
-    assert(expired.messageVisible, `${expiryStatus} expiry left the retry input hidden`);
-    assert(!expired.submitDisabled && !expired.submitting, `${expiryStatus} expiry did not enable retry submit`);
-    assert(expired.stored === null, `${expiryStatus} expiry retained a dead tracking token`);
-  }
-
-  const transientRetry = { hold: true, body: matchedReceipt('Lucio Dalla – Anna e Marco') };
-  receiptStage = 'transient receipt retry';
-  setReceiptPlan(receiptTokens.transient, {
-    steps: [{ abort: true }, transientRetry],
-  });
-  const transientStart = await startTrackedSong('song_transient', 'Smoke transient retry');
-  await waitForRouteCount(
-    () => receiptPolls.length,
-    transientStart.pollsBefore + 2,
-    3000,
-    'transient receipt failure did not retry',
-  );
-  const retrying = await receiptUiState();
-  assert(retrying.receipt === copy.form_song_searching, 'transient poll failure replaced the searching receipt');
-  assert(retrying.stored !== null, 'transient poll failure erased the resumable receipt');
-  transientRetry.release();
-  await waitForReceiptText(copy.form_song_matched.replace('{track}', 'Lucio Dalla – Anna e Marco'));
-
-  const immediatePollCount = receiptPolls.length;
-  receiptStage = 'immediate terminal POST';
-  await startTrackedSong(
-    'song_immediate_terminal',
-    'Smoke immediate terminal',
-    'Anna',
-    copy.form_song_no_verified_match,
-  );
-  await page.waitForTimeout(120);
-  assert(receiptPolls.length === immediatePollCount, 'immediate terminal POST scheduled a receipt poll');
-  const immediate = await receiptUiState();
-  assert(immediate.stored === null, 'immediate terminal POST stored a tracking token');
-  assert(!immediate.submitDisabled, 'immediate terminal POST left retry submit disabled');
-
-  async function exerciseTerminalAnimationRace({ scenario, token, deferFrame }) {
-    receiptStage = `${scenario} animation race`;
-    const terminalStep = { hold: true, body: matchedReceipt('Franco Battiato – Centro di gravità permanente') };
-    setReceiptPlan(token, { steps: [terminalStep] });
-    requestScenario = scenario;
-    await page.evaluate((storageKey) => sessionStorage.removeItem(storageKey), songReceiptStorageKey);
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    await loadFreshPage();
-    assert(
-      !(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)),
-      `${scenario} could not enable the animated receipt path`,
-    );
-    await page.addStyleTag({
-      content: '.mmr-dedica-form.is-sending { animation-play-state: paused !important; }',
-    });
-    const pollsBefore = receiptPolls.length;
-    const postsBefore = requestPosts.length;
-    await page.locator('#req-msg').fill(`Smoke ${scenario}`);
-    await page.locator('#request-form button[type="submit"]').click();
-    await waitForRouteCount(
-      () => requestPosts.length,
-      postsBefore + 1,
-      2000,
-      `${scenario} POST was never requested`,
-    );
-    receiptStage = `${scenario} animation start`;
-    try {
-      await page.waitForFunction(
-        () => document.getElementById('request-form').classList.contains('is-sending'),
-        null,
-        { timeout: 2000 },
-      );
-    } catch (error) {
-      const formState = await page.evaluate(() => {
-        const form = document.getElementById('request-form');
-        const receipt = document.getElementById('request-sent');
-        return {
-          className: form ? form.className : '',
-          submitting: form ? form.dataset.submitting || '' : '',
-          receipt: receipt ? receipt.textContent.trim() : '',
-        };
-      });
-      throw new Error(`${error.message}; form=${JSON.stringify(formState)}`);
-    }
-    await page.evaluate(() => { window.__playerSmokeHoldRequestFrames = true; });
-    await waitForRouteCount(
-      () => receiptPolls.length,
-      pollsBefore + 1,
-      2000,
-      `${scenario} terminal poll was never requested`,
-    );
-
-    if (deferFrame) {
-      await page.locator('#request-form').evaluate((form) => {
-        form.dispatchEvent(new AnimationEvent('animationend', { animationName: 'tt-card-lift', bubbles: true }));
-      });
-      receiptStage = `${scenario} deferred searching frame`;
-      await page.waitForFunction(
-        () => window.__playerSmokeHeldRequestFrameCount() === 1,
-        null,
-        { timeout: 2000, polling: 20 },
-      );
-    }
-
-    terminalStep.release();
-    receiptStage = `${scenario} terminal completion`;
-    await page.waitForFunction(
-      (storageKey) => sessionStorage.getItem(storageKey) === null,
-      songReceiptStorageKey,
-      { timeout: 2000, polling: 20 },
-    );
-
-    if (!deferFrame) {
-      receiptStage = `${scenario} terminal frame`;
-      await page.waitForFunction(
-        () => window.__playerSmokeHeldRequestFrameCount() === 1,
-        null,
-        { timeout: 2000, polling: 20 },
-      );
-      await page.locator('#request-form').evaluate((form) => {
-        form.dispatchEvent(new AnimationEvent('animationend', { animationName: 'tt-card-lift', bubbles: true }));
-      });
-      assert(
-        await page.evaluate(() => window.__playerSmokeHeldRequestFrameCount()) === 1,
-        'late lift callback queued a stale searching frame',
-      );
-    } else {
-      receiptStage = `${scenario} terminal frame after stale frame`;
-      await page.waitForFunction(
-        () => window.__playerSmokeHeldRequestFrameCount() === 2,
-        null,
-        { timeout: 2000, polling: 20 },
-      );
-    }
-
-    await page.evaluate(() => window.__playerSmokeFlushRequestFrames());
-    const expected = copy.form_song_matched.replace('{track}', 'Franco Battiato – Centro di gravità permanente');
-    await waitForReceiptText(expected);
-    await page.waitForTimeout(80);
-    assert((await receiptUiState()).receipt === expected, `${scenario} stale animation overwrote terminal outcome`);
-    await page.evaluate(() => { window.__playerSmokeHoldRequestFrames = false; });
-  }
-
-  await exerciseTerminalAnimationRace({
-    scenario: 'song_stale_frame',
-    token: receiptTokens.staleFrame,
-    deferFrame: true,
-  });
-  await exerciseTerminalAnimationRace({
-    scenario: 'song_late_lift',
-    token: receiptTokens.lateLift,
-    deferFrame: false,
-  });
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await loadFreshPage();
-  } catch (error) {
-    throw new Error(`player-smoke: ${receiptStage}: ${error.message}`);
-  }
+  await exerciseSongReceiptScenarios();
 
   // A second click while play() is pending cancels the one in-flight request;
   // it must not create a duplicate request or leave an active playback intent.

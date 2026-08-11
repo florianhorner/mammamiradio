@@ -149,6 +149,110 @@ async def test_ban_clears_matching_pin(tmp_path):
     assert state.pinned_track is None
 
 
+@pytest.mark.parametrize("match_kind", ["canonical", "same-cache-key"])
+def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path, match_kind):
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+    from mammamiradio.web.listener_requests import _public_song_status
+
+    requested = Track(
+        title="Requested Song",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="listener-request-source",
+    )
+    ban_target = (
+        Track(
+            title=requested.title,
+            artist=requested.artist,
+            duration_ms=requested.duration_ms,
+            youtube_id="different-source-same-canonical-song",
+        )
+        if match_kind == "canonical"
+        else Track(
+            title="Requested Song (operator label)",
+            artist=requested.artist,
+            duration_ms=requested.duration_ms,
+            youtube_id=requested.youtube_id,
+        )
+    )
+    unrelated_request_track = Track(
+        title="Unrelated Request",
+        artist="Other Artist",
+        duration_ms=180_000,
+        youtube_id="unrelated-request-source",
+    )
+    ordinary = _track("Ordinary Rotation", "Rotation Artist", "ordinary-source")
+    app = _make_app(tmp_path, [requested, unrelated_request_track, ordinary])
+    state = app.state.station_state
+    request_record = {
+        "request_id": "banned-listener-request",
+        "public_token": "banned-listener-token",
+        "name": "Luca",
+        "message": "Play Requested Song by Listener Artist",
+        "type": "song_request",
+        "status": "queued",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": True,
+        "song_track": requested.display,
+        "song_track_obj": requested,
+    }
+    unrelated_request = {
+        "request_id": "unrelated-listener-request",
+        "name": "Giulia",
+        "message": "Play Unrelated Request by Other Artist",
+        "type": "song_request",
+        "status": "queued",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+        "song_track": unrelated_request_track.display,
+        "song_track_obj": unrelated_request_track,
+    }
+    unrelated_before = dict(unrelated_request)
+    state.pending_requests.extend([request_record, unrelated_request])
+    state.pinned_track = requested
+
+    result = _apply_ban(state, app.state.config, [ban_target], queue=app.state.queue)
+
+    assert result["removed"] == 1
+    assert requested not in state.playlist
+    assert state.pinned_track is None
+    assert request_record["song_found"] is False
+    assert request_record["song_error"] is True
+    assert request_record["song_error_reason"] == "banned"
+    assert request_record["song_pinned"] is False
+    assert request_record["song_track_obj"] is None
+    assert request_record in state.pending_requests
+    assert unrelated_request == unrelated_before
+    assert _public_song_status(request_record) == {
+        "ok": True,
+        "type": "song_request",
+        "song_resolution": "not_matched",
+        "song_track": None,
+        "outcome_reason": "not_playable",
+    }
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST (SONG UNAVAILABLE):" in prompt
+    assert commit is not None
+    assert state.pinned_track is None
+    assert _select_accepted_music_track(state, app.state.config) is ordinary
+
+    # The ordinary unavailable acknowledgement archives the public receipt;
+    # the banned recording never regains a playable object or pin.
+    commit.apply(state)
+    assert request_record not in state.pending_requests
+    receipt = state.recently_consumed_requests[-1]
+    assert receipt["status"] == "song_not_found"
+    assert _public_song_status(receipt)["song_resolution"] == "not_matched"
+    assert _public_song_status(receipt)["outcome_reason"] == "not_playable"
+
+
 @pytest.mark.asyncio
 async def test_ban_purges_not_yet_started_queued_music_segment(tmp_path):
     app = _make_app(tmp_path, [_track("Volare", "Modugno")])

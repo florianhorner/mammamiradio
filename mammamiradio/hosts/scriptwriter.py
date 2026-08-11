@@ -39,6 +39,7 @@ from mammamiradio.core.models import (
     PersonalityAxes,
     SegmentType,
     StationState,
+    Track,
 )
 from mammamiradio.hosts.ad_creative import (
     AD_FORMATS,
@@ -435,18 +436,35 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
         # played from the download pin. Setting the marker synchronously (here, at
         # peek time — not in the deferred commit) also makes it safe against the
         # lookahead race where two banters peek the same pending request.
-        if (
-            track_obj is not None
-            and not req.get("song_pinned")
-            and state.pinned_track is not None
-            and state.pinned_track is not track_obj
-        ):
-            # The download deliberately joined rotation without replacing an
-            # operator/earlier-request pin. Preserve that same ordering here:
-            # this banter cannot promise or consume the request until its track
-            # can actually claim the play-next handoff.
-            return "", None
+        if track_obj is not None and not req.get("song_pinned") and state.pinned_track is not None:
+            pinned_track = state.pinned_track
+            same_recording_pin = pinned_track is track_obj or (
+                isinstance(track_obj, Track) and pinned_track.cache_key == track_obj.cache_key
+            )
+            if not same_recording_pin:
+                pin_belongs_to_later_listener_request = any(
+                    later_req is not req
+                    and later_req.get("song_found")
+                    and not later_req.get("song_pinned")
+                    and isinstance((later_track := later_req.get("song_track_obj")), Track)
+                    and later_track.cache_key == pinned_track.cache_key
+                    for later_req in pending
+                )
+                if not pin_belongs_to_later_listener_request:
+                    # The download deliberately joined rotation without replacing an
+                    # unrelated operator/earlier-request pin. Preserve that same
+                    # ordering here: this banter cannot promise or consume the request
+                    # until its track can actually claim the play-next handoff.
+                    return "", None
+                # A pin for a later listener request cannot jump FIFO and air
+                # without its own dedication. Its pending request already keeps
+                # that recording reserved, so release the shared slot for the
+                # head request; the later request will reclaim it on its turn.
+                state.pinned_track = None
         if track_obj is not None and not req.get("song_pinned"):
+            # Exact-object and same-cache-key pins both become this request's
+            # single handoff. Replacing a distinct Track object for the same
+            # recording keeps the downloaded request metadata authoritative.
             state.pinned_track = track_obj
             if state.force_next is None:
                 state.force_next = SegmentType.MUSIC

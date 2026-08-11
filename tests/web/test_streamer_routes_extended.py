@@ -3908,6 +3908,80 @@ async def test_queued_listener_song_waits_for_fifo_pin_before_entering_rotation(
     assert receipt["public_token"] == "listener-fifo-token"
 
 
+@pytest.mark.parametrize("distinct_same_recording_pin", [False, True], ids=["exact-object", "same-cache-key"])
+def test_same_recording_operator_pin_waits_for_single_announced_listener_handoff(distinct_same_recording_pin):
+    """An operator pin for the requested recording is adopted, never aired then replayed."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    app = _make_test_app()
+    state = app.state.station_state
+    requested_track = Track(
+        title="Requested Song",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="listener-shared-recording",
+    )
+    state.playlist.append(requested_track)
+    operator_pin = (
+        Track(
+            title="Requested Song (operator row)",
+            artist="Listener Artist",
+            duration_ms=180_000,
+            youtube_id="listener-shared-recording",
+        )
+        if distinct_same_recording_pin
+        else requested_track
+    )
+    req = {
+        "request_id": "same-recording-request",
+        "public_token": "same-recording-token",
+        "name": "Luca",
+        "message": "Play Requested Song by Listener Artist",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+    }
+    state.pending_requests.append(req)
+    state.pinned_track = operator_pin
+
+    def _choose_ordinary(candidates, *, weights, k):
+        assert all(track.cache_key != requested_track.cache_key for track in candidates)
+        return [candidates[0]]
+
+    # The producer must preserve the operator's same-recording intent while
+    # keeping it off air until the dedication planner can adopt it.
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose_ordinary):
+        first_track = _select_accepted_music_track(state, app.state.config)
+    assert first_track.cache_key != requested_track.cache_key
+    assert state.pinned_track is operator_pin
+    assert state.force_next == SegmentType.BANTER
+    assert req["song_pinned"] is False
+
+    # Model the forced banter cycle consuming its force before prompt planning.
+    state.force_next = None
+    announcement, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in announcement
+    assert commit is not None
+    assert state.pinned_track is requested_track
+    assert state.force_next == SegmentType.MUSIC
+    assert req["song_pinned"] is True
+    commit.apply(state)
+
+    # The announced handoff consumes exactly one pin. The same recording cannot
+    # immediately re-enter ordinary rotation after the request is archived.
+    assert _select_accepted_music_track(state, app.state.config) is requested_track
+    state.after_music(requested_track)
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose_ordinary):
+        assert _select_accepted_music_track(state, app.state.config).cache_key != requested_track.cache_key
+    assert req not in state.pending_requests
+
+
 @pytest.mark.asyncio
 async def test_download_listener_song_no_results_marks_error(tmp_path):
     app = _make_test_app()

@@ -1428,7 +1428,7 @@ def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[s
 
 
 def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "operator", queue=None) -> dict:
-    """Ban tracks durably: persist, drop from rotation, clear pin, purge queue.
+    """Ban tracks durably: persist, terminalize requests, clear pin, purge queue.
 
     Synchronous (no ``await``): the in-memory blocklist + playlist mutation and the
     disk persist happen in one stretch so concurrent ban/unban handlers cannot lose
@@ -1455,11 +1455,33 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     persisted = save_blocklist(config.cache_dir, state.blocklist)
 
     banned_keys = set(keys)
+    banned_cache_keys = {track.cache_key for track in tracks if isinstance(track, Track)}
+
+    def _is_banned_recording(track: object) -> bool:
+        return isinstance(track, Track) and (
+            normalized_track_key(track) in banned_keys or track.cache_key in banned_cache_keys
+        )
+
+    # A listener download may already have committed and be waiting for its
+    # dedication handoff when the operator bans that recording. Keep the request
+    # pending for the normal unavailable acknowledgement/receipt lifecycle, but
+    # revoke every matched/pinnable marker synchronously so scriptwriter cannot
+    # resurrect the removed track after this ban returns.
+    for listener_request in state.pending_requests:
+        request_track = listener_request.get("song_track_obj")
+        if not listener_request.get("song_found") or not _is_banned_recording(request_track):
+            continue
+        listener_request["song_found"] = False
+        listener_request["song_error"] = True
+        listener_request["song_error_reason"] = "banned"
+        listener_request["song_pinned"] = False
+        listener_request["song_track_obj"] = None
+
     before = len(state.playlist)
-    state.playlist = [t for t in state.playlist if normalized_track_key(t) not in banned_keys]
+    state.playlist = [track for track in state.playlist if not _is_banned_recording(track)]
     removed = before - len(state.playlist)
     pin_cleared = False
-    if state.pinned_track is not None and normalized_track_key(state.pinned_track) in banned_keys:
+    if state.pinned_track is not None and _is_banned_recording(state.pinned_track):
         state.pinned_track = None
         pin_cleared = True
     if removed or pin_cleared:

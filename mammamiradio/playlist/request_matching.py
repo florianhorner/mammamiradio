@@ -454,7 +454,6 @@ def clean_candidate_title(value: object) -> str:
     title = original_title
     title = _BRACKET_RE.sub(lambda match: "" if _is_noise_group(match.group(1)) else match.group(0), title)
     title = re.sub(r"\bwith\s+lyrics?\b", "", title, flags=re.IGNORECASE)
-    title = re.sub(r"\b(?:4k|8k|hd|hq|sd)\b", "", title, flags=re.IGNORECASE)
     suffix = re.compile(
         # Platform packaging is a separate suffix, never the tail of an
         # identity word. Without this boundary, ``Claudio`` was shortened to
@@ -468,6 +467,12 @@ def clean_candidate_title(value: object) -> str:
     while title != previous:
         previous = title
         title = suffix.sub("", title).strip()
+    # Quality labels are normally platform noise, but they can also be the
+    # complete song identity. Remove an adjacent wrapper first so ``HD
+    # (Official Audio)`` keeps ``HD``; quality labels elsewhere remain noise.
+    if normalize_match_text(title) in {"4k", "8k", "hd", "hq", "sd"}:
+        return _SPACE_RE.sub(" ", title).strip(" -\u2013\u2014|")
+    title = re.sub(r"\b(?:4k|8k|hd|hq|sd)\b", "", title, flags=re.IGNORECASE)
     cleaned = _SPACE_RE.sub(" ", title).strip(" -\u2013\u2014|")
     # A packaging-looking word can also be the complete, legitimate song
     # identity (``Audio``, ``Lyrics``, ``Visualizer``, ``HD``, ``4K``). Exact
@@ -481,10 +486,6 @@ def _split_title_credit(raw_title: str) -> tuple[str, str]:
     if len(parts) == 2:
         return _clean_artist(parts[0]), clean_candidate_title(parts[1])
     return "", clean_candidate_title(raw_title)
-
-
-def _artist_matches(requested_artist: str, evidence: object) -> bool:
-    return bool(_matched_artist_identity(requested_artist, evidence))
 
 
 def _same_artist_identity(requested: str, candidate: str) -> bool:
