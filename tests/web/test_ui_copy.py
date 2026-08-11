@@ -38,6 +38,8 @@ def test_default_off_returns_english():
     assert get_copy(False, "stat_tracks") == "Tracks in Rotation"
     assert get_copy(False, "form_message_placeholder").startswith("Dear Radio")
     assert get_copy(False, "form_message_required").startswith("Write a message")
+    assert get_copy(False, "form_success_song").startswith("Request received")
+    assert "checking the catalogue" in get_copy(False, "form_song_searching")
     assert get_copy(False, "form_success_shoutout").startswith("Dedication received")
     assert "{s}" in get_copy(False, "form_rate_limited")
     assert get_copy(False, "form_network_error").startswith("We lost the connection")
@@ -49,6 +51,8 @@ def test_super_italian_on_returns_italian():
     assert get_copy(True, "stat_tracks") == "Tracce in playlist"
     assert get_copy(True, "form_message_placeholder").startswith("Cara Radio")
     assert get_copy(True, "form_message_required").startswith("Scrivi prima")
+    assert get_copy(True, "form_success_song").startswith("Richiesta ricevuta")
+    assert "Cerchiamo in catalogo" in get_copy(True, "form_song_searching")
     assert get_copy(True, "form_success_shoutout").startswith("Dedica ricevuta")
     assert "{s}" in get_copy(True, "form_rate_limited")
     assert get_copy(True, "form_network_error").startswith("Abbiamo perso la connessione")
@@ -58,6 +62,13 @@ def test_request_outcome_copy_is_complete_in_both_modes():
     outcome_keys = (
         "form_success_song",
         "form_success_shoutout",
+        "form_song_searching",
+        "form_song_matched",
+        "form_song_matched_generic",
+        "form_song_no_verified_match",
+        "form_song_not_playable",
+        "form_song_temporarily_unavailable",
+        "form_song_tracking_expired",
         "form_rate_limited",
         "form_queue_full",
         "form_declined",
@@ -67,6 +78,7 @@ def test_request_outcome_copy_is_complete_in_both_modes():
         for key in outcome_keys:
             assert COPY[lang].get(key), f"missing request outcome {key} in {lang}"
         assert "{s}" in COPY[lang]["form_rate_limited"]
+        assert "{track}" in COPY[lang]["form_song_matched"]
 
     text = _LISTENER_JS.read_text(encoding="utf-8")
     for key in outcome_keys:
@@ -79,6 +91,25 @@ def test_request_outcome_copy_is_complete_in_both_modes():
         "Invio non riuscito",
     )
     assert not any(receipt in text for receipt in hardcoded_italian_receipts)
+
+    premature_promises = (
+        "The hosts will cue it soon",
+        "metteranno presto la canzone in scaletta",
+    )
+    listener_copy = "\n".join((*COPY["en"].values(), *COPY["it"].values()))
+    assert not any(promise in text or promise in listener_copy for promise in premature_promises)
+
+    infrastructure_claims = (
+        "catalogue isn’t reachable",
+        "catalogo musicale non è raggiungibile",
+    )
+    assert not any(
+        claim in COPY[lang]["form_song_temporarily_unavailable"]
+        for lang in ("en", "it")
+        for claim in infrastructure_claims
+    )
+    assert "dedication" in COPY["en"]["form_song_temporarily_unavailable"]
+    assert "dedica" in COPY["it"]["form_song_temporarily_unavailable"]
 
 
 def test_missing_key_returns_default():

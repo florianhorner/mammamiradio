@@ -364,9 +364,9 @@ def test_listener_request_receipt_does_not_hide_its_form_ancestor() -> None:
 
 def test_listener_request_outcomes_are_localized_and_failure_reset_preserves_input() -> None:
     js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("const SONG_RECEIPT_STORAGE_KEY") : js.index("/* ── Wire everything")]
     submit = js[js.index("async function submitRequest") : js.index("/* ── Wire everything")]
     for key in (
-        "form_success_song",
         "form_success_shoutout",
         "form_rate_limited",
         "form_queue_full",
@@ -375,13 +375,100 @@ def test_listener_request_outcomes_are_localized_and_failure_reset_preserves_inp
     ):
         assert re.search(rf"_t\(\s*'{key}'", submit), f"request outcome bypasses localized {key} copy"
 
+    for key in (
+        "form_success_song",
+        "form_song_searching",
+        "form_song_matched",
+        "form_song_matched_generic",
+        "form_song_no_verified_match",
+        "form_song_not_playable",
+        "form_song_temporarily_unavailable",
+        "form_song_tracking_expired",
+    ):
+        assert re.search(rf"_t\(\s*'{key}'", request_flow), f"song receipt bypasses localized {key} copy"
+
     assert "if (r.ok && d.ok)" in submit, "an HTTP error body must never pose as a successful request."
+    assert "_scheduleRequestFormReset" in submit
     assert "}, isSuccess ? 15000 : 6000)" in submit
     clear_block = submit[submit.index("_resetRequestForm(formEl, sentEl);") : submit.index("} catch (e)")]
     assert "if (isSuccess)" in clear_block
     assert "msgInput.value = ''" in clear_block
     catch_block = submit[submit.index("} catch (e)") :]
     assert "msgInput.value = ''" not in catch_block, "network recovery must preserve the listener's retry text."
+
+
+def test_listener_song_receipt_is_trackable_resumable_and_honest() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("const SONG_RECEIPT_STORAGE_KEY") : js.index("/* ── Wire everything")]
+    submit = request_flow[request_flow.index("async function submitRequest") :]
+
+    assert "SONG_RECEIPT_POLL_MS = 3000" in request_flow
+    assert "sessionStorage.setItem(SONG_RECEIPT_STORAGE_KEY" in request_flow
+    assert "public_token: d.public_token" in submit
+    assert "message: msg" in submit
+    assert "_resumeSongReceipt();" in js[js.index("document.addEventListener('DOMContentLoaded'") :]
+    assert "sessionStorage.getItem(SONG_RECEIPT_STORAGE_KEY)" in request_flow
+
+    poll = request_flow[
+        request_flow.index("async function _pollSongReceipt") : request_flow.index("function _resumeSongReceipt")
+    ]
+    assert "'/public-listener-requests/' + encodeURIComponent(receipt.public_token)" in poll
+    assert "payload.song_resolution === 'searching'" in poll
+    assert "_isTerminalSongResolution(payload.song_resolution)" in poll
+    assert "_scheduleSongReceiptPoll(receipt)" in poll
+    assert "r.status === 404 || r.status === 410" in poll
+    assert "cache: 'no-store'" in poll
+
+    terminal = request_flow[
+        request_flow.index("function _showTerminalSongReceipt") : request_flow.index(
+            "function _scheduleSongReceiptPoll"
+        )
+    ]
+    assert "_clearStoredSongReceipt(receipt.public_token)" in terminal
+    assert "_restoreSongReceiptInput(receipt)" in terminal
+    assert "_setRequestFieldsHidden(formEl, false)" in terminal
+    assert "delete formEl.dataset.submitting" in terminal
+    assert "msgInput.value = ''" in terminal
+    failure_branch = terminal[terminal.index("// A refusal or lookup failure") :]
+    assert "msgInput.value = ''" not in failure_branch
+
+    assert "The hosts will cue it soon" not in js
+    assert "catalogue isn’t reachable" not in js
+    assert "rewrite it as a dedication instead" in js
+
+
+def test_listener_terminal_submit_response_skips_searching_poll_delay() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("const SONG_RECEIPT_STORAGE_KEY") : js.index("/* ── Wire everything")]
+    submit = request_flow[request_flow.index("async function submitRequest") :]
+
+    assert "immediateSongTerminal = isSongRequest && _isTerminalSongResolution(d.song_resolution)" in submit
+    assert "if (!immediateSongTerminal) _storeSongReceipt(songReceipt)" in submit
+    immediate = submit[submit.index("if (songReceipt && immediateSongTerminal)") :]
+    assert "_showTerminalSongReceipt(songReceipt, d)" in immediate
+    assert immediate.index("_showTerminalSongReceipt(songReceipt, d)") < immediate.index(
+        "_scheduleSongReceiptPoll(songReceipt)"
+    )
+
+
+def test_listener_deferred_animation_cannot_restore_stale_searching_receipt() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("const SONG_RECEIPT_STORAGE_KEY") : js.index("/* ── Wire everything")]
+    reveal = request_flow[
+        request_flow.index("function _revealSentCrossfade") : request_flow.index("function _showEmptyRequestMessage")
+    ]
+    submit = request_flow[request_flow.index("async function submitRequest") :]
+    finish_lift = submit[submit.index("const finishLift") : submit.index("const onCardLiftEnd")]
+
+    assert "const renderRevision = requestReceiptRenderRevision" in reveal
+    assert "if (renderRevision !== requestReceiptRenderRevision) return" in reveal
+    assert "const submitRenderRevision = _setRequestReceiptText(sentEl, text)" in submit
+    assert "if (submitRenderRevision === requestReceiptRenderRevision)" in finish_lift
+    assert finish_lift.index("if (submitRenderRevision === requestReceiptRenderRevision)") < finish_lift.index(
+        "_setRequestFieldsHidden(formEl, true)"
+    )
+    assert "if (submitRenderRevision !== requestReceiptRenderRevision) return" in finish_lift
+    assert "metteranno presto la canzone in scaletta" not in js
 
 
 def test_listener_playback_is_scoped_to_explicit_play_controls() -> None:

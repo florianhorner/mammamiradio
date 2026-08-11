@@ -4519,12 +4519,14 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_fi
         "song_error_reason": "",
         "song_track": None,
         "banter_cycles_missed": 4,
+        "public_token": "listener-token",
     }
     state.pending_requests.append(req)
 
     prompt, commit = _plan_listener_request_block(state)
 
-    assert "SONG NOT FOUND" in prompt
+    assert "LOOKUP STILL PENDING" in prompt
+    assert "Non dare alcun esito" in prompt
     assert commit is not None
     assert commit.consume is True
     assert commit.mark_song_error is True
@@ -4534,8 +4536,134 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_fi
     # Request moves to recently_consumed with song_not_found status
     assert len(state.recently_consumed_requests) == 1
     assert state.recently_consumed_requests[0]["status"] == "song_not_found"
-    assert state.recently_consumed_requests[0]["song_error_reason"] == "not_found"
+    assert state.recently_consumed_requests[0]["song_error_reason"] == "lookup_timed_out"
     assert state.recently_consumed_requests[0]["name"] == "Luca"
+    assert state.recently_consumed_requests[0]["public_token"] == "listener-token"
+    assert state.recently_consumed_requests[0]["song_error"] is True
+
+
+def test_listener_timeout_commit_defers_late_match_until_it_is_announced(state):
+    requested_track = Track(
+        title="Più bella cosa",
+        artist="Eros Ramazzotti",
+        duration_ms=240000,
+        youtube_id="late-match",
+    )
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": None,
+        "banter_cycles_missed": 4,
+        "public_token": "listener-token",
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LOOKUP STILL PENDING" in prompt
+    assert commit is not None and commit.mark_song_error is True
+    # The background task commits while the deferred banter is rendering.
+    req["song_found"] = True
+    req["song_track"] = "Eros Ramazzotti \u2013 Pi\u00f9 bella cosa"
+    req["song_track_obj"] = requested_track
+    commit.apply(state)
+
+    assert req["song_error"] is False
+    assert req["song_error_reason"] == ""
+    assert req in state.pending_requests
+    assert state.recently_consumed_requests == []
+
+    # The timeout banter explicitly withheld the lookup outcome. The next
+    # banter must announce the late match before the receipt can claim it was
+    # sent to the hosts.
+    announcement, announcement_commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in announcement
+    assert "La canzone che stai per suonare" in announcement
+    assert "Eros Ramazzotti \u2013 Pi\u00f9 bella cosa" in announcement
+    assert announcement_commit is not None
+    assert state.pinned_track is requested_track
+    assert state.force_next == SegmentType.MUSIC
+    assert req["song_pinned"] is True
+    announcement_commit.apply(state)
+
+    assert req not in state.pending_requests
+    receipt = state.recently_consumed_requests[0]
+    assert receipt["status"] == "sent_to_hosts"
+    assert receipt["song_found"] is True
+    assert receipt["song_error"] is False
+    assert receipt["song_error_reason"] == ""
+
+
+def test_listener_timeout_late_queued_match_preserves_occupied_pin(state):
+    operator_pick = Track(
+        title="Operator Pick",
+        artist="Operator",
+        duration_ms=180000,
+        youtube_id="operator-pick",
+    )
+    requested_track = Track(
+        title="Più bella cosa",
+        artist="Eros Ramazzotti",
+        duration_ms=240000,
+        youtube_id="late-queued-match",
+    )
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": None,
+        "song_pinned": False,
+        "banter_cycles_missed": 4,
+        "public_token": "listener-token",
+    }
+    state.pending_requests.append(req)
+    state.pinned_track = operator_pick
+
+    prompt, timeout_commit = _plan_listener_request_block(state)
+
+    assert "LOOKUP STILL PENDING" in prompt
+    assert timeout_commit is not None and timeout_commit.mark_song_error is True
+
+    # Rendering yields long enough for the lookup to finish. Its commit returns
+    # ``queued`` because the operator pin is occupied, so it joins rotation but
+    # must remain unpinned until that earlier choice has played.
+    state.playlist.append(requested_track)
+    req["song_found"] = True
+    req["song_track"] = "Eros Ramazzotti – Più bella cosa"
+    req["song_track_obj"] = requested_track
+    timeout_commit.apply(state)
+
+    assert req in state.pending_requests
+    assert state.recently_consumed_requests == []
+    assert state.pinned_track is operator_pick
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is None
+    assert state.pinned_track is operator_pick
+    assert req["song_pinned"] is False
+    assert req in state.pending_requests
+
+    state.pinned_track = None
+    announcement, announcement_commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in announcement
+    assert announcement_commit is not None and announcement_commit.consume is True
+    assert state.pinned_track is requested_track
+    assert req["song_pinned"] is True
+    announcement_commit.apply(state)
+
+    assert req not in state.pending_requests
+    assert state.recently_consumed_requests[0]["status"] == "sent_to_hosts"
 
 
 def test_plan_listener_request_block_background_failure_consumes_song_not_found(state):
@@ -4682,6 +4810,57 @@ def test_plan_listener_request_block_pins_once_and_is_race_safe(state):
     assert state.force_next is None
 
 
+def test_plan_listener_request_block_waits_for_occupied_pin(state):
+    operator_pick = Track(
+        title="Operator Pick",
+        artist="Operator",
+        duration_ms=180000,
+        youtube_id="operator-pick",
+    )
+    requested_track = Track(
+        title="Somewhere I Belong",
+        artist="Linkin Park",
+        duration_ms=200000,
+        youtube_id="listener-pick",
+    )
+    req = {
+        "name": "fanfan",
+        "message": "play some Linkin Park",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": "Linkin Park - Somewhere I Belong",
+        "song_track_obj": requested_track,
+        # The download returned ``queued`` because this slot was occupied.
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+    state.pinned_track = operator_pick
+    state.force_next = SegmentType.BANTER
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is None
+    assert state.pinned_track is operator_pick
+    assert state.force_next == SegmentType.BANTER
+    assert req["song_pinned"] is False
+    assert req in state.pending_requests
+
+    # Once the earlier pin has been consumed, the listener track can claim the
+    # slot and only then be announced/consumed.
+    state.pinned_track = None
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None and commit.consume is True
+    assert state.pinned_track is requested_track
+    # Do not overwrite an independent operator force-next directive.
+    assert state.force_next == SegmentType.BANTER
+    assert req["song_pinned"] is True
+
+
 def test_plan_listener_request_block_ignores_ready_second_song_until_it_reaches_head(state):
     first_req = {
         "name": "Luca",
@@ -4733,7 +4912,8 @@ def test_plan_listener_request_block_song_error_branch(state):
 
     prompt, commit = _plan_listener_request_block(state)
 
-    assert "SONG NOT FOUND" in prompt
+    assert "SONG UNAVAILABLE" in prompt
+    assert "Non dire che la canzone non esiste o che non \u00e8 stata trovata" in prompt
     assert commit is not None
     assert commit.consume is True
 

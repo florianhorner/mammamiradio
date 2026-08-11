@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
+from typing import TYPE_CHECKING, ClassVar, Literal, NotRequired, TypedDict
 from urllib.parse import urlsplit, urlunsplit
 
 from mammamiradio.core.listener_session import ListenerSession
@@ -542,9 +542,12 @@ class ConsumedListenerRequest(TypedDict):
     message: str | None
     song_track: str | None
     type: str | None
-    status: str  # "sent_to_hosts" | "song_not_found" | "source_changed"
+    status: str  # "sent_to_hosts" | "song_not_found" | "source_changed" | "dismissed"
     song_error_reason: str
     consumed_at: float
+    public_token: NotRequired[str | None]
+    song_found: NotRequired[bool]
+    song_error: NotRequired[bool]
 
 
 @dataclass
@@ -1434,24 +1437,47 @@ class StationState:
         if not self.pending_requests:
             return
         now = time.time()
-        for request in self.pending_requests:
-            self.recently_consumed_requests.append(
-                {
-                    "id": request.get("request_id") or str(request.get("ts", "")),
-                    "name": request.get("name"),
-                    "message": request.get("message") or request.get("text"),
-                    "song_track": request.get("song_track"),
-                    "type": request.get("type"),
-                    "status": "source_changed",
-                    "song_error_reason": "",
-                    "consumed_at": now,
-                }
+        for request in list(self.pending_requests):
+            self.archive_listener_request(
+                request,
+                status="source_changed",
+                song_error_reason="source_changed" if request.get("type") == "song_request" else "",
+                now=now,
             )
-        cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
+
+    def archive_listener_request(
+        self,
+        request: dict,
+        *,
+        status: str,
+        song_error_reason: str | None = None,
+        now: float | None = None,
+    ) -> ConsumedListenerRequest:
+        """Move one request to the short-lived receipt trail without losing its public token."""
+        consumed_at = time.time() if now is None else now
+        reason = str(song_error_reason if song_error_reason is not None else request.get("song_error_reason") or "")
+        song_error = bool(request.get("song_error")) or bool(reason)
+        receipt: ConsumedListenerRequest = {
+            "id": request.get("request_id") or str(request.get("ts", "")),
+            "name": request.get("name"),
+            "message": request.get("message") or request.get("text"),
+            "song_track": request.get("song_track"),
+            "type": request.get("type"),
+            "status": status,
+            "song_error_reason": reason,
+            "song_found": bool(request.get("song_found")) and not song_error,
+            "song_error": song_error,
+            "public_token": request.get("public_token"),
+            "consumed_at": consumed_at,
+        }
+        self.recently_consumed_requests.append(receipt)
+        cutoff = consumed_at - RECENTLY_CONSUMED_RETENTION_SECONDS
         self.recently_consumed_requests = [
-            request for request in self.recently_consumed_requests if request.get("consumed_at", 0) >= cutoff
+            record for record in self.recently_consumed_requests if record.get("consumed_at", 0) >= cutoff
         ]
-        self.pending_requests.clear()
+        if request in self.pending_requests:
+            self.pending_requests.remove(request)
+        return receipt
 
     def _arm_heading_announcement_if_needed(self, track: Track) -> None:
         heading = self.heading

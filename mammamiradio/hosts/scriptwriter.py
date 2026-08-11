@@ -31,7 +31,6 @@ from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_mod
 from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims, home_return_authority_for_directive
 from mammamiradio.core.models import (
-    RECENTLY_CONSUMED_RETENTION_SECONDS,
     ChaosSubtype,
     CostCategory,
     DialogueLine,
@@ -216,29 +215,24 @@ class ListenerRequestCommit:
             return
         if self.banter_cycles_missed is not None:
             self.request["banter_cycles_missed"] = self.banter_cycles_missed
-        if self.mark_song_error:
+        # A lookup may finish while the fifth-cycle timeout banter is being
+        # rendered. Re-read the shared request at commit time: a verified track
+        # already queued must never be overwritten by the stale timeout plan.
+        # That banter was explicitly told *not* to announce an outcome, so it
+        # also cannot truthfully archive the late match as "sent_to_hosts".
+        # Leave the request pending for the next banter to announce and consume.
+        if self.mark_song_error and self.request.get("song_found"):
+            return
+        mark_song_error = self.mark_song_error and not self.request.get("song_found")
+        if mark_song_error:
             self.request["song_error"] = True
             if not self.request.get("song_error_reason"):
-                self.request["song_error_reason"] = "not_found"
+                self.request["song_error_reason"] = "lookup_timed_out"
         if self.consume:
-            now = time.time()
-            state.recently_consumed_requests.append(
-                {
-                    "id": self.request.get("request_id") or str(self.request.get("ts", "")),
-                    "name": self.request.get("name"),
-                    "message": self.request.get("message"),
-                    "song_track": self.request.get("song_track"),
-                    "type": self.request.get("type"),
-                    "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
-                    "song_error_reason": self.request.get("song_error_reason") or "",
-                    "consumed_at": now,
-                }
+            state.archive_listener_request(
+                self.request,
+                status="song_not_found" if self.request.get("song_error") else "sent_to_hosts",
             )
-            cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
-            state.recently_consumed_requests = [
-                r for r in state.recently_consumed_requests if r.get("consumed_at", 0) >= cutoff
-            ]
-            state.pending_requests.remove(self.request)
 
 
 @dataclass
@@ -441,9 +435,21 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
         # played from the download pin. Setting the marker synchronously (here, at
         # peek time — not in the deferred commit) also makes it safe against the
         # lookahead race where two banters peek the same pending request.
+        if (
+            track_obj is not None
+            and not req.get("song_pinned")
+            and state.pinned_track is not None
+            and state.pinned_track is not track_obj
+        ):
+            # The download deliberately joined rotation without replacing an
+            # operator/earlier-request pin. Preserve that same ordering here:
+            # this banter cannot promise or consume the request until its track
+            # can actually claim the play-next handoff.
+            return "", None
         if track_obj is not None and not req.get("song_pinned"):
             state.pinned_track = track_obj
-            state.force_next = SegmentType.MUSIC
+            if state.force_next is None:
+                state.force_next = SegmentType.MUSIC
             req["song_pinned"] = True
         return (
             f"""
@@ -454,12 +460,24 @@ Sii caldo, divertente, fai sentire {name} speciale. Questa è la magia della rad
 """,
             commit,
         )
-    if is_song and (req.get("song_error") or commit.mark_song_error):
+    if is_song and req.get("song_error"):
         return (
             f"""
-LISTENER REQUEST (SONG NOT FOUND):
+LISTENER REQUEST (SONG UNAVAILABLE):
 {name} ha chiesto: "{msg}"
-Non sei riuscito a trovare quella canzone. Dillo con simpatia e dedica comunque un saluto speciale a {name}.
+Non è stato possibile preparare la richiesta per la messa in onda. Non dire che la canzone non esiste o che non è stata trovata: il motivo potrebbe essere tecnico o editoriale. Dillo con simpatia e dedica comunque un saluto speciale a {name}.
+""",
+            commit,
+        )
+    if is_song and commit.mark_song_error:
+        # Fifth-cycle lookup timeout. The background task can still resolve
+        # before this deferred commit applies, so the script must be truthful in
+        # either outcome and avoid announcing a catalogue miss.
+        return (
+            f"""
+LISTENER REQUEST (LOOKUP STILL PENDING):
+{name} ha chiesto: "{msg}"
+Non dare alcun esito sulla canzone e non promettere che andrà in onda. Dedica comunque un saluto speciale a {name}.
 """,
             commit,
         )

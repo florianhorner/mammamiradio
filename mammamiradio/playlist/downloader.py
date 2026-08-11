@@ -11,8 +11,10 @@ import shutil
 import subprocess
 import time
 import uuid
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import Literal
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, build_opener
@@ -569,19 +571,36 @@ def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> P
     return _download_ytdlp(track, cache_dir)
 
 
-def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
-    """Search yt-dlp for tracks matching query, returning metadata without downloading.
+YtdlpSearchStatus = Literal["ok", "disabled", "unavailable", "failed"]
 
-    Uses extract_flat so only lightweight playlist-level info is fetched.
-    Returns a list of dicts with youtube_id, title, artist, duration_ms, display.
-    Returns [] if yt-dlp is unavailable or the search fails.
+
+@dataclass(frozen=True)
+class YtdlpSearchOutcome:
+    """Strict yt-dlp metadata-search result for callers that need honest state."""
+
+    status: YtdlpSearchStatus
+    results: list[dict]
+    error: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status == "ok"
+
+
+def search_ytdlp_metadata_outcome(query: str, max_results: int = 5) -> YtdlpSearchOutcome:
+    """Search yt-dlp while preserving empty, unavailable, and failed outcomes.
+
+    ``status='ok'`` with no results is a genuine empty search.  The other
+    statuses let interactive callers avoid reporting infrastructure failures as
+    catalogue misses.  ``search_ytdlp_metadata`` remains the compatibility API
+    for best-effort callers that intentionally collapse every failure to ``[]``.
     """
     if not _ytdlp_enabled():
-        return []
+        return YtdlpSearchOutcome(status="disabled", results=[])
     try:
         import yt_dlp
-    except ImportError:
-        return []
+    except ImportError as exc:
+        return YtdlpSearchOutcome(status="unavailable", results=[], error=str(exc))
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -624,15 +643,27 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
                     "youtube_id": e["id"],
                     "title": title,
                     "artist": artist,
+                    # Additive identity evidence for strict relevance callers.
+                    # ``artist`` above intentionally retains its legacy
+                    # uploader/channel meaning for existing API consumers.
+                    "track_title": e.get("track") or "",
+                    "track_artist": e.get("artist") or e.get("creator") or "",
+                    "uploader": e.get("uploader") or "",
+                    "channel": e.get("channel") or "",
                     "duration_ms": duration_ms,
                     "album_art": thumbnail,
                     "display": display,
                 }
             )
-        return results
-    except Exception:
+        return YtdlpSearchOutcome(status="ok", results=results)
+    except Exception as exc:
         logger.debug("yt-dlp metadata search failed", exc_info=True)
-        return []
+        return YtdlpSearchOutcome(status="failed", results=[], error=str(exc))
+
+
+def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
+    """Compatibility search API that collapses unavailable/failure to ``[]``."""
+    return search_ytdlp_metadata_outcome(query, max_results).results
 
 
 async def download_track(

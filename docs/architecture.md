@@ -758,6 +758,30 @@ The same mechanism is callable directly via `POST /api/interrupt` (admin auth, 6
 
 ## Access model
 
+### Listener song-request resolution
+
+`POST /api/listener-request` still accepts shoutouts and song requests without
+waiting for a catalogue search or download. Its successful response additively
+includes the opaque `public_token` and `song_resolution`; existing response
+fields and the stored `song_found`, `song_error`, and lifecycle `status` fields
+remain available for compatibility. A detected song request begins with
+`song_resolution: "searching"`, which means that lookup and, when a candidate
+matches, download and admission are still pending.
+
+`GET /public-listener-requests/{public_token}` lets the submitting listener
+follow that one request without exposing the admin `request_id`, internal error
+details, or mutation capabilities. Its terminal song resolutions are
+`"matched"`, `"not_matched"`, and `"failed"`. A match is reported only after
+the requested identity is verified and the downloaded track is committed to
+the playlist; it means the track is ready for station scheduling, not that it
+has already aired. Public unsuccessful outcomes are deliberately coarse:
+`"no_verified_match"`, `"not_playable"`, or
+`"temporarily_unavailable"`. They give the listener a safe next step while
+keeping provider and admission details private. Pending and recently consumed
+records remain queryable by token for the existing five-minute receipt window.
+Receipt responses are `Cache-Control: no-store`, and the service worker excludes
+the route, so a transient `searching` response cannot mask a later terminal result.
+
 ### Route table
 
 Write routes that consume request details use `mammamiradio.web.json_body.read_json_object`.
@@ -817,10 +841,11 @@ Admin auth dependencies still run before body parsing on protected routes.
 | `/api/clip` | POST | Public | Capture a shareable clip (full ad/banter segment, or last 30s of music) |
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
-| `/api/listener-request` | POST | Public | Submit a song request or shoutout |
+| `/api/listener-request` | POST | Public | Submit a song request or shoutout; successful responses add `public_token` and the current `song_resolution` for listener-side follow-up |
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
+| `/public-listener-requests/{public_token}` | GET | Public | Safe resolution receipt for one submission: `searching`, `matched`, `not_matched`, or `failed`, with a cleaned track on matches or a coarse actionable outcome on failures |
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
-| `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
+| `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical); `action: "handled"` closes a successfully queued request without retracting its committed track or matched receipt |
 | `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying an opaque row `id` and its current `preference` score |
 | `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; every response (including an empty query) returns the playlist `revision` captured with the local snapshot before any external lookup, and each local result carries its opaque row `id` |
 | `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`); no queue purge |

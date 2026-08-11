@@ -6124,6 +6124,7 @@ async def _commit_external_download(
     *,
     should_commit: Callable[[], bool],
     should_pin: Callable[[], bool],
+    blocked_identity_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> str:
     """Download `track` and commit it to the rotation pool unless the playlist
     SOURCE switched while downloading. Only switch_playlist bumps source_revision,
@@ -6141,6 +6142,7 @@ async def _commit_external_download(
         download_external_track,
         reject_cached_download,
     )
+    from mammamiradio.playlist.request_matching import normalize_match_text
 
     state = app_state.station_state
     config = app_state.config
@@ -6188,8 +6190,27 @@ async def _commit_external_download(
             if not verdict.accepted:
                 rejected_download_reason = verdict.reason
         if not rejected_download_reason:
-            if normalized_track_key(track) in state.blocklist:
-                return "banned"
+            candidate_block_keys = {normalized_track_key(track), *blocked_identity_keys}
+
+            def _same_blocked_identity(left: tuple[str, str], right: tuple[str, str]) -> bool:
+                left_artist = normalize_match_text(left[0])
+                right_artist = normalize_match_text(right[0])
+                artists_match = left_artist == right_artist or left_artist.replace(" ", "") == right_artist.replace(
+                    " ", ""
+                )
+                return artists_match and normalize_match_text(left[1]) == normalize_match_text(right[1])
+
+            if any(
+                _same_blocked_identity(candidate_key, blocked_key)
+                for candidate_key in candidate_block_keys
+                for blocked_key in state.blocklist
+            ):
+                # Quarantine the just-downloaded artifact outside the source
+                # lock. Equivalent identities (accent/compact/base-variant)
+                # may not match the sidecar's literal key during a later cache
+                # rescue, so leaving it behind could resurrect a banned song.
+                rejected_download_reason = "operator_blocklist"
+        if not rejected_download_reason:
             # A previously failed source can be retried explicitly by an admin
             # or listener request. Once this download is admitted, it is real
             # playable media again rather than a session-denied cache key.
@@ -6211,6 +6232,9 @@ async def _commit_external_download(
             return "pinned"
 
     await asyncio.to_thread(reject_cached_download, config.cache_dir, track.cache_key, rejected_download_reason)
+    if rejected_download_reason == "operator_blocklist":
+        logger.info("External track refused by operator blocklist: %s", track.display)
+        return "banned"
     logger.info(
         "External track held out of rotation after download: %s (yt:%s reason=%s)",
         track.display,

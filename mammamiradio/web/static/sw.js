@@ -1,6 +1,6 @@
 // Service Worker for Mamma Mi Radio PWA
 // Bump CACHE_NAME on any visual/asset change. Old cache is purged on activate.
-const CACHE_NAME = 'radio-itali-v6';
+const CACHE_NAME = 'radio-itali-v7';
 const PRECACHE_URLS = [
   '/listen',
   '/static/manifest.json',
@@ -44,7 +44,8 @@ self.addEventListener('fetch', (event) => {
   // Never cache the audio stream or API calls
   // Use endsWith/includes to handle HA Ingress prefixed paths
   if (path.endsWith('/stream') || path.includes('/api/') ||
-      path.endsWith('/status') || path.endsWith('/public-status')) {
+      path.endsWith('/status') || path.endsWith('/public-status') ||
+      path.includes('/public-listener-requests')) {
     return;
   }
 

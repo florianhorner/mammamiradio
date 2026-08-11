@@ -4803,7 +4803,7 @@ async def test_sw_js_keeps_css_and_js_network_first():
 
     assert resp.status_code == 200
     text = resp.text
-    assert "radio-itali-v6" in text
+    assert "radio-itali-v7" in text
     assert "const isFreshAsset" in text
     assert "path.endsWith('.css')" in text
     assert "path.endsWith('.js')" in text
@@ -4812,6 +4812,17 @@ async def test_sw_js_keeps_css_and_js_network_first():
     stable_cache_block = text.split("const isStableInstallAsset", maxsplit=1)[1]
     assert "path.endsWith('.css')" not in stable_cache_block
     assert "path.endsWith('.js')" not in stable_cache_block
+
+
+@pytest.mark.asyncio
+async def test_sw_js_never_caches_listener_request_receipts():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/sw.js")
+
+    assert resp.status_code == 200
+    assert "path.includes('/public-listener-requests')" in resp.text
 
 
 @pytest.mark.asyncio
