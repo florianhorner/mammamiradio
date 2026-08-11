@@ -1505,7 +1505,7 @@ class StationState:
         )
         session_counts = {kind: int(self.stream_pacing_counts.get(kind, 0)) for kind in STREAM_PACING_EVENT_KINDS}
         return {
-            "target_lead_ms": 500,
+            "target_lead_ms": 4_000,
             "late_threshold_ms": 50,
             "session": {**session_counts, "total": sum(session_counts.values())},
             "window_15m": {**window_counts, "total": sum(window_counts.values())},

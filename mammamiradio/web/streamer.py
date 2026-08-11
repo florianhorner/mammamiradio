@@ -703,7 +703,10 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
-STREAM_TARGET_LEAD_SECONDS = 0.5
+# Direct MP3 clients such as Sonos have a small receive buffer. Four seconds
+# covers the 1.781s scheduler stall measured on HA Green while remaining below
+# the listener queue's roughly 16s capacity in the default 192 kbps setup.
+STREAM_TARGET_LEAD_SECONDS = 4.0
 STREAM_MAX_PACKET_SECONDS = 0.125
 STREAM_LATE_THRESHOLD_SECONDS = 0.05
 STREAM_MAX_RECOVERY_CHUNKS = 3
