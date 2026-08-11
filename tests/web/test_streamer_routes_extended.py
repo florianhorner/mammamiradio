@@ -1994,6 +1994,120 @@ async def test_source_switch_keeps_song_promised_by_on_air_dedication(
     assert not app.state.skip_event.is_set()
 
 
+@pytest.mark.parametrize(
+    "fallback_kind",
+    ["assetless", "preserved-runway", "fresh-runway"],
+)
+def test_source_switch_retries_on_air_promised_song_when_admitted_file_vanished(tmp_path, fallback_kind):
+    """A missing admitted file takes playback's retry path during source replacement."""
+    from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_TOKEN_KEY
+    from mammamiradio.web.streamer import _apply_loaded_source
+
+    app = _make_test_app()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    dedication_queue_id = "on-air-missing-song-dedication"
+    assert state.arm_listener_request_handoff(
+        {"request_id": "on-air-missing-song-request"},
+        requested,
+        dedication_queue_id=dedication_queue_id,
+    )
+    missing_promised = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished-promised-song.mp3",
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "vanished-promised-song-q",
+            "title": requested.display,
+            "title_only": requested.title,
+            "artist": requested.artist,
+            **state.listener_request_handoff_metadata(requested),
+        },
+        ephemeral=False,
+    )
+    state.admit_listener_request_handoff(missing_promised)
+    token = str(missing_promised.metadata[LISTENER_REQUEST_HANDOFF_TOKEN_KEY])
+
+    ordinary_path = tmp_path / "old-source-runway.mp3"
+    ordinary_path.write_bytes(b"old-source-runway")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "old-source-runway-q",
+            "title": "Old source runway",
+            "title_only": "Old source runway",
+            "artist": "Old Artist",
+        },
+        ephemeral=False,
+    )
+    fresh_path = tmp_path / "fresh-source-runway.mp3"
+    fresh_path.write_bytes(b"fresh-source-runway")
+    fresh = Segment(
+        type=SegmentType.BANTER,
+        path=fresh_path,
+        duration_sec=20.0,
+        metadata={
+            "queue_id": "fresh-source-runway-q",
+            "title": "Fresh source runway",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    app.state.queue = asyncio.Queue(maxsize=2)
+    initial_queue = (missing_promised,) if fallback_kind == "assetless" else (missing_promised, ordinary)
+    for segment in initial_queue:
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {
+            "id": str(segment.metadata["queue_id"]),
+            "type": segment.type.value,
+            "label": str(segment.metadata["title"]),
+        }
+        for segment in initial_queue
+    ]
+    state.now_streaming = {
+        "type": SegmentType.BANTER.value,
+        "label": "Listener dedication",
+        "started": time.time(),
+        "metadata": {"queue_id": dedication_queue_id, "title": "Listener dedication"},
+    }
+    new_tracks = [Track(title="New source song", artist="New Artist", duration_ms=180_000, spotify_id="new1")]
+    request = MagicMock()
+    request.app = app
+
+    with patch(
+        "mammamiradio.web.streamer._continuity_reservation_segments",
+        return_value=[fresh] if fallback_kind == "fresh-runway" else [],
+    ):
+        result = _apply_loaded_source(
+            request,
+            new_tracks,
+            PlaylistSource(kind="url", source_id="new-source", label="New source"),
+        )
+
+    assert result["skipped"] is False
+    assert not app.state.skip_event.is_set()
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+    expected_slot = (
+        fresh if fallback_kind == "fresh-runway" else ordinary if fallback_kind == "preserved-runway" else None
+    )
+    assert state.continuity_slot is expected_slot
+    assert state.listener_request_admitted_reservations == {}
+    restored = state.listener_request_handoff
+    assert restored is not None
+    assert restored.token == token
+    assert restored.track is requested
+    assert restored.dedication_queue_id == dedication_queue_id
+    assert restored.music_selection_exclusive is True
+    assert restored.pin_revision is None
+    assert restored.force_next_revision == state.force_next_revision
+    assert state.force_next is SegmentType.MUSIC
+    assert state.playlist == new_tracks
+
+
 # ---------------------------------------------------------------------------
 # Search tracks
 # ---------------------------------------------------------------------------

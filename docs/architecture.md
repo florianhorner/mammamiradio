@@ -350,13 +350,14 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   with it and preserves the next ordinary playable segment. Once the dedication is
   already on air, however, its exact song owns the boundary even before queue
   admission. An admitted and ready song becomes the required survivor at the
-  queue head. An active render is fenced by the source/continuity revisions, then
-  the same token, track, and dedication id are restored with fresh force/pin
-  ownership for a retry under the new revision. Fresh or preserved fallback audio
-  stays in the capacity-exempt slot so the retried song can enter the real queue
-  first; the producer drain guard yields to this owner, while the slot and playback
-  recovery ladder still cover a retry that misses the dedication boundary. In
-  both cases the dedication finishes without a source-switch skip, and ownership
+  queue head. An admitted file that vanished before playback, or an active render
+  fenced by the source/continuity revisions, restores the same token, track, and
+  dedication id with fresh force/pin ownership for a retry under the new revision.
+  Fresh or preserved fallback audio stays in the capacity-exempt slot so the
+  retried song can enter the real queue first; the producer drain guard yields to
+  this owner, while the slot and playback recovery ladder still cover a retry that
+  misses the dedication boundary. In both cases the dedication finishes without
+  a source-switch skip, and ownership
   remains until the promised song emits its first byte.
   Ordinary selection, norm-cache and
   last-known-good rescue, continuity reservation/slot claims, enqueue admission,
@@ -414,11 +415,12 @@ fed only when a rescue is actually heard by a listener and resets on restart.
 A successful replacement control supersedes an earlier reservation: it clears
 ordinary and protected queued audio, clears any out-of-band `continuity_slot`,
 and creates a fresh reservation for the new action. The one stronger owner is an
-exact song promised by a dedication already on air. An admitted song stays at
-the queue head; an active in-flight handoff is restored for a revision-clean
-retry, with fresh continuity held out of band so the real queue remains open. The
-resulting queue and shadow projection therefore describe exactly the same final
-order. If no fresh reservation can be built, the control fails closed instead:
+exact song promised by a dedication already on air. A ready admitted song stays
+at the queue head; a vanished admitted file or active in-flight handoff is
+restored for a revision-clean retry, with fresh continuity held out of band so
+the real queue remains open. The resulting queue and shadow projection therefore
+describe exactly the same final order. If no fresh reservation can be built, the
+control fails closed instead:
 it keeps the first immediately playable queued segment and any valid
 capacity-exempt slot, drops only the remaining queued work to reopen producer
 capacity, and never cuts the current segment into an empty runway. A companionship

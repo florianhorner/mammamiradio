@@ -2827,11 +2827,35 @@ def _apply_loaded_source(
     # The queue replacement and its reservation happen before the source
     # revision changes, so an in-flight render cannot win the tiny gap between
     # a destructive purge and safety audio admission.
+    queued_before_switch = tuple(getattr(request.app.state.queue, "_queue", ()))
     on_air_promise_ownership = _on_air_listener_promise_ownership(state, request.app.state.queue)
     active_on_air_handoff = state.active_listener_request_handoff_on_air()
     on_air_promise_handoffs = {
         token: state.listener_request_admitted_reservations[token] for token in on_air_promise_ownership.values()
     }
+    on_air_promise_segments = {
+        token: segment
+        for segment in queued_before_switch
+        if (
+            token := on_air_promise_ownership.get(
+                str((segment.metadata if isinstance(segment.metadata, dict) else {}).get("queue_id") or "")
+            )
+        )
+    }
+    # Playback normally converts an admitted file that vanished before its first
+    # byte back into an active retry. Source replacement can discard that queued
+    # object first, so identify the same retryable case while its full handoff is
+    # still retained. A blocklisted recording remains terminal policy, not a retry.
+    unreadable_on_air_handoffs = {
+        token: handoff
+        for token, handoff in on_air_promise_handoffs.items()
+        if (segment := on_air_promise_segments.get(token)) is not None
+        and not _indexed_audio_path_is_file(segment.path)
+        and not song_identity_key_is_blocklisted(_segment_blocklist_key(segment), state.blocklist)
+    }
+    unreadable_on_air_queue_ids = frozenset(
+        queue_id for queue_id, token in on_air_promise_ownership.items() if token in unreadable_on_air_handoffs
+    )
     preserved_on_air_tokens = frozenset(on_air_promise_handoffs)
     if active_on_air_handoff is not None:
         preserved_on_air_tokens |= {active_on_air_handoff.token}
@@ -2852,7 +2876,7 @@ def _apply_loaded_source(
         replace_queue=True,
         discard_reason=GenerationWasteReason.SOURCE_SWITCH,
         preserve_queue_ids=frozenset(on_air_promise_ownership),
-        prefer_capacity_slot=active_on_air_handoff is not None,
+        prefer_capacity_slot=bool(active_on_air_handoff or unreadable_on_air_handoffs),
         capacity_slot_excluded_queue_ids=cancelled_dedication_queue_ids,
         outcome=runway,
     )
@@ -2877,6 +2901,23 @@ def _apply_loaded_source(
             purged += dropped_listener_segments
             state.continuity_epoch += 1
             runway.preserved_existing = _playable_runway_available(request.app.state.queue, state)
+    # An assetless reservation can fail closed without touching a queue that
+    # contains only the vanished promised file. Remove that dead object here so
+    # it cannot coexist with the active retry restored below.
+    if unreadable_on_air_queue_ids:
+        dropped_unreadable_promises = drop_matching_segments(
+            request.app.state.queue,
+            state,
+            should_drop=lambda segment: (
+                str((segment.metadata if isinstance(segment.metadata, dict) else {}).get("queue_id") or "")
+                in unreadable_on_air_queue_ids
+            ),
+            reason=GenerationWasteReason.SOURCE_SWITCH,
+        )
+        if dropped_unreadable_promises:
+            purged += dropped_unreadable_promises
+            state.continuity_epoch += 1
+            runway.preserved_existing = _playable_runway_available(request.app.state.queue, state)
     surviving_queue_ids = {
         str(segment.metadata.get("queue_id") or "") for segment in getattr(request.app.state.queue, "_queue", ())
     }
@@ -2885,13 +2926,18 @@ def _apply_loaded_source(
         for queue_id, token in on_air_promise_ownership.items()
         if queue_id in surviving_queue_ids
     }
+    lost_on_air_handoff = next(
+        (handoff for token, handoff in unreadable_on_air_handoffs.items() if token not in surviving_on_air_handoffs),
+        None,
+    )
+    retry_on_air_handoff = active_on_air_handoff or lost_on_air_handoff
     state.switch_playlist(tracks, resolved_source)
-    # The ordinary source switch revokes old-source requests. Retain only the
-    # admitted song still queued behind its on-air dedication, including its
-    # first-byte retry ownership.
+    # The ordinary source switch revokes old-source requests. Retain a ready
+    # admitted song behind its on-air dedication, or restore the same promise
+    # for a clean retry when its queued file vanished before playback.
     state.listener_request_admitted_reservations.update(surviving_on_air_handoffs)
-    if active_on_air_handoff is not None:
-        state.restore_listener_request_handoff_after_source_switch(active_on_air_handoff)
+    if retry_on_air_handoff is not None:
+        state.restore_listener_request_handoff_after_source_switch(retry_on_air_handoff)
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
     # Immediate cutover is safe only when this action admitted fresh protected
@@ -2900,7 +2946,7 @@ def _apply_loaded_source(
     # runway prevents dead air but must not trigger a cutover into prior-source
     # audio.
     skipped = False
-    preserved_on_air_promise = bool(surviving_on_air_handoffs or active_on_air_handoff)
+    preserved_on_air_promise = bool(surviving_on_air_handoffs or retry_on_air_handoff)
     if (
         state.now_streaming
         and not preserved_on_air_promise
