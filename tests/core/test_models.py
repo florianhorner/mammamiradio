@@ -459,7 +459,9 @@ def test_switch_playlist_clears_listener_request_state():
     state.pending_requests.append({"request_id": "req-1", "name": "Luca", "message": "ciao", "type": "shoutout"})
     state.pending_actions.append({"type": "skip_bridge"})
     state._listener_request_rl = {"127.0.0.1": 123.0}
-    state.pinned_track = _track(99)
+    promised = _track(99)
+    state.pinned_track = promised
+    assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, promised)
     state.force_next = SegmentType.BANTER
 
     state.switch_playlist([_track(2)])
@@ -476,6 +478,7 @@ def test_switch_playlist_clears_listener_request_state():
     assert list(state.pending_actions) == []
     assert state._listener_request_rl == {}
     assert state.pinned_track is None
+    assert state.listener_request_handoff is None
     assert state.force_next is None
 
 

@@ -378,11 +378,11 @@ def segment_track_key(segment: Segment) -> tuple[str, str]:
 class ListenerTrackReservations:
     """Matched listener songs that must wait for their dedication handoff.
 
-    The pending request list is the ownership boundary: a match stays reserved
-    whether or not it already owns ``pinned_track``, and archiving the request
-    releases it without a second mutable registry to synchronize.  Cache-key
-    and canonical song identities cover both the exact downloaded object and
-    pre-existing cache/queue segments for the same recording.
+    Pending requests own ordinary reservations whether or not they already own
+    ``pinned_track``. After a successful dedication acknowledgement archives a
+    request, its exact promised source moves into ``ListenerRequestHandoff``
+    until queue admission. Cache-key and canonical song identities cover both
+    the downloaded object and pre-existing segments for the same recording.
     """
 
     cache_keys: frozenset[str] = frozenset()
