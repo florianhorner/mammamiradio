@@ -5101,7 +5101,6 @@ function updateListenerRequests(reqs,consumed){
     if(r.type==='song_request'){
       if(r.song_found){
         status=statusInline('ready',r.song_track||'ready');
-        actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
         status=statusInline('blocked',listenerSongErrorLabel(r.song_error_reason));
       } else {
@@ -5144,14 +5143,6 @@ async function lrDismiss(id){
   if(!r||r.ok===false){toast(wayOut('remove that request'));return;}
   if(r.removed>0)toast('Request removed');
   else toast('Already removed');
-}
-async function lrQueueNext(i){
-  const req=_lrReqs[i];if(!req)return;
-  if(req.type==='song_request'&&req.song_found){
-    const r=await api('POST','/api/listener-requests/dismiss',{id:req.id,action:'handled'});
-    if(!r||r.ok===false){toast(wayOut('handle that request'));return;}
-    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
-  }
 }
 
 // ── Log / Archivio ──

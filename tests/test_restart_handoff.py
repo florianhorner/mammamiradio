@@ -1012,6 +1012,21 @@ def test_admission_rejects_blocklisted_artist_title(tmp_path):
     assert [rejection.reason for rejection in admission.rejected] == ["blocklisted"]
 
 
+def test_admission_rejects_exact_equivalent_blocklisted_identity(tmp_path):
+    path = _write_spooled_file(tmp_path)
+    entry = _entry_for_path(tmp_path, path, artist="TotoCutugno", title="LItaliano")
+
+    admission = admit_restart_handoff_manifest(
+        tmp_path,
+        RestartHandoffManifest(entries=(entry,), created_at=100.0),
+        blocklist={("toto cutugno", "l'italiano"): {"display": "Toto Cutugno - L'Italiano"}},
+        now=120.0,
+        duration_probe=_duration,
+    )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["blocklisted"]
+
+
 def test_admission_rejects_missing_identity(tmp_path):
     path = _write_spooled_file(tmp_path)
     entry = _entry_for_path(tmp_path, path, artist="", title="Song")

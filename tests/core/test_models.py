@@ -460,8 +460,20 @@ def test_switch_playlist_clears_listener_request_state():
     state.pending_actions.append({"type": "skip_bridge"})
     state._listener_request_rl = {"127.0.0.1": 123.0}
     promised = _track(99)
-    state.pinned_track = promised
+    state.set_pinned_track(promised)
     assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, promised)
+    admitted = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/admitted-request.mp3"),
+        metadata={
+            "artist": promised.artist,
+            "title_only": promised.title,
+            **state.listener_request_handoff_metadata(promised),
+        },
+    )
+    state.admit_listener_request_handoff(admitted)
+    assert state.listener_request_admitted_reservations
+    assert state.arm_listener_request_handoff({"request_id": "active-request"}, promised)
     force_revision = state.set_force_next(SegmentType.BANTER)
 
     state.switch_playlist([_track(2)])
@@ -479,6 +491,7 @@ def test_switch_playlist_clears_listener_request_state():
     assert state._listener_request_rl == {}
     assert state.pinned_track is None
     assert state.listener_request_handoff is None
+    assert state.listener_request_admitted_reservations == {}
     assert state.force_next is None
     assert state.force_next_revision == force_revision + 1
 
@@ -1636,6 +1649,7 @@ def test_listener_track_reservation_lifetime_is_the_pending_request(song_pinned)
         ("Toto Cutugno", "LItaliano", "Toto Cutugno", "L'Italiano"),
         ("Lucio Battìsti", "Emozioni", "Lucio Battisti", "Emozioni"),
         ("TotoCutugno", "L'Italiano", "Toto Cutugno", "LItaliano"),
+        ("Lady Gaga", "Shallow (feat. Bradley Cooper)", "Lady Gaga", "Shallow"),
     ],
 )
 def test_listener_track_reservation_uses_matcher_identity_equivalence(

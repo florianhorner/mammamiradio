@@ -1,31 +1,22 @@
-"""Listener-request endpoints + background tasks.
+"""Listener-request HTTP surfaces and background song resolution.
 
-Extracted from `streamer.py` (PR Track B v2.11.0). Owns the public POST surface
-where listeners submit a dedica or song wish, the admin queue view, the
-public sanitized feed, and the dismiss endpoint. Plus the background task that
-turns a typed song wish into a downloaded track ready for the producer.
+Accepted requests enter ``pending_requests`` with ``status="queued"``. Song
+lookup and download update the request's resolution fields while it remains
+pending. Hosts and admin actions archive requests in
+``recently_consumed_requests`` as ``sent_to_hosts``, ``dismissed``, or
+``song_not_found``; a playlist source change archives them as
+``source_changed``. That short-lived trail serves both the admin history and
+the listener's public-token receipt. Requests rejected by validation,
+moderation, or rate limiting are never stored.
 
-State machine (extended in v2.11.0 for Track B):
-
-    submit ──► [validate, rate-limit, moderate]
-                    │
-                    ▼
-              ┌─ rejected (moderation refuses)
-              │
-              └─► queued ──► scheduled ──► on_air ──► aired
-                              │              │
-                              └─► expired ◄──┘  (audio production failed
-                                                 or evicted past TTL)
-
-`status` lives on each pending_requests record (added v2.11.0). Existing
-admin endpoints continue to use `ts` as id for backward compat; `request_id`
-(uuid4) is the canonical admin id going forward, while `public_token` is the
-listener-safe tracking token exposed through the public feed.
+``request_id`` is the canonical admin mutation handle; legacy callers may use
+the timestamp id. ``public_token`` is the listener-facing receipt handle and is
+not accepted by admin mutation routes.
 
 Identity model: per-session nickname only. No cookies, no login. The
-listener self-reports `name` with each submission. `submitter_ip_hash`
-(HMAC-SHA256(IP + ADMIN_TOKEN)) is server-side rate-limit key only;
-never exposed to listener responses.
+listener self-reports `name` with each submission. `submitter_ip_hash` is a
+server-side rate-limit key derived from the client IP and is never exposed to
+listener responses.
 """
 
 from __future__ import annotations
@@ -45,11 +36,15 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from mammamiradio.core.models import (
-    RECENTLY_CONSUMED_RETENTION_SECONDS,
+    LISTENER_REQUEST_FORCE_REVISION_KEY,
+    LISTENER_REQUEST_PIN_REVISION_KEY,
     SegmentType,
+    listener_request_force_revision,
+    listener_request_pin_revision,
 )
 from mammamiradio.hosts.moderation import is_blocked
 from mammamiradio.playlist.playlist import normalized_track_key
+from mammamiradio.playlist.request_matching import SongRequestIntent
 from mammamiradio.web.auth import _HASSIO_NETWORK, require_admin_access
 from mammamiradio.web.json_body import read_json_object
 from mammamiradio.web.streamer import _register_background_task, _reserve_continuity_runway
@@ -116,13 +111,6 @@ def _public_outcome_reason(record: dict[str, Any]) -> str | None:
     if reason in _SONG_NOT_PLAYABLE_REASONS:
         return "not_playable"
     return "temporarily_unavailable"
-
-
-def _prune_recently_consumed(state: Any, now: float) -> None:
-    cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
-    state.recently_consumed_requests = [
-        record for record in state.recently_consumed_requests if record.get("consumed_at", 0) >= cutoff
-    ]
 
 
 def _public_song_status(record: dict[str, Any]) -> dict[str, Any]:
@@ -193,7 +181,7 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
     """Return current pending listener request queue (admin only)."""
     state = request.app.state.station_state
     now = time.time()
-    _prune_recently_consumed(state, now)
+    state.prune_recent_listener_requests(now)
     return {
         "requests": [
             {
@@ -207,7 +195,7 @@ async def get_listener_requests(request: Request, _: None = Depends(require_admi
                 "song_resolution": _song_resolution(r),
                 "song_track": r.get("song_track"),
                 "age_s": int(now - r.get("ts", now)),
-                # Track B v2.11.0 (admin-only fields):
+                # Admin mutation and pending-lifecycle fields.
                 "request_id": r.get("request_id"),
                 "status": r.get("status", "queued"),
                 "evict_after": r.get("evict_after"),
@@ -276,7 +264,7 @@ async def get_public_listener_request(request: Request, public_token: str):
 
     state = request.app.state.station_state
     now = time.time()
-    _prune_recently_consumed(state, now)
+    state.prune_recent_listener_requests(now)
     for record in (*state.pending_requests, *reversed(state.recently_consumed_requests)):
         if str(record.get("public_token") or "") == canonical_token:
             return JSONResponse(_public_song_status(record), headers={"Cache-Control": "no-store"})
@@ -291,9 +279,9 @@ async def get_public_listener_request(request: Request, public_token: str):
 async def dismiss_listener_request(request: Request, _: None = Depends(require_admin_access)):
     """Remove a specific listener request from the queue (admin only).
 
-    Accepts either the legacy `ts`-based id or the v2.11.0 canonical `request_id`
-    (uuid4). The listener-facing `public_token` is deliberately not accepted as
-    an admin mutation handle.
+    Accepts either the legacy `ts`-based id or the canonical UUID `request_id`.
+    The listener-facing `public_token` is deliberately not accepted as an admin
+    mutation handle.
     """
     state = request.app.state.station_state
     body, error = await read_json_object(request)
@@ -303,7 +291,7 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
     if not req_id:
         return JSONResponse({"ok": False, "error": "id required"}, status_code=400)
     action = str(body.get("action") or "dismiss")
-    if action not in {"dismiss", "handled"}:
+    if action != "dismiss":
         return JSONResponse({"ok": False, "error": "invalid action"}, status_code=400)
     removed_requests = []
     kept_requests = []
@@ -312,27 +300,29 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
             removed_requests.append(r)
         else:
             kept_requests.append(r)
-    if action == "handled" and any(not removed.get("song_found") for removed in removed_requests):
-        return JSONResponse({"ok": False, "error": "request not ready"}, status_code=409)
     state.pending_requests = kept_requests
     for removed in removed_requests:
         if removed.get("public_token"):
-            if action == "handled":
-                state.archive_listener_request(removed, status="sent_to_hosts", song_error_reason="")
-            else:
-                state.archive_listener_request(
-                    removed,
-                    status="dismissed",
-                    song_error_reason="dismissed" if removed.get("type") == "song_request" else "",
-                )
-    # "Handled" closes the admin card after a successful queue commit; it must
-    # not undo that commit. Explicit dismissal still retracts the requested
-    # track and pin as before.
-    removed_tracks = (
-        []
-        if action == "handled"
-        else [r.get("song_track_obj") for r in removed_requests if r.get("song_track_obj") is not None]
-    )
+            state.archive_listener_request(
+                removed,
+                status="dismissed",
+                song_error_reason="dismissed" if removed.get("type") == "song_request" else "",
+            )
+    removed_tracks = [r.get("song_track_obj") for r in removed_requests if r.get("song_track_obj") is not None]
+    pin_force_revisions = {
+        id(track): revision
+        for removed in removed_requests
+        if removed.get("song_pinned")
+        and (track := removed.get("song_track_obj")) is not None
+        and (revision := listener_request_force_revision(removed)) is not None
+    }
+    pin_revisions = {
+        id(track): revision
+        for removed in removed_requests
+        if removed.get("song_pinned")
+        and (track := removed.get("song_track_obj")) is not None
+        and (revision := listener_request_pin_revision(removed)) is not None
+    }
     playlist_will_change = any(any(candidate is track for candidate in state.playlist) for track in removed_tracks)
     pin_will_change = any(state.pinned_track is track for track in removed_tracks)
     if playlist_will_change or pin_will_change:
@@ -351,9 +341,18 @@ async def dismiss_listener_request(request: Request, _: None = Depends(require_a
         if len(state.playlist) != original_len:
             state.playlist_revision += 1
         if state.pinned_track is track:
-            state.pinned_track = None
-            if state.force_next == SegmentType.MUSIC:
-                state.clear_force_next()
+            owned_pin_revision = pin_revisions.get(id(track))
+            if owned_pin_revision is not None:
+                state.clear_pinned_track(
+                    expected_revision=owned_pin_revision,
+                    expected_track=track,
+                )
+            owned_force_revision = pin_force_revisions.get(id(track))
+            if owned_force_revision is not None:
+                state.clear_force_next(
+                    expected_revision=owned_force_revision,
+                    expected_type=SegmentType.MUSIC,
+                )
     return {"ok": True, "removed": len(removed_requests)}
 
 
@@ -427,19 +426,18 @@ async def listener_request(request: Request):
         "name": name,
         "message": message,
         "type": "song_request" if is_song_request else "shoutout",
-        "song_query": song_intent.search_query if song_intent is not None else None,
-        "song_intent": song_intent,
         "song_found": False,
         "song_error": False,
         "song_error_reason": "",
         "song_track": None,
+        "song_pinned": False,
+        LISTENER_REQUEST_PIN_REVISION_KEY: None,
+        LISTENER_REQUEST_FORCE_REVISION_KEY: None,
         "banter_cycles_missed": 0,  # initialized here; incremented by ListenerRequestCommit in scriptwriter.py
         "ts": now,
-        # Track B v2.11.0 (Phase 2 — additive, state machine inert).
-        # request_id is the canonical id (replaces ts in v2.12). status moves
-        # through queued → scheduled → on_air → aired (or rejected/expired)
-        # in Phase 3. evict_after is set on terminal transition. submitter_ip_hash
-        # is HMAC-SHA256(IP, ADMIN_TOKEN) — never exposed in public responses.
+        # request_id is the admin mutation handle; public_token is the public
+        # receipt handle. status stays queued while pending, then the terminal
+        # archive receives the outcome status. submitter_ip_hash stays private.
         "request_id": str(uuid.uuid4()),
         "public_token": str(uuid.uuid4()),
         "status": "queued",
@@ -450,7 +448,10 @@ async def listener_request(request: Request):
 
     # Fire async download for song requests
     if is_song_request and allow_ytdlp:
-        _dl_task = asyncio.create_task(_download_listener_song(req, request.app.state, state.source_revision))
+        assert song_intent is not None
+        _dl_task = asyncio.create_task(
+            _download_listener_song(req, request.app.state, state.source_revision, song_intent)
+        )
         _register_background_task(request.app.state, _dl_task)
     elif is_song_request:
         _set_song_error(req, "downloads_disabled")
@@ -465,7 +466,12 @@ async def listener_request(request: Request):
     }
 
 
-async def _download_listener_song(req: dict, app_state, originating_source_revision: int) -> None:
+async def _download_listener_song(
+    req: dict,
+    app_state,
+    originating_source_revision: int,
+    intent: SongRequestIntent,
+) -> None:
     """Verify, download, and commit a listener song request to rotation.
 
     Stream-safe: does not purge the pre-buffered queue. An accepted track may
@@ -479,25 +485,11 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
     from mammamiradio.playlist.downloader import search_ytdlp_metadata_outcome
     from mammamiradio.playlist.music_admission import YOUTUBE_ADMISSION_SEARCH_DEPTH, classify_youtube_candidate
     from mammamiradio.playlist.request_matching import (
-        SongRequestIntent,
         match_song_request_candidates,
-        parse_song_request,
     )
     from mammamiradio.web.streamer import _commit_external_download, _safe_external_album_art
 
     state = app_state.station_state
-    intent = req.get("song_intent")
-    if not isinstance(intent, SongRequestIntent):
-        intent = parse_song_request(str(req.get("message") or ""))
-    if intent is None:
-        legacy_query = str(req.get("song_query") or "").strip()
-        intent = parse_song_request(f"play {legacy_query}") if legacy_query else None
-    if intent is None:
-        _set_song_error(req, "ambiguous_request")
-        logger.info("Listener song request was too ambiguous: request_id=%s", req.get("request_id"))
-        return
-    req["song_intent"] = intent
-    req["song_query"] = intent.search_query
     try:
         loop = asyncio.get_running_loop()
         outcome = await loop.run_in_executor(
@@ -530,6 +522,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             return
 
         track: Track | None = None
+        accepted_match = None
         track_display = ""
         held_notice_reason = ""
         for match in relevance.matches:
@@ -544,6 +537,7 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             verdict = classify_youtube_candidate(candidate, state.playlist, app_state.config.pacing, metadata=meta)
             if verdict.accepted:
                 track = candidate
+                accepted_match = match
                 track_display = " \u2013 ".join(part for part in (match.artist, match.title) if part)
                 break
             if not held_notice_reason and verdict.notice_reason:
@@ -558,6 +552,14 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             _set_song_error(req, held_notice_reason or "non_music_audio")
             logger.info("Listener song request returned no single-track result: request_id=%s", req.get("request_id"))
             return
+        assert accepted_match is not None
+        req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
+        req[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+
+        def _record_pin_claim(pin_revision: int, force_revision: int | None) -> None:
+            req[LISTENER_REQUEST_PIN_REVISION_KEY] = pin_revision
+            req[LISTENER_REQUEST_FORCE_REVISION_KEY] = force_revision
+
         status = await _commit_external_download(
             track,
             app_state,
@@ -576,10 +578,11 @@ async def _download_listener_song(req: dict, app_state, originating_source_revis
             # operator-banned base song. Check that canonical identity under the
             # same source-switch lock as the ordinary track key.
             blocked_identity_keys=frozenset(
-                (artist.strip().lower(), match.identity_title.strip().lower())
-                for artist in match.credited_artists
+                (artist.strip().lower(), accepted_match.identity_title.strip().lower())
+                for artist in accepted_match.credited_artists
                 if artist.strip()
             ),
+            on_pin_claimed=_record_pin_claim,
         )
         # "pinned" or "queued" both mean the track landed in the playlist for this
         # request. "banned" means the operator blocklisted the song — a terminal

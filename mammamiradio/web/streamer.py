@@ -65,6 +65,9 @@ from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilitie
 from mammamiradio.core.config import MODEL_REGISTRY_FILENAME, PACING_BOUNDS, ModelsSection, load_model_registry
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+    LISTENER_REQUEST_FORCE_REVISION_KEY,
+    LISTENER_REQUEST_PIN_REVISION_KEY,
     ChaosSubtype,
     GenerationWasteReason,
     Heading,
@@ -75,6 +78,7 @@ from mammamiradio.core.models import (
     SegmentType,
     StationState,
     Track,
+    listener_request_force_revision,
     segment_has_admitted_listener_request_handoff,
     segment_track_key,
 )
@@ -86,7 +90,7 @@ from mammamiradio.core.setup_status import (
     build_setup_status,
     classify_station_mode,
 )
-from mammamiradio.core.song_identity import song_identity_keys_match
+from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import generation_in_progress, schedule_label_generation
@@ -129,7 +133,16 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
-from mammamiradio.scheduling.queue_mutations import drop_matching_segments
+from mammamiradio.scheduling.queue_mutations import (
+    drop_matching_segments,
+    settle_listener_request_queue_dependencies,
+)
+from mammamiradio.scheduling.queue_mutations import (
+    drop_segment_moment_receipts as _drop_segment_moment_receipts,
+)
+from mammamiradio.scheduling.queue_mutations import (
+    unlink_ephemeral_best_effort as _unlink_ephemeral_best_effort,
+)
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
@@ -595,50 +608,6 @@ def _purge_segment_queue(q) -> int:
     return len(items)
 
 
-def _unlink_ephemeral_best_effort(seg) -> None:
-    """Delete an ephemeral segment's temp render without ever raising (#397).
-
-    Purge paths must always finish clearing the queue/shadow and returning their
-    count even when a temp unlink fails (permission/IO). ``missing_ok=True`` only
-    swallows a missing file; a real ``OSError`` would otherwise abort the purge
-    mid-loop and leave the UI shadow stale behind a half-drained queue.
-    """
-    if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
-        try:
-            seg.path.unlink(missing_ok=True)
-        except Exception:
-            # Broad on purpose: a non-OSError (e.g. a malformed segment whose
-            # path is None -> AttributeError) must not abort the purge loop and
-            # leave the UI shadow stale behind a half-drained queue. Honors this
-            # helper's "without ever raising" contract.
-            logger.debug("Ephemeral purge unlink failed for %s", getattr(seg, "path", None), exc_info=True)
-
-
-def _drop_segment_moment_receipts(state: StationState, segment, reason: str) -> None:
-    """Demote any Moment Receipt a discarded queued segment was carrying.
-
-    Every path that pulls an already-queued BANTER segment out of the real
-    queue without letting it air (purge, session-stop mid-selection, an
-    operator's /api/queue/remove) must also settle the receipt honestly —
-    otherwise the admin trail keeps showing "waiting for its break" for a
-    segment that no longer exists. Best-effort like every other receipt call:
-    never lets bookkeeping affect the purge/discard it's piggybacking on.
-    """
-    store = getattr(state, "moment_store", None)
-    if store is None:
-        return
-    meta = getattr(segment, "metadata", None)
-    if not isinstance(meta, dict):
-        return
-    try:
-        for key in ("ritual_moment_id", "gag_moment_id"):
-            moment_id = str(meta.get(key) or "")
-            if moment_id:
-                store.mark_dropped(moment_id, reason)
-    except Exception:  # pragma: no cover - receipts must never break a purge
-        logger.debug("Moment receipt discard drop failed", exc_info=True)
-
-
 def _purge_queue_and_shadow(q, state: StationState, *, reason: str) -> int:
     """Drain the real queue AND clear the UI shadow in one synchronous block.
 
@@ -656,6 +625,7 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str) -> int:
     """
     items = _drain_segment_queue(q)
     for seg in items:
+        state.revoke_listener_request_handoff_for_discarded_dedication(seg)
         state.record_discard(seg, reason=reason, already_counted_in_produced=True)
         _drop_segment_moment_receipts(state, seg, str(reason))
         _unlink_ephemeral_best_effort(seg)
@@ -747,7 +717,9 @@ def _segment_is_immediately_playable(
         return False
     if segment.type is SegmentType.MUSIC:
         key = _segment_blocklist_key(segment)
-        if key in state.blocklist or key in excluded_track_keys:
+        if song_identity_key_is_blocklisted(key, state.blocklist) or song_identity_key_is_blocklisted(
+            key, excluded_track_keys
+        ):
             return False
         if _segment_is_listener_reserved(state, segment):
             return False
@@ -772,7 +744,7 @@ def _continuity_reservation_segments(
     covered = 0.0
     excluded_paths = excluded_paths or set()
     persistent_blocked_keys = set(state.blocklist)
-    blocked_keys = persistent_blocked_keys | (excluded_track_keys or set())
+    transient_blocked_keys = excluded_track_keys or set()
     listener_reservations = state.listener_track_reservations()
     recovery = _DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
     emergency_tone = _DEMO_ASSETS_DIR / "recovery" / "emergency_tone.mp3"
@@ -848,9 +820,11 @@ def _continuity_reservation_segments(
             continue
         metadata = load_track_metadata(cached) or {}
         cache_key = _sidecar_track_key(metadata)
-        if cache_key in blocked_keys:
+        if song_identity_key_is_blocklisted(cache_key, persistent_blocked_keys) or song_identity_key_is_blocklisted(
+            cache_key, transient_blocked_keys
+        ):
             logger.info("Skipping blocklisted cached continuity track (%s - %s)", cache_key[0], cache_key[1])
-            if cache_key in persistent_blocked_keys:
+            if song_identity_key_is_blocklisted(cache_key, persistent_blocked_keys):
                 # A durable ban makes this path unusable for the session. It can
                 # be re-indexed by a later render or the next startup after unban.
                 prune_paths.append(cached)
@@ -977,7 +951,9 @@ def _claim_continuity_slot(state: StationState) -> Segment | None:
     slot = state.continuity_slot
     if slot is None or _continuity_slot_seconds(state) <= 0:
         return None
-    if slot.type is SegmentType.MUSIC and _segment_blocklist_key(slot) in state.blocklist:
+    if slot.type is SegmentType.MUSIC and song_identity_key_is_blocklisted(
+        _segment_blocklist_key(slot), state.blocklist
+    ):
         logger.warning("Protected continuity slot became blocklisted before playback; clearing it")
         state.continuity_slot = None
         return None
@@ -1101,11 +1077,13 @@ def _discard_unplayable_queue_prefix(q, state: StationState, *, reason: str) -> 
 
     dropped = queued[:prefix_length]
     survivors = queued[prefix_length:]
+    dropped, survivors = settle_listener_request_queue_dependencies(dropped, survivors, state=state)
     for segment in dropped:
         discard_reason = reason
         is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
         if is_companionship_cue and not _companionship_cue_is_current(state, companionship_epoch):
             discard_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
         state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
         _drop_segment_moment_receipts(state, segment, discard_reason)
         _unlink_ephemeral_best_effort(segment)
@@ -1210,20 +1188,6 @@ def _reserve_continuity_runway(
             # slot), but discard every other queued item so the producer has
             # capacity to recover. If neither is ready, mutate nothing: the
             # caller must not cut the current audio.
-            playable_index = next(
-                (
-                    index
-                    for index, segment in enumerate(current_queue)
-                    if _segment_is_immediately_playable(
-                        state,
-                        segment,
-                        excluded_paths=excluded_paths,
-                        excluded_track_keys=excluded_track_keys,
-                    )
-                ),
-                None,
-            )
-            playable_head = current_queue[playable_index] if playable_index is not None else None
             slot_ready = bool(
                 state.continuity_slot is not None
                 and _segment_is_immediately_playable(
@@ -1233,17 +1197,32 @@ def _reserve_continuity_runway(
                     excluded_track_keys=excluded_track_keys,
                 )
             )
-            if playable_head is None and not slot_ready:
+            survivors: list[Segment] = []
+            failure_dropped = current_queue
+            for playable_index, playable_head in enumerate(current_queue):
+                if not _segment_is_immediately_playable(
+                    state,
+                    playable_head,
+                    excluded_paths=excluded_paths,
+                    excluded_track_keys=excluded_track_keys,
+                ):
+                    continue
+                candidate_dropped = current_queue[:playable_index] + current_queue[playable_index + 1 :]
+                candidate_dropped, candidate_survivors = settle_listener_request_queue_dependencies(
+                    candidate_dropped,
+                    [playable_head],
+                    state=state,
+                )
+                if candidate_survivors:
+                    failure_dropped = candidate_dropped
+                    survivors = candidate_survivors
+                    break
+            if not survivors and not slot_ready:
                 return 0
             if outcome is not None:
                 outcome.preserved_existing = True
-            survivors = [playable_head] if playable_head is not None else []
-            failure_dropped = (
-                current_queue[:playable_index] + current_queue[playable_index + 1 :]
-                if playable_index is not None
-                else current_queue
-            )
             for segment in failure_dropped:
+                state.revoke_listener_request_handoff_for_discarded_dedication(segment)
                 state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
                 _drop_segment_moment_receipts(state, segment, discard_reason)
                 _unlink_ephemeral_best_effort(segment)
@@ -1351,7 +1330,9 @@ def _reserve_continuity_runway(
             return 0
         state.continuity_slot = planned_slot
 
+    dropped, combined = settle_listener_request_queue_dependencies(dropped, combined, state=state)
     for segment in dropped:
+        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
         state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
         _drop_segment_moment_receipts(state, segment, discard_reason)
         _unlink_ephemeral_best_effort(segment)
@@ -1434,27 +1415,33 @@ def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[s
     """
     items = _drain_segment_queue(q)
     survivors: list = []
-    dropped_ids: set[str] = set()
+    dropped: list = []
     for segment in items:
         metadata = getattr(segment, "metadata", {}) or {}
         if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") in entity_ids:
-            queue_id = metadata.get("queue_id")
-            if isinstance(queue_id, str):
-                dropped_ids.add(queue_id)
-            state.record_discard(
-                segment,
-                reason=GenerationWasteReason.OPERATOR_PURGE,
-                already_counted_in_produced=True,
-            )
-            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
-            _unlink_ephemeral_best_effort(segment)
+            dropped.append(segment)
             continue
         survivors.append(segment)
+    dropped, survivors = settle_listener_request_queue_dependencies(dropped, survivors, state=state)
+    dropped_ids = {
+        queue_id
+        for segment in dropped
+        if isinstance((queue_id := getattr(segment, "metadata", {}).get("queue_id")), str)
+    }
+    for segment in dropped:
+        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
+        state.record_discard(
+            segment,
+            reason=GenerationWasteReason.OPERATOR_PURGE,
+            already_counted_in_produced=True,
+        )
+        _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+        _unlink_ephemeral_best_effort(segment)
     for segment in survivors:
         q.put_nowait(segment)
     if dropped_ids:
         state.queued_segments = [entry for entry in state.queued_segments if entry.get("id") not in dropped_ids]
-    return len(dropped_ids)
+    return len(dropped)
 
 
 def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "operator", queue=None) -> dict:
@@ -1491,21 +1478,30 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         # media-source identities and can legitimately be shared by distinct
         # operator rows; broadening only this mutation path would disagree with
         # the queue, ingest, rescue, and playback blocklist gates.
-        return isinstance(track, Track) and normalized_track_key(track) in banned_keys
+        return isinstance(track, Track) and song_identity_key_is_blocklisted(normalized_track_key(track), banned_keys)
 
     # A listener download may already have committed and be waiting for its
     # dedication handoff when the operator bans that recording. Keep the request
     # pending for the normal unavailable acknowledgement/receipt lifecycle, but
     # revoke every matched/pinnable marker synchronously so scriptwriter cannot
     # resurrect the removed track after this ban returns.
+    owned_pin_force_revision: int | None = None
     for listener_request in state.pending_requests:
         request_track = listener_request.get("song_track_obj")
         if not listener_request.get("song_found") or not _is_banned_track(request_track):
             continue
+        if (
+            listener_request.get("song_pinned")
+            and state.pinned_track is request_track
+            and (request_force_revision := listener_request_force_revision(listener_request)) is not None
+        ):
+            owned_pin_force_revision = request_force_revision
         listener_request["song_found"] = False
         listener_request["song_error"] = True
         listener_request["song_error_reason"] = "banned"
         listener_request["song_pinned"] = False
+        listener_request[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+        listener_request[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
         listener_request["song_track_obj"] = None
 
     before = len(state.playlist)
@@ -1513,26 +1509,29 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     removed = before - len(state.playlist)
     pin_cleared = False
     if state.pinned_track is not None and _is_banned_track(state.pinned_track):
-        state.pinned_track = None
-        if state.force_next is SegmentType.MUSIC:
-            state.clear_force_next()
+        state.set_pinned_track(None)
+        if owned_pin_force_revision is not None:
+            state.clear_force_next(
+                expected_revision=owned_pin_force_revision,
+                expected_type=SegmentType.MUSIC,
+            )
         pin_cleared = True
     # Ban policy is intentionally broader than handoff ownership: it applies
     # to every source with the same canonical artist/title. Revoke a promised
     # album source even when the operator selected a live/remix source for the
     # ban; exact-source matching remains appropriate everywhere else.
     handoff = state.listener_request_handoff
-    if handoff is not None and normalized_track_key(handoff.track) in banned_keys:
+    if handoff is not None and _is_banned_track(handoff.track):
         state.clear_listener_request_handoff()
     if removed or pin_cleared:
         state.playlist_revision += 1
 
     def _matches_blocklist(segment: Segment) -> bool:
-        # Shared definition, not a local copy. The hand-rolled tuple this
-        # replaced used `metadata.get("artist", "")`, so a segment carrying an
-        # explicit `artist: None` keyed as ("none", title) and slipped through
-        # the purge - the canonical helper coalesces falsy to "".
-        return segment.type is SegmentType.MUSIC and _segment_blocklist_key(segment) in banned_keys
+        # Use the shared segment identity so missing artist metadata is
+        # normalized consistently at mutation and playback gates.
+        return segment.type is SegmentType.MUSIC and song_identity_key_is_blocklisted(
+            _segment_blocklist_key(segment), banned_keys
+        )
 
     prior_tail = None
     if queue is not None:
@@ -2743,6 +2742,23 @@ def _apply_loaded_source(
         discard_reason=GenerationWasteReason.SOURCE_SWITCH,
         outcome=runway,
     )
+    # An assetless replacement may preserve one playable old-source head. A
+    # listener dedication cannot be that bridge: switch_playlist revokes its
+    # requested recording, so airing the surviving announcement would make a
+    # promise the new source cannot keep. Drop only that exact queued segment;
+    # the shared queue mutation revokes its handoff at the same boundary.
+    handoff = state.listener_request_handoff
+    if handoff is not None and handoff.dedication_queue_id:
+        dropped_dedication = drop_matching_segments(
+            request.app.state.queue,
+            state,
+            should_drop=lambda segment: str(segment.metadata.get("queue_id") or "") == handoff.dedication_queue_id,
+            reason=GenerationWasteReason.SOURCE_SWITCH,
+        )
+        if dropped_dedication:
+            purged += dropped_dedication
+            state.continuity_epoch += 1
+            runway.preserved_existing = _playable_runway_available(request.app.state.queue, state)
     state.switch_playlist(tracks, resolved_source)
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
@@ -2955,6 +2971,42 @@ def _consume_queue_shadow(segment_queue: asyncio.Queue[Segment], state: StationS
         len(shadow),
         len(actual_remaining),
     )
+
+
+def _settle_unheard_listener_dedication_failure(
+    segment_queue: asyncio.Queue[Segment],
+    state: StationState,
+    segment: Segment,
+) -> None:
+    """Retract a failed dedication and any music whose promise depended on it."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    queue_id = str(metadata.get("queue_id") or "")
+    if not queue_id:
+        return
+    handoff = state.listener_request_handoff
+    handoff_depends_on_segment = bool(handoff is not None and handoff.dedication_queue_id == queue_id)
+    queued = list(getattr(segment_queue, "_queue", ()))
+    queued_music_depends_on_segment = any(
+        isinstance(candidate.metadata, dict)
+        and str(candidate.metadata.get(LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY) or "") == queue_id
+        for candidate in queued
+    )
+    if not handoff_depends_on_segment and not queued_music_depends_on_segment:
+        return
+
+    dropped, survivors = settle_listener_request_queue_dependencies([segment], queued, state=state)
+    handoff_revoked = state.revoke_listener_request_handoff_for_discarded_dedication(segment)
+    for dependent in dropped[1:]:
+        state.record_discard(
+            dependent,
+            reason=GenerationWasteReason.PLAYBACK_FILE_ERROR,
+            already_counted_in_produced=True,
+        )
+        _drop_segment_moment_receipts(state, dependent, GenerationWasteReason.PLAYBACK_FILE_ERROR)
+        _unlink_ephemeral_best_effort(dependent)
+    _rebuild_queue_shadow(segment_queue, state, survivors)
+    if not handoff_revoked:
+        state.continuity_epoch += 1
 
 
 def _start_stream_segment(
@@ -3352,7 +3404,9 @@ async def run_playback_loop(app) -> None:
             continue
 
         music_discard_reason: str | None = None
-        if segment.type is SegmentType.MUSIC and _segment_blocklist_key(segment) in state.blocklist:
+        if segment.type is SegmentType.MUSIC and song_identity_key_is_blocklisted(
+            _segment_blocklist_key(segment), state.blocklist
+        ):
             music_discard_reason = GenerationWasteReason.OPERATOR_BAN
         elif _segment_is_listener_reserved(state, segment):
             music_discard_reason = GenerationWasteReason.LISTENER_REQUEST_RESERVED
@@ -3530,6 +3584,11 @@ async def run_playback_loop(app) -> None:
                 logger.warning("Segment file unreadable, skipping: %s (%s)", segment.path, exc)
                 was_skipped = True
                 terminal_reason = "file_error"
+            if bytes_sent == 0:
+                # A readable but empty/header-only dedication is just as unheard
+                # as a missing file. Revoke its promise before any exclusively
+                # linked song can air without the acknowledgement.
+                _settle_unheard_listener_dedication_failure(segment_queue, state, segment)
             # Lookback snapshot: when an ad/banter segment finishes, remember the
             # whole thing so a listener who taps Share just after it ends (music
             # already playing again) still captures it. Single extract at the
@@ -4634,6 +4693,54 @@ async def _request_skip(
     return bridged
 
 
+def _cancel_pending_urgent_interrupt(state: StationState, *, reason: str) -> None:
+    """Settle an urgent interrupt that a stronger operator control supersedes."""
+    force_revision = state.urgent_interrupt_force_next_revision
+    has_urgent_owner = force_revision is not None
+    has_urgent_slot = state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+    has_pending_bridge = state.interrupt_slot is not None
+    if not has_urgent_owner and not has_urgent_slot and not has_pending_bridge:
+        return
+
+    moment_ids = {
+        moment_id
+        for moment_id in (
+            state.ha_pending_directive_moment_id,
+            state.last_banter_ritual_moment_id,
+        )
+        if moment_id
+    }
+    if state.moment_store is not None:
+        for moment_id in moment_ids:
+            try:
+                state.moment_store.mark_dropped(moment_id, reason)
+            except Exception:  # pragma: no cover - receipt truth cannot break transport control
+                logger.debug("Urgent interrupt receipt cleanup failed", exc_info=True)
+
+    interrupt_path = state.interrupt_slot
+    if interrupt_path is not None and state.interrupt_slot_ephemeral and not _is_packaged_asset(interrupt_path):
+        try:
+            interrupt_path.unlink(missing_ok=True)
+        except Exception:
+            logger.debug("Urgent interrupt temp cleanup failed for %s", interrupt_path, exc_info=True)
+
+    if force_revision is not None:
+        state.clear_force_next(
+            expected_revision=force_revision,
+            expected_type=SegmentType.BANTER,
+        )
+    state.urgent_interrupt_force_next_revision = None
+    if state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT:
+        state.chaos_pending = None
+    state.ha_pending_directive = ""
+    state.ha_pending_directive_moment_id = ""
+    state.ha_pending_directive_source = ""
+    state.last_banter_ritual_moment_id = ""
+    state.interrupt_slot = None
+    state.interrupt_slot_ephemeral = False
+    state.chaos_cutover_epoch += 1
+
+
 @router.post("/api/skip")
 async def skip_track(request: Request, _: None = Depends(require_admin_access)):
     """Skip the currently streaming segment."""
@@ -4695,6 +4802,11 @@ async def panic_cut(request: Request, _: None = Depends(require_admin_access)):
         skipped = True
     elif state.now_streaming:
         logger.warning("Panic cut withheld because no playable runway is ready; current audio will finish")
+    _cancel_pending_urgent_interrupt(state, reason=GenerationWasteReason.OPERATOR_PANIC)
+    # Panic semantically supersedes an older Air Next trigger. Without clearing
+    # its attribution guard, the producer re-arms that stale trigger after it
+    # consumes Panic's MUSIC directive.
+    state.operator_force_pending = None
     # force_next is set AFTER skip_event to avoid the producer consuming it
     # before the current segment has been cut.
     state.set_force_next(SegmentType.MUSIC)
@@ -4775,27 +4887,27 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
 
     # Remove the matching Segment from the real queue. Match by queue_id when
     # available (position-independent); fall back to index alignment otherwise.
-    real_removed = False
     removed_segment = None
     if target_id:
         for i, seg in enumerate(items):
             if getattr(seg, "metadata", {}).get("queue_id") == target_id:
                 removed_segment = items.pop(i)
-                real_removed = True
                 break
-    if not real_removed and index < len(items):
+    if removed_segment is None and index < len(items):
         removed_segment = items.pop(index)
 
-    if removed_segment is not None:
+    removed_segments = [removed_segment] if removed_segment is not None else []
+    removed_segments, items = settle_listener_request_queue_dependencies(removed_segments, items, state=state)
+    for discarded_segment in removed_segments:
+        state.revoke_listener_request_handoff_for_discarded_dedication(discarded_segment)
         state.record_discard(
-            removed_segment,
+            discarded_segment,
             reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
             already_counted_in_produced=True,
         )
-        _drop_segment_moment_receipts(state, removed_segment, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
-        _unlink_ephemeral_best_effort(removed_segment)
+        _drop_segment_moment_receipts(state, discarded_segment, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
+        _unlink_ephemeral_best_effort(discarded_segment)
 
-    state.queued_segments.pop(index)
     _rebuild_queue_shadow(q, state, items)
     if removed_segment is not None:
         # A single arbitrary-position removal can expose a previously
@@ -4803,7 +4915,7 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
         # _apply_ban guards against. Re-run the fail-closed check rather
         # than trust _rebuild_queue_shadow's naive tail bookkeeping.
         _reconcile_queue_tail_adjacency(q, state, prior_tail=prior_tail)
-    excluded_paths = {removed_segment.path} if removed_segment is not None else set()
+    excluded_paths = {segment.path for segment in removed_segments}
     _reserve_continuity_runway(
         request.app.state,
         state,
@@ -4822,8 +4934,11 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
     state = request.app.state.station_state
     # Purge queued segments
     purged = _purge_queue_and_shadow(request.app.state.queue, state, reason=GenerationWasteReason.OPERATOR_STOP)
-    # Drop any pending interrupt/forced segment so it can't fire as stale audio on
-    # the next resume; unlink an ephemeral bridge temp so the stop doesn't leak it.
+    # Drop any pending urgent lifecycle by ownership, even if a failed render
+    # already cleared chaos_pending. This also settles its Moment Receipt.
+    _cancel_pending_urgent_interrupt(state, reason=GenerationWasteReason.OPERATOR_STOP)
+    # Drop any remaining non-urgent interrupt bridge/forced segment so it can't
+    # fire as stale audio on resume; unlink an ephemeral temp so Stop doesn't leak it.
     if (
         state.interrupt_slot is not None
         and state.interrupt_slot_ephemeral
@@ -5791,7 +5906,9 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
     # empty the rotation entirely and force permanent rescue playback. (Per-row
     # removal stays exempt: the operator asked for that one song gone.)
     banned_keys = {normalized_track_key(t) for t in tracks}
-    in_pool = sum(1 for t in state.playlist if normalized_track_key(t) in banned_keys)
+    in_pool = sum(
+        1 for track in state.playlist if song_identity_key_is_blocklisted(normalized_track_key(track), banned_keys)
+    )
     remaining = len(state.playlist) - in_pool
     floor = MIN_ROTATION_AFTER_BAN if len(state.playlist) >= MIN_ROTATION_AFTER_BAN else 1
     if remaining < floor:
@@ -6194,6 +6311,7 @@ async def _commit_external_download(
     should_commit: Callable[[], bool],
     should_pin: Callable[[], bool],
     blocked_identity_keys: frozenset[tuple[str, str]] = frozenset(),
+    on_pin_claimed: Callable[[int, int | None], None] | None = None,
 ) -> str:
     """Download `track` and commit it to the rotation pool unless the playlist
     SOURCE switched while downloading. Only switch_playlist bumps source_revision,
@@ -6260,9 +6378,8 @@ async def _commit_external_download(
         if not rejected_download_reason:
             candidate_block_keys = {normalized_track_key(track), *blocked_identity_keys}
             if any(
-                song_identity_keys_match(candidate_key, blocked_key)
+                song_identity_key_is_blocklisted(candidate_key, state.blocklist)
                 for candidate_key in candidate_block_keys
-                for blocked_key in state.blocklist
             ):
                 # Quarantine the just-downloaded artifact outside the source
                 # lock. Equivalent identities (accent/compact/base-variant)
@@ -6282,12 +6399,15 @@ async def _commit_external_download(
             # rotation and the caller surfaces that it's queued-behind, not next.
             if not should_pin():
                 return "queued"
-            state.pinned_track = track
+            pin_revision = state.set_pinned_track(track)
             # Only force MUSIC when nothing else is already forced. An operator trigger
             # (banter/ad/news) or a mode change may have set force_next; that directive
             # plays first, then the pinned track lands on the next music slot.
+            pin_force_revision = None
             if state.force_next is None:
-                state.set_force_next(SegmentType.MUSIC)
+                pin_force_revision = state.set_force_next(SegmentType.MUSIC)
+            if on_pin_claimed is not None:
+                on_pin_claimed(pin_revision, pin_force_revision)
             return "pinned"
 
     await asyncio.to_thread(reject_cached_download, config.cache_dir, track.cache_key, rejected_download_reason)
@@ -7215,7 +7335,7 @@ async def move_to_next(request: Request, _: None = Depends(require_admin_access)
         _reserve_continuity_runway(request.app.state, state, request.app.state.config)
         # Pin the track so select_next_track returns it immediately on the next
         # music pick, regardless of weighted-random ordering.
-        state.pinned_track = track
+        state.set_pinned_track(track)
         # Bump revision so the producer picks up the pin on its next cycle.
         # We intentionally do NOT purge pre-produced segments here — draining
         # the lookahead queue felt like the entire playlist was destroyed.

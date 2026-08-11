@@ -1267,7 +1267,6 @@ def test_search_ytdlp_metadata_outcome_distinguishes_extraction_failure():
 
     assert outcome.status == "failed"
     assert outcome.results == []
-    assert "exploded" in outcome.error
 
 
 # ---------------------------------------------------------------------------

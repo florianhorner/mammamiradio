@@ -18,6 +18,8 @@ import mammamiradio.hosts.scriptwriter as scriptwriter_module
 from mammamiradio.core.config import DEFAULT_ROLE, _empty_models, load_config, resolve_model
 from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_FORCE_REVISION_KEY,
+    LISTENER_REQUEST_PIN_REVISION_KEY,
     LLM_COST_CATEGORIES,
     ChaosSubtype,
     DialogueLine,
@@ -4326,6 +4328,32 @@ async def test_write_banter_keeps_interrupt_directive_until_producer_queues(conf
 
 
 @pytest.mark.asyncio
+async def test_write_banter_keeps_safety_retry_directive_until_producer_queues(config, state):
+    config.super_italian_mode = True
+    state.ha_pending_directive = "La pasta scotta. Interrompi tutto."
+    state.chaos_pending = None
+    state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
+
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "Muoviti."}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result, _ = await write_banter(state, config)
+
+    assert result == [DialogueLine(config.hosts[0], "Muoviti.")]
+    assert "HIGH PRIORITY" in captured["prompt"]
+    assert "La pasta scotta" in captured["prompt"]
+    assert state.ha_pending_directive == "La pasta scotta. Interrompi tutto."
+
+
+@pytest.mark.asyncio
 async def test_write_banter_prompt_excludes_connection_arrival_block(config, state):
     state.ha_home_mood = "Mood sconosciuto"
     state.ha_home_mood_en = "Unknown mood"
@@ -4409,7 +4437,7 @@ async def test_write_banter_defers_listener_request_mutation_until_commit(config
 
 
 @pytest.mark.asyncio
-async def test_write_banter_generation_fallback_releases_claimed_listener_pin(config, state):
+async def test_write_banter_generation_fallback_keeps_truthful_listener_commit(config, state):
     requested_track = Track(
         title="Albachiara",
         artist="Vasco Rossi",
@@ -4436,12 +4464,107 @@ async def test_write_banter_generation_fallback_releases_claimed_listener_pin(co
     ):
         lines, commit = await write_banter(state, config)
 
-    assert lines  # stock copy keeps the station on air
-    assert commit is None
+    assert requested_track.display in lines[0].text
+    assert "coming up" in lines[0].text
+    assert commit is not None
     assert request in state.pending_requests
-    assert request["song_pinned"] is False
-    assert state.pinned_track is None
-    assert state.force_next is None
+    assert request["song_pinned"] is True
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
+
+    commit.apply(state, config, queue_id="provider-fallback-dedication")
+
+    assert request not in state.pending_requests
+    assert state.listener_request_handoff is not None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_llm_matches_and_settles_listener_song(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.super_italian_mode = True
+    requested_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="demo-listener-plan",
+    )
+    request = {
+        "request_id": "demo-listener-request",
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    lines, commit = await write_banter(state, config)
+
+    assert requested_track.display in lines[0].text
+    assert "Arriva tra poco" in lines[0].text
+    assert commit is not None
+    commit.apply(state, config, queue_id="demo-dedication")
+    assert request not in state.pending_requests
+    assert state.listener_request_handoff is not None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_llm_advances_inflight_listener_lookup(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    request = {
+        "request_id": "demo-inflight-request",
+        "name": "Luca",
+        "message": "play Imagine",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    lines, commit = await write_banter(state, config)
+
+    assert lines
+    assert commit is not None
+    assert "Imagine" not in " ".join(line.text for line in lines)
+    commit.apply(state)
+    assert request["banter_cycles_missed"] == 1
+    assert request in state.pending_requests
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_llm_terminal_song_copy_stays_neutral(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    request = {
+        "request_id": "demo-failed-request",
+        "name": "Luca",
+        "message": "play Imagine",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": True,
+        "song_error_reason": "downloads_disabled",
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    lines, commit = await write_banter(state, config)
+
+    spoken = " ".join(line.text for line in lines).casefold()
+    assert "thanks for writing" in spoken
+    assert all(word not in spoken for word in ("catalogue", "unavailable", "not found", "disabled"))
+    assert commit is not None
+    commit.apply(state)
+    assert request not in state.pending_requests
+    assert state.recently_consumed_requests[0]["status"] == "song_not_found"
 
 
 def test_plan_listener_request_block_empty_queue(state):
@@ -4978,7 +5101,8 @@ def test_plan_listener_request_block_keeps_fifo_when_pin_belongs_to_later_reques
         "song_pinned": False,
     }
     state.pending_requests.extend([first_req, later_req])
-    state.pinned_track = later_track
+    later_req["song_pinned"] = True
+    later_req[LISTENER_REQUEST_PIN_REVISION_KEY] = state.set_pinned_track(later_track)
 
     prompt, commit = _plan_listener_request_block(state)
 
@@ -4991,8 +5115,8 @@ def test_plan_listener_request_block_keeps_fifo_when_pin_belongs_to_later_reques
     # Once the first handoff is committed and consumed, the later request still
     # owns its reserved recording and reclaims the shared pin on its own turn.
     commit.apply(state)
-    state.pinned_track = None
-    state.force_next = None
+    state.set_pinned_track(None)
+    state.set_force_next(None)
     assert _plan_listener_request_block(state) == ("", None)
     handoff_segment = Segment(
         type=SegmentType.MUSIC,
@@ -5009,6 +5133,64 @@ def test_plan_listener_request_block_keeps_fifo_when_pin_belongs_to_later_reques
     assert later_commit is not None
     assert state.pinned_track is later_track
     assert later_req["song_pinned"] is True
+
+
+def test_fifo_pin_handover_transfers_owned_music_force_to_head_plan(state):
+    first_track = Track(
+        title="First Request",
+        artist="First Artist",
+        duration_ms=180000,
+        youtube_id="listener-first-force",
+    )
+    later_track = Track(
+        title="Later Request",
+        artist="Later Artist",
+        duration_ms=180000,
+        youtube_id="listener-later-force",
+    )
+    first_req = {
+        "name": "Luca",
+        "message": "play First Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": first_track.display,
+        "song_track_obj": first_track,
+        "song_pinned": False,
+    }
+    later_req = {
+        "name": "Giulia",
+        "message": "play Later Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": later_track.display,
+        "song_track_obj": later_track,
+        "song_pinned": True,
+    }
+    state.pending_requests.extend([first_req, later_req])
+    later_req[LISTENER_REQUEST_PIN_REVISION_KEY] = state.set_pinned_track(later_track)
+    later_force_revision = state.set_force_next(SegmentType.MUSIC)
+    later_req[LISTENER_REQUEST_FORCE_REVISION_KEY] = later_force_revision
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "First Request" in prompt
+    assert commit is not None
+    assert state.pinned_track is first_track
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision > later_force_revision
+    assert first_req[LISTENER_REQUEST_FORCE_REVISION_KEY] == state.force_next_revision
+    assert later_req[LISTENER_REQUEST_PIN_REVISION_KEY] is None
+    assert later_req[LISTENER_REQUEST_FORCE_REVISION_KEY] is None
+
+    commit.abandon(state)
+
+    assert state.pinned_track is None
+    assert state.force_next is None
+    assert first_req["song_pinned"] is False
+    assert first_req[LISTENER_REQUEST_PIN_REVISION_KEY] is None
+    assert first_req[LISTENER_REQUEST_FORCE_REVISION_KEY] is None
 
 
 def test_plan_listener_request_block_ignores_ready_second_song_until_it_reaches_head(state):

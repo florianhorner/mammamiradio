@@ -580,7 +580,6 @@ class YtdlpSearchOutcome:
 
     status: YtdlpSearchStatus
     results: list[dict]
-    error: str = ""
 
     @property
     def succeeded(self) -> bool:
@@ -599,8 +598,8 @@ def search_ytdlp_metadata_outcome(query: str, max_results: int = 5) -> YtdlpSear
         return YtdlpSearchOutcome(status="disabled", results=[])
     try:
         import yt_dlp
-    except ImportError as exc:
-        return YtdlpSearchOutcome(status="unavailable", results=[], error=str(exc))
+    except ImportError:
+        return YtdlpSearchOutcome(status="unavailable", results=[])
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -656,9 +655,9 @@ def search_ytdlp_metadata_outcome(query: str, max_results: int = 5) -> YtdlpSear
                 }
             )
         return YtdlpSearchOutcome(status="ok", results=results)
-    except Exception as exc:
+    except Exception:
         logger.debug("yt-dlp metadata search failed", exc_info=True)
-        return YtdlpSearchOutcome(status="failed", results=[], error=str(exc))
+        return YtdlpSearchOutcome(status="failed", results=[])
 
 
 def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:

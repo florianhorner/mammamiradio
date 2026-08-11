@@ -168,6 +168,7 @@ async def test_purge_queue_and_shadow_unlinks_ephemeral_keeps_durable(tmp_path):
 @pytest.mark.asyncio
 async def test_purge_queue_and_shadow_keeps_packaged_asset_even_if_ephemeral(tmp_path, monkeypatch):
     """Package data must survive queue purges even with a bad ephemeral flag."""
+    from mammamiradio.scheduling import queue_mutations
     from mammamiradio.web import streamer
 
     demo_root = tmp_path / "assets" / "demo"
@@ -178,6 +179,7 @@ async def test_purge_queue_and_shadow_keeps_packaged_asset_even_if_ephemeral(tmp
     tmp_render.parent.mkdir()
     tmp_render.write_bytes(b"\x00" * 2048)
     monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", demo_root)
+    monkeypatch.setattr(queue_mutations, "_DEMO_ASSETS_DIR", demo_root)
 
     q = asyncio.Queue()
     q.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, ephemeral=True))
@@ -323,7 +325,7 @@ async def test_purge_segment_queue_keeps_packaged_asset_even_if_ephemeral(tmp_pa
 
 
 def test_unlink_ephemeral_best_effort_keeps_packaged_asset(tmp_path, monkeypatch):
-    from mammamiradio.web import streamer
+    from mammamiradio.scheduling import queue_mutations
 
     demo_root = tmp_path / "assets" / "demo"
     packaged = demo_root / "recovery" / "continuity_1.mp3"
@@ -332,7 +334,7 @@ def test_unlink_ephemeral_best_effort_keeps_packaged_asset(tmp_path, monkeypatch
     tmp_render = tmp_path / "tmp" / "render.mp3"
     tmp_render.parent.mkdir()
     tmp_render.write_bytes(b"\x00" * 2048)
-    monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", demo_root)
+    monkeypatch.setattr(queue_mutations, "_DEMO_ASSETS_DIR", demo_root)
 
     _unlink_ephemeral_best_effort(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
     _unlink_ephemeral_best_effort(Segment(type=SegmentType.BANTER, path=tmp_render, metadata={}, ephemeral=True))

@@ -17,6 +17,7 @@ from urllib.request import urlopen
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import Heading, PlaylistSource, Track
 from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
+from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
 
 _DEMO_ASSETS_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
@@ -270,22 +271,22 @@ def _normalized_track_key(track: Track) -> tuple[str, str]:
     return _core_normalized_track_key(track)
 
 
-# Public alias: the single canonical (artist, title) identity used for both
-# playlist dedup AND the persistent operator blocklist (see playlist/blocklist.py
-# and core/models.py StationState.blocklist). One key definition, reused everywhere.
+# Public alias for the stored playlist/durable-policy key. Playlist dedupe uses
+# literal key equality; hard blocklist gates additionally apply exact normalized
+# equivalence for punctuation, accents, compact artists, and feature credits.
 normalized_track_key = _normalized_track_key
 
 
 def filter_blocklisted(tracks: Sequence[Track], blocklist: Mapping[tuple[str, str], object] | None) -> list[Track]:
-    """Drop tracks whose normalized ``(artist, title)`` is in the operator blocklist.
+    """Drop tracks exactly equivalent to an operator-blocklisted identity.
 
-    The enforcement primitive applied at every ingest doorway (startup, source
-    switch, mid-session chart refresh, external/listener download). Returns a fresh
-    list; a falsy blocklist is a cheap passthrough.
+    Applied at bulk ingest doorways; direct audio gates share the underlying
+    song-identity comparison. Returns a fresh list; a falsy blocklist is a cheap
+    passthrough.
     """
     if not blocklist:
         return list(tracks)
-    return [track for track in tracks if _normalized_track_key(track) not in blocklist]
+    return [track for track in tracks if not song_identity_key_is_blocklisted(_normalized_track_key(track), blocklist)]
 
 
 def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Track]) -> int:

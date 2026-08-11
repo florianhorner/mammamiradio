@@ -28,6 +28,7 @@ from typing import Any
 from mammamiradio.audio.normalizer import probe_duration_sec
 from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_ADMITTED_KEY, Segment, SegmentType, Track
 from mammamiradio.core.path_safety import safe_path_within
+from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.music_admission import classify_youtube_candidate
 
 logger = logging.getLogger(__name__)
@@ -617,7 +618,9 @@ def _identity_metadata_rejection_reason(
 ) -> str | None:
     if not artist.strip() or not title.strip():
         return "missing_identity"
-    if blocklist and (_normalize_identity(artist), _normalize_identity(title)) in blocklist:
+    if blocklist and song_identity_key_is_blocklisted(
+        (_normalize_identity(artist), _normalize_identity(title)), blocklist
+    ):
         return "blocklisted"
     if _has_blocked_metadata_marker(metadata):
         return "ephemeral_or_dynamic_marker"

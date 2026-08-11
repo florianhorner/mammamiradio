@@ -31,6 +31,8 @@ from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_mod
 from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims, home_return_authority_for_directive
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_FORCE_REVISION_KEY,
+    LISTENER_REQUEST_PIN_REVISION_KEY,
     ChaosSubtype,
     CostCategory,
     DialogueLine,
@@ -40,6 +42,8 @@ from mammamiradio.core.models import (
     SegmentType,
     StationState,
     Track,
+    listener_request_force_revision,
+    listener_request_pin_revision,
 )
 from mammamiradio.hosts.ad_creative import (
     AD_FORMATS,
@@ -211,6 +215,7 @@ _LISTENER_REQUEST_PLAN_FIELDS = (
     "song_error_reason",
     "song_track",
     "song_pinned",
+    LISTENER_REQUEST_PIN_REVISION_KEY,
     "banter_cycles_missed",
 )
 
@@ -228,6 +233,7 @@ class _ListenerRequestPlanSnapshot:
     request_signature: tuple[object, ...]
     track_obj: object | None
     matched_pin: object | None = None
+    matched_pin_revision: int | None = None
     requires_matched_pin: bool = False
 
 
@@ -241,6 +247,7 @@ class ListenerRequestCommit:
     consume: bool = False
     _plan_snapshot: _ListenerRequestPlanSnapshot | None = None
     _claimed_pin_track: object | None = None
+    _claimed_pin_revision: int | None = None
     _claimed_song_pinned: bool = False
     _claimed_force_next_revision: int | None = None
 
@@ -248,8 +255,10 @@ class ListenerRequestCommit:
         self,
         *,
         matched_pin: object | None = None,
+        matched_pin_revision: int | None = None,
         requires_matched_pin: bool = False,
         claimed_pin_track: object | None = None,
+        claimed_pin_revision: int | None = None,
         claimed_song_pinned: bool = False,
         claimed_force_next_revision: int | None = None,
     ) -> ListenerRequestCommit:
@@ -259,9 +268,11 @@ class ListenerRequestCommit:
             request_signature=_listener_request_plan_signature(self.request),
             track_obj=self.request.get("song_track_obj"),
             matched_pin=matched_pin,
+            matched_pin_revision=matched_pin_revision,
             requires_matched_pin=requires_matched_pin,
         )
         self._claimed_pin_track = claimed_pin_track
+        self._claimed_pin_revision = claimed_pin_revision
         self._claimed_song_pinned = claimed_song_pinned
         self._claimed_force_next_revision = claimed_force_next_revision
         return self
@@ -286,9 +297,12 @@ class ListenerRequestCommit:
             return False
         if self.request.get("song_track_obj") is not snapshot.track_obj:
             return False
-        return not (
-            require_matched_pin and snapshot.requires_matched_pin and state.pinned_track is not snapshot.matched_pin
-        )
+        if require_matched_pin and snapshot.requires_matched_pin:
+            if state.pinned_track is not snapshot.matched_pin:
+                return False
+            if snapshot.matched_pin_revision is not None:
+                return state.pinned_track_revision == snapshot.matched_pin_revision
+        return True
 
     def abandon(self, state: StationState) -> None:
         """Release only the synchronous request pin claimed by this failed plan."""
@@ -303,12 +317,17 @@ class ListenerRequestCommit:
             and self.request.get("song_pinned")
         ):
             self.request["song_pinned"] = False
+            if listener_request_pin_revision(self.request) == self._claimed_pin_revision:
+                self.request[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+            if listener_request_force_revision(self.request) == self._claimed_force_next_revision:
+                self.request[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
 
-        # Pin identity is the ownership token. A newer operator pin must survive
-        # this plan's rejection, along with the MUSIC force that belongs to it.
-        owns_current_pin = state.pinned_track is claimed_track
-        if owns_current_pin:
-            state.pinned_track = None
+        # Track identity alone is not ownership: a newer operator may pin the
+        # same object. Clear only the revision this plan actually claimed.
+        if self._claimed_pin_revision is not None and state.clear_pinned_track(
+            expected_revision=self._claimed_pin_revision,
+            expected_track=claimed_track if isinstance(claimed_track, Track) else None,
+        ):
             claimed_force_revision = self._claimed_force_next_revision
             if claimed_force_revision is not None:
                 state.clear_force_next(
@@ -319,11 +338,12 @@ class ListenerRequestCommit:
         # Idempotence matters because a rendered segment can be rejected in a
         # nested failure path and then pass through the outer cleanup belt.
         self._claimed_pin_track = None
+        self._claimed_pin_revision = None
         self._claimed_song_pinned = False
         self._claimed_force_next_revision = None
 
     def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
-        del config, queue_id
+        del config
         if not any(pending is self.request for pending in state.pending_requests):
             return
         if not self.is_plan_current(state, require_matched_pin=False):
@@ -354,7 +374,11 @@ class ListenerRequestCommit:
                 # admitted pin; a different live pin means ownership changed.
                 if state.pinned_track is not None and state.pinned_track is not matched_pin:
                     return
-                if not state.arm_listener_request_handoff(self.request, matched_pin):
+                if not state.arm_listener_request_handoff(
+                    self.request,
+                    matched_pin,
+                    dedication_queue_id=queue_id,
+                ):
                     return
             state.archive_listener_request(
                 self.request,
@@ -476,7 +500,7 @@ class BanterCommit:
     def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
         self.apply_queue_acceptance(state)
         if self.listener_request is not None:
-            self.listener_request.apply(state)
+            self.listener_request.apply(state, queue_id=queue_id)
         if self.heading_announcement is not None:
             self.heading_announcement.apply(state, config)
         if self.release_beat is not None:
@@ -583,6 +607,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     if is_song and req.get("song_found") and req.get("song_track"):
         track_obj = req.get("song_track_obj")
         claimed_song_pinned = False
+        claimed_pin_revision: int | None = None
         claimed_force_next_revision: int | None = None
         # Establish one exact play-next claim. The background download may
         # already own the slot; otherwise this planner claims it when available.
@@ -598,28 +623,53 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
                 and pinned_track.cache_key == track_obj.cache_key
             )
             if req.get("song_pinned"):
+                request_pin_revision = listener_request_pin_revision(req)
+                owns_current_pin = (
+                    same_recording_pin
+                    and request_pin_revision is not None
+                    and request_pin_revision == state.pinned_track_revision
+                )
                 if not same_recording_pin:
                     # An operator can replace a download-owned pin before this
-                    # request reaches the head. The marker is only an ownership
-                    # claim, so losing that exact recording must make the
-                    # request wait for or reclaim the slot instead of promising
-                    # a handoff that admission can never validate.
+                    # request reaches the head. Losing that recording makes the
+                    # request wait for or reclaim the slot before promising it.
                     req["song_pinned"] = False
+                    req[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                    req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
+                elif not owns_current_pin:
+                    # A newer operator pin for the same recording can fulfill
+                    # the spoken request, but the listener lifecycle does not
+                    # own it and must never clear it on later cleanup.
+                    req[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                    req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
                 elif pinned_track is not track_obj:
                     # Keep the request's verified Track object authoritative
                     # when an equivalent cache-key object owns the same slot.
-                    state.pinned_track = track_obj
+                    request_pin_revision = state.set_pinned_track(track_obj)
+                    req[LISTENER_REQUEST_PIN_REVISION_KEY] = request_pin_revision
                     pinned_track = track_obj
+            elif same_recording_pin:
+                # Borrow an independently-owned same-recording pin without
+                # converting it into listener-owned state.
+                req["song_pinned"] = True
+                req[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
             if not req.get("song_pinned") and pinned_track is not None and not same_recording_pin:
-                pin_belongs_to_later_listener_request = any(
-                    later_req is not req
-                    and later_req.get("song_found")
-                    and not later_req.get("song_pinned")
-                    and isinstance((later_track := later_req.get("song_track_obj")), Track)
-                    and later_track.cache_key == pinned_track.cache_key
-                    for later_req in pending
-                )
-                if not pin_belongs_to_later_listener_request:
+                later_pin_owner: dict | None = None
+                for later_req in pending:
+                    later_track = later_req.get("song_track_obj")
+                    if (
+                        later_req is req
+                        or not later_req.get("song_found")
+                        or not isinstance(later_track, Track)
+                        or later_track.cache_key != pinned_track.cache_key
+                    ):
+                        continue
+                    later_pin_revision = listener_request_pin_revision(later_req)
+                    if later_pin_revision is not None and later_pin_revision == state.pinned_track_revision:
+                        later_pin_owner = later_req
+                        break
+                if later_pin_owner is None:
                     # The download deliberately joined rotation without replacing an
                     # unrelated operator/earlier-request pin. Preserve that same
                     # ordering here: this banter cannot promise or consume the request
@@ -629,20 +679,46 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
                 # without its own dedication. Its pending request already keeps
                 # that recording reserved, so release the shared slot for the
                 # head request; the later request will reclaim it on its turn.
-                state.pinned_track = None
+                released_later_pin = state.clear_pinned_track(
+                    expected_revision=state.pinned_track_revision,
+                    expected_track=pinned_track,
+                )
+                if not released_later_pin:
+                    return "", None
+                later_force_revision = listener_request_force_revision(later_pin_owner)
+                if later_force_revision is not None:
+                    # Transfer a later request's paired MUSIC force together
+                    # with its pin. Leaving that directive behind would make
+                    # the head request borrow unowned state; if its dedication
+                    # were then abandoned, an unrelated song could consume the
+                    # stale force while neither listener request owned a pin.
+                    state.clear_force_next(
+                        expected_revision=later_force_revision,
+                        expected_type=SegmentType.MUSIC,
+                    )
+                later_pin_owner["song_pinned"] = False
+                later_pin_owner[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                later_pin_owner[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
         if track_obj is not None and not req.get("song_pinned"):
             # Exact-object and same-cache-key pins both become this request's
             # single handoff. Replacing a distinct Track object for the same
             # recording keeps the downloaded request metadata authoritative.
-            state.pinned_track = track_obj
+            claimed_pin_revision = state.set_pinned_track(track_obj)
+            req[LISTENER_REQUEST_PIN_REVISION_KEY] = claimed_pin_revision
+            req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
             if state.force_next is None:
                 claimed_force_next_revision = state.set_force_next(SegmentType.MUSIC)
+                req[LISTENER_REQUEST_FORCE_REVISION_KEY] = claimed_force_next_revision
             req["song_pinned"] = True
             claimed_song_pinned = True
+        matched_pin = state.pinned_track if isinstance(state.pinned_track, Track) else track_obj
+        matched_pin_revision = state.pinned_track_revision if state.pinned_track is matched_pin else None
         commit.capture_plan(
-            matched_pin=track_obj,
+            matched_pin=matched_pin,
+            matched_pin_revision=matched_pin_revision,
             requires_matched_pin=True,
             claimed_pin_track=track_obj if claimed_song_pinned else None,
+            claimed_pin_revision=claimed_pin_revision,
             claimed_song_pinned=claimed_song_pinned,
             claimed_force_next_revision=claimed_force_next_revision,
         )
@@ -687,6 +763,56 @@ Menziona {name} per nome in modo naturale durante il banter. Fallo sentire ascol
 """,
         commit,
     )
+
+
+def _stock_listener_request_exchange(
+    state: StationState,
+    config: StationConfig,
+    commit: ListenerRequestCommit | None = None,
+) -> tuple[list[DialogueLine], ListenerRequestCommit | None]:
+    """Acknowledge a pending request truthfully without generated copy.
+
+    Demo Radio and provider-failure paths still have to advance the same
+    deferred request lifecycle as generated banter. The stock line mentions a
+    verified match only when the planner owns its exact play-next handoff; all
+    terminal non-match outcomes stay neutral about why the song did not air.
+    """
+    if commit is None:
+        _prompt, commit = _plan_listener_request_block(state)
+    if commit is None:
+        return random.choice(_banter_fallback_pools(config)), None
+    if not commit.is_plan_current(state):
+        commit.abandon(state)
+        return random.choice(_banter_fallback_pools(config)), None
+
+    # Cycles one through four are intentionally invisible while lookup remains
+    # in flight. Air ordinary stock copy, but preserve the deferred counter so
+    # a permanently stalled lookup still reaches its bounded terminal receipt.
+    if commit.banter_cycles_missed is not None and not commit.consume:
+        return random.choice(_banter_fallback_pools(config)), commit
+
+    request = commit.request
+    language = _spoken_fallback_language(config)
+    default_name = "Un ascoltatore" if language == "it" else "A listener"
+    name = _sanitize_prompt_data(str(request.get("name") or default_name), max_len=60).strip() or default_name
+    if request.get("type") == "song_request" and request.get("song_found") and request.get("song_track"):
+        song_track = _sanitize_prompt_data(str(request["song_track"]), max_len=120).strip()
+        if language == "it":
+            text = f"{name}, abbiamo trovato {song_track}. Arriva tra poco."
+        else:
+            text = f"{name}, we found {song_track}. It's coming up."
+    elif request.get("type") == "song_request":
+        if language == "it":
+            text = f"{name}, grazie per averci scritto. Intanto continuiamo con la musica."
+        else:
+            text = f"{name}, thanks for writing in. For now, we keep the music moving."
+    elif language == "it":
+        text = f"{name}, il tuo saluto è arrivato in studio. Grazie per averci scritto."
+    else:
+        text = f"{name}, your message reached the studio. Thanks for writing in."
+
+    host = random.choice(_regular_hosts(config))
+    return [DialogueLine(host, text)], commit
 
 
 def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
@@ -2420,6 +2546,7 @@ async def write_banter(
     prompt_fact: PromptFact | None = None,
     use_directed_home_context: bool = False,
     companionship_context: CompanionshipPromptContext | None = None,
+    include_listener_request: bool = True,
 ) -> tuple[list[DialogueLine], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
@@ -2435,6 +2562,8 @@ async def write_banter(
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script LLM unavailable; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
+        if include_listener_request and state.pending_requests:
+            return _stock_listener_request_exchange(state, config)
         host = random.choice(_regular_hosts(config))
         fallback = (
             "E torniamo alla musica!" if _spoken_fallback_language(config) == "it" else "And back to the music, amici!"
@@ -2657,7 +2786,10 @@ Make this the focus of this banter break. It happened just now — react natural
         # Normal reactive directives fire once. Interrupt directives stay pending
         # until the urgent segment is actually queued, so a stale in-flight render
         # cannot consume the only copy before producer epoch guards discard it.
-        is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
+        is_interrupt = (
+            ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
+            or state.urgent_interrupt_force_next_revision is not None
+        )
         if not is_interrupt:
             state.ha_pending_directive = ""
             state.ha_pending_directive_moment_id = ""
@@ -2676,7 +2808,10 @@ Make this the focus of this banter break. It happened just now — react natural
     heading_announcement = _sanitize_prompt_data(raw_heading_announcement, max_len=120)
 
     # Listener request injection
-    listener_request_block, listener_request_commit = _plan_listener_request_block(state)
+    if include_listener_request and chaos_subtype is None:
+        listener_request_block, listener_request_commit = _plan_listener_request_block(state)
+    else:
+        listener_request_block, listener_request_commit = "", None
 
     release_beat_block = ""
     release_beat_schema = ""
@@ -3163,8 +3298,6 @@ Return JSON:
             if director is not None:
                 director.note_fact_free_fallback()
         logger.error("Banter generation failed (%s): %s", type(e).__name__, e, exc_info=True)
-        if listener_request_commit is not None:
-            listener_request_commit.abandon(state)
         if release_beat_commit is not None:
             release_beat_commit.abandon(state)
         # The stock-copy fallback below does NOT carry the home directive, so
@@ -3199,10 +3332,14 @@ Return JSON:
                 logger.debug("Moment receipt gag drop failed", exc_info=True)
         state.ha_running_gag_moment_id = ""
         if chaos_subtype is not None:
+            if listener_request_commit is not None:
+                listener_request_commit.abandon(state)
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script generation failed; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
+        if listener_request_commit is not None:
+            return _stock_listener_request_exchange(state, config, listener_request_commit)
         return random.choice(_banter_fallback_pools(config)), None
 
 

@@ -32,6 +32,10 @@ from mammamiradio.audio.norm_cache import recent_music_identity_keys, select_nor
 from mammamiradio.core.config import load_config
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
     GenerationWasteReason,
     Segment,
     SegmentLogEntry,
@@ -1461,6 +1465,106 @@ async def test_run_playback_loop_skips_missing_file_and_survives(tmp_path):
             await asyncio.gather(task, return_exceptions=True)
 
     persist.assert_awaited_once()  # the valid segment aired after the skip
+
+
+@pytest.mark.asyncio
+async def test_missing_dedication_revokes_pending_listener_handoff(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    requested = Track(title="Albachiara", artist="Vasco Rossi", duration_ms=180000, youtube_id="pending")
+    dedication_queue_id = "missing-pending-dedication"
+    assert state.arm_listener_request_handoff(
+        {"request_id": "pending-request"},
+        requested,
+        dedication_queue_id=dedication_queue_id,
+    )
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=tmp_path / "missing-dedication.mp3",
+            metadata={"queue_id": dedication_queue_id, "title": "Listener dedication"},
+            ephemeral=False,
+        )
+    )
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert state.listener_request_handoff is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_exclusive", [True, False], ids=["exclusive", "borrowed-operator"])
+@pytest.mark.parametrize("dedication_exists", [False, True], ids=["missing", "empty"])
+async def test_unheard_dedication_settles_linked_music_before_first_byte(
+    tmp_path,
+    request_exclusive,
+    dedication_exists,
+):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+    dedication_queue_id = f"missing-linked-dedication-{request_exclusive}"
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / f"missing-dedication-{request_exclusive}.mp3",
+        metadata={"queue_id": dedication_queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    if dedication_exists:
+        dedication.path.write_bytes(b"")
+    music_path = tmp_path / f"linked-music-{request_exclusive}.mp3"
+    music_path.write_bytes(b"x" * 4096)
+    music = Segment(
+        type=SegmentType.MUSIC,
+        path=music_path,
+        metadata={
+            "queue_id": f"linked-music-{request_exclusive}",
+            "title": "Albachiara",
+            "title_only": "Albachiara",
+            "artist": "Vasco Rossi",
+            LISTENER_REQUEST_HANDOFF_TOKEN_KEY: "admitted-token",
+            LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True,
+            LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY: dedication_queue_id,
+            LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY: request_exclusive,
+        },
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(dedication)
+    app.state.queue.put_nowait(music)
+    state.queued_segments = [
+        {"id": dedication_queue_id, "type": "banter", "label": "Listener dedication"},
+        {"id": music.metadata["queue_id"], "type": "music", "label": "Albachiara"},
+    ]
+
+    with patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()) as persist:
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert state.listener_request_handoff is None
+    if request_exclusive:
+        persist.assert_not_awaited()
+        assert not any(row.get("id") == music.metadata["queue_id"] for row in state.queued_segments)
+    else:
+        persist.assert_awaited_once()
+        for key in (
+            LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+            LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+            LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+            LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
+        ):
+            assert key not in music.metadata
 
 
 @pytest.mark.asyncio
@@ -3831,6 +3935,36 @@ async def test_trigger_rejects_second_while_one_pending():
 
 
 @pytest.mark.asyncio
+async def test_interrupt_supersedes_earlier_operator_trigger_without_stranding_guard():
+    """Trigger -> interrupt releases the superseded one-at-a-time guard."""
+    from mammamiradio.core.models import ChaosSubtype
+
+    app = _make_test_app()
+    state = app.state.station_state
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        trigger = await client.post("/api/trigger", json={"type": "banter"})
+        trigger_revision = state.force_next_revision
+        interrupt = await client.post(
+            "/api/interrupt",
+            json={"directive": "Announce the urgent safety warning.", "urgency": "urgent"},
+        )
+
+        assert trigger.json() == {"ok": True, "triggered": "banter"}
+        assert interrupt.json()["ok"] is True
+        assert state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+        assert state.force_next is SegmentType.BANTER
+        assert state.force_next_revision > trigger_revision
+        assert state.operator_force_pending is None
+
+        retry = await client.post("/api/trigger", json={"type": "banter"})
+
+    assert retry.json() == {"ok": True, "triggered": "banter"}
+    assert state.operator_force_pending is SegmentType.BANTER
+
+
+@pytest.mark.asyncio
 async def test_trigger_rejects_operator_pick_while_session_stopped():
     """A visually disabled Air Next control must also be rejected server-side."""
     app = _make_test_app()
@@ -4264,7 +4398,7 @@ async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
     """A deliberate stop must drop any pending interrupt/forced segment so it
     cannot fire as stale audio on the next resume, and must unlink an ephemeral
     interrupt bridge temp so the stop does not leak it."""
-    from mammamiradio.core.models import SegmentType
+    from mammamiradio.core.models import ChaosSubtype, SegmentType
 
     app = _make_test_app()
     state = app.state.station_state
@@ -4272,7 +4406,11 @@ async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
     bridge.write_bytes(b"id3")
     state.interrupt_slot = bridge
     state.interrupt_slot_ephemeral = True
-    state.force_next = SegmentType.BANTER
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    state.ha_pending_directive = "Announce the urgent kitchen warning."
+    state.ha_pending_directive_moment_id = "interrupt-moment"
+    state.ha_pending_directive_source = "interrupt"
+    state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -4282,7 +4420,77 @@ async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
     assert state.interrupt_slot is None
     assert state.interrupt_slot_ephemeral is False
     assert state.force_next is None
+    assert state.urgent_interrupt_force_next_revision is None
+    assert state.chaos_pending is None
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
     assert not bridge.exists()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_urgent_interrupt_after_chaos_slot_was_abandoned(tmp_path):
+    """Stop follows durable urgent ownership after a failed chaos render."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    bridge = tmp_path / "postfailure-interrupt.mp3"
+    bridge.write_bytes(b"interrupt")
+    state.interrupt_slot = bridge
+    state.interrupt_slot_ephemeral = True
+    state.chaos_pending = None
+    state.ha_pending_directive = "A failed urgent render must not return after Start."
+    state.ha_pending_directive_source = "operator"
+    state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
+    chaos_epoch = state.chaos_cutover_epoch
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/stop")
+
+    assert response.json()["ok"] is True
+    assert state.session_stopped is True
+    assert state.force_next is None
+    assert state.urgent_interrupt_force_next_revision is None
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_source == ""
+    assert state.interrupt_slot is None
+    assert state.interrupt_slot_ephemeral is False
+    assert state.chaos_cutover_epoch == chaos_epoch + 1
+    assert not bridge.exists()
+
+
+@pytest.mark.asyncio
+async def test_stop_demotes_pending_urgent_interrupt_moment_receipt(tmp_path):
+    """Canceling an unqueued ritual interrupt leaves an honest terminal receipt."""
+    from mammamiradio.core.models import ChaosSubtype
+    from mammamiradio.home.moment_receipts import MomentStore
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    store = MomentStore()
+    moment_id = store.record(
+        lane="interrupt",
+        family="safety_saves",
+        public_label="Safety moment",
+    )
+    state.moment_store = store
+    state.ha_pending_directive = "React to the urgent home safety event."
+    state.ha_pending_directive_moment_id = moment_id
+    state.ha_pending_directive_source = "ha"
+    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
+    state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/stop")
+
+    assert response.json()["ok"] is True
+    (row,) = store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == GenerationWasteReason.OPERATOR_STOP
+    assert state.ha_pending_directive_moment_id == ""
 
 
 @pytest.mark.asyncio
@@ -4312,6 +4520,269 @@ async def test_panic_cut_while_streaming():
     # Stale rows are replaced by an audible protected reservation.
     assert len(state.queued_segments) == app.state.queue.qsize() == 1
     assert state.queued_segments[0]["reason"] == "Protected continuity audio."
+
+
+@pytest.mark.asyncio
+async def test_panic_supersedes_stale_operator_force_attribution():
+    """Panic cancels an older Air Next card as well as replacing its directive."""
+    app = _make_test_app()
+    state = app.state.station_state
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        trigger = await client.post("/api/trigger", json={"type": "banter"})
+        trigger_revision = state.force_next_revision
+        panic = await client.post("/api/panic")
+
+    assert trigger.status_code == 200
+    assert trigger.json() == {"ok": True, "triggered": "banter"}
+    assert panic.status_code == 200
+    assert panic.json()["ok"] is True
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision > trigger_revision
+    assert state.operator_force_pending is None
+
+
+@pytest.mark.asyncio
+async def test_panic_supersedes_pending_urgent_interrupt_before_forcing_music(tmp_path):
+    """Interrupt -> Panic cancels the bridge/directive before MUSIC takes ownership."""
+    from mammamiradio.core.models import ChaosSubtype
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.tmp_dir = tmp_path
+    state = app.state.station_state
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        interrupt = await client.post(
+            "/api/interrupt",
+            json={"directive": "Announce the urgent safety warning.", "urgency": "urgent"},
+        )
+        assert interrupt.json()["ok"] is True
+        assert state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+        interrupt_revision = state.force_next_revision
+        assert state.interrupt_slot is not None
+
+        panic = await client.post("/api/panic")
+
+    assert panic.json()["ok"] is True
+    assert state.chaos_pending is None
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+    assert state.interrupt_slot is None
+    assert state.interrupt_slot_ephemeral is False
+    assert state.urgent_interrupt_force_next_revision is None
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision > interrupt_revision
+
+
+@pytest.mark.asyncio
+async def test_panic_clears_urgent_bridge_after_warning_admission(tmp_path):
+    """A queued warning cannot leave its immediate bridge ahead of Panic audio."""
+    app = _make_test_app()
+    state = app.state.station_state
+    bridge = tmp_path / "admitted-urgent-bridge.mp3"
+    bridge.write_bytes(b"bridge")
+    state.interrupt_slot = bridge
+    state.interrupt_slot_ephemeral = True
+    warning_path = tmp_path / "admitted-urgent-warning.mp3"
+    warning_path.write_bytes(b"warning")
+    warning = Segment(
+        type=SegmentType.BANTER,
+        path=warning_path,
+        metadata={"queue_id": "admitted-urgent-warning", "urgent_interrupt_priority": True},
+    )
+    app.state.queue.put_nowait(warning)
+    state.queued_segments = [{"id": "admitted-urgent-warning", "type": "banter", "label": "Urgent warning"}]
+    # Successful producer admission has already settled these two ownership
+    # markers; playback has not yet claimed the bridge slot.
+    state.urgent_interrupt_force_next_revision = None
+    state.chaos_pending = None
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        panic = await client.post("/api/panic")
+
+    assert panic.status_code == 200
+    assert panic.json()["ok"] is True
+    assert state.interrupt_slot is None
+    assert state.interrupt_slot_ephemeral is False
+    assert not bridge.exists()
+    assert warning not in app.state.queue._queue
+    assert state.force_next is SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/api/purge", "/api/panic"], ids=["purge", "panic"])
+@pytest.mark.parametrize("dedication_queued", [True, False], ids=["queued", "already-dequeued"])
+async def test_queue_reset_revokes_only_discarded_listener_dedication(
+    tmp_path,
+    endpoint,
+    dedication_queued,
+):
+    """A reset cancels the promise it drops, not a dedication already leaving the queue."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+
+    app = _make_test_app()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": "queued-dedication",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+    prompt, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+
+    dedication_path = tmp_path / "listener-dedication.mp3"
+    dedication_path.write_bytes(b"dedication")
+    queue_id = "listener-dedication-q"
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        duration_sec=20.0,
+        metadata={"queue_id": queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(dedication)
+    state.queued_segments = [{"id": queue_id, "type": "banter", "label": "Listener dedication"}]
+    commit.apply(state, app.state.config, queue_id=queue_id)
+    handoff = state.listener_request_handoff
+    assert handoff is not None
+
+    if not dedication_queued:
+        assert app.state.queue.get_nowait() is dedication
+        app.state.queue.task_done()
+        state.queued_segments.clear()
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(endpoint)
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    if dedication_queued:
+        assert state.listener_request_handoff is None
+    else:
+        assert state.listener_request_handoff is not None
+        assert state.listener_request_handoff.token == handoff.token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operator_owned",
+    [False, True],
+    ids=["request-exclusive", "newer-operator-pin"],
+)
+async def test_queue_remove_settles_music_linked_to_discarded_dedication(tmp_path, operator_owned):
+    """An admitted song follows its dedication unless a newer operator owns it."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    app = _make_test_app()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": f"linked-admitted-{operator_owned}",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+    if operator_owned:
+        state.set_pinned_track(requested)
+
+    prompt, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+
+    dedication_path = tmp_path / f"linked-dedication-{operator_owned}.mp3"
+    dedication_path.write_bytes(b"dedication")
+    dedication_queue_id = f"linked-dedication-{operator_owned}-q"
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        duration_sec=20.0,
+        metadata={"queue_id": dedication_queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(dedication)
+    state.queued_segments = [{"id": dedication_queue_id, "type": "banter", "label": "Listener dedication"}]
+    commit.apply(state, app.state.config, queue_id=dedication_queue_id)
+    assert state.listener_request_handoff is not None
+    if state.force_next is None:
+        state.force_listener_request_handoff_music()
+    if state.force_next is not None:
+        state.clear_force_next()
+
+    selected = _select_accepted_music_track(state, app.state.config)
+    assert selected is requested
+    handoff_metadata = state.listener_request_handoff_metadata(selected)
+    assert handoff_metadata[LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY] == dedication_queue_id
+    assert handoff_metadata[LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY] is (not operator_owned)
+
+    music_path = tmp_path / f"linked-music-{operator_owned}.mp3"
+    music_path.write_bytes(b"music")
+    music = Segment(
+        type=SegmentType.MUSIC,
+        path=music_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": f"linked-music-{operator_owned}-q",
+            "title": selected.display,
+            "title_only": selected.title,
+            "artist": selected.artist,
+            **handoff_metadata,
+        },
+        ephemeral=False,
+    )
+    state.admit_listener_request_handoff(music)
+    assert state.listener_request_admitted_reservations
+    app.state.queue.put_nowait(music)
+    state.queued_segments.append({"id": music.metadata["queue_id"], "type": "music", "label": selected.display})
+    discarded_before = state.discarded_segments_total
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/queue/remove", json={"id": dedication_queue_id})
+
+    assert response.status_code == 200
+    assert response.json()["removed"] == "Listener dedication"
+    queued = list(app.state.queue._queue)
+    if operator_owned:
+        assert music in queued
+        assert state.discarded_segments_total == discarded_before + 1
+        assert any(row.get("id") == music.metadata["queue_id"] for row in state.queued_segments)
+        for key in (
+            LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+            LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+            LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+            LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
+        ):
+            assert key not in music.metadata
+    else:
+        assert music not in queued
+        assert state.discarded_segments_total == discarded_before + 2
+        assert not any(row.get("id") == music.metadata["queue_id"] for row in state.queued_segments)
+    assert state.listener_request_admitted_reservations == {}
 
 
 @pytest.mark.asyncio
@@ -4365,6 +4836,132 @@ async def test_panic_music_force_survives_stale_listener_plan_abandon():
     assert state.pinned_track is None
     assert state.force_next is SegmentType.MUSIC
     assert state.force_next_revision == panic_force_revision
+
+
+@pytest.mark.asyncio
+async def test_newer_same_track_operator_pin_survives_listener_plan_abandon():
+    """A failed dedication render cannot retract a later move-to-next of its track."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _abandon_banter_commit
+    from mammamiradio.web.streamer import _admin_track_id
+
+    app = _make_test_app()
+    app.state.source_switch_lock = asyncio.Lock()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": "same-track-listener-plan",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+    assert state.pinned_track is requested
+    listener_force_revision = state.force_next_revision
+
+    target = {
+        "revision": state.playlist_revision,
+        "index": 0,
+        "id": _admin_track_id(requested),
+    }
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/move_to_next", json=target)
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert state.pinned_track is requested
+    operator_force_revision = state.force_next_revision
+    assert operator_force_revision > listener_force_revision
+
+    _abandon_banter_commit(state, commit)
+
+    assert listener_request["song_pinned"] is False
+    assert state.pinned_track is requested
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision == operator_force_revision
+
+
+@pytest.mark.asyncio
+async def test_discarded_dedication_preserves_newer_same_track_operator_pin(tmp_path):
+    """Removing an old dedication cannot retract a later move-to-next of its track."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.web.streamer import _admin_track_id
+
+    app = _make_test_app()
+    app.state.source_switch_lock = asyncio.Lock()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": "same-track-queued-dedication",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+    prompt, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+
+    dedication_path = tmp_path / "same-track-dedication.mp3"
+    dedication_path.write_bytes(b"dedication")
+    queue_id = "same-track-dedication-q"
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        duration_sec=20.0,
+        metadata={"queue_id": queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(dedication)
+    state.queued_segments = [{"id": queue_id, "type": "banter", "label": "Listener dedication"}]
+    commit.apply(state, app.state.config, queue_id=queue_id)
+    assert state.listener_request_handoff is not None
+    listener_force_revision = state.force_next_revision
+
+    target = {
+        "revision": state.playlist_revision,
+        "index": 0,
+        "id": _admin_track_id(requested),
+    }
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.scheduling.producer.RUNWAY_FLOOR_SECONDS", 0):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            move_response = await client.post("/api/playlist/move_to_next", json=target)
+            operator_force_revision = state.force_next_revision
+            continuity_epoch_before_remove = state.continuity_epoch
+            remove_response = await client.post("/api/queue/remove", json={"id": queue_id})
+
+    assert move_response.status_code == 200
+    assert move_response.json()["ok"] is True
+    assert operator_force_revision > listener_force_revision
+    assert remove_response.status_code == 200
+    assert remove_response.json()["removed"] == "Listener dedication"
+    assert state.listener_request_handoff is None
+    assert state.pinned_track is requested
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision == operator_force_revision
+    assert state.continuity_epoch > continuity_epoch_before_remove
 
 
 @pytest.mark.asyncio

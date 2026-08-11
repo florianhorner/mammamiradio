@@ -596,11 +596,10 @@ def test_scaletta_runway_translates_rendered_audio_into_host_progress() -> None:
     assert "updateProgrammeRunway(_st)" in _function_block(html, "refreshFast")
 
 
-def test_listener_done_action_is_distinct_from_dismissal() -> None:
+def test_ready_listener_request_cannot_be_marked_done_before_dedication() -> None:
     html = _read_admin_html()
-    handled = _function_block(html, "lrQueueNext")
     dismissed = _function_block(html, "lrDismiss")
 
-    assert "{id:req.id,action:'handled'}" in handled
+    assert "lrMarkHandled" not in html
+    assert "action:'handled'" not in html
     assert "{id}" in dismissed
-    assert "action:'handled'" not in dismissed

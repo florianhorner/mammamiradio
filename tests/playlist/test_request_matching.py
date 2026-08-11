@@ -63,7 +63,11 @@ def test_unquoted_final_by_keeps_metadata_verifiable_full_title_alternative():
 
     assert intent is not None
     assert (intent.mode, intent.title, intent.artist) == ("artist_title", "Killed", "Death")
-    assert intent.alternative_identity == SongRequestIdentity(mode="title", title="Killed by Death")
+    assert intent.alternative_identities[0] == SongRequestIdentity(
+        mode="title",
+        title="Killed by Death",
+        preserve_title_feature_syntax=True,
+    )
 
     result = match_song_request_candidates(
         intent,
@@ -79,8 +83,8 @@ def test_final_by_alternative_strips_dedication_from_parsed_credit():
 
     assert intent is not None
     assert intent.artist == "Death"
-    assert intent.alternative_identity is not None
-    assert intent.alternative_identity.title == "Killed by Death"
+    assert intent.alternative_identities
+    assert intent.alternative_identities[0].title == "Killed by Death"
 
 
 @pytest.mark.parametrize("message", ['Play "Killed by Death"', 'Play "Killed by Death" for Anna'])
@@ -89,7 +93,7 @@ def test_quoted_final_by_title_is_authoritative_without_alternative(message):
 
     assert intent is not None
     assert (intent.mode, intent.title, intent.artist) == ("title", "Killed by Death", "")
-    assert intent.alternative_identity is None
+    assert not intent.alternative_identities
 
 
 def test_song_by_song_full_title_resolves_through_alternative_identity():
@@ -162,11 +166,14 @@ def test_ambiguous_italian_di_identities_both_resolve_from_metadata():
     centro = parse_song_request("Metti Centro di Gravit\u00e0 Permanente")
     futura = parse_song_request("Metti Futura di Lucio Dalla")
 
-    assert centro is not None and centro.alternative_identity is not None
-    assert futura is not None and futura.alternative_identity is not None
+    assert centro is not None and centro.alternative_identities
+    assert futura is not None and futura.alternative_identities
     assert (centro.mode, centro.title) == ("title", "Centro di Gravit\u00e0 Permanente")
     assert (futura.mode, futura.title) == ("title", "Futura di Lucio Dalla")
-    assert (futura.alternative_identity.title, futura.alternative_identity.artist) == ("Futura", "Lucio Dalla")
+    assert (futura.alternative_identities[0].title, futura.alternative_identities[0].artist) == (
+        "Futura",
+        "Lucio Dalla",
+    )
 
     centro_result = match_song_request_candidates(
         centro,
@@ -188,7 +195,7 @@ def test_quoted_italian_di_title_is_authoritative_without_alternative():
 
     assert intent is not None
     assert (intent.mode, intent.title) == ("title", "Futura di Lucio Dalla")
-    assert intent.alternative_identity is None
+    assert not intent.alternative_identities
 
 
 @pytest.mark.parametrize("message", ["Play Albachiara for Anna", "Metti Albachiara per Anna"])
@@ -197,7 +204,88 @@ def test_parse_title_only_named_dedication(message):
 
     assert intent is not None
     assert intent.mode == "title"
-    assert intent.title == "Albachiara"
+    assert intent.title in {"Albachiara for Anna", "Albachiara per Anna"}
+    assert intent.alternative_identities[0] == SongRequestIdentity(mode="title", title="Albachiara")
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": "Albachiara", "track_artist": "Vasco Rossi"}],
+    )
+
+    assert result.best is not None
+    assert result.best.identity_title == "Albachiara"
+
+
+def test_named_dedication_alternative_cannot_outrank_full_title():
+    intent = parse_song_request("Play Waiting for You")
+    assert intent is not None
+    assert intent.title == "Waiting for You"
+    assert intent.alternative_identities[0] == SongRequestIdentity(mode="title", title="Waiting")
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {"youtube_id": "wrong", "title": "Waiting", "track_artist": "Wrong Artist"},
+            {"youtube_id": "right", "title": "Waiting for You", "track_artist": "F4"},
+        ],
+    )
+
+    assert result.best is not None
+    assert result.best.metadata["youtube_id"] == "right"
+
+
+@pytest.mark.parametrize(
+    ("message", "full_title", "base_title"),
+    [
+        ("Can you play Imagine for me?", "Imagine for me", "Imagine"),
+        ("Could you put on Imagine for us?", "Imagine for us", "Imagine"),
+        ("Mi puoi mettere Albachiara per me?", "Albachiara per me", "Albachiara"),
+        ("Mi puoi mettere Albachiara per noi?", "Albachiara per noi", "Albachiara"),
+    ],
+)
+def test_recipient_pronoun_tail_is_candidate_verified_alternative(message, full_title, base_title):
+    intent = parse_song_request(message)
+
+    assert intent is not None
+    assert intent.title == full_title
+    assert intent.alternative_identities[0] == SongRequestIdentity(mode="title", title=base_title)
+    match = match_song_request_candidates(intent, [{"title": base_title, "track_artist": "Verified Artist"}]).best
+    assert match is not None
+    assert match.identity_title == base_title
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Per favore, puoi mettere Albachiara?",
+        "Cara radio, per favore, puoi mettere Albachiara?",
+        "Radio, puoi mettere Albachiara?",
+    ],
+)
+def test_polite_radio_address_punctuation_still_parses_song_command(message):
+    intent = parse_song_request(message)
+
+    assert intent is not None
+    assert (intent.mode, intent.title) == ("title", "Albachiara")
+
+
+@pytest.mark.parametrize("separator", [" - ", " – "])
+def test_pasted_artist_title_credit_is_an_exact_metadata_interpretation(separator):
+    intent = parse_song_request(f"Play Lucio Battisti{separator}Emozioni")
+
+    assert intent is not None
+    assert intent.title == f"Lucio Battisti{separator}Emozioni"
+    assert intent.alternative_identities[0] == SongRequestIdentity(
+        mode="artist_title",
+        artist="Lucio Battisti",
+        title="Emozioni",
+    )
+    match = match_song_request_candidates(
+        intent,
+        [{"title": f"Lucio Battisti{separator}Emozioni", "track_artist": "Lucio Battisti"}],
+    ).best
+    assert match is not None
+    assert (match.station_artist, match.identity_title) == ("Lucio Battisti", "Emozioni")
 
 
 def test_parse_title_containing_for_before_explicit_artist_credit():
@@ -206,6 +294,32 @@ def test_parse_title_containing_for_before_explicit_artist_credit():
     assert intent is not None
     assert intent.mode == "artist_title"
     assert (intent.artist, intent.title) == ("Chicago", "Song for You")
+
+
+def test_structured_artist_disproves_dash_as_title_credit():
+    full_intent = parse_song_request("Play Bang Bang - My Baby Shot Me Down")
+    suffix_intent = parse_song_request("Play My Baby Shot Me Down")
+    assert full_intent is not None and suffix_intent is not None
+    candidate = {
+        "title": "Bang Bang - My Baby Shot Me Down",
+        "track_artist": "Nancy Sinatra",
+    }
+
+    assert match_song_request_candidates(full_intent, [candidate]).best is not None
+    assert match_song_request_candidates(suffix_intent, [candidate]).best is None
+
+
+def test_structured_artist_confirms_normal_dash_credit():
+    intent = parse_song_request("Play Bang Bang")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": "Nancy Sinatra - Bang Bang", "track_artist": "Nancy Sinatra"}],
+    )
+
+    assert result.best is not None
+    assert result.best.identity_title == "Bang Bang"
 
 
 def test_dedication_words_do_not_become_requested_recording_qualifiers():
@@ -270,6 +384,7 @@ def test_normalization_handles_accents_unicode_dashes_and_punctuation():
         ("AC/DC", "ACDC", "acdc"),
         ("Jay-Z", "JayZ", "jayz"),
         ("P.I.M.P.", "PIMP", "pimp"),
+        ("L_Italiano", "LItaliano", "litaliano"),
     ],
 )
 def test_normalization_joins_intra_word_punctuation(punctuated, compact, normalized):
@@ -331,6 +446,17 @@ def test_concatenated_vevo_uploader_is_exact_compact_artist_evidence():
 
     assert result.best is not None
     assert (result.best.artist, result.best.title) == ("Lucio Battisti", "Emozioni")
+    assert (result.best.station_artist, result.best.identity_artist) == ("LucioBattisti", "LucioBattisti")
+
+    oddly_spaced = parse_song_request("Play something by Luci oBattisti")
+    assert oddly_spaced is not None
+    oddly_spaced_match = match_song_request_candidates(
+        oddly_spaced,
+        [{"title": "Emozioni (Official Video)", "artist": "LucioBattistiVEVO"}],
+    ).best
+    assert oddly_spaced_match is not None
+    assert oddly_spaced_match.station_artist == result.best.station_artist
+    assert oddly_spaced_match.identity_artist == result.best.identity_artist
 
 
 def test_artist_cleanup_does_not_remove_a_real_music_suffix():
@@ -341,6 +467,20 @@ def test_artist_cleanup_does_not_remove_a_real_music_suffix():
 
     assert result.best is not None
     assert result.best.artist == "Roxy Music"
+
+
+@pytest.mark.parametrize(
+    "uploader",
+    ["Lucio Battisti - Topic", "Lucio Battisti Official Channel", "Lucio Battisti Official"],
+)
+def test_explicit_platform_artist_wrappers_remain_exact_artist_evidence(uploader):
+    intent = parse_song_request("Play something by Lucio Battisti")
+    assert intent is not None
+
+    match = match_song_request_candidates(intent, [{"title": "Emozioni", "artist": uploader}]).best
+
+    assert match is not None
+    assert (match.station_artist, match.identity_artist) == ("Lucio Battisti", "Lucio Battisti")
 
 
 def test_explicit_request_requires_both_artist_and_title():
@@ -410,12 +550,35 @@ def test_structured_title_keeps_artist_prefix_from_display_title_as_evidence():
     assert (result.best.artist, result.best.title) == ("Lucio Battisti", "Emozioni")
 
 
+def test_matching_title_prefix_owns_station_identity_over_conflicting_metadata():
+    intent = parse_song_request("Play Shallow by Lady Gaga")
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [
+            {
+                "title": "Lady Gaga - Shallow",
+                "track_artist": "Various Artists",
+                "artist": "Generic Channel",
+            }
+        ],
+    ).best
+
+    assert match is not None
+    assert (match.artist, match.station_artist, match.identity_artist) == (
+        "Lady Gaga",
+        "Lady Gaga",
+        "Lady Gaga",
+    )
+
+
 @pytest.mark.parametrize(
     "candidate_title",
     [
         "Lady Gaga feat. Bradley Cooper - Shallow",
         "Lady Gaga - Shallow (feat. Bradley Cooper)",
-        "Lady Gaga - Shallow ft. Bradley Cooper",
+        "Lady Gaga - Shallow - ft. Bradley Cooper",
     ],
 )
 def test_featured_artist_credits_remain_strong_identity_evidence(candidate_title):
@@ -452,6 +615,96 @@ def test_featured_artist_match_carries_every_verified_credit_for_policy_checks()
     )
 
 
+@pytest.mark.parametrize(
+    "candidate_title",
+    [
+        "Lady Gaga - Shallow (feat. Bradley Cooper)",
+        "Lady Gaga - Shallow - ft. Bradley Cooper",
+    ],
+)
+def test_title_side_feature_credit_is_artist_evidence(candidate_title):
+    intent = parse_song_request("Play Shallow by Bradley Cooper")
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": candidate_title, "artist": "Generic Channel"}],
+    ).best
+
+    assert match is not None
+    assert (match.station_artist, match.identity_artist, match.identity_title) == (
+        "Lady Gaga",
+        "Bradley Cooper",
+        "Shallow",
+    )
+    assert set(match.credited_artists) == {
+        "Lady Gaga",
+        "Bradley Cooper",
+        "Lady Gaga feat. Bradley Cooper",
+    }
+
+
+@pytest.mark.parametrize(
+    ("request_text", "candidate_title"),
+    [
+        ("Play live version of Shallow by Bradley Cooper", "Lady Gaga - Shallow (feat. Bradley Cooper) (Live)"),
+        (
+            "Play remastered version of Shallow by Bradley Cooper",
+            "Lady Gaga - Shallow (feat. Bradley Cooper) (Remastered)",
+        ),
+    ],
+)
+def test_title_side_feature_group_survives_a_following_recording_variant(request_text, candidate_title):
+    intent = parse_song_request(request_text)
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": candidate_title, "artist": "Generic Channel"}],
+    ).best
+
+    assert match is not None
+    assert (match.station_artist, match.identity_artist, match.identity_title) == (
+        "Lady Gaga",
+        "Bradley Cooper",
+        "Shallow",
+    )
+
+
+@pytest.mark.parametrize(
+    "candidate_title",
+    [
+        "Lady Gaga - Shallow - feat. Bradley Cooper (Club Mix)",
+    ],
+)
+def test_compound_separator_feature_tail_is_not_guessed(candidate_title):
+    intent = parse_song_request("Play Shallow by Bradley Cooper")
+    assert intent is not None
+
+    result = match_song_request_candidates(intent, [{"title": candidate_title, "artist": "Generic Channel"}])
+
+    assert result.best is None
+    assert result.failure_reason == "low_confidence"
+
+
+def test_title_side_guest_never_uses_unverified_uploader_as_station_artist():
+    intent = parse_song_request("Play Shallow by Bradley Cooper")
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": "Shallow (feat. Bradley Cooper)", "artist": "Generic Channel"}],
+    ).best
+
+    assert match is not None
+    assert (match.artist, match.station_artist, match.identity_artist) == (
+        "Bradley Cooper",
+        "Bradley Cooper",
+        "Bradley Cooper",
+    )
+    assert "Generic Channel" in match.credited_artists
+
+
 @pytest.mark.parametrize("credit", ["feat. Bradley Cooper", "ft. Bradley Cooper", "featuring Bradley Cooper"])
 def test_artist_side_feature_credit_uses_request_independent_station_artist(credit):
     lady_gaga = parse_song_request("Play Shallow by Lady Gaga")
@@ -485,8 +738,45 @@ def test_feature_credit_layouts_share_one_station_identity():
     }
 
 
+def test_listener_feature_credit_requires_candidate_backed_guest_evidence():
+    intent = parse_song_request("Play Shallow feat. Bradley Cooper by Lady Gaga")
+    assert intent is not None
+    assert (intent.title, intent.artist, intent.requested_feature_artist) == (
+        "Shallow",
+        "Lady Gaga",
+        "Bradley Cooper",
+    )
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {"youtube_id": "plain", "title": "Lady Gaga - Shallow", "artist": "Lady Gaga"},
+            {
+                "youtube_id": "wrong-guest",
+                "title": "Lady Gaga - Shallow (feat. Tony Bennett)",
+                "artist": "Lady Gaga",
+            },
+            {
+                "youtube_id": "title-credit",
+                "title": "Lady Gaga - Shallow (feat. Bradley Cooper)",
+                "artist": "Lady Gaga",
+            },
+            {
+                "youtube_id": "artist-credit",
+                "title": "Shallow",
+                "track_artist": "Lady Gaga feat. Bradley Cooper",
+            },
+        ],
+    )
+
+    assert [match.metadata["youtube_id"] for match in result.matches] == [
+        "title-credit",
+        "artist-credit",
+    ]
+
+
 def test_station_artist_keeps_equal_billing_collaborators_intact():
-    intent = parse_song_request("Play Shallow by Lady Gaga")
+    intent = parse_song_request("Play Shallow by Lady Gaga & Bradley Cooper")
     assert intent is not None
 
     result = match_song_request_candidates(
@@ -497,6 +787,35 @@ def test_station_artist_keeps_equal_billing_collaborators_intact():
     assert result.best is not None
     assert result.best.artist == "Lady Gaga & Bradley Cooper"
     assert result.best.station_artist == "Lady Gaga & Bradley Cooper"
+
+
+@pytest.mark.parametrize("requested_artist", ["Earth", "Wind", "Fire"])
+def test_band_name_connectors_do_not_prove_individual_artist(requested_artist):
+    intent = parse_song_request(f"Play September by {requested_artist}")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": "Earth, Wind & Fire - September", "artist": "Generic Channel"}],
+    )
+
+    assert result.best is None
+    assert result.failure_reason == "low_confidence"
+
+
+def test_featured_band_credit_stays_one_artist_identity():
+    full_band = parse_song_request("Play Celebration by Earth, Wind & Fire")
+    individual = parse_song_request("Play Celebration by Fire")
+    assert full_band is not None and individual is not None
+    metadata = [{"title": "Taylor Swift feat. Earth, Wind & Fire - Celebration", "artist": "Generic Channel"}]
+
+    full_match = match_song_request_candidates(full_band, metadata).best
+    individual_result = match_song_request_candidates(individual, metadata)
+
+    assert full_match is not None
+    assert full_match.identity_artist == "Earth, Wind & Fire"
+    assert individual_result.best is None
+    assert individual_result.failure_reason == "low_confidence"
 
 
 @pytest.mark.parametrize(
@@ -658,6 +977,47 @@ def test_words_inside_song_identity_do_not_request_a_recording_variant(
     assert result.best is not None
     assert result.best.variant == "standard"
     assert len(result.matches) == expected_matches
+
+
+@pytest.mark.parametrize("subtitle", ["Live and Let Die", "Cover Me"])
+def test_bracketed_title_subtitle_is_not_a_partial_recording_qualifier(subtitle):
+    intent = parse_song_request(f"Play Song ({subtitle}) by Example Artist")
+    assert intent is not None
+    assert intent.requested_qualifiers == frozenset()
+
+    exact = match_song_request_candidates(
+        intent,
+        [{"title": f"Example Artist - Song ({subtitle})", "artist": "Example Artist"}],
+    )
+    base_only = parse_song_request("Play Song by Example Artist")
+    assert base_only is not None
+    partial = match_song_request_candidates(
+        base_only,
+        [{"title": f"Example Artist - Song ({subtitle})", "artist": "Example Artist"}],
+    )
+
+    assert exact.best is not None
+    assert exact.best.variant == "standard"
+    assert exact.best.identity_title == f"Song ({subtitle})"
+    assert partial.best is None
+
+
+@pytest.mark.parametrize(
+    ("group", "variant"),
+    [("Live at Wembley", "live"), ("Acoustic Version", "acoustic"), ("Club Remix", "remix")],
+)
+def test_complete_bracketed_recording_qualifier_group_still_matches(group, variant):
+    intent = parse_song_request("Play Song by Example Artist")
+    assert intent is not None
+
+    result = match_song_request_candidates(
+        intent,
+        [{"title": f"Example Artist - Song ({group})", "artist": "Example Artist"}],
+    )
+
+    assert result.best is not None
+    assert result.best.variant == variant
+    assert result.best.identity_title == "Song"
 
 
 def test_duplicate_structured_title_does_not_invent_live_variant():
@@ -967,3 +1327,366 @@ def test_legitimate_audio_title_is_not_erased_as_platform_noise():
     assert clean_candidate_title("Audio") == "Audio"
     assert result.best is not None
     assert result.best.identity_title == "Audio"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Play Shallow by Lady Gaga feat. Bradley Cooper",
+        'Play "Shallow" by Lady Gaga feat. Bradley Cooper',
+        "Metti Shallow di Lady Gaga feat. Bradley Cooper",
+    ],
+)
+def test_artist_side_requested_feature_requires_the_named_guest(message):
+    intent = parse_song_request(message)
+    assert intent is not None
+    assert (intent.artist, intent.requested_feature_artist) == ("Lady Gaga", "Bradley Cooper")
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {"youtube_id": "plain", "title": "Lady Gaga - Shallow", "track_artist": "Lady Gaga"},
+            {
+                "youtube_id": "wrong",
+                "title": "Lady Gaga feat. Tony Bennett - Shallow",
+                "track_artist": "Lady Gaga feat. Tony Bennett",
+            },
+            {
+                "youtube_id": "right",
+                "title": "Lady Gaga feat. Bradley Cooper - Shallow",
+                "track_artist": "Lady Gaga feat. Bradley Cooper",
+            },
+        ],
+    )
+
+    assert [match.metadata["youtube_id"] for match in result.matches] == ["right"]
+
+
+def test_distinct_title_and_artist_feature_credits_are_both_required():
+    intent = parse_song_request("Play Song feat. X by Artist feat. Y")
+
+    assert intent is not None
+    assert intent.requested_feature_artist == "Y"
+    assert intent.preserve_title_feature_syntax is True
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {
+                "youtube_id": "wrong-title-guest",
+                "title": "Artist feat. Y - Song feat. Z",
+                "track_artist": "Artist feat. Y",
+                "track_title": "Song feat. Z",
+            },
+            {
+                "youtube_id": "right-guests",
+                "title": "Artist feat. Y - Song feat. X",
+                "track_artist": "Artist feat. Y",
+                "track_title": "Song feat. X",
+            },
+        ],
+    )
+
+    assert [match.metadata["youtube_id"] for match in result.matches] == ["right-guests"]
+
+
+def test_artist_only_requested_feature_requires_the_named_guest():
+    intent = parse_song_request("Play a song by Lady Gaga feat. Bradley Cooper")
+    assert intent is not None
+    assert (intent.mode, intent.artist, intent.requested_feature_artist) == (
+        "artist",
+        "Lady Gaga",
+        "Bradley Cooper",
+    )
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {"youtube_id": "plain", "title": "Poker Face", "track_artist": "Lady Gaga"},
+            {
+                "youtube_id": "wrong",
+                "title": "Cheek to Cheek",
+                "track_artist": "Lady Gaga feat. Tony Bennett",
+            },
+            {
+                "youtube_id": "right",
+                "title": "Shallow",
+                "track_artist": "Lady Gaga feat. Bradley Cooper",
+            },
+        ],
+    )
+
+    assert [match.metadata["youtube_id"] for match in result.matches] == ["right"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Play Shallow by Lady Gaga", "Play Shallow by Bradley Cooper", "Play Shallow feat. Bradley Cooper"],
+)
+def test_punctuated_unbracketed_candidate_feature_credit_is_verifiable(message):
+    intent = parse_song_request(message)
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": "Lady Gaga - Shallow ft. Bradley Cooper", "track_artist": "Lady Gaga"}],
+    ).best
+
+    assert match is not None
+    assert (match.station_artist, match.identity_title) == ("Lady Gaga", "Shallow")
+
+
+def test_unpunctuated_feature_words_keep_exact_full_title_ahead_of_guest_interpretation():
+    literal = parse_song_request("Play The Song Featuring Tomorrow by Example Artist")
+    explicit_guest = parse_song_request("Play Shallow featuring Bradley Cooper by Lady Gaga")
+    assert literal is not None and explicit_guest is not None
+
+    literal_result = match_song_request_candidates(
+        literal,
+        [
+            {"youtube_id": "wrong-base", "title": "Example Artist - The Song", "track_artist": "Example Artist"},
+            {
+                "youtube_id": "literal",
+                "title": "Example Artist - The Song Featuring Tomorrow",
+                "track_artist": "Example Artist",
+            },
+        ],
+    )
+    guest_result = match_song_request_candidates(
+        explicit_guest,
+        [
+            {"youtube_id": "plain", "title": "Lady Gaga - Shallow", "track_artist": "Lady Gaga"},
+            {
+                "youtube_id": "wrong-guest",
+                "title": "Lady Gaga - Shallow (feat. Tony Bennett)",
+                "track_artist": "Lady Gaga",
+            },
+            {
+                "youtube_id": "right-guest",
+                "title": "Lady Gaga - Shallow (feat. Bradley Cooper)",
+                "track_artist": "Lady Gaga",
+            },
+        ],
+    )
+
+    assert [match.metadata["youtube_id"] for match in literal_result.matches] == ["literal"]
+    assert [match.metadata["youtube_id"] for match in guest_result.matches] == ["right-guest"]
+
+
+def test_dash_live_title_phrase_is_not_collapsed_into_a_recording_variant():
+    base = parse_song_request("Play Song by Example Artist")
+    exact = parse_song_request("Play Song - Live and Let Die by Example Artist")
+    assert base is not None and exact is not None
+    candidate = {
+        "title": "Example Artist - Song - Live and Let Die",
+        "track_artist": "Example Artist",
+    }
+
+    assert match_song_request_candidates(base, [candidate]).best is None
+    exact_match = match_song_request_candidates(exact, [candidate]).best
+    assert exact_match is not None
+    assert (exact_match.identity_title, exact_match.variant) == ("Song - Live and Let Die", "standard")
+
+
+@pytest.mark.parametrize(
+    ("message", "candidate_title", "feature_artist"),
+    [
+        ("Play Lucio Battisti - Emozioni for me", "Lucio Battisti - Emozioni", ""),
+        (
+            "Play Lucio Battisti - Emozioni (feat. Mina)",
+            "Lucio Battisti - Emozioni (feat. Mina)",
+            "Mina",
+        ),
+        ("Play Lucio Battisti - Emozioni please", "Lucio Battisti - Emozioni", ""),
+    ],
+)
+def test_pasted_artist_title_composes_with_other_ranked_ambiguities(message, candidate_title, feature_artist):
+    intent = parse_song_request(message)
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": candidate_title, "track_artist": "Lucio Battisti"}],
+    ).best
+
+    assert match is not None
+    assert (match.station_artist, match.identity_title) == ("Lucio Battisti", "Emozioni")
+    if feature_artist:
+        assert feature_artist in match.credited_artists
+
+
+@pytest.mark.parametrize(
+    ("message", "title"),
+    [
+        ("Play Imagine please", "Imagine"),
+        ("Can you play Imagine, please?", "Imagine"),
+        ("Metti Albachiara per favore", "Albachiara"),
+    ],
+)
+def test_trailing_politeness_is_a_ranked_candidate_verified_alternative(message, title):
+    intent = parse_song_request(message)
+    assert intent is not None
+    assert intent.title != title
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": title, "track_artist": "Verified Artist"}],
+    ).best
+
+    assert match is not None
+    assert match.identity_title == title
+
+
+@pytest.mark.parametrize("title", ["Waiting, for You", "Song; per Te"])
+def test_quoted_title_protects_internal_dedication_punctuation(title):
+    intent = parse_song_request(f'Play "{title}"')
+    assert intent is not None
+    assert (intent.mode, intent.title, intent.alternative_identities) == ("title", title, ())
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": title, "track_artist": "Verified Artist"}],
+    ).best
+
+    assert match is not None
+    assert match.identity_title == title
+
+
+@pytest.mark.parametrize("title", ["Digital Audio", "Final Lyrics", "Night Visualizer", "Signal HD"])
+def test_bare_multiword_platform_looking_suffix_stays_song_identity(title):
+    assert clean_candidate_title(title) == title
+    full = parse_song_request(f"Play {title} by Example Artist")
+    shortened = parse_song_request(f"Play {title.rsplit(maxsplit=1)[0]} by Example Artist")
+    assert full is not None and shortened is not None
+
+    candidate = {"title": f"Example Artist - {title}", "track_artist": "Example Artist"}
+    assert match_song_request_candidates(full, [candidate]).best is not None
+    assert match_song_request_candidates(shortened, [candidate]).best is None
+
+
+@pytest.mark.parametrize(
+    ("full_title", "short_title"),
+    [
+        ("Living With Lyrics", "Living"),
+        ("HD Signal", "Signal"),
+        ("Ultra HD Dreams", "Ultra Dreams"),
+    ],
+)
+def test_unseparated_platform_words_do_not_create_title_equivalence(full_title, short_title):
+    assert clean_candidate_title(full_title) == full_title
+    full = parse_song_request(f"Play {full_title} by Example Artist")
+    short = parse_song_request(f"Play {short_title} by Example Artist")
+    assert full is not None and short is not None
+
+    full_candidate = {"title": f"Example Artist - {full_title}", "track_artist": "Example Artist"}
+    short_candidate = {"title": f"Example Artist - {short_title}", "track_artist": "Example Artist"}
+    assert match_song_request_candidates(full, [full_candidate]).best is not None
+    assert match_song_request_candidates(short, [full_candidate]).best is None
+    assert match_song_request_candidates(full, [short_candidate]).best is None
+
+
+@pytest.mark.parametrize("hyphen", ["\u2010", "\u2011"])
+def test_unicode_intra_word_hyphens_match_compact_title_identity(hyphen):
+    intent = parse_song_request("Play SpiderMan by Example Artist")
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": f"Example Artist - Spider{hyphen}Man", "track_artist": "Example Artist"}],
+    ).best
+
+    assert match is not None
+    assert match.identity_title == f"Spider{hyphen}Man"
+
+
+def test_platform_artist_disproves_a_false_title_dash_prefix():
+    intent = parse_song_request("Play Bang Bang - My Baby Shot Me Down")
+    suffix = parse_song_request("Play My Baby Shot Me Down")
+    assert intent is not None and suffix is not None
+    candidate = {
+        "title": "Bang Bang - My Baby Shot Me Down",
+        "uploader": "Nancy Sinatra - Topic",
+    }
+
+    match = match_song_request_candidates(intent, [candidate]).best
+
+    assert match is not None
+    assert (match.station_artist, match.identity_title) == (
+        "Nancy Sinatra",
+        "Bang Bang - My Baby Shot Me Down",
+    )
+    assert match_song_request_candidates(suffix, [candidate]).best is None
+
+
+@pytest.mark.parametrize("marker", ["ft.", "feat"])
+def test_requested_guest_corroborates_contextual_candidate_credit(marker):
+    intent = parse_song_request("Play Song feat. Pitbull by Example Artist")
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [{"title": f"Example Artist - Song {marker} Pitbull", "uploader": "Example Artist"}],
+    ).best
+
+    assert match is not None
+    assert (match.station_artist, match.identity_title) == ("Example Artist", "Song")
+    assert "Pitbull" in match.credited_artists
+
+
+@pytest.mark.parametrize("title", ["Welcome to Ft. Lauderdale", "A Feat of Strength"])
+def test_title_cased_feature_words_remain_literal_candidate_identity(title):
+    exact = parse_song_request(f"Play {title} by Example Artist")
+    shortened = parse_song_request(f"Play {title.split(' Ft. ')[0].split(' Feat ')[0]} by Example Artist")
+    assert exact is not None and shortened is not None
+    candidate = {"title": f"Example Artist - {title}", "uploader": "Example Artist"}
+
+    assert match_song_request_candidates(exact, [candidate]).best is not None
+    assert match_song_request_candidates(shortened, [candidate]).best is None
+
+
+def test_feature_credit_composes_with_recording_qualifiers_in_either_order():
+    intent = parse_song_request("Play Song feat. Guest (Remix) by Example Artist")
+    assert intent is not None
+    assert intent.requested_feature_artist == "Guest"
+    assert intent.requested_qualifiers == frozenset({"remix"})
+
+    result = match_song_request_candidates(
+        intent,
+        [
+            {"title": "Example Artist - Song (Remix) feat. Guest", "uploader": "Example Artist"},
+            {"title": "Example Artist - Song - feat. Guest - Live", "uploader": "Example Artist"},
+        ],
+    )
+
+    assert [(match.identity_title, match.variant) for match in result.matches] == [("Song", "remix")]
+
+    live_intent = parse_song_request("Play live version of Song feat. Guest by Example Artist")
+    assert live_intent is not None
+    live_match = match_song_request_candidates(
+        live_intent,
+        [{"title": "Example Artist - Song - feat. Guest - Live", "uploader": "Example Artist"}],
+    ).best
+    assert live_match is not None
+    assert (live_match.identity_title, live_match.variant) == ("Song", "live")
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Play Imagine by John Lennon please",
+        'Play "Imagine" by John Lennon please',
+        "Metti Imagine di John Lennon per favore",
+    ],
+)
+def test_terminal_courtesy_after_artist_credit_is_not_part_of_artist(message):
+    intent = parse_song_request(message)
+
+    assert intent is not None
+    assert (intent.artist, intent.title) == ("John Lennon", "Imagine")
+
+
+def test_literal_title_ending_in_please_keeps_its_primary_identity():
+    intent = parse_song_request("Play Imagine Please")
+
+    assert intent is not None
+    assert intent.title == "Imagine Please"

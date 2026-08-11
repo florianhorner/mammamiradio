@@ -124,6 +124,19 @@ def test_select_norm_cache_rescue_skips_blocklisted_cache_file(tmp_path):
     choice.assert_called_once_with([allowed])
 
 
+def test_select_norm_cache_rescue_skips_exact_equivalent_blocklist_identity(tmp_path):
+    state = StationState(blocklist={("toto cutugno", "l'italiano"): {"display": "Toto Cutugno - L'Italiano"}})
+
+    _write_norm(tmp_path, "norm_aaa_litaliano.mp3", title="LItaliano", artist="TotoCutugno")
+    allowed = _write_norm(tmp_path, "norm_zzz_alternative.mp3", title="Musica Leggera", artist="Colapesce")
+
+    with patch("mammamiradio.audio.norm_cache.random.choice", side_effect=_choose_first) as choice:
+        rescue = select_norm_cache_rescue(tmp_path, state, allow_recent_repeat=True)
+
+    assert rescue == allowed
+    choice.assert_called_once_with([allowed])
+
+
 def test_select_norm_cache_rescue_holds_every_cache_identity_owned_by_pending_dedication(tmp_path):
     requested = Track(
         title="LItaliano",

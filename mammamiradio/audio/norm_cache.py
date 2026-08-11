@@ -9,6 +9,7 @@ from pathlib import Path
 
 from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
 from mammamiradio.core.models import ListenerTrackReservations, Segment, SegmentType, StationState, Track
+from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.downloader import is_rejected_cache_key
 
 _NORM_CACHE_KEY_RE = re.compile(r"^norm_(?P<cache_key>.+)_\d+k\.mp3$")
@@ -167,16 +168,17 @@ def sidecar_track_key(sidecar: dict) -> tuple[str, str]:
 def _is_blocklisted(path: Path, blocklist: object) -> bool:
     """True if this cache file's ``(artist, title)`` is on the operator blocklist.
 
-    The blocklist key is ``(track.artist.lower(), track.title.lower())`` and the norm
-    sidecar stores exactly ``track.title``/``track.artist`` (producer.save_track_metadata),
-    so the sidecar maps straight onto the ban identity. A file with no sidecar can't be
-    identified and is left selectable (best-effort — banned songs almost always carry one)."""
+    The norm sidecar stores ``track.title``/``track.artist`` verbatim. The shared
+    identity comparison then applies the same accent, punctuation, compact-spacing,
+    uploader-wrapper, and feature-credit equivalence used by every other hard gate.
+    A file with no sidecar cannot be identified and remains selectable (best-effort —
+    banned songs almost always carry one)."""
     if not blocklist or not isinstance(blocklist, dict):
         return False
     sidecar = load_track_metadata(path)
     if not sidecar:
         return False
-    return sidecar_track_key(sidecar) in blocklist
+    return song_identity_key_is_blocklisted(sidecar_track_key(sidecar), blocklist)
 
 
 def is_listener_reserved_cache_file(

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
     LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
     LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+    URGENT_INTERRUPT_PRIORITY_KEY,
     Heading,
     SegmentLogEntry,
     StationState,
@@ -183,6 +186,9 @@ def test_public_segment_metadata_redacts_listener_request_handoff():
         "title": "Song",
         LISTENER_REQUEST_HANDOFF_TOKEN_KEY: "private-request-token",
         LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True,
+        LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY: "private-queue-id",
+        LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY: True,
+        URGENT_INTERRUPT_PRIORITY_KEY: True,
     }
 
     assert status_payload._public_segment_metadata(metadata) == {"title": "Song"}

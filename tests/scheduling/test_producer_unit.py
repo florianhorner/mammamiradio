@@ -18,6 +18,7 @@ from mammamiradio.core.config import RadioEventRule, load_config
 from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
     LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    URGENT_INTERRUPT_PRIORITY_KEY,
     ChaosSubtype,
     DialogueLine,
     GenerationWasteReason,
@@ -262,6 +263,67 @@ async def test_listener_handoff_music_does_not_inherit_displaced_air_next(tmp_pa
     assert state.listener_request_handoff is None
     assert state.operator_force_pending is SegmentType.BANTER
     assert force_at_music_admission == [SegmentType.BANTER]
+
+
+@pytest.mark.asyncio
+async def test_operator_music_air_next_keeps_promised_song_behind_its_dedication(tmp_path):
+    requested = Track(
+        title="Canzone richiesta",
+        artist="Artista",
+        duration_ms=180_000,
+        youtube_id="listener-requested-air-next",
+    )
+    state = StationState(
+        playlist=[requested],
+        listeners_active=1,
+        home_authorization=HomeAuthorization.legacy(),
+    )
+    dedication_queue_id = "listener-dedication"
+    assert state.arm_listener_request_handoff(
+        {"request_id": "admitted-request"},
+        requested,
+        dedication_queue_id=dedication_queue_id,
+    )
+    state.set_pinned_track(requested)
+    state.set_force_next(SegmentType.MUSIC)
+    state.operator_force_pending = SegmentType.MUSIC
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.pacing.lookahead_segments = 2
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    dedication_path = tmp_path / "dedication.mp3"
+    dedication_path.write_bytes(b"dedication")
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        metadata={"queue_id": dedication_queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    queue.put_nowait(dedication)
+    state.queued_segments = [{"id": dedication_queue_id, "type": "banter", "label": "Listener dedication"}]
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"audio")
+
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"normalized audio")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._schedule_restart_handoff_spool"),
+    ):
+        await _run_until_queue_depth(queue, state, config, 2)
+
+    queued = list(queue._queue)
+    assert queued[0] is dedication
+    promised = queued[1]
+    assert promised.type is SegmentType.MUSIC
+    assert promised.metadata.get("air_next") is not True
+    assert promised.metadata.get(LISTENER_REQUEST_HANDOFF_ADMITTED_KEY) is True
+    assert state.listener_request_handoff is None
+    assert state.operator_force_pending is None
 
 
 @pytest.mark.parametrize(
@@ -1956,6 +2018,67 @@ async def test_banter_with_listener_request_commit_applies_on_queue():
 
 
 @pytest.mark.asyncio
+async def test_operator_air_next_banter_leaves_listener_request_for_adjacent_break(tmp_path):
+    """A front-inserted operator break cannot promise music behind the runway."""
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    buffered = [
+        Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / f"buffered-{index}.mp3",
+            duration_sec=180.0,
+            metadata={"queue_id": f"buffered-{index}", "title": f"Buffered {index}"},
+            ephemeral=False,
+        )
+        for index in range(2)
+    ]
+    for segment in buffered:
+        segment.path.write_bytes(b"buffered")
+        queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": segment.metadata["queue_id"], "type": "music", "label": segment.metadata["title"]}
+        for segment in buffered
+    ]
+    requested = state.playlist[0]
+    request = {
+        "request_id": "forced-banter-request",
+        "name": "Luca",
+        "message": f"Play {requested.title}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+    state.set_force_next(SegmentType.BANTER)
+    state.operator_force_pending = SegmentType.BANTER
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queue_depth(queue, state, config, 3)
+
+    queued = list(queue._queue)
+    assert queued[0].type is SegmentType.BANTER
+    assert queued[1:] == buffered
+    assert request in state.pending_requests
+    assert state.listener_request_handoff is None
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
 async def test_transition_failure_recovers_listener_pin_from_successful_banter_sibling():
     state = _make_state()
     config = _make_config()
@@ -2017,28 +2140,49 @@ async def test_transition_failure_recovers_listener_pin_from_successful_banter_s
 
 
 @pytest.mark.asyncio
-async def test_banter_canned_path_does_not_apply_listener_request_commit():
-    """When a canned clip is used, the ListenerRequestCommit is never applied."""
+async def test_banter_no_llm_pending_request_bypasses_canned_clip_and_applies_commit():
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    req = {"type": "song_request", "name": "Giulia", "song_found": True}
+    requested = state.playlist[0]
+    req = {
+        "request_id": "demo-producer-request",
+        "type": "song_request",
+        "name": "Giulia",
+        "message": f"Play {requested.title}",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
     state.pending_requests.append(req)
-
     canned_path = _fake_path()
+
+    async def _hold_after_queue_commit(*_args, **_kwargs):
+        await asyncio.Event().wait()
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_path) as pick_canned,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._consume_queued_banter_milestone", side_effect=_hold_after_queue_commit),
     ):
         await _run_until_queued(queue, state, config)
 
-    # canned path: _used_generated_banter is False, commit is None — request must remain
-    assert req in state.pending_requests
+    pick_canned.assert_not_called()
+    assert req not in state.pending_requests
+    assert state.listener_request_handoff is not None
     seg = queue.get_nowait()
+    assert requested.display in str(seg.metadata.get("lines"))
     assert "memory_extraction" not in seg.metadata
 
 
@@ -3039,20 +3183,348 @@ async def test_interrupt_stock_copy_demotes_receipt_at_queue_commit(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_urgent_interrupt_cleanup_preserves_later_operator_banter_force(tmp_path):
+    """The interrupt safety belt cannot erase a newer same-valued Air Next trigger."""
+    import httpx
+    from fastapi import FastAPI
+
+    from mammamiradio.scheduling.producer import _fire_interrupt
+    from mammamiradio.web.streamer import router as streamer_router
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    skip_event = asyncio.Event()
+    fired = await _fire_interrupt(
+        state,
+        InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
+        queue,
+        skip_event,
+        bridge_tmp_dir=tmp_path,
+    )
+
+    assert fired is True
+    assert state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+    assert state.force_next is SegmentType.BANTER
+    interrupt_force_revision = state.force_next_revision
+
+    app = FastAPI()
+    app.include_router(streamer_router)
+    app.state.station_state = state
+    app.state.config = config
+    app.state.queue = queue
+    trigger_response: httpx.Response | None = None
+    operator_force_revision: int | None = None
+    host = config.hosts[0]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+
+        async def _hold_after_queue_commit(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        async def _write_banter(*_args, **_kwargs):
+            nonlocal operator_force_revision, trigger_response
+            if trigger_response is None:
+                trigger_response = await client.post("/api/trigger", json={"type": "banter"})
+                operator_force_revision = state.force_next_revision
+            return [(host, "Momento, amici...")], BanterCommit()
+
+        with (
+            patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+            patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+            patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}._consume_queued_banter_milestone", side_effect=_hold_after_queue_commit),
+        ):
+            await _run_until_queued(queue, state, config)
+
+    assert trigger_response is not None
+    assert trigger_response.status_code == 200
+    assert trigger_response.json() == {"ok": True, "triggered": "banter"}
+    assert operator_force_revision is not None
+    assert operator_force_revision > interrupt_force_revision
+    assert state.chaos_pending is None
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == operator_force_revision
+    assert state.operator_force_pending is SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operator_type",
+    [None, SegmentType.BANTER],
+    ids=["full-lookahead", "newer-operator-force"],
+)
+async def test_urgent_safety_owner_preempts_runway_without_erasing_newer_force(tmp_path, operator_type):
+    """A claimed retry stays urgent-priority while preserving later operator work."""
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    for index in range(config.pacing.lookahead_segments):
+        path = tmp_path / f"buffered-{index}.mp3"
+        path.write_bytes(b"buffered")
+        queue.put_nowait(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=path,
+                duration_sec=180.0,
+                metadata={"title": f"Buffered {index}"},
+            )
+        )
+
+    safety_force_revision = state.set_force_next(SegmentType.BANTER)
+    state.urgent_interrupt_force_next_revision = safety_force_revision
+    assert state.clear_force_next(
+        expected_revision=safety_force_revision,
+        expected_type=SegmentType.BANTER,
+    )
+    operator_force_revision = None
+    if operator_type is not None:
+        operator_force_revision = state.set_force_next(operator_type)
+        state.operator_force_pending = operator_type
+
+    urgent_committed = asyncio.Event()
+    operator_committed = asyncio.Event()
+    commit_release = asyncio.Event()
+    commit_count = 0
+    host = config.hosts[0]
+
+    async def _write_urgent_banter(*_args, **_kwargs):
+        return [(host, "Avviso urgente.")], BanterCommit()
+
+    async def _hold_after_queue_commit(*_args, **_kwargs):
+        nonlocal commit_count
+        commit_count += 1
+        if commit_count == 1:
+            urgent_committed.set()
+            if operator_type is None:
+                await commit_release.wait()
+        else:
+            operator_committed.set()
+            await commit_release.wait()
+
+    producer_task = None
+    try:
+        with (
+            patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+            patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_urgent_banter),
+            patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}._consume_queued_banter_milestone", side_effect=_hold_after_queue_commit),
+        ):
+            producer_task = asyncio.create_task(run_producer(queue, state, config))
+            await asyncio.wait_for(urgent_committed.wait(), timeout=3.0)
+            if operator_type is not None:
+                await asyncio.wait_for(operator_committed.wait(), timeout=3.0)
+
+            queued = list(queue._queue)
+            assert queued[0].type is SegmentType.BANTER
+            assert queued[0].metadata.get(URGENT_INTERRUPT_PRIORITY_KEY) is True
+            assert state.urgent_interrupt_force_next_revision is None
+            if operator_type is None:
+                assert [segment.type for segment in queued[1:]] == [
+                    SegmentType.MUSIC
+                ] * config.pacing.lookahead_segments
+                assert state.force_next is None
+            else:
+                assert queued[1].type is operator_type
+                assert queued[1].metadata.get(URGENT_INTERRUPT_PRIORITY_KEY) is not True
+                assert [segment.type for segment in queued[2:]] == [
+                    SegmentType.MUSIC
+                ] * config.pacing.lookahead_segments
+                assert state.force_next is None
+                assert state.force_next_revision > operator_force_revision
+                assert state.operator_force_pending is None
+    finally:
+        if producer_task is not None:
+            producer_task.cancel()
+            commit_release.set()
+            try:
+                await producer_task
+            except asyncio.CancelledError:
+                pass
+
+
+def test_stale_urgent_render_keeps_elected_receipt_for_retry():
+    """Pre-admission staleness cannot terminalize a still-owned warning receipt."""
+    from mammamiradio.scheduling.producer import _drop_segment_moment_receipts
+
+    state = _make_state()
+    store = _moment_store()
+    moment_id = store.record(lane="interrupt", family="safety_saves", public_label="Safety moment")
+    state.moment_store = store
+    state.ha_pending_directive_moment_id = moment_id
+    state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=_fake_path(),
+        metadata={"ritual_moment_id": moment_id},
+    )
+
+    _drop_segment_moment_receipts(
+        state,
+        segment,
+        GenerationWasteReason.STALE_SOURCE,
+        "urgent-retry",
+    )
+
+    (row,) = store.rows
+    assert row.status == "elected"
+    assert row.drop_reason == ""
+
+    state.urgent_interrupt_force_next_revision = None
+    _drop_segment_moment_receipts(
+        state,
+        segment,
+        GenerationWasteReason.OPERATOR_STOP,
+        "urgent-terminal",
+    )
+    (row,) = store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == GenerationWasteReason.OPERATOR_STOP
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "drop_reason", "expected_force"),
+    [
+        ("/api/stop", GenerationWasteReason.OPERATOR_STOP, None),
+        ("/api/panic", GenerationWasteReason.OPERATOR_PANIC, SegmentType.MUSIC),
+    ],
+    ids=["stop", "panic"],
+)
+async def test_operator_control_cancels_urgent_interrupt_during_safety_force_render(
+    tmp_path,
+    endpoint,
+    drop_reason,
+    expected_force,
+):
+    """A claimed retry remains urgent-owned until it queues or is superseded."""
+    import httpx
+    from fastapi import FastAPI
+
+    from mammamiradio.web.streamer import router as streamer_router
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    skip_event = asyncio.Event()
+
+    store = _moment_store()
+    moment_id = store.record(
+        lane="interrupt",
+        family="safety_saves",
+        public_label="Safety moment",
+    )
+    bridge = tmp_path / f"urgent-safety-retry-{endpoint.rsplit('/', 1)[-1]}.mp3"
+    bridge.write_bytes(b"urgent bridge")
+    state.moment_store = store
+    state.chaos_pending = None  # The first-strike renderer exhausted its retries.
+    state.ha_pending_directive = "React to the urgent home safety event."
+    state.ha_pending_directive_moment_id = moment_id
+    state.ha_pending_directive_source = "ha"
+    state.interrupt_slot = bridge
+    state.interrupt_slot_ephemeral = True
+    safety_force_revision = state.set_force_next(SegmentType.BANTER)
+    state.urgent_interrupt_force_next_revision = safety_force_revision
+
+    app = FastAPI()
+    app.include_router(streamer_router)
+    app.state.station_state = state
+    app.state.config = config
+    app.state.queue = queue
+    app.state.skip_event = skip_event
+    app.state.last_shareworthy_clip = None
+
+    render_started = asyncio.Event()
+    render_release = asyncio.Event()
+    host = config.hosts[0]
+
+    async def _hold_retry_render(*_args, **_kwargs):
+        # Model write_banter's in-flight receipt handoff explicitly: a
+        # terminal control must settle both the pending and rendered slots.
+        state.last_banter_ritual_moment_id = state.ha_pending_directive_moment_id
+        render_started.set()
+        await render_release.wait()
+        return [(host, "Momento, amici...")], BanterCommit()
+
+    producer_task = None
+    try:
+        with (
+            patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+            patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_hold_retry_render),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            producer_task = asyncio.create_task(run_producer(queue, state, config))
+            await asyncio.wait_for(render_started.wait(), timeout=3.0)
+
+            # Claiming force_next starts the render; it must not erase the only
+            # marker that lets a concurrent terminal control settle the retry.
+            assert state.force_next is None
+            assert state.urgent_interrupt_force_next_revision == safety_force_revision
+
+            transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post(endpoint)
+
+            assert response.status_code == 200
+            assert response.json()["ok"] is True
+            assert state.force_next is expected_force
+            assert state.urgent_interrupt_force_next_revision is None
+            assert state.ha_pending_directive == ""
+            assert state.ha_pending_directive_moment_id == ""
+            assert state.ha_pending_directive_source == ""
+            assert state.last_banter_ritual_moment_id == ""
+            assert state.interrupt_slot is None
+            assert state.interrupt_slot_ephemeral is False
+            assert not bridge.exists()
+            (row,) = store.rows
+            assert row.status == "dropped"
+            assert row.drop_reason == drop_reason
+    finally:
+        if producer_task is not None:
+            render_release.set()
+            producer_task.cancel()
+            try:
+                await producer_task
+            except asyncio.CancelledError:
+                pass
+
+
+@pytest.mark.asyncio
 async def test_urgent_interrupt_retry_preserves_receipt_for_generated_banter(tmp_path):
     """A retry may enter the next loop with the same id in the stale handoff
     slot and the live urgent directive. Cleanup must not demote that receipt
     before the successful generated retry can attach it to the segment."""
-    from mammamiradio.core.models import ChaosSubtype
-
     state = _make_state()
     state.moment_store = _moment_store()
     row_id = state.moment_store.record(lane="interrupt", family="safety_saves", public_label="Safety moment")
     state.ha_pending_directive = "Safety moment. React NOW."
     state.ha_pending_directive_moment_id = row_id
     state.last_banter_ritual_moment_id = row_id
-    state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
-    state.force_next = SegmentType.BANTER
+    # The chaos renderer abandoned its slot; only the safety-force ownership
+    # carries this urgent lifecycle into the retry cycle.
+    state.chaos_pending = None
+    safety_force_revision = state.set_force_next(SegmentType.BANTER)
+    state.urgent_interrupt_force_next_revision = safety_force_revision
+    assert state.clear_force_next(
+        expected_revision=safety_force_revision,
+        expected_type=SegmentType.BANTER,
+    )
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
@@ -3070,7 +3542,15 @@ async def test_urgent_interrupt_retry_preserves_receipt_for_generated_banter(tmp
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Allora...", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
@@ -3083,6 +3563,7 @@ async def test_urgent_interrupt_retry_preserves_receipt_for_generated_banter(tmp
     assert state.ha_pending_directive == ""
     assert state.ha_pending_directive_moment_id == ""
     assert state.force_next is None
+    assert state.urgent_interrupt_force_next_revision is None
 
 
 @pytest.mark.asyncio
@@ -3256,31 +3737,26 @@ async def test_running_gag_not_marked_on_llm_stock_copy_fallback():
 
 
 @pytest.mark.asyncio
-async def test_banter_impossible_tts_path_does_not_apply_listener_request_commit():
-    """Impossible-TTS fallback should queue banter without mutating listener requests."""
+async def test_banter_impossible_tts_path_still_serves_when_no_request_is_pending():
     state = _make_state()
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    req = {
-        "type": "song_request",
-        "name": "Giulia",
-        "message": "metti Eros Ramazzotti",
-        "song_found": True,
-    }
-    state.pending_requests.append(req)
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=False),
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}.generate_impossible_line", return_value="Linea impossibile"),
-        patch(f"{PRODUCER_MODULE}._synthesize_impossible_moment", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(
+            f"{PRODUCER_MODULE}._synthesize_impossible_moment",
+            new_callable=AsyncMock,
+            return_value=_fake_path(),
+        ) as synthesize_impossible,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
         await _run_until_queued(queue, state, config)
 
-    assert req in state.pending_requests
+    synthesize_impossible.assert_awaited_once()
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert "memory_extraction" not in seg.metadata
@@ -6217,6 +6693,28 @@ async def test_enqueue_funnel_drops_a_banned_music_segment(tmp_path):
     # The non-banned song reaches the queue and flips the timeline-tail type. (last_music_file
     # for normally-rendered music is owned by _remember_rendered_music, not the funnel.)
     assert state.last_enqueued_type == SegmentType.MUSIC
+
+
+@pytest.mark.asyncio
+async def test_enqueue_funnel_drops_exact_equivalent_blocklist_identity(tmp_path):
+    from mammamiradio.scheduling.producer import _enqueue_with_egress
+
+    state = _make_state()
+    state.blocklist = {("toto cutugno", "l'italiano"): {"display": "Toto Cutugno - L'Italiano"}}
+    config = _make_config()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    blocked_path = tmp_path / "equivalent-blocked.mp3"
+    blocked_path.write_bytes(b"x")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=blocked_path,
+        ephemeral=True,
+        metadata={"artist": "TotoCutugno", "title_only": "LItaliano"},
+    )
+
+    assert await _enqueue_with_egress(queue, state, config, segment) is False
+    assert queue.empty()
+    assert not blocked_path.exists()
 
 
 @pytest.mark.asyncio

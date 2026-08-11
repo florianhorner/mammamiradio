@@ -58,6 +58,8 @@ from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
 from mammamiradio.core.models import (
     LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
     LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+    LISTENER_REQUEST_PIN_REVISION_KEY,
+    URGENT_INTERRUPT_PRIORITY_KEY,
     AdHistoryEntry,
     ChaosSubtype,
     DialogueLine,
@@ -72,6 +74,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import (
     approved_spoken_assets,
     is_approved_packaged_audio_asset,
@@ -132,7 +135,10 @@ from mammamiradio.playlist.music_admission import classify_youtube_candidate, is
 from mammamiradio.playlist.playlist import fetch_chart_refresh, filter_blocklisted, normalized_track_key
 from mammamiradio.playlist.track_rationale import classify_track_crate, generate_track_rationale
 from mammamiradio.restart_handoff import RestartHandoffCandidate, try_write_restart_handoff_spool
-from mammamiradio.scheduling.queue_mutations import drop_matching_segments
+from mammamiradio.scheduling.queue_mutations import (
+    drop_matching_segments,
+    settle_listener_request_queue_dependencies,
+)
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds, next_segment_type
 
 logger = logging.getLogger(__name__)
@@ -518,7 +524,12 @@ def _is_session_rejected_without_concrete_source(track: Track, config: StationCo
     )
 
 
-def _select_accepted_music_track(state: StationState, config: StationConfig) -> Track | None:
+def _select_accepted_music_track(
+    state: StationState,
+    config: StationConfig,
+    *,
+    consumed_force_clear_revision: int | None = None,
+) -> Track | None:
     handoff = state.listener_request_handoff
     if handoff is not None and _is_session_rejected_without_concrete_source(handoff.track, config):
         # A session-denied source has no media left to retry. Release this
@@ -532,8 +543,16 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
                 request["song_error"] = True
                 request["song_error_reason"] = "download_failed"
                 request["song_pinned"] = False
-        if state.pinned_track is not None and handoff.matches_track(state.pinned_track):
-            state.pinned_track = None
+                request[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+        if (
+            handoff.pin_revision is not None
+            and state.pinned_track is not None
+            and handoff.matches_track(state.pinned_track)
+        ):
+            state.clear_pinned_track(
+                expected_revision=handoff.pin_revision,
+                expected_track=state.pinned_track,
+            )
         state.clear_listener_request_handoff(handoff.track)
         handoff = None
     # A queued dedication is stronger than reservations created by later
@@ -541,7 +560,9 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
     # failed render; an unrelated operator pin keeps the current turn and the
     # handoff retries on the following forced MUSIC cycle.
     if handoff is not None and state.pinned_track is None:
-        state.pinned_track = handoff.track
+        pin_revision = state.set_pinned_track(handoff.track)
+        state.listener_request_handoff = replace(handoff, pin_revision=pin_revision)
+        handoff = state.listener_request_handoff
     rejected_keys = {
         track.cache_key for track in state.playlist if _is_session_rejected_without_concrete_source(track, config)
     }
@@ -574,6 +595,25 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
         if state.pinned_track is not None and handoff_pin is None and reservations.reserves_track(state.pinned_track)
         else None
     )
+    held_listener_pin_revision = state.pinned_track_revision
+    handoff_selection_exclusive = bool(
+        handoff is not None
+        and handoff.music_selection_exclusive
+        and (
+            held_listener_pin is not None
+            or (
+                handoff_pin is not None
+                and handoff.pin_revision is not None
+                and handoff.pin_revision == state.pinned_track_revision
+            )
+        )
+    )
+    borrowed_handoff_pin = bool(
+        handoff is not None
+        and not handoff_selection_exclusive
+        and handoff_pin is not None
+        and handoff.matches_track(handoff_pin)
+    )
     if held_listener_pin is not None and handoff is None and state.force_next is None:
         # The consumed MUSIC force could not safely honor this pin yet. Put the
         # dedication planning turn next; _plan_listener_request_block then
@@ -591,6 +631,9 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
         finally:
             if held_listener_pin is not None:
                 state.pinned_track = held_listener_pin
+                # The temporary swap above has no await and is invisible outside
+                # this selector. Restore the persistent owner's revision too.
+                state.pinned_track_revision = held_listener_pin_revision
     except RuntimeError as exc:
         if not state.playlist or str(exc) == "Playlist is empty":
             raise
@@ -600,6 +643,15 @@ def _select_accepted_music_track(state: StationState, config: StationConfig) -> 
             )
             return None
         raise
+    if handoff is not None and candidate is not None and handoff.matches_track(candidate):
+        current_handoff = state.listener_request_handoff
+        if current_handoff is not None and current_handoff.token == handoff.token:
+            state.listener_request_handoff = replace(
+                current_handoff,
+                music_selection_exclusive=handoff_selection_exclusive,
+                borrowed_pin_clear_revision=(state.pinned_track_revision if borrowed_handoff_pin else None),
+                borrowed_force_clear_revision=(consumed_force_clear_revision if borrowed_handoff_pin else None),
+            )
     return candidate
 
 
@@ -1491,7 +1543,18 @@ def _mark_moment_dropped(state: StationState, moment_id: str, reason: str, conte
 def _drop_segment_moment_receipts(state: StationState, segment: Segment, reason: str, context: str) -> None:
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
     for key in ("ritual_moment_id", "gag_moment_id"):
-        _mark_moment_dropped(state, str(metadata.get(key) or ""), reason, f"{context}:{key}")
+        moment_id = str(metadata.get(key) or "")
+        if (
+            key == "ritual_moment_id"
+            and state.urgent_interrupt_force_next_revision is not None
+            and moment_id == state.ha_pending_directive_moment_id
+        ):
+            # A pre-admission urgent render may be stale while its lifecycle is
+            # still live. Preserve the elected receipt for the retry that keeps
+            # the same directive; terminal controls clear the owner first and
+            # therefore still demote their discarded segment normally.
+            continue
+        _mark_moment_dropped(state, moment_id, reason, f"{context}:{key}")
 
 
 # Legacy process-local cache used only by ``_latest_music_file`` as a tmp-directory
@@ -1833,7 +1896,7 @@ def _blocklist_safe_last_music(
         return None
 
     identity = normalized_track_key(Track(title=title, artist=artist, duration_ms=0))
-    if identity in state.blocklist:
+    if song_identity_key_is_blocklisted(identity, state.blocklist):
         logger.warning(
             "%s: skipping blocklisted last-known-good music: %s - %s",
             purpose.capitalize(),
@@ -1933,10 +1996,15 @@ def _queue_shadow_entry(segment: Segment, *, reason: str | None = None) -> dict:
 
 
 def _front_insert_queue_and_shadow(
-    queue: asyncio.Queue[Segment], state: StationState, segment: Segment, shadow_entry: dict
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    segment: Segment,
+    shadow_entry: dict,
+    *,
+    settle_operator_force: bool = True,
 ) -> bool:
-    """Air an operator-triggered segment NEXT instead of behind the buffered
-    lookahead. Synchronously drains the queue, puts the segment at the front, and
+    """Air a priority segment NEXT instead of behind the buffered
+    lookahead. Synchronously drains the queue, puts the segment in priority order, and
     repushes — no await between draining the real queue and updating the shadow, so
     the streamer cannot interleave (mirrors ``_purge_queue_and_shadow`` and the
     ``/api/queue/remove`` critical section). Drops the furthest-future tail if the
@@ -1953,7 +2021,8 @@ def _front_insert_queue_and_shadow(
             segment.path.unlink(missing_ok=True)
         # The forced render is abandoned — release the one-at-a-time guard so the
         # operator can retry after resume instead of being locked out until restart.
-        state.operator_force_pending = None
+        if settle_operator_force:
+            state.operator_force_pending = None
         logger.info("Discarding forced %s because the session is stopped", segment.type.value)
         return False
     items: list[Segment] = []
@@ -1966,30 +2035,44 @@ def _front_insert_queue_and_shadow(
     rows_by_segment = {
         id(item): state.queued_segments[index] for index, item in enumerate(items) if index < len(state.queued_segments)
     }
+    incoming_urgent = bool(segment.metadata.get(URGENT_INTERRUPT_PRIORITY_KEY))
     # A second air-next render should normally be impossible because the operator
     # one-at-a-time guard stays armed until admission. Keep the queue safe even if
     # a race or an internal caller violates that assumption: when every occupied
     # slot is already air-next, reject the newcomer instead of deleting an earlier
     # operator promise merely to make room for the newer one.
-    if queue.maxsize and len(items) >= queue.maxsize and items and all(item.metadata.get("air_next") for item in items):
+    if (
+        not incoming_urgent
+        and queue.maxsize
+        and len(items) >= queue.maxsize
+        and items
+        and all(item.metadata.get("air_next") for item in items)
+    ):
         for item in items:
             queue.put_nowait(item)
         state.record_discard(segment, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW)
         if segment.ephemeral and not _is_packaged_asset(segment.path):
             segment.path.unlink(missing_ok=True)
-        state.operator_force_pending = None
+        if settle_operator_force:
+            state.operator_force_pending = None
         logger.info("Air-next: rejected %s because every queue slot is already air-next", segment.type.value)
         return False
-    # A queue-head speech segment that carries a "just finished playing X" claim
+    # A speech segment at the insertion point that carries a "just finished
+    # playing X" claim
     # (baked into its audio, crossfaded over X's fade) has that claim unconditionally
     # broken the moment anything gets wedged ahead of it — X is no longer what plays
     # right before it. Drop it here rather than airing a now-false claim; a fresh,
     # accurate one is produced on the next normal cycle (see #641 for the sibling
     # audio-level version of this problem).
+    insert_index = 0
+    if not incoming_urgent:
+        while insert_index < len(items) and items[insert_index].metadata.get(URGENT_INTERRUPT_PRIORITY_KEY):
+            insert_index += 1
     stale_head: Segment | None = None
-    if items and items[0].metadata.get("transition_track_ref"):
-        stale_head = items.pop(0)
-    items.insert(0, segment)
+    if insert_index < len(items) and items[insert_index].metadata.get("transition_track_ref"):
+        stale_head = items.pop(insert_index)
+    segment.metadata["air_next"] = True
+    items.insert(insert_index, segment)
     dropped: list[Segment] = []
     while queue.maxsize and len(items) > queue.maxsize:
         # A continuity reservation is the listener-safety tail. A ready
@@ -2013,24 +2096,47 @@ def _front_insert_queue_and_shadow(
             (index for index in range(len(items) - 1, 0, -1) if items[index].metadata.get("continuity_reservation")),
             None,
         )
-        if protected_index is None:
-            # Only already-admitted air-next entries remain. Never evict one to
-            # make a newer request fit; reject the new head and preserve the
-            # established queue order. The all-air-next fast path above handles
-            # the normal shape, while this branch keeps the invariant defensive
-            # if a future queue layout reaches it.
-            items.pop(0)
-            state.record_discard(segment, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW)
-            if segment.ephemeral and not _is_packaged_asset(segment.path):
-                segment.path.unlink(missing_ok=True)
-            state.operator_force_pending = None
-            for item in items:
-                queue.put_nowait(item)
-            state.queued_segments = [rows_by_segment.get(id(item)) or _queue_shadow_entry(item) for item in items]
-            logger.info("Air-next: rejected %s rather than evict an earlier air-next", segment.type.value)
-            return False
-        else:
+        if protected_index is not None:
             state.continuity_slot = items.pop(protected_index)
+            continue
+        # A safety warning outranks ordinary Air Next promises. If all queue
+        # slots are already priority entries, evict only the furthest-future
+        # non-urgent one; an existing urgent warning is never displaced.
+        evict_air_next_index = (
+            next(
+                (
+                    index
+                    for index in range(len(items) - 1, -1, -1)
+                    if items[index] is not segment
+                    and items[index].metadata.get("air_next")
+                    and not items[index].metadata.get(URGENT_INTERRUPT_PRIORITY_KEY)
+                ),
+                None,
+            )
+            if incoming_urgent
+            else None
+        )
+        if evict_air_next_index is not None:
+            dropped.append(items.pop(evict_air_next_index))
+            continue
+        # Only already-admitted air-next entries remain. Never evict an older
+        # urgent promise to make a newer request fit; reject the newcomer and
+        # preserve the established queue order.
+        newcomer_index = next(index for index, item in enumerate(items) if item is segment)
+        items.pop(newcomer_index)
+        state.record_discard(segment, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW)
+        if segment.ephemeral and not _is_packaged_asset(segment.path):
+            segment.path.unlink(missing_ok=True)
+        if settle_operator_force:
+            state.operator_force_pending = None
+        for item in items:
+            queue.put_nowait(item)
+        state.queued_segments = [rows_by_segment.get(id(item)) or _queue_shadow_entry(item) for item in items]
+        logger.info("Air-next: rejected %s rather than evict an earlier urgent segment", segment.type.value)
+        return False
+    dependency_drops = ([stale_head] if stale_head is not None else []) + dropped
+    dependency_drops, items = settle_listener_request_queue_dependencies(dependency_drops, items, state=state)
+    dropped = [item for item in dependency_drops if item is not stale_head]
     for item in items:
         queue.put_nowait(item)
     # Rebuild the operator projection from the final real queue. This is a little
@@ -2038,10 +2144,10 @@ def _front_insert_queue_and_shadow(
     # air-next insertion while a different ordinary tail is dropped.
     if shadow_entry.get("id"):
         segment.metadata["queue_id"] = str(shadow_entry["id"])
-    segment.metadata["air_next"] = True
     prior_rows = {str(row.get("id")): row for row in state.queued_segments if row.get("id")}
     prior_rows[str(shadow_entry.get("id"))] = shadow_entry
     if stale_head is not None:
+        state.revoke_listener_request_handoff_for_discarded_dedication(stale_head)
         state.record_discard(
             stale_head, reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF, already_counted_in_produced=True
         )
@@ -2051,6 +2157,7 @@ def _front_insert_queue_and_shadow(
         if getattr(stale_head, "ephemeral", False) and not _is_packaged_asset(stale_head.path):
             stale_head.path.unlink(missing_ok=True)
     for seg in dropped:
+        state.revoke_listener_request_handoff_for_discarded_dedication(seg)
         state.record_discard(seg, reason=GenerationWasteReason.AIR_NEXT_OVERFLOW, already_counted_in_produced=True)
         _drop_segment_moment_receipts(state, seg, GenerationWasteReason.AIR_NEXT_OVERFLOW, "air-next-overflow")
         if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
@@ -2085,7 +2192,8 @@ def _front_insert_queue_and_shadow(
     # in-flight guard HERE (not at render-start) is what makes "one at a time" hold
     # through a slow render: a second tap stays rejected until this pick airs, so it
     # can never be front-inserted ahead of it.
-    state.operator_force_pending = None
+    if settle_operator_force:
+        state.operator_force_pending = None
     logger.info(
         "Air-next: front-inserted %s%s%s",
         segment.type.value,
@@ -2246,7 +2354,11 @@ def _enqueue_rejection_reason(
     """Classify the current enqueue rejection without storing mutable side state."""
     if state.session_stopped:
         return GenerationWasteReason.SESSION_STOPPED
-    if segment.type == SegmentType.MUSIC and state.blocklist and segment_track_key(segment) in state.blocklist:
+    if (
+        segment.type == SegmentType.MUSIC
+        and state.blocklist
+        and song_identity_key_is_blocklisted(segment_track_key(segment), state.blocklist)
+    ):
         return GenerationWasteReason.BLOCKLIST_GATE
     if (
         segment.type == SegmentType.MUSIC
@@ -2330,6 +2442,7 @@ async def _enqueue_with_egress(
     segment: Segment,
     *,
     front_insert: bool = False,
+    settle_operator_force_on_front_insert: bool = True,
     shadow_entry: dict | None = None,
     stale_check: StaleCheck | None = None,
     admission_callback: Callable[[Segment], None] | None = None,
@@ -2376,7 +2489,13 @@ async def _enqueue_with_egress(
     admission_started = time.monotonic()
     if front_insert:
         assert shadow_entry is not None  # narrowed by the guard above (mypy)
-        admitted = _front_insert_queue_and_shadow(queue, state, segment, shadow_entry)
+        admitted = _front_insert_queue_and_shadow(
+            queue,
+            state,
+            segment,
+            shadow_entry,
+            settle_operator_force=settle_operator_force_on_front_insert,
+        )
         state.add_render_stage_timing("admission", (time.monotonic() - admission_started) * 1000)
         return admitted
     await queue.put(segment)
@@ -3055,7 +3174,12 @@ async def _fire_interrupt(
     state.ha_pending_directive_moment_id = ""
     state.ha_pending_directive_source = directive_source
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
-    state.set_force_next(SegmentType.BANTER)  # safety belt if chaos_pending is raced
+    # The interrupt supersedes any queued or in-flight operator Air Next. Its
+    # continuity cut invalidates that render, so retaining attribution would
+    # strand the one-at-a-time trigger guard after urgent cleanup.
+    state.operator_force_pending = None
+    # Safety belt if another path races the dedicated chaos-pending slot.
+    state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
     state.chaos_cutover_epoch += 1
     if skip_event is not None:
         skip_event.set()
@@ -4302,6 +4426,7 @@ async def _run_producer_inner(
             and not _runway_fill_needed(queue)
             and state.force_next is None
             and state.chaos_pending is None
+            and state.urgent_interrupt_force_next_revision is None
         ):
             # Periodically evict stale cache files while the producer is idle
             now = asyncio.get_running_loop().time()
@@ -4351,21 +4476,37 @@ async def _run_producer_inner(
         # to discard the in-flight chaos segment correctly.
         generation_chaos_epoch = state.chaos_cutover_epoch
         chaos_subtype: ChaosSubtype | None = None
+        urgent_interrupt_cycle = False
         is_operator_forced = False  # operator /api/trigger -> air-next (front-insert)
+        consumed_force_clear_revision: int | None = None
         natural_banter_candidate = False
         # A failed promised-song render retains its request-owned handoff. Arm
         # the retry at the cycle boundary, where consuming the force and later
         # queue admission cannot erase a newer operator directive mid-render.
         if state.listener_request_handoff is not None and state.force_next is None:
-            state.set_force_next(SegmentType.MUSIC)
+            state.force_listener_request_handoff_music()
         if state.chaos_pending is not None:
             chaos_subtype = state.chaos_pending
+            urgent_interrupt_cycle = chaos_subtype is ChaosSubtype.URGENT_INTERRUPT
             state.chaos_last_degraded_reason = ""
             seg_type = SegmentType.BANTER
             logger.info("Chaos first-strike: %s", chaos_subtype.value)
+        elif state.urgent_interrupt_force_next_revision is not None:
+            # The owner is a dedicated priority slot, not merely the current
+            # value of force_next. A later operator directive can replace that
+            # shared slot while an urgent attempt renders; keep it intact and
+            # deliver the warning first. Consume only the original safety force.
+            urgent_interrupt_cycle = True
+            seg_type = SegmentType.BANTER
+            state.clear_force_next(
+                expected_revision=state.urgent_interrupt_force_next_revision,
+                expected_type=SegmentType.BANTER,
+            )
+            logger.info("Urgent interrupt safety retry")
         elif state.force_next is not None:
             seg_type = state.force_next
-            state.clear_force_next()
+            if state.clear_force_next():
+                consumed_force_clear_revision = state.force_next_revision
             # An operator trigger (not the 60s-silence rescue or other internal
             # forces) gets air-next: it is front-inserted so it airs at the next
             # boundary instead of behind the buffered lookahead.
@@ -4399,6 +4540,8 @@ async def _run_producer_inner(
                         seg_type.value,
                     )
                     seg_type = SegmentType.MUSIC
+        if seg_type is SegmentType.BANTER and state.urgent_interrupt_force_next_revision is not None:
+            urgent_interrupt_cycle = True
         if seg_type == SegmentType.MUSIC and not state.playlist:
             logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
             seg_type = SegmentType.BANTER
@@ -4694,7 +4837,11 @@ async def _run_producer_inner(
 
         try:
             if seg_type == SegmentType.MUSIC:
-                track = _select_accepted_music_track(state, config)
+                track = _select_accepted_music_track(
+                    state,
+                    config,
+                    consumed_force_clear_revision=consumed_force_clear_revision,
+                )
                 playlist_idx: int = -1
                 if track is None:
                     # Do not spin while every candidate is unavailable. Route
@@ -5009,7 +5156,12 @@ async def _run_producer_inner(
                 ):
                     companionship_claim = state.listener_session.claim_companionship()
 
-                if chaos_subtype is None and not _sw.has_script_llm(config) and not impossible_tts:
+                if (
+                    chaos_subtype is None
+                    and not _sw.has_script_llm(config)
+                    and not impossible_tts
+                    and not state.pending_requests
+                ):
                     # Use canned clips for first 2, then impossible TTS as the gold closer
                     if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT - 1:
                         canned = _pick_canned_clip("banter", state=state)
@@ -5060,6 +5212,7 @@ async def _run_producer_inner(
                                     state,
                                     config,
                                     chaos_subtype=chaos_subtype,
+                                    include_listener_request=False,
                                 )
                                 _gen_ok = True
                             finally:
@@ -5112,6 +5265,9 @@ async def _run_producer_inner(
                                     current_prompt_fact: PromptFact | None = prompt_fact,
                                     current_use_directed_home_context: bool = use_directed_home_context,
                                     current_companionship_claim: ListenerSessionCueClaim | None = companionship_claim,
+                                    current_include_listener_request: bool = not (
+                                        is_operator_forced or urgent_interrupt_cycle
+                                    ),
                                 ) -> tuple[list[DialogueLine], Any]:
                                     nonlocal listener_request_commit
                                     result = await _sw.write_banter(
@@ -5119,6 +5275,7 @@ async def _run_producer_inner(
                                         config,
                                         prompt_fact=current_prompt_fact,
                                         use_directed_home_context=current_use_directed_home_context,
+                                        include_listener_request=current_include_listener_request,
                                         companionship_context=(
                                             current_companionship_claim.prompt_context
                                             if current_companionship_claim is not None
@@ -6525,7 +6682,14 @@ async def _run_producer_inner(
 
             # Stable per-segment id: the shared queue publication helper stamps
             # this on both the audio and its Scaletta row before admission.
+            if urgent_interrupt_cycle:
+                # Preserve the safety warning at the front even if a newer
+                # operator force finishes rendering before playback reaches it.
+                segment.metadata[URGENT_INTERRUPT_PRIORITY_KEY] = True
             shadow_entry = _queue_shadow_entry(segment)
+            listener_handoff_music = bool(
+                segment.type is SegmentType.MUSIC and segment.metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY)
+            )
             # Reserve the ambient home fact (if any) BEFORE admission. A rejected
             # reservation means the topic is already queued ahead or resting on
             # cooldown, so airing this segment would double the same cue on-air —
@@ -6549,9 +6713,10 @@ async def _run_producer_inner(
                 _unlink_if_tmp_render(segment, config.tmp_dir)
                 await _sleep_post_failure_backoff(post_failure_backoff)
                 continue
-            if is_operator_forced:
-                # Air-next: front-insert past the buffered lookahead so the operator
-                # hears their pick at the next boundary, never minutes later.
+            if (is_operator_forced or urgent_interrupt_cycle) and not listener_handoff_music:
+                # Priority-next: both operator Air Next and an urgent retry must
+                # cross the buffered lookahead at the next boundary. The urgent
+                # path preserves a newer operator guard/directive for its turn.
                 def _front_insert_stale_check(_segment: Segment = segment) -> bool:
                     # Stale if the continuity/source/playlist/chaos gate fires OR
                     # the home-fact policy changed for this segment.
@@ -6565,6 +6730,7 @@ async def _run_producer_inner(
                     config,
                     segment,
                     front_insert=True,
+                    settle_operator_force_on_front_insert=is_operator_forced,
                     shadow_entry=shadow_entry,
                     stale_check=_front_insert_stale_check,
                 ):
@@ -6572,7 +6738,8 @@ async def _run_producer_inner(
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
                     _abandon_banter_commit(state, banter_commit)
-                    state.operator_force_pending = None
+                    if is_operator_forced:
+                        state.operator_force_pending = None
                     state.finish_render_timing(
                         "discarded",
                         reason=_enqueue_rejection_reason(state, segment, _enqueue_stale_reason)
@@ -6599,6 +6766,8 @@ async def _run_producer_inner(
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")
                     _abandon_banter_commit(state, banter_commit)
+                    if is_operator_forced:
+                        state.operator_force_pending = None
                     state.finish_render_timing(
                         "discarded",
                         reason=_enqueue_rejection_reason(state, segment, _enqueue_stale_reason)
@@ -6606,9 +6775,17 @@ async def _run_producer_inner(
                     )
                     await _sleep_post_failure_backoff(post_failure_backoff)
                     continue
+                if is_operator_forced:
+                    # A MUSIC Air Next may coincide with the request-owned pin.
+                    # That exact recording fulfills the operator's music action,
+                    # but it must queue behind its dedication and cross the
+                    # handoff admission callback above rather than front-insert
+                    # anonymously. Settle the one-at-a-time operator guard only
+                    # after that atomic admission succeeds.
+                    state.operator_force_pending = None
             if chaos_subtype is not None and state.chaos_pending == chaos_subtype:
                 state.chaos_pending = None
-            if chaos_subtype == ChaosSubtype.URGENT_INTERRUPT:
+            if urgent_interrupt_cycle:
                 # An interrupt banter that fell back to stock copy queued WITHOUT
                 # its receipt id (the scriptwriter's except path cleared the
                 # handoff) — and the directive is consumed right here, so there
@@ -6628,11 +6805,15 @@ async def _run_producer_inner(
                 state.ha_pending_directive = ""
                 state.ha_pending_directive_moment_id = ""
                 state.ha_pending_directive_source = ""
-                # The safety-belt force_next was set when the interrupt fired.
-                # chaos_pending already produced the banter; clearing here
-                # prevents the producer from queueing an extra banter next cycle.
-                if state.force_next == SegmentType.BANTER:
-                    state.clear_force_next()
+                # Whether the chaos slot or its safety-belt retry produced this
+                # banter, settle the same urgent lifecycle only after admission.
+                urgent_force_revision = state.urgent_interrupt_force_next_revision
+                if urgent_force_revision is not None:
+                    state.clear_force_next(
+                        expected_revision=urgent_force_revision,
+                        expected_type=SegmentType.BANTER,
+                    )
+                state.urgent_interrupt_force_next_revision = None
             _segments_produced += 1
             # Queue appended → up_next changed → integration consumers polling
             # ``changed_at`` need to see this even without a segment transition.
