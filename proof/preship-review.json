@@ -1,1 +1,1 @@
-{"schema_version":"1.0.0","skill":"adversarial-review","commit":"abfe5ce8fe1e89c962af92e2c2e1fbc18d141eef","timestamp":"2026-07-30T20:58:49Z","status":"issues_found","emitted_at":"2026-07-30T20:58:49Z"}
+{"schema_version":"1.0.0","skill":"review","commit":"82f29294284f91ae7b49d283bb8cd9735420bd59","timestamp":"2026-08-11T19:40:08Z","status":"clean","emitted_at":"2026-08-11T19:40:26Z"}
