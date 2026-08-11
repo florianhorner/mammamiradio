@@ -164,7 +164,18 @@ _PLATFORM_PACKAGING_SUFFIX_RE = re.compile(
     r")\s*$",
     re.IGNORECASE,
 )
-_GENERIC_ARTIST_LABELS = frozenset({"various artists", "various artist", "multiple artists"})
+_GENERIC_ARTIST_LABELS = frozenset(
+    {
+        "various artists",
+        "various artist",
+        "multiple artists",
+        "generic channel",
+        "official channel",
+        "generic distributor",
+        "distributor channel",
+        "youtube",
+    }
+)
 
 
 def _contains_phrase(normalized_text: str, phrase: str) -> bool:
@@ -955,10 +966,7 @@ def _platform_artist_disproving_prefix(candidate: _CandidateIdentity) -> str:
     if candidate.authoritative_artist or not candidate.prefix_artist:
         return ""
     usable = [
-        artist
-        for artist in candidate.platform_artists
-        if normalize_match_text(artist) not in _GENERIC_ARTIST_LABELS
-        and normalize_match_text(artist) not in {"generic channel", "official channel", "youtube"}
+        artist for artist in candidate.platform_artists if normalize_match_text(artist) not in _GENERIC_ARTIST_LABELS
     ]
     if not usable or any(_same_artist_identity(candidate.prefix_artist, artist) for artist in usable):
         return ""

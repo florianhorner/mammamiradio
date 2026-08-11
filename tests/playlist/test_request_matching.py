@@ -511,6 +511,55 @@ def test_title_only_uses_title_prefix_as_display_artist():
     assert (result.best.artist, result.best.title) == ("Lucio Battisti", "Il mio canto libero")
 
 
+def test_title_only_uses_structured_title_prefix_as_station_identity_over_generic_distributor():
+    intent = parse_song_request("Play Imagine")
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [
+            {
+                "title": "John Lennon - Imagine",
+                "track_title": "Imagine",
+                "uploader": "Generic Distributor",
+                "artist": "Generic Distributor",
+            }
+        ],
+    ).best
+
+    assert match is not None
+    assert (match.artist, match.station_artist, match.identity_title) == (
+        "John Lennon",
+        "John Lennon",
+        "Imagine",
+    )
+    assert match.credited_artists == ("John Lennon",)
+
+
+def test_title_only_keeps_specific_uploader_when_it_disproves_title_prefix():
+    intent = parse_song_request("Play Imagine")
+    assert intent is not None
+
+    match = match_song_request_candidates(
+        intent,
+        [
+            {
+                "title": "John Lennon - Imagine",
+                "track_title": "Imagine",
+                "uploader": "Ariana Grande",
+                "artist": "Ariana Grande",
+            }
+        ],
+    ).best
+
+    assert match is not None
+    assert (match.artist, match.station_artist, match.identity_title) == (
+        "Ariana Grande",
+        "Ariana Grande",
+        "Imagine",
+    )
+
+
 def test_structured_track_identity_is_strong_evidence():
     intent = parse_song_request("Play Il mio canto libero by Lucio Battisti")
     assert intent is not None

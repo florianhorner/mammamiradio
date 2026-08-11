@@ -36,9 +36,6 @@ def _listener_search_ok(results: list[dict]) -> YtdlpSearchOutcome:
 def _listener_request_intent(request: dict) -> SongRequestIntent:
     message = str(request.get("message") or "")
     intent = parse_song_request(message)
-    if intent is None:
-        query = str(request.get("song_query") or "").strip()
-        intent = parse_song_request(f"play {query}") if query else None
     assert intent is not None
     return intent
 
@@ -1144,7 +1141,6 @@ async def test_listener_request_upgrades_thumbnail_to_cover(tmp_path):
         "request_id": "r1",
         "type": "song_request",
         "message": "play Canzone by Tizio",
-        "song_query": "Tizio Canzone official audio",
     }
     state.pending_requests.append(req)
     itunes = _cover_urlopen_mock({"results": [{"artworkUrl100": "https://is1.mzstatic.com/100x100bb.jpg"}]})
@@ -1830,8 +1826,17 @@ async def test_assetless_source_switch_drops_preserved_listener_dedication(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_assetless_source_switch_keeps_song_promised_by_on_air_dedication(tmp_path):
-    """An audible request promise keeps its admitted song ahead of old runway."""
+@pytest.mark.parametrize(
+    ("fresh_continuity", "queue_capacity"),
+    [(False, 2), (True, 2), (True, 1)],
+    ids=["assetless", "fresh-runway", "fresh-capacity-slot"],
+)
+async def test_source_switch_keeps_song_promised_by_on_air_dedication(
+    tmp_path,
+    fresh_continuity,
+    queue_capacity,
+):
+    """An audible request promise stays ahead of old and fresh runway."""
     from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_TOKEN_KEY
     from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
 
@@ -1893,7 +1898,22 @@ async def test_assetless_source_switch_keeps_song_promised_by_on_air_dedication(
         },
         ephemeral=False,
     )
-    for segment in (ordinary, promised):
+    fresh_path = tmp_path / "fresh-continuity.mp3"
+    fresh_path.write_bytes(b"fresh-continuity")
+    fresh = Segment(
+        type=SegmentType.BANTER,
+        path=fresh_path,
+        duration_sec=20.0,
+        metadata={
+            "queue_id": "fresh-continuity-q",
+            "title": "Fresh continuity",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    app.state.queue = asyncio.Queue(maxsize=queue_capacity)
+    initial_queue = (ordinary, promised) if queue_capacity > 1 else (promised,)
+    for segment in initial_queue:
         app.state.queue.put_nowait(segment)
     state.queued_segments = [
         {
@@ -1901,7 +1921,7 @@ async def test_assetless_source_switch_keeps_song_promised_by_on_air_dedication(
             "type": segment.type.value,
             "label": str(segment.metadata["title"]),
         }
-        for segment in (ordinary, promised)
+        for segment in initial_queue
     ]
     state.now_streaming = {
         "type": "banter",
@@ -1913,7 +1933,10 @@ async def test_assetless_source_switch_keeps_song_promised_by_on_air_dedication(
     new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with (
-        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer._continuity_reservation_segments",
+            return_value=[fresh] if fresh_continuity else [],
+        ),
         patch(
             "mammamiradio.web.streamer.load_explicit_source",
             return_value=(
@@ -1935,8 +1958,10 @@ async def test_assetless_source_switch_keeps_song_promised_by_on_air_dedication(
 
     assert response.status_code == 200
     assert response.json()["skipped"] is False
-    assert list(app.state.queue._queue) == [promised]
-    assert state.queued_segments == [{"id": "promised-song-q", "type": "music", "label": requested.display}]
+    expected_queue = [promised, fresh] if fresh_continuity and queue_capacity > 1 else [promised]
+    assert list(app.state.queue._queue) == expected_queue
+    assert state.queued_segments[0] == {"id": "promised-song-q", "type": "music", "label": requested.display}
+    assert state.continuity_slot is (fresh if fresh_continuity and queue_capacity == 1 else None)
     assert state.listener_request_admitted_reservations[token].dedication_queue_id == dedication_queue_id
     assert state.listener_request_admitted_reservations[token].matches_track(requested)
     assert state.playlist == new_tracks
@@ -2280,19 +2305,34 @@ async def test_listener_request_valid_shoutout():
 async def test_listener_request_valid_song_starts_background_download():
     app = _make_test_app()
     app.state.config.allow_ytdlp = True
+    message = "puoi mettere Albachiara?"
+    expected_intent = parse_song_request(message)
+    assert expected_intent is not None
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock) as dl_mock:
+    with (
+        patch(
+            "mammamiradio.playlist.request_matching.parse_song_request",
+            return_value=expected_intent,
+        ) as parse_mock,
+        patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock) as dl_mock,
+    ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post(
-                "/api/listener-request", json={"name": "Luca", "message": "puoi mettere Albachiara?"}
-            )
+            resp = await client.post("/api/listener-request", json={"name": "Luca", "message": message})
         await asyncio.sleep(0)
     assert resp.status_code == 200
     body = resp.json()
     assert body["type"] == "song_request"
     assert body["song_resolution"] == "searching"
     assert body["public_token"] == app.state.station_state.pending_requests[0]["public_token"]
-    assert dl_mock.await_count == 1
+    parse_mock.assert_called_once_with(message)
+    dl_mock.assert_awaited_once()
+    worker_args = dl_mock.await_args.args
+    assert worker_args[:3] == (
+        app.state.station_state.pending_requests[0],
+        app.state,
+        app.state.station_state.source_revision,
+    )
+    assert worker_args[3] is expected_intent
 
 
 @pytest.mark.asyncio
@@ -3212,7 +3252,6 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
         "name": "Luca",
         "message": "metti albachiara",
         "type": "song_request",
-        "song_query": "albachiara",
         "song_found": False,
         "song_error": False,
         "request_id": "33333333-3333-4333-8333-333333333333",
@@ -4000,7 +4039,7 @@ async def test_download_listener_song_success(tmp_path):
     state = app.state.station_state
     starting_revision = state.playlist_revision
     original_len = len(state.playlist)
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
@@ -4047,7 +4086,7 @@ async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
     state = app.state.station_state
     state.blocklist = {("vasco rossi", "albachiara"): {"display": "Vasco Rossi - Albachiara"}}
     original_len = len(state.playlist)
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
@@ -4261,7 +4300,7 @@ async def test_download_listener_song_sanitizes_invalid_album_art(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     starting_revision = state.playlist_revision
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
@@ -4306,7 +4345,7 @@ async def test_download_listener_song_preserves_operator_pin(tmp_path):
     operator_pick = Track(title="Operator", artist="Op", duration_ms=1000, youtube_id="operator001")
     state.pinned_track = operator_pick
     original_len = len(state.playlist)
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
@@ -4589,7 +4628,7 @@ async def test_download_listener_song_no_results_marks_error(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "missing", "message": "missing", "song_found": False, "song_error": False}
+    req = {"message": "play missing", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with patch(
         "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
@@ -4610,7 +4649,6 @@ async def test_download_listener_song_longform_result_marks_error_without_downlo
     state = app.state.station_state
     original_len = len(state.playlist)
     req = {
-        "song_query": "Two Hour DJ Set official audio",
         "message": "play Two Hour DJ Set",
         "song_found": False,
         "song_error": False,
@@ -4650,7 +4688,6 @@ async def test_download_listener_song_non_music_result_marks_specific_error_with
     state = app.state.station_state
     original_len = len(state.playlist)
     req = {
-        "song_query": "Morning Podcast Episode official audio",
         "message": "play Morning Podcast Episode",
         "song_found": False,
         "song_error": False,
@@ -4689,7 +4726,7 @@ async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    req = {"message": "play track", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
 
     async def _download_with_source_switch(*_args, **_kwargs):
@@ -4723,7 +4760,7 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    req = {"message": "play track", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
@@ -4752,7 +4789,7 @@ async def test_download_listener_song_search_exception_marks_error(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    req = {"message": "play track", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
 
     with patch(
@@ -4774,8 +4811,7 @@ async def test_download_listener_song_cancelled_marks_error_and_removes_pending(
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     req = {
-        "song_query": "track",
-        "message": "track",
+        "message": "play track",
         "song_found": False,
         "song_error": False,
         "request_id": "cancelled-request",
@@ -4825,8 +4861,8 @@ async def test_download_listener_song_non_head_request_does_not_pin_out_of_order
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
-    first_req = {"song_query": "first", "message": "metti first", "song_found": False, "song_error": False}
-    second_req = {"song_query": "second", "message": "metti second", "song_found": False, "song_error": False}
+    first_req = {"message": "metti first", "song_found": False, "song_error": False}
+    second_req = {"message": "metti second", "song_found": False, "song_error": False}
     state.pending_requests.extend([first_req, second_req])
 
     with (

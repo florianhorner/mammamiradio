@@ -348,7 +348,8 @@ enqueue directly through `_enqueue_with_egress()`. The matrix below is pinned by
   song promise; fallback runway selection then skips any exclusive music orphaned
   with it and preserves the next ordinary playable segment. Once the dedication is
   already on air, however, its exact admitted and ready song becomes the required
-  survivor: assetless replacement drops unrelated old-source runway, lets the
+  survivor: replacement drops unrelated old-source runway, places any fresh
+  continuity behind the promised song (or in the capacity-exempt slot), lets the
   dedication finish, and retains the song's full token ownership through its first
   emitted byte.
   Ordinary selection, norm-cache and
@@ -406,12 +407,15 @@ fed only when a rescue is actually heard by a listener and resets on restart.
 
 A successful replacement control supersedes an earlier reservation: it clears
 ordinary and protected queued audio, clears any out-of-band `continuity_slot`,
-and creates a fresh reservation for the new action. The resulting queue and
-shadow projection therefore describe exactly the same final order. If no fresh
-reservation can be built, the control fails closed instead: it keeps the first
-immediately playable queued segment and any valid capacity-exempt slot, drops
-only the remaining queued work to reopen producer capacity, and never cuts the
-current segment into an empty runway. A companionship cue counts as immediately
+and creates a fresh reservation for the new action. The one stronger owner is an
+exact admitted song promised by a dedication already on air; that song stays at
+the queue head, with fresh continuity fitted behind it or held out of band. The
+resulting queue and shadow projection therefore describe exactly the same final
+order. If no fresh reservation can be built, the control fails closed instead:
+it keeps the first immediately playable queued segment and any valid
+capacity-exempt slot, drops only the remaining queued work to reopen producer
+capacity, and never cuts the current segment into an empty runway. A companionship
+cue counts as immediately
 playable only while its listener-session epoch is current and its lifecycle state
 is `QUEUED`, matching the playback fence that runs before any bytes reach air.
 Every rebuild that drops queued work
@@ -608,12 +612,14 @@ Because every source above is re-fetched fresh on startup, an in-memory "remove"
 
 Listener search results acquire that station identity from verified candidate
 metadata, never from the listener's wording. An artist-field feature credit, or a
-title credit that is bracketed or a terminal separator-led suffix, collapses before
-`Track` creation to the same base artist/title. A standalone title word such as
-`feat.`, `ft.`, or `featuring` remains literal because it is ambiguous. The full
-candidate credit and verified guest identity remain admission-time blocklist
-aliases; a guest tail stays whole so a band name such as `Earth, Wind & Fire` is
-never guessed to be three individual performers.
+title credit that is bracketed, terminal separator-led, or a conservative
+punctuated abbreviation, collapses before `Track` creation to the same base
+artist/title. Ambiguous literal or unpunctuated `feat`/`ft`/`featuring` wording
+remains part of the title unless a separately named guest corroborates the
+candidate's lowercase credit interpretation; compound separator tails remain
+literal. The full candidate credit and verified guest identity remain
+admission-time blocklist aliases; a guest tail stays whole so a band name such as
+`Earth, Wind & Fire` is never guessed to be three individual performers.
 
 `core.song_identity.song_identity_key_is_blocklisted` is the shared hard-policy comparison. `playlist.filter_blocklisted` wraps it at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and bulk source loads. External/listener download commit, restart handoff, producer admission, continuity selection, playback's last-mile fence, and norm-cache **rescue** call the same comparison directly because they can serve audio without passing through `state.playlist`; a banned song therefore cannot re-enter through cached, queued, or post-restart audio under an equivalent spelling. The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. Dropping a segment can expose a different queue tail; `_apply_ban` and manual `/api/queue/remove` both re-verify that newly exposed tail (`_reconcile_queue_tail_adjacency`) rather than trust it blindly, since only rescue/recycled music can safely re-anchor speech-bed adjacency — ordinary rendered music may carry an egress-processed path. A last-mile fence in the playback loop itself covers the remaining race, where a banned track was already pulled off the queue before a ban's synchronous purge reached it: playback discards that segment immediately, before any bytes reach air, and runs the same tail-adjacency reconciliation. Recovery paths carry a matching guard one level up: error recovery, the quality-gate circuit breaker's last-known-good recycling, and speech-bed adjacency selection all resolve their candidate through `_blocklist_safe_last_music`, which requires a durable `{artist, title}` identity and rejects it outright — even when unidentified — while any ban is active, so none of those paths can reintroduce an operator-banned song through a cached or adjacency-based route. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label, so it bans even a rescue-cache or one-off song that never entered `state.playlist`), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, a bridge to forced music whenever no immediately playable runway remains — not just an empty queue, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge sees the post-purge, playback-verified runway state and still force-bridges to music if nothing left in the queue can actually play — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
 

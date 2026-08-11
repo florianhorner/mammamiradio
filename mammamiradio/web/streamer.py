@@ -1150,6 +1150,9 @@ def _reserve_continuity_runway(
         queue_id = str(metadata.get("queue_id") or "")
         return bool(queue_id and queue_id in preserve_queue_ids and _ready_duration(segment) > 0)
 
+    required_survivors = [segment for segment in existing if _must_preserve(segment)]
+    required_survivor_ids = {id(segment) for segment in required_survivors}
+
     slot = state.continuity_slot
     if slot is not None and not _segment_is_immediately_playable(
         state,
@@ -1206,9 +1209,8 @@ def _reserve_continuity_runway(
             )
             survivors: list[Segment] = []
             failure_dropped = current_queue
-            required_survivors = [segment for segment in current_queue if _must_preserve(segment)]
             if required_survivors:
-                candidate_dropped = [segment for segment in current_queue if not _must_preserve(segment)]
+                candidate_dropped = [segment for segment in current_queue if id(segment) not in required_survivor_ids]
                 candidate_dropped, candidate_survivors = settle_listener_request_queue_dependencies(
                     candidate_dropped,
                     required_survivors,
@@ -1279,8 +1281,12 @@ def _reserve_continuity_runway(
     dropped: list[Segment] = []
     planned_slot: Segment | None = None
     if replace_queue:
-        dropped = existing
-        existing = []
+        # A request-owned song queued behind its already-on-air dedication is
+        # stronger than source replacement. Keep that exact admitted segment at
+        # the front, then fit fresh continuity behind it; every unrelated
+        # old-source segment still leaves immediately.
+        dropped = [segment for segment in existing if id(segment) not in required_survivor_ids]
+        existing = required_survivors
         # The replacement is fully built before the prior slot is superseded.
         state.continuity_slot = None
     else:
@@ -1293,6 +1299,7 @@ def _reserve_continuity_runway(
                 for idx in range(len(existing) - 1, -1, -1)
                 if not existing[idx].metadata.get(_CONTINUITY_RESERVATION_FLAG)
                 and not existing[idx].metadata.get("air_next")
+                and id(existing[idx]) not in required_survivor_ids
             ),
             None,
         )
@@ -1318,6 +1325,11 @@ def _reserve_continuity_runway(
             planned_slot = reservation[0]
             reservation = []
             combined = existing
+
+    if replace_queue and planned_slot is not None:
+        # The exact promised song owns the bounded queue head. Keep fresh safety
+        # audio capacity-exempt rather than evicting or reordering that promise.
+        state.continuity_slot = planned_slot
 
     if not replace_queue:
         current_ready = buffered_audio_seconds(
@@ -2841,13 +2853,22 @@ def _apply_loaded_source(
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
     # Immediate cutover is safe only when this action admitted fresh protected
-    # audio. An assetless fallback may preserve an old-source queue head or slot;
-    # that runway prevents dead air but must not make the source switch cut over
-    # into audio from the prior source.
+    # audio and no audible dedication still owns its next song. An assetless
+    # fallback may also preserve an ordinary old-source queue head or slot; that
+    # runway prevents dead air but must not trigger a cutover into prior-source
+    # audio.
     skipped = False
-    if state.now_streaming and runway.fresh_reservation and _playable_runway_available(request.app.state.queue, state):
+    preserved_on_air_promise = bool(surviving_on_air_handoffs)
+    if (
+        state.now_streaming
+        and not preserved_on_air_promise
+        and runway.fresh_reservation
+        and _playable_runway_available(request.app.state.queue, state)
+    ):
         request.app.state.skip_event.set()
         skipped = True
+    elif state.now_streaming and preserved_on_air_promise:
+        logger.info("Source changed while a listener dedication was on air; preserving its promised song")
     elif state.now_streaming:
         logger.warning(
             "Source changed without fresh cutover audio; current audio will finish (preserved=%s)",
