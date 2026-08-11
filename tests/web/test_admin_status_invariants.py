@@ -280,6 +280,7 @@ def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> 
     assert "statusRow('Generated waste'" in block
     assert "const wasteState=gw.degraded?'degraded':'ready'" in block
     assert "listener_request_reserved:'held for its dedication'" in block
+    assert "playback_file_error:'audio unavailable before air'" in block
     assert "wasteRow," in block
 
 

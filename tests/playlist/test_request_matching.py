@@ -511,7 +511,8 @@ def test_title_only_uses_title_prefix_as_display_artist():
     assert (result.best.artist, result.best.title) == ("Lucio Battisti", "Il mio canto libero")
 
 
-def test_title_only_uses_structured_title_prefix_as_station_identity_over_generic_distributor():
+@pytest.mark.parametrize("structured_artist", ["", "Various Artists", "Generic Distributor"])
+def test_title_only_uses_title_prefix_as_station_identity_over_generic_metadata(structured_artist):
     intent = parse_song_request("Play Imagine")
     assert intent is not None
 
@@ -521,6 +522,7 @@ def test_title_only_uses_structured_title_prefix_as_station_identity_over_generi
             {
                 "title": "John Lennon - Imagine",
                 "track_title": "Imagine",
+                "track_artist": structured_artist,
                 "uploader": "Generic Distributor",
                 "artist": "Generic Distributor",
             }

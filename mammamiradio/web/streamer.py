@@ -2810,6 +2810,16 @@ def _apply_loaded_source(
     on_air_promise_handoffs = {
         token: state.listener_request_admitted_reservations[token] for token in on_air_promise_ownership.values()
     }
+    preserved_on_air_tokens = frozenset(on_air_promise_handoffs)
+    listener_handoffs = (
+        state.listener_request_handoff,
+        *state.listener_request_admitted_reservations.values(),
+    )
+    cancelled_dedication_queue_ids = frozenset(
+        handoff.dedication_queue_id
+        for handoff in listener_handoffs
+        if handoff is not None and handoff.dedication_queue_id and handoff.token not in preserved_on_air_tokens
+    )
     runway = ContinuityRunwayOutcome()
     purged = _reserve_continuity_runway(
         request.app.state,
@@ -2820,21 +2830,25 @@ def _apply_loaded_source(
         preserve_queue_ids=frozenset(on_air_promise_ownership),
         outcome=runway,
     )
-    # An assetless replacement may preserve one playable old-source head. A
-    # listener dedication cannot be that bridge: switch_playlist revokes its
-    # requested recording, so airing the surviving announcement would make a
-    # promise the new source cannot keep. Drop only that exact queued segment;
-    # the shared queue mutation revokes its handoff at the same boundary.
-    handoff = state.listener_request_handoff
-    if handoff is not None and handoff.dedication_queue_id:
-        dropped_dedication = drop_matching_segments(
+    # An assetless replacement may preserve existing old-source runway. A
+    # still-queued listener dedication cannot be that bridge: switch_playlist
+    # revokes both active and admitted old-source handoffs, so airing the
+    # surviving announcement would make a promise the new source cannot keep.
+    # Drop each exact queued dedication; dependency settlement removes its
+    # linked admitted song in the same queue mutation. The only exception is a
+    # dedication already on air, whose ready admitted song was retained above.
+    if cancelled_dedication_queue_ids:
+        dropped_listener_segments = drop_matching_segments(
             request.app.state.queue,
             state,
-            should_drop=lambda segment: str(segment.metadata.get("queue_id") or "") == handoff.dedication_queue_id,
+            should_drop=lambda segment: (
+                str((segment.metadata if isinstance(segment.metadata, dict) else {}).get("queue_id") or "")
+                in cancelled_dedication_queue_ids
+            ),
             reason=GenerationWasteReason.SOURCE_SWITCH,
         )
-        if dropped_dedication:
-            purged += dropped_dedication
+        if dropped_listener_segments:
+            purged += dropped_listener_segments
             state.continuity_epoch += 1
             runway.preserved_existing = _playable_runway_available(request.app.state.queue, state)
     surviving_queue_ids = {

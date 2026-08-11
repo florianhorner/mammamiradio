@@ -1024,10 +1024,11 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
             if (cleaned := _clean_artist(value))
         )
     )
-    # Structured performer metadata is best.  In its absence, a conventional
-    # ``Artist - Title`` credit is more trustworthy for display than the
-    # uploader/channel identity retained in the legacy ``artist`` field.
-    display_artist = structured_artist or prefix_artist
+    # Specific structured performer metadata is best. A generic compilation or
+    # distributor label is not performer identity, so a conventional
+    # ``Artist - Title`` credit outranks it. Keep the raw generic value only as a
+    # last-resort display fallback when the candidate supplies no better artist.
+    display_artist = authoritative_artist or prefix_artist
     if not display_artist:
         display_artist = next(
             (_clean_artist(value) for value in base_artist_evidence if _clean_artist(value)),

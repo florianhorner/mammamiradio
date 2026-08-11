@@ -1748,8 +1748,13 @@ async def test_playlist_load_preserves_old_source_head_without_fresh_runway(tmp_
 
 
 @pytest.mark.asyncio
-async def test_assetless_source_switch_drops_preserved_listener_dedication(tmp_path):
-    """A preserved old-source dedication cannot promise a canceled handoff."""
+@pytest.mark.parametrize(
+    "admit_promised_song",
+    [False, True],
+    ids=["active-handoff", "admitted-song"],
+)
+async def test_assetless_source_switch_drops_queued_listener_promise(tmp_path, admit_promised_song):
+    """Queued dedication and admitted music cannot survive source replacement."""
     from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
 
     app = _make_test_app()
@@ -1790,6 +1795,26 @@ async def test_assetless_source_switch_drops_preserved_listener_dedication(tmp_p
     state.queued_segments = [{"id": queue_id, "type": "banter", "label": "Listener dedication"}]
     commit.apply(state, app.state.config, queue_id=queue_id)
     assert state.listener_request_handoff is not None
+    if admit_promised_song:
+        promised_path = tmp_path / "old-source-promised-song.mp3"
+        promised_path.write_bytes(b"promised-song")
+        promised = Segment(
+            type=SegmentType.MUSIC,
+            path=promised_path,
+            duration_sec=180.0,
+            metadata={
+                "queue_id": "old-source-promised-song-q",
+                "title": requested.display,
+                "title_only": requested.title,
+                "artist": requested.artist,
+                **state.listener_request_handoff_metadata(requested),
+            },
+            ephemeral=False,
+        )
+        state.admit_listener_request_handoff(promised)
+        app.state.queue.put_nowait(promised)
+        state.queued_segments.append({"id": "old-source-promised-song-q", "type": "music", "label": requested.display})
+        assert state.listener_request_admitted_reservations
 
     new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -1819,6 +1844,7 @@ async def test_assetless_source_switch_drops_preserved_listener_dedication(tmp_p
     assert app.state.queue.empty()
     assert state.queued_segments == []
     assert state.listener_request_handoff is None
+    assert state.listener_request_admitted_reservations == {}
     assert state.pinned_track is None
     assert state.force_next is None
     assert state.playlist == new_tracks
