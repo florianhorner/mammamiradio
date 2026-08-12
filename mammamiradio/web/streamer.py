@@ -84,6 +84,8 @@ from mammamiradio.core.first_listen_show import (
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    STREAM_LATE_THRESHOLD_SECONDS,
+    STREAM_TARGET_LEAD_SECONDS,
     ChaosSubtype,
     GenerationWasteReason,
     Heading,
@@ -703,12 +705,9 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
-# Direct MP3 clients such as Sonos have a small receive buffer. Four seconds
-# covers the 1.781s scheduler stall measured on HA Green while remaining below
-# the listener queue's roughly 16s capacity in the default 192 kbps setup.
-STREAM_TARGET_LEAD_SECONDS = 4.0
 STREAM_MAX_PACKET_SECONDS = 0.125
-STREAM_LATE_THRESHOLD_SECONDS = 0.05
+# Restores 375 ms — ~75% of the old 0.5s lead, ~9% of today's 4s. Calibrated
+# against STREAM_TARGET_LEAD_SECONDS; revisit the two together.
 STREAM_MAX_RECOVERY_CHUNKS = 3
 STREAM_UNDERRUN_WARNING_INTERVAL_SECONDS = 60.0
 
@@ -4330,6 +4329,10 @@ async def run_playback_loop(app) -> None:
     pacer_factory = getattr(app.state, "stream_pacer_factory", StreamPacer)
     pacer = pacer_factory(bytes_per_sec)
     app.state.stream_pacer = pacer
+    # Report what this pacer runs at, not what the constant says, so the admin
+    # diagnostic can never describe a cushion the loop is not using.
+    state.stream_pacing_target_lead_seconds = pacer.target_lead_seconds
+    state.stream_pacing_late_threshold_seconds = pacer.late_threshold_seconds
     # A full disconnect/reconnect can happen while the inner file-send loop is
     # active, so the outer empty-room branch alone is not enough to restore a
     # first-packet cushion for that new listener generation.

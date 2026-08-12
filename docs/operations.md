@@ -533,7 +533,7 @@ Shape (all counters and lists are present from boot, zeroed / empty / `idle`
 before anything is recorded; `slow_listener_drops.last_drop_at` is `null` until
 the first overflow, because no timestamp exists yet):
 
-- `target_lead_ms` — the fixed send-ahead target (`4000`).
+- `target_lead_ms` — the send-ahead target the live pacer is running at (`4000`).
 - `late_threshold_ms` — the lateness that records an event (`50`).
 - `session` / `window_15m` — counts of `late`, `underrun`, `overrun_rebased`, and
   `total`, for the whole session and a rolling 15-minute window.
