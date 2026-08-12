@@ -890,6 +890,12 @@ class ExternalAddNotice(TypedDict):
 RECENTLY_CONSUMED_RETENTION_SECONDS = 300
 STREAM_DELIVERY_WINDOW_SECONDS = 15 * 60
 STREAM_PACING_EVENT_KINDS = ("late", "underrun", "overrun_rebased")
+# StreamPacer's send-ahead cushion, and what stream_delivery_snapshot reports.
+# 4s absorbs a render pause (station ID, ad, banter, HA projection) before a
+# direct MP3 client hears it; worst measured on HA Green was 1.781s. Costs 32
+# of a listener queue's 128 packet slots at 192 kbps.
+STREAM_TARGET_LEAD_SECONDS = 4.0
+STREAM_LATE_THRESHOLD_SECONDS = 0.05
 HA_REFRESH_STAGES = ("states_request", "enrichment_wait", "projection", "idle")
 
 
@@ -1232,6 +1238,11 @@ class StationState:
     listener_session_tasks: set[asyncio.Task] = field(default_factory=set, repr=False)
     listener_session_persona_retry_at: float = 0.0
     listener_session_persona_retry_attempts: int = 0
+    # What the live StreamPacer runs at, recorded when the playback loop builds
+    # it. Defaults to the shipped constants so a state object with no loop
+    # attached still reports honest numbers.
+    stream_pacing_target_lead_seconds: float = STREAM_TARGET_LEAD_SECONDS
+    stream_pacing_late_threshold_seconds: float = STREAM_LATE_THRESHOLD_SECONDS
     # Bounded, anonymous stream-delivery diagnostics. These are session-local
     # and exposed only through authenticated /status. Raw listener identity,
     # segment labels/titles, and Home Assistant values never enter these rows.
@@ -1505,8 +1516,8 @@ class StationState:
         )
         session_counts = {kind: int(self.stream_pacing_counts.get(kind, 0)) for kind in STREAM_PACING_EVENT_KINDS}
         return {
-            "target_lead_ms": 500,
-            "late_threshold_ms": 50,
+            "target_lead_ms": round(self.stream_pacing_target_lead_seconds * 1000),
+            "late_threshold_ms": round(self.stream_pacing_late_threshold_seconds * 1000),
             "session": {**session_counts, "total": sum(session_counts.values())},
             "window_15m": {**window_counts, "total": sum(window_counts.values())},
             "recent": list(self.stream_pacing_events),
