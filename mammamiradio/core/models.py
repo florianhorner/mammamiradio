@@ -212,7 +212,18 @@ class Track:
     @cached_property
     def normalized_key(self) -> tuple[str, str]:
         """Stored literal key used by preferences, dedupe, and persisted bans."""
-        return (self.artist.strip().lower(), self.title.strip().lower())
+        return song_identity_key(self.artist, self.title)
+
+
+def song_identity_key(artist: object, title: object) -> tuple[str, str]:
+    """Build the stored literal song key from a raw artist/title pair.
+
+    The single key definition for callers that hold two fields rather than a
+    :class:`Track` — listener-request blocklist aliases, sidecars, and segment
+    metadata all have to mean the same thing by "the same song", and every
+    hand-rolled ``strip().lower()`` copy is a place that meaning can drift.
+    """
+    return (str(artist or "").strip().lower(), str(title or "").strip().lower())
 
 
 def normalized_track_key(track: Track) -> tuple[str, str]:
@@ -772,6 +783,12 @@ class ListenerTrackReservations:
         return bool(cache_key) and str(cache_key) in self.cache_keys
 
     def reserves_track_key(self, track_key: tuple[str, str]) -> bool:
+        # Nothing reserved is the overwhelmingly common state, and the answer is
+        # then False whatever the key normalizes to. Check that first so the
+        # producer's per-pick sweep of the whole playlist does not pay full
+        # identity normalization per track for a foregone answer.
+        if not self.track_keys:
+            return False
         equivalence_key = normalize_song_identity_key(track_key)
         return bool(equivalence_key[0] and equivalence_key[1]) and equivalence_key in self.track_keys
 
@@ -791,6 +808,10 @@ class ListenerTrackReservations:
         return False
 
 
+# Frozen, empty, and immutable — safe to hand to every caller when the listener
+# lifecycle owns nothing, which is the state the station is in most of the time.
+_NO_LISTENER_TRACK_RESERVATIONS = ListenerTrackReservations()
+
 LISTENER_REQUEST_HANDOFF_TOKEN_KEY = "listener_request_handoff_id"
 LISTENER_REQUEST_HANDOFF_ADMITTED_KEY = "listener_request_handoff_admitted"
 LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY = "listener_request_dedication_queue_id"
@@ -808,20 +829,27 @@ LISTENER_REQUEST_INTERNAL_METADATA_KEYS = frozenset(
 URGENT_INTERRUPT_PRIORITY_KEY = "urgent_interrupt_priority"
 
 
-def listener_request_force_revision(request: dict) -> int | None:
-    """Return the owned MUSIC-force revision carried by a request, if valid."""
-    revision = request.get(LISTENER_REQUEST_FORCE_REVISION_KEY)
+def _positive_revision(request: dict, key: str) -> int | None:
+    """Return a request-carried ownership revision, or ``None`` if not a real one.
+
+    ``bool`` is excluded deliberately: it is an ``int`` subclass, so a stray
+    ``True`` would otherwise read as revision 1 and let a request clear state it
+    never owned. That subtlety lives here once, for every revision field.
+    """
+    revision = request.get(key)
     if isinstance(revision, int) and not isinstance(revision, bool) and revision > 0:
         return revision
     return None
+
+
+def listener_request_force_revision(request: dict) -> int | None:
+    """Return the owned MUSIC-force revision carried by a request, if valid."""
+    return _positive_revision(request, LISTENER_REQUEST_FORCE_REVISION_KEY)
 
 
 def listener_request_pin_revision(request: dict) -> int | None:
     """Return the pinned-track ownership revision carried by a request."""
-    revision = request.get(LISTENER_REQUEST_PIN_REVISION_KEY)
-    if isinstance(revision, int) and not isinstance(revision, bool) and revision > 0:
-        return revision
-    return None
+    return _positive_revision(request, LISTENER_REQUEST_PIN_REVISION_KEY)
 
 
 @dataclass(frozen=True)
@@ -2253,17 +2281,26 @@ class StationState:
     def prune_recent_listener_requests(self, now: float | None = None) -> None:
         """Drop terminal listener receipts after their public retention window."""
         cutoff = (time.time() if now is None else now) - RECENTLY_CONSUMED_RETENTION_SECONDS
-        self.recently_consumed_requests = [
-            record for record in self.recently_consumed_requests if record.get("consumed_at", 0) >= cutoff
-        ]
+        records = self.recently_consumed_requests
+        # Every listener receipt poll and every admin poll lands here, and almost
+        # none of them find an expired record. Only rebuild the trail when one
+        # actually fell outside the window.
+        if all(record.get("consumed_at", 0) >= cutoff for record in records):
+            return
+        self.recently_consumed_requests = [record for record in records if record.get("consumed_at", 0) >= cutoff]
 
     def listener_track_reservations(self) -> ListenerTrackReservations:
         """Return song identities owned anywhere in the listener-request lifecycle."""
-        reservations = ListenerTrackReservations.from_pending_requests(self.pending_requests)
         lifecycle_tracks = [handoff.track for handoff in self.listener_request_admitted_reservations.values()]
         lifecycle_tracks.extend(handoff.track for handoff in self.listener_request_retry_handoffs)
         if self.listener_request_handoff is not None:
             lifecycle_tracks.append(self.listener_request_handoff.track)
+        if not self.pending_requests and not lifecycle_tracks:
+            # No request owns anything: hand back the shared empty answer instead
+            # of normalizing identities into two throwaway frozensets on every
+            # music pick and every status poll.
+            return _NO_LISTENER_TRACK_RESERVATIONS
+        reservations = ListenerTrackReservations.from_pending_requests(self.pending_requests)
         return reservations.including_tracks(lifecycle_tracks)
 
     def release_listener_request_admitted_reservation(self, segment: Segment) -> bool:

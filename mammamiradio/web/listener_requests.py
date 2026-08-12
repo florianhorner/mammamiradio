@@ -41,6 +41,7 @@ from mammamiradio.core.models import (
     SegmentType,
     listener_request_force_revision,
     listener_request_pin_revision,
+    song_identity_key,
 )
 from mammamiradio.hosts.moderation import is_blocked
 from mammamiradio.playlist.playlist import normalized_track_key
@@ -70,6 +71,26 @@ router = APIRouter()
 _SONG_NO_MATCH_REASONS = frozenset({"low_confidence", "not_found"})
 _SONG_NOT_PLAYABLE_REASONS = frozenset({"banned", "longform_audio", "non_music_audio"})
 
+# One classification of every terminal song failure, shared by the listener's
+# public outcome copy and the admin-facing resolution. A new failure reason is
+# added here once, so the two surfaces can never disagree about what it means.
+_SONG_REASON_CATEGORY: dict[str, str] = {
+    **{reason: "no_verified_match" for reason in _SONG_NO_MATCH_REASONS},
+    **{reason: "not_playable" for reason in _SONG_NOT_PLAYABLE_REASONS},
+}
+
+
+def _song_failure_category(record: dict[str, Any]) -> str:
+    """Collapse one terminal song failure to its public actionable category."""
+    reason = str(record.get("song_error_reason") or "")
+    category = _SONG_REASON_CATEGORY.get(reason)
+    if category is not None:
+        return category
+    # A lookup that ended with no reason recorded still means "we found nothing".
+    if not reason and str(record.get("status") or "") == "song_not_found":
+        return "no_verified_match"
+    return "temporarily_unavailable"
+
 
 def _song_resolution(record: dict[str, Any]) -> str | None:
     """Project the legacy song booleans into one explicit listener-safe state."""
@@ -88,11 +109,9 @@ def _song_resolution(record: dict[str, Any]) -> str | None:
         }
     )
     if has_terminal_error:
-        if reason in _SONG_NO_MATCH_REASONS or reason in _SONG_NOT_PLAYABLE_REASONS:
-            return "not_matched"
-        if status == "song_not_found" and not reason:
-            return "not_matched"
-        return "failed"
+        # A classified failure is one we can name for the listener; anything else
+        # is an honest "it didn't work this time".
+        return "failed" if _song_failure_category(record) == "temporarily_unavailable" else "not_matched"
     if record.get("song_found") or (status == "sent_to_hosts" and record.get("song_track")):
         return "matched"
     return "searching"
@@ -100,17 +119,9 @@ def _song_resolution(record: dict[str, Any]) -> str | None:
 
 def _public_outcome_reason(record: dict[str, Any]) -> str | None:
     """Collapse internal failures to the three actionable public categories."""
-    resolution = _song_resolution(record)
-    if resolution not in {"not_matched", "failed"}:
+    if _song_resolution(record) not in {"not_matched", "failed"}:
         return None
-    reason = str(record.get("song_error_reason") or "")
-    if reason in _SONG_NO_MATCH_REASONS:
-        return "no_verified_match"
-    if str(record.get("status") or "") == "song_not_found" and not reason:
-        return "no_verified_match"
-    if reason in _SONG_NOT_PLAYABLE_REASONS:
-        return "not_playable"
-    return "temporarily_unavailable"
+    return _song_failure_category(record)
 
 
 def _public_song_status(record: dict[str, Any]) -> dict[str, Any]:
@@ -585,7 +596,7 @@ async def _download_listener_song(
             # operator-banned base song. Check that canonical identity under the
             # same source-switch lock as the ordinary track key.
             blocked_identity_keys=frozenset(
-                (artist.strip().lower(), accepted_match.identity_title.strip().lower())
+                song_identity_key(artist, accepted_match.identity_title)
                 for artist in accepted_match.credited_artists
                 if artist.strip()
             ),

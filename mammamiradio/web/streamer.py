@@ -94,6 +94,7 @@ from mammamiradio.core.models import (
     ChaosSubtype,
     GenerationWasteReason,
     Heading,
+    ListenerRequestHandoff,
     PartyMode,
     PersonalityAxes,
     PlaylistSource,
@@ -179,6 +180,12 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
+from mammamiradio.scheduling.queue_mutations import (
+    discard_queued_segment as _discard_queued_segment,
+)
+from mammamiradio.scheduling.queue_mutations import (
+    discard_queued_segments as _discard_queued_segments,
+)
 from mammamiradio.scheduling.queue_mutations import (
     drop_matching_segments,
     settle_listener_request_queue_dependencies,
@@ -927,11 +934,7 @@ def _purge_queue_and_shadow(q, state: StationState, *, reason: str) -> int:
     no-await stretch and no reader can observe the two views disagreeing.
     """
     items = _drain_segment_queue(q)
-    for seg in items:
-        state.revoke_listener_request_handoff_for_discarded_dedication(seg)
-        state.record_discard(seg, reason=reason, already_counted_in_produced=True)
-        _drop_segment_moment_receipts(state, seg, str(reason))
-        _unlink_ephemeral_best_effort(seg)
+    _discard_queued_segments(state, items, reason=reason)
     state.queued_segments.clear()
     return len(items)
 
@@ -1450,10 +1453,7 @@ def _discard_unplayable_queue_prefix(q, state: StationState, *, reason: str) -> 
         is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
         if is_companionship_cue and not _companionship_cue_is_current(state, companionship_epoch):
             discard_reason = GenerationWasteReason.LISTENER_SESSION_STALE
-        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
-        state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
-        _drop_segment_moment_receipts(state, segment, discard_reason)
-        _unlink_ephemeral_best_effort(segment)
+        _discard_queued_segment(state, segment, reason=discard_reason)
     prior_tail = queued[-1] if queued else None
     _rebuild_queue_shadow(q, state, survivors)
     # Trimming the head can expose a surviving unplayable MUSIC tail (a queued
@@ -1689,11 +1689,7 @@ def _reserve_continuity_runway_unstamped(
                 return 0
             if outcome is not None:
                 outcome.preserved_existing = True
-            for segment in failure_dropped:
-                state.revoke_listener_request_handoff_for_discarded_dedication(segment)
-                state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
-                _drop_segment_moment_receipts(state, segment, discard_reason)
-                _unlink_ephemeral_best_effort(segment)
+            _discard_queued_segments(state, failure_dropped, reason=discard_reason)
             if failure_dropped or preserved_slot is not None:
                 _rebuild_queue_shadow(q, state, survivors)
                 # Queue capacity has changed, so producer work captured before
@@ -1814,11 +1810,7 @@ def _reserve_continuity_runway_unstamped(
         state.continuity_slot = planned_slot
 
     dropped, combined = settle_listener_request_queue_dependencies(dropped, combined, state=state)
-    for segment in dropped:
-        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
-        state.record_discard(segment, reason=discard_reason, already_counted_in_produced=True)
-        _drop_segment_moment_receipts(state, segment, discard_reason)
-        _unlink_ephemeral_best_effort(segment)
+    _discard_queued_segments(state, dropped, reason=discard_reason)
     _rebuild_queue_shadow(q, state, combined)
     state.continuity_epoch += 1
     return len(dropped)
@@ -1911,15 +1903,7 @@ def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[s
         for segment in dropped
         if isinstance((queue_id := getattr(segment, "metadata", {}).get("queue_id")), str)
     }
-    for segment in dropped:
-        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
-        state.record_discard(
-            segment,
-            reason=GenerationWasteReason.OPERATOR_PURGE,
-            already_counted_in_produced=True,
-        )
-        _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
-        _unlink_ephemeral_best_effort(segment)
+    _discard_queued_segments(state, dropped, reason=GenerationWasteReason.OPERATOR_PURGE)
     for segment in survivors:
         q.put_nowait(segment)
     if dropped_ids:
@@ -1927,13 +1911,49 @@ def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[s
     return len(dropped)
 
 
-def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "operator", queue=None) -> dict:
+def _partition_playlist_by_ban(playlist: list, banned_keys: set[tuple[str, str]]) -> tuple[list, list]:
+    """Split rotation rows into ``(kept, removed)`` in ONE normalized pass.
+
+    ``song_identity_key_is_blocklisted`` normalizes both sides of every
+    comparison, so screening a full rotation against a bulk ban is real work and
+    it runs on the event loop inside an admin handler. Evaluate the predicate
+    once per row and hand the same split to every consumer (the rotation-floor
+    guard, the playlist mutation, and the source-readiness reconcile) instead of
+    re-deriving it.
+    """
+    kept: list = []
+    removed: list = []
+    for track in playlist:
+        # The durable policy is canonical artist/title identity. Cache keys are
+        # media-source identities and can legitimately be shared by distinct
+        # operator rows; broadening only this mutation path would disagree with
+        # the queue, ingest, rescue, and playback blocklist gates.
+        banned = isinstance(track, Track) and song_identity_key_is_blocklisted(normalized_track_key(track), banned_keys)
+        (removed if banned else kept).append(track)
+    return kept, removed
+
+
+def _apply_ban(
+    state: StationState,
+    config,
+    tracks: list,
+    *,
+    banned_by: str = "operator",
+    queue=None,
+    playlist_partition: tuple[list, list] | None = None,
+) -> dict:
     """Ban tracks durably: persist, terminalize requests, clear pin, purge queue.
 
     Synchronous (no ``await``): the in-memory blocklist + playlist mutation and the
     disk persist happen in one stretch so concurrent ban/unban handlers cannot lose
     an update — the single-loop discipline the queue code already relies on. Returns
     ``{"ok", "banned": [display], "removed": int, "purged": int, "persisted": bool}``.
+
+    ``playlist_partition`` is the ``(kept, removed)`` split of ``state.playlist``
+    for these same tracks, when a caller already had to compute it — the bulk-ban
+    rotation-floor guard does, immediately before calling in. Only valid from
+    inside the caller's own no-``await`` stretch, which is where every ban path
+    already lives; omitted, the split is computed here.
     """
     keys: dict[tuple[str, str], str] = {}
     for track in tracks:
@@ -1957,10 +1977,8 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
     banned_keys = set(keys)
 
     def _is_banned_track(track: object) -> bool:
-        # The durable policy is canonical artist/title identity. Cache keys are
-        # media-source identities and can legitimately be shared by distinct
-        # operator rows; broadening only this mutation path would disagree with
-        # the queue, ingest, rescue, and playback blocklist gates.
+        # Same canonical identity rule as _partition_playlist_by_ban, for the
+        # single-object checks (pin, handoffs, pending requests) below.
         return isinstance(track, Track) and song_identity_key_is_blocklisted(normalized_track_key(track), banned_keys)
 
     # A listener download may already have committed and be waiting for its
@@ -1987,10 +2005,11 @@ def _apply_ban(state: StationState, config, tracks: list, *, banned_by: str = "o
         listener_request[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
         listener_request["song_track_obj"] = None
 
-    before = len(state.playlist)
-    removed_tracks = [track for track in state.playlist if _is_banned_track(track)]
-    state.playlist = [track for track in state.playlist if not _is_banned_track(track)]
-    removed = before - len(state.playlist)
+    kept_tracks, removed_tracks = (
+        _partition_playlist_by_ban(state.playlist, banned_keys) if playlist_partition is None else playlist_partition
+    )
+    state.playlist = kept_tracks
+    removed = len(removed_tracks)
     state.source_readiness.reconcile_active_tracks(state.playlist, removed_tracks=removed_tracks)
     pin_cleared = False
     if state.pinned_track is not None and _is_banned_track(state.pinned_track):
@@ -4033,13 +4052,17 @@ def _provider_health_snapshot(config, state: StationState) -> dict:
     }
 
 
-def _on_air_listener_promise_ownership(state: StationState, q) -> dict[str, tuple[str, Segment]]:
-    """Map queued promised music to its request token and segment.
+def _on_air_listener_promise_ownership(
+    state: StationState, q
+) -> dict[str, tuple[str, Segment, ListenerRequestHandoff]]:
+    """Map queued promised music to its request token, segment, and handoff.
 
     Queue metadata alone is not authority: require the active dedication id,
     the admitted marker, and the retained full handoff to agree. This lets an
     assetless source switch preserve only music that must follow a promise
-    listeners may already have heard.
+    listeners may already have heard. The validated handoff rides along in the
+    result so callers settle from what was checked here rather than re-indexing
+    ``listener_request_admitted_reservations`` by token afterwards.
     """
     now_streaming = state.now_streaming if isinstance(state.now_streaming, dict) else {}
     now_metadata = now_streaming.get("metadata")
@@ -4049,7 +4072,7 @@ def _on_air_listener_promise_ownership(state: StationState, q) -> dict[str, tupl
     if not dedication_queue_id:
         return {}
 
-    ownership: dict[str, tuple[str, Segment]] = {}
+    ownership: dict[str, tuple[str, Segment, ListenerRequestHandoff]] = {}
     for segment in getattr(q, "_queue", ()):
         if segment.type is not SegmentType.MUSIC or not segment_has_admitted_listener_request_handoff(segment):
             continue
@@ -4065,7 +4088,7 @@ def _on_air_listener_promise_ownership(state: StationState, q) -> dict[str, tupl
             and handoff.dedication_queue_id == dedication_queue_id
             and handoff.authorizes_segment(segment)
         ):
-            ownership[queue_id] = (token, segment)
+            ownership[queue_id] = (token, segment, handoff)
     return ownership
 
 
@@ -4140,26 +4163,22 @@ def _apply_loaded_source(
     # a destructive purge and safety audio admission.
     on_air_promise_ownership = _on_air_listener_promise_ownership(state, request.app.state.queue)
     active_on_air_handoff = state.active_listener_request_handoff_on_air()
-    on_air_promise_handoffs = {
-        token: state.listener_request_admitted_reservations[token]
-        for token, _segment in on_air_promise_ownership.values()
-    }
     # Playback normally converts an admitted file that vanished before its first
     # byte back into an active retry. Source replacement can discard that queued
     # object first, so identify the same retryable case while its full handoff is
     # still retained. A blocklisted recording remains terminal policy, not a retry.
     unreadable_on_air_handoffs = {
-        token: on_air_promise_handoffs[token]
-        for token, segment in on_air_promise_ownership.values()
+        token: handoff
+        for token, segment, handoff in on_air_promise_ownership.values()
         if not _indexed_audio_path_is_file(segment.path)
         and not song_identity_key_is_blocklisted(_segment_blocklist_key(segment), state.blocklist)
     }
     unreadable_on_air_queue_ids = frozenset(
         queue_id
-        for queue_id, (token, _segment) in on_air_promise_ownership.items()
+        for queue_id, (token, _segment, _handoff) in on_air_promise_ownership.items()
         if token in unreadable_on_air_handoffs
     )
-    preserved_on_air_tokens = frozenset(on_air_promise_handoffs)
+    preserved_on_air_tokens = frozenset(token for token, _segment, _handoff in on_air_promise_ownership.values())
     if active_on_air_handoff is not None:
         preserved_on_air_tokens |= {active_on_air_handoff.token}
     listener_handoffs = (
@@ -4210,8 +4229,8 @@ def _apply_loaded_source(
         str(segment.metadata.get("queue_id") or "") for segment in getattr(request.app.state.queue, "_queue", ())
     }
     surviving_on_air_handoffs = {
-        token: on_air_promise_handoffs[token]
-        for queue_id, (token, _segment) in on_air_promise_ownership.items()
+        token: handoff
+        for queue_id, (token, _segment, handoff) in on_air_promise_ownership.items()
         if queue_id in surviving_queue_ids
     }
     lost_on_air_handoff = next(
@@ -4475,14 +4494,14 @@ def _settle_unheard_listener_dedication_failure(
 
     dropped, survivors = settle_listener_request_queue_dependencies([segment], queued, state=state)
     handoff_revoked = state.revoke_listener_request_handoff_for_discarded_dedication(segment)
-    for dependent in dropped[1:]:
-        state.record_discard(
-            dependent,
-            reason=GenerationWasteReason.PLAYBACK_FILE_ERROR,
-            already_counted_in_produced=True,
-        )
-        _drop_segment_moment_receipts(state, dependent, GenerationWasteReason.PLAYBACK_FILE_ERROR)
-        _unlink_ephemeral_best_effort(dependent)
+    # The dedication itself was revoked above (its result decides the epoch bump);
+    # its dependents only followed it out, so they never re-run the revocation.
+    _discard_queued_segments(
+        state,
+        dropped[1:],
+        reason=GenerationWasteReason.PLAYBACK_FILE_ERROR,
+        revoke_listener_handoff=False,
+    )
     _rebuild_queue_shadow(segment_queue, state, survivors)
     if not handoff_revoked:
         state.continuity_epoch += 1
@@ -7249,15 +7268,7 @@ async def queue_remove_item(request: Request, _: None = Depends(require_admin_ac
 
     removed_segments = [removed_segment] if removed_segment is not None else []
     removed_segments, items = settle_listener_request_queue_dependencies(removed_segments, items, state=state)
-    for discarded_segment in removed_segments:
-        state.revoke_listener_request_handoff_for_discarded_dedication(discarded_segment)
-        state.record_discard(
-            discarded_segment,
-            reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
-            already_counted_in_produced=True,
-        )
-        _drop_segment_moment_receipts(state, discarded_segment, GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
-        _unlink_ephemeral_best_effort(discarded_segment)
+    _discard_queued_segments(state, removed_segments, reason=GenerationWasteReason.OPERATOR_QUEUE_REMOVE)
 
     _rebuild_queue_shadow(q, state, items)
     if removed_segment is not None:
@@ -8432,10 +8443,10 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
     # empty the rotation entirely and force permanent rescue playback. (Per-row
     # removal stays exempt: the operator asked for that one song gone.)
     banned_keys = {normalized_track_key(t) for t in tracks}
-    in_pool = sum(
-        1 for track in state.playlist if song_identity_key_is_blocklisted(normalized_track_key(track), banned_keys)
-    )
-    remaining = len(state.playlist) - in_pool
+    # One normalized screen of the rotation, reused by the ban itself below —
+    # nothing awaits in between, so the split stays true to state.playlist.
+    playlist_partition = _partition_playlist_by_ban(state.playlist, banned_keys)
+    remaining = len(playlist_partition[0])
     floor = MIN_ROTATION_AFTER_BAN if len(state.playlist) >= MIN_ROTATION_AFTER_BAN else 1
     if remaining < floor:
         return {
@@ -8444,7 +8455,13 @@ async def ban_tracks(request: Request, _: None = Depends(require_admin_access)):
             "Unban a few or add more music first.",
         }
 
-    result = _apply_ban(state, config, tracks, queue=request.app.state.queue)
+    result = _apply_ban(
+        state,
+        config,
+        tracks,
+        queue=request.app.state.queue,
+        playlist_partition=playlist_partition,
+    )
     _reserve_continuity_runway(
         request.app.state,
         state,

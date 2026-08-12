@@ -8,13 +8,14 @@ This keeps search ranking from being mistaken for identity.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mammamiradio.core.song_identity import (
+    fold_accents,
     normalize_artist_identity_text,
+    primary_artist_identity,
     split_artist_feature_credit,
     split_title_feature_credit,
     strip_platform_artist_wrapper,
@@ -109,10 +110,33 @@ _SEMANTIC_QUALIFIERS = {
     "radio_edit": ("radio edit",),
 }
 _ALL_QUALIFIERS = {**_FORBIDDEN_QUALIFIERS, **_SEMANTIC_QUALIFIERS}
+# Label priority for display: semantic variants first, then forbidden ones. Built
+# from the detection vocabulary so a new qualifier can never be detectable but
+# unnameable (or renamed on one side only).
+_VARIANT_LABEL_PRIORITY = (*_SEMANTIC_QUALIFIERS, *_FORBIDDEN_QUALIFIERS)
+# Word-boundary-padded, pre-normalized qualifier phrases. ``_qualifiers`` runs
+# per candidate per request identity on the event loop, and re-normalizing these
+# constants on every call cost far more than the substring tests themselves.
+_NORMALIZED_QUALIFIER_PHRASES = tuple(
+    (name, tuple(f" {normalized} " for phrase in phrases if (normalized := normalize_match_text(phrase))))
+    for name, phrases in _ALL_QUALIFIERS.items()
+)
+# Shared alternation fragments. The prefix, suffix, and bracket detectors below
+# each recognise the same variant vocabulary in a different syntactic position;
+# spelling a word once here keeps the three from drifting apart.
+_DERIVATIVE_VARIANT_ALT = r"karaoke|instrumental"
+_ATTRIBUTION_VARIANT_ALT = r"tribute|tributo|reaction|reazione"
+_TEMPO_VARIANT_ALT = r"sped\s+up|speed\s+up|slowed(?:\s+down)?|nightcore"
+_ACOUSTIC_VARIANT_ALT = r"acoustic(?:\s+version)?|acustic[ao](?:\s+versione)?|unplugged"
+_REMASTER_VARIANT_ALT = r"(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?|(?:\d{4}\s+)?rimasterizzat[ao](?:\s+\d{4})?"
+_LONGFORM_WRAPPER_ALT = (
+    r"dj\s+set|full\s+(?:concert|show|album)|complete\s+(?:album|set)|"
+    r"album\s+completo|concerto\s+completo|mix\s+completo"
+)
 _VARIANT_PREFIX_RE = re.compile(
-    r"^(?:a\s+)?(?:live|dal\s+vivo|acoustic|acustic[ao]|unplugged|karaoke|instrumental|cover|"
-    r"tribute|tributo|reaction|reazione|remix(?:ed)?|remaster(?:ed)?|rimasterizzat[ao]|"
-    r"radio\s+edit|sped\s+up|speed\s+up|slowed(?:\s+down)?|nightcore)"
+    rf"^(?:a\s+)?(?:live|dal\s+vivo|acoustic|acustic[ao]|unplugged|{_DERIVATIVE_VARIANT_ALT}|cover|"
+    rf"{_ATTRIBUTION_VARIANT_ALT}|remix(?:ed)?|remaster(?:ed)?|rimasterizzat[ao]|"
+    rf"radio\s+edit|{_TEMPO_VARIANT_ALT})"
     r"\s+(?:version\s+|versione\s+)?(?:of|di)\s+",
     re.IGNORECASE,
 )
@@ -121,27 +145,23 @@ _ITALIAN_LIVE_VARIANT_LABEL_PATTERN = r"dal\s+vivo(?:\s+(?:versione(?:\s+\d{4})?
 _VARIANT_SUFFIX_RE = re.compile(
     r"\s*[-\u2013\u2014|]\s*"
     rf"(?:{_LIVE_VARIANT_LABEL_PATTERN}|{_ITALIAN_LIVE_VARIANT_LABEL_PATTERN}|"
-    r"acoustic(?:\s+version)?|acustic[ao](?:\s+versione)?|"
-    r"unplugged|(?:[^-\u2013\u2014|()]*\s+)?remix|(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?|"
-    r"(?:\d{4}\s+)?rimasterizzat[ao](?:\s+\d{4})?|"
-    r"radio\s+edit|karaoke|instrumental|cover|tribute|tributo|reaction|reazione|sped\s+up|speed\s+up|"
-    r"slowed(?:\s+down)?|nightcore)\s*$",
+    rf"{_ACOUSTIC_VARIANT_ALT}|(?:[^-\u2013\u2014|()]*\s+)?remix|{_REMASTER_VARIANT_ALT}|"
+    rf"radio\s+edit|{_DERIVATIVE_VARIANT_ALT}|cover|{_ATTRIBUTION_VARIANT_ALT}|"
+    rf"{_TEMPO_VARIANT_ALT})\s*$",
     re.IGNORECASE,
 )
-_LONGFORM_IDENTITY_WRAPPER_RE = re.compile(
-    r"^(?:dj\s+set|full\s+(?:concert|show|album)|complete\s+(?:album|set)|"
-    r"album\s+completo|concerto\s+completo|mix\s+completo)$",
+_LONGFORM_IDENTITY_WRAPPER_RE = re.compile(rf"^(?:{_LONGFORM_WRAPPER_ALT})$", re.IGNORECASE)
+_LONGFORM_TITLE_TAIL_RE = re.compile(
+    rf"\s*(?:[-\u2013\u2014|]\s*|\s+)(?:{_LONGFORM_WRAPPER_ALT})\s*$",
     re.IGNORECASE,
 )
 _BRACKETED_VARIANT_GROUP_RE = re.compile(
     rf"^(?:{_LIVE_VARIANT_LABEL_PATTERN}|{_ITALIAN_LIVE_VARIANT_LABEL_PATTERN}|"
-    r"acoustic(?:\s+version)?|acustic[ao](?:\s+versione)?|unplugged|"
+    rf"{_ACOUSTIC_VARIANT_ALT}|"
     r"(?:[^()]+\s+)?remix|remixed|"
-    r"(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?|"
-    r"(?:\d{4}\s+)?rimasterizzat[ao](?:\s+\d{4})?|"
-    r"radio\s+edit|karaoke|instrumental|cover(?:\s+version)?|"
-    r"tribute|tributo|reaction|reazione|sped\s+up|speed\s+up|"
-    r"slowed(?:\s+down)?|nightcore"
+    rf"{_REMASTER_VARIANT_ALT}|"
+    rf"radio\s+edit|{_DERIVATIVE_VARIANT_ALT}|cover(?:\s+version)?|"
+    rf"{_ATTRIBUTION_VARIANT_ALT}|{_TEMPO_VARIANT_ALT}"
     r")$",
     re.IGNORECASE,
 )
@@ -178,19 +198,11 @@ _GENERIC_ARTIST_LABELS = frozenset(
 )
 
 
-def _contains_phrase(normalized_text: str, phrase: str) -> bool:
-    normalized_phrase = normalize_match_text(phrase)
-    return bool(normalized_phrase) and f" {normalized_phrase} " in f" {normalized_text} "
-
-
 def _qualifiers(value: object) -> frozenset[str]:
-    normalized = normalize_match_text(value)
-    found = {
-        name
-        for name, phrases in _ALL_QUALIFIERS.items()
-        if any(_contains_phrase(normalized, phrase) for phrase in phrases)
-    }
-    return frozenset(found)
+    padded_text = f" {normalize_match_text(value)} "
+    return frozenset(
+        name for name, phrases in _NORMALIZED_QUALIFIER_PHRASES if any(phrase in padded_text for phrase in phrases)
+    )
 
 
 def _bracketed_qualifiers(value: object) -> frozenset[str]:
@@ -734,9 +746,7 @@ def _station_artist_identity(value: object) -> str:
     artist used by bans, dedupe, queue admission, and cache rescue. Co-billed
     artists joined by ``&``, ``x``, commas, or ``and`` remain intact.
     """
-    artist = _clean_artist(value)
-    feature_credit = split_artist_feature_credit(artist)
-    return _clean_artist(feature_credit[0]) if feature_credit is not None else artist
+    return primary_artist_identity(value)
 
 
 def _display_matched_artist(requested: str, evidence: str) -> str:
@@ -761,8 +771,9 @@ def _display_matched_artist(requested: str, evidence: str) -> str:
                 parts.append(candidate[offset : offset + len(word)])
                 offset += len(word)
             return " ".join(parts)
-        decomposed = unicodedata.normalize("NFKD", requested)
-        unaccented = "".join(char for char in decomposed if not unicodedata.combining(char))
+        # The shared identity fold, minus case folding and keeping ``&``: this
+        # value is read by a listener, not compared by the matcher.
+        unaccented = fold_accents(requested)
         return _SPACE_RE.sub(" ", re.sub(r"[^\w&]+", " ", unaccented, flags=re.UNICODE)).strip()
     return candidate
 
@@ -941,14 +952,7 @@ def _strip_title_variant(value: str, *, strip_feature_credit: bool = True) -> st
     ).strip()
     title = _VARIANT_PREFIX_RE.sub("", title)
     title = _VARIANT_SUFFIX_RE.sub("", title)
-    title = re.sub(
-        r"\s*(?:[-\u2013\u2014|]\s*|\s+)"
-        r"(?:dj\s+set|full\s+(?:concert|show|album)|complete\s+(?:album|set)|"
-        r"album\s+completo|concerto\s+completo|mix\s+completo)\s*$",
-        "",
-        title,
-        flags=re.IGNORECASE,
-    )
+    title = _LONGFORM_TITLE_TAIL_RE.sub("", title)
     return title.strip(" -\u2013\u2014|")
 
 
@@ -956,6 +960,9 @@ def _strip_title_variant(value: str, *, strip_feature_credit: bool = True) -> st
 class _CandidateIdentity:
     artist_evidence: tuple[str, ...]
     title: str
+    # The cleaned structured ``track_title``, retained so the matcher can reuse
+    # it instead of re-cleaning the same metadata for every request identity.
+    structured_title: str
     display_artist: str
     authoritative_artist: str
     feature_base_artist: str
@@ -1063,6 +1070,7 @@ def _candidate_identity(metadata: dict[str, Any]) -> _CandidateIdentity:
     return _CandidateIdentity(
         artist_evidence=artist_evidence,
         title=title,
+        structured_title=structured_title,
         display_artist=display_artist,
         authoritative_artist=authoritative_artist,
         feature_base_artist=feature_base_artist,
@@ -1121,23 +1129,7 @@ def _variant_rank(qualifiers: frozenset[str]) -> int:
 
 
 def _variant_label(qualifiers: frozenset[str]) -> str:
-    for name in (
-        "live",
-        "acoustic",
-        "remix",
-        "remaster",
-        "radio_edit",
-        "cover",
-        "karaoke",
-        "tribute",
-        "reaction",
-        "sped_up",
-        "slowed",
-        "nightcore",
-    ):
-        if name in qualifiers:
-            return name
-    return "standard"
+    return next((name for name in _VARIANT_LABEL_PRIORITY if name in qualifiers), "standard")
 
 
 def match_song_request_candidates(
@@ -1154,6 +1146,17 @@ def match_song_request_candidates(
     """
     matches: list[SongCandidateMatch] = []
     request_identities = [intent.primary_identity, *intent.alternative_identities]
+    # The request side of the comparison depends only on the identity, so it is
+    # resolved once per interpretation rather than once per candidate.
+    requested_base_titles = [
+        normalize_match_text(
+            _strip_title_variant(
+                identity.title,
+                strip_feature_credit=not identity.preserve_title_feature_syntax,
+            )
+        )
+        for identity in request_identities
+    ]
     for index, metadata in enumerate(metadata_results):
         candidate = _candidate_identity(metadata)
         # Recording variants belong to the recording title. Artist/channel
@@ -1164,7 +1167,6 @@ def match_song_request_candidates(
             _recording_qualifiers(display_title_evidence),
             _recording_qualifiers(metadata.get("track_title") or ""),
         )
-        structured_title = clean_candidate_title(metadata.get("track_title") or "")
         full_display_title = clean_candidate_title(metadata.get("title") or "")
         for identity_rank, request_identity in enumerate(request_identities):
             contextual_feature = next(
@@ -1229,7 +1231,7 @@ def match_song_request_candidates(
             )
             platform_artist_disproving_prefix = _platform_artist_disproving_prefix(candidate)
             if (
-                not structured_title
+                not candidate.structured_title
                 and full_display_title
                 and full_display_title != candidate.title
                 and (
@@ -1250,12 +1252,7 @@ def match_song_request_candidates(
             matched_qualifiers: frozenset[str] = frozenset()
             requested_qualifiers = request_identity.requested_qualifiers
             strip_feature_credit = not request_identity.preserve_title_feature_syntax
-            requested_base_title = normalize_match_text(
-                _strip_title_variant(
-                    request_identity.title,
-                    strip_feature_credit=strip_feature_credit,
-                )
-            )
+            requested_base_title = requested_base_titles[identity_rank]
             for interpreted_title, interpreted_qualifiers in title_interpretations:
                 if (interpreted_qualifiers & _FORBIDDEN_QUALIFIERS.keys()) - requested_qualifiers:
                     continue

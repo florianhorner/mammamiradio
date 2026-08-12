@@ -958,18 +958,24 @@
     }
   }
 
+  // Every "the listener can type again" path clears the same submit-state bits.
+  // One definition so the retry path and the timeout path cannot drift on which
+  // of them get cleared and leave a dead-looking Send button behind.
+  function _restoreEditableRequestForm(formEl) {
+    if (!formEl) return;
+    formEl.style.display = '';
+    _setRequestFieldsHidden(formEl, false);
+    formEl.classList.remove('is-sending');
+    delete formEl.dataset.submitting;
+    const submitBtn = formEl.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = false;
+  }
+
   function _resetRequestForm(formEl, sentEl) {
     // Cancel any deferred requestAnimationFrame from an older searching or
     // terminal receipt before making the editable form visible again.
     requestReceiptRenderRevision += 1;
-    if (formEl) {
-      formEl.style.display = '';
-      _setRequestFieldsHidden(formEl, false);
-      formEl.classList.remove('is-sending');
-      delete formEl.dataset.submitting;
-      const submitBtn = formEl.querySelector('button[type="submit"]');
-      if (submitBtn) submitBtn.disabled = false;
-    }
+    _restoreEditableRequestForm(formEl);
     if (sentEl) {
       delete sentEl.dataset.validation;
       sentEl.style.display = 'none';
@@ -1124,14 +1130,7 @@
 
     // A refusal or lookup failure is retryable: put the original request back
     // in the textarea and keep the localized next step in the live region.
-    if (formEl) {
-      formEl.style.display = '';
-      _setRequestFieldsHidden(formEl, false);
-      formEl.classList.remove('is-sending');
-      delete formEl.dataset.submitting;
-      const submitBtn = formEl.querySelector('button[type="submit"]');
-      if (submitBtn) submitBtn.disabled = false;
-    }
+    _restoreEditableRequestForm(formEl);
     if (sentEl) {
       sentEl.style.display = '';
       sentEl.classList.add('is-visible');

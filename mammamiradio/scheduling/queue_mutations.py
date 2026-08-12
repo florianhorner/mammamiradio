@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from mammamiradio.core.models import (
     LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
@@ -119,6 +119,49 @@ def unlink_ephemeral_best_effort(segment: Segment) -> None:
         logger.debug("Ephemeral queue-drop unlink failed for %s", segment.path, exc_info=True)
 
 
+def discard_queued_segment(
+    state: StationState,
+    segment: Segment,
+    *,
+    reason: str,
+    revoke_listener_handoff: bool = True,
+) -> None:
+    """Settle one admitted segment that leaves the queue before it can air.
+
+    The four steps are an ordered sequence, not a bag: the listener promise is
+    revoked while the segment still describes it, the discard is recorded before
+    any best-effort observer runs, the moment receipt is demoted, and only then
+    is the temporary render unlinked. Every queue-mutation site owes all four, so
+    they live here rather than being retyped per caller.
+
+    ``revoke_listener_handoff=False`` is for a caller that already revoked the
+    owning dedication itself (and needs its return value) and is settling only
+    the dependents that followed it out of the queue.
+    """
+    if revoke_listener_handoff:
+        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
+    state.record_discard(segment, reason=reason, already_counted_in_produced=True)
+    drop_segment_moment_receipts(state, segment, reason)
+    unlink_ephemeral_best_effort(segment)
+
+
+def discard_queued_segments(
+    state: StationState,
+    segments: Iterable[Segment],
+    *,
+    reason: str,
+    revoke_listener_handoff: bool = True,
+) -> None:
+    """Run the queued-segment discard sequence over every dropped segment."""
+    for segment in segments:
+        discard_queued_segment(
+            state,
+            segment,
+            reason=reason,
+            revoke_listener_handoff=revoke_listener_handoff,
+        )
+
+
 def drop_matching_segments(
     queue: asyncio.Queue[Segment],
     state: StationState,
@@ -167,10 +210,6 @@ def drop_matching_segments(
     if dropped_ids:
         state.queued_segments = [entry for entry in state.queued_segments if entry.get("id") not in dropped_ids]
 
-    for segment in dropped:
-        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
-        state.record_discard(segment, reason=reason, already_counted_in_produced=True)
-        drop_segment_moment_receipts(state, segment, reason)
-        unlink_ephemeral_best_effort(segment)
+    discard_queued_segments(state, dropped, reason=reason)
 
     return len(dropped)

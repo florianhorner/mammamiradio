@@ -246,9 +246,11 @@ class ListenerRequestCommit:
     mark_song_error: bool = False
     consume: bool = False
     _plan_snapshot: _ListenerRequestPlanSnapshot | None = None
+    # Set only when this plan itself claimed the play-next slot; ``None`` means
+    # there is nothing of ours to release. It is the single record of that claim,
+    # so a released claim cannot half-survive in a second flag.
     _claimed_pin_track: object | None = None
     _claimed_pin_revision: int | None = None
-    _claimed_song_pinned: bool = False
     _claimed_force_next_revision: int | None = None
 
     def capture_plan(
@@ -259,7 +261,6 @@ class ListenerRequestCommit:
         requires_matched_pin: bool = False,
         claimed_pin_track: object | None = None,
         claimed_pin_revision: int | None = None,
-        claimed_song_pinned: bool = False,
         claimed_force_next_revision: int | None = None,
     ) -> ListenerRequestCommit:
         """Freeze the request truth that the generated copy is allowed to air."""
@@ -273,7 +274,6 @@ class ListenerRequestCommit:
         )
         self._claimed_pin_track = claimed_pin_track
         self._claimed_pin_revision = claimed_pin_revision
-        self._claimed_song_pinned = claimed_song_pinned
         self._claimed_force_next_revision = claimed_force_next_revision
         return self
 
@@ -308,7 +308,7 @@ class ListenerRequestCommit:
         """Release only the synchronous request pin claimed by this failed plan."""
 
         claimed_track = self._claimed_pin_track
-        if not self._claimed_song_pinned or claimed_track is None:
+        if claimed_track is None:
             return
 
         if (
@@ -339,7 +339,6 @@ class ListenerRequestCommit:
         # nested failure path and then pass through the outer cleanup belt.
         self._claimed_pin_track = None
         self._claimed_pin_revision = None
-        self._claimed_song_pinned = False
         self._claimed_force_next_revision = None
 
     def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
@@ -606,7 +605,7 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     song_track = _sanitize_prompt_data(str(req.get("song_track") or ""), max_len=120)
     if is_song and req.get("song_found") and req.get("song_track"):
         track_obj = req.get("song_track_obj")
-        claimed_song_pinned = False
+        claimed_pin_track: object | None = None
         claimed_pin_revision: int | None = None
         claimed_force_next_revision: int | None = None
         # Establish one exact play-next claim. The background download may
@@ -710,16 +709,15 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
                 claimed_force_next_revision = state.set_force_next(SegmentType.MUSIC)
                 req[LISTENER_REQUEST_FORCE_REVISION_KEY] = claimed_force_next_revision
             req["song_pinned"] = True
-            claimed_song_pinned = True
+            claimed_pin_track = track_obj
         matched_pin = state.pinned_track if isinstance(state.pinned_track, Track) else track_obj
         matched_pin_revision = state.pinned_track_revision if state.pinned_track is matched_pin else None
         commit.capture_plan(
             matched_pin=matched_pin,
             matched_pin_revision=matched_pin_revision,
             requires_matched_pin=True,
-            claimed_pin_track=track_obj if claimed_song_pinned else None,
+            claimed_pin_track=claimed_pin_track,
             claimed_pin_revision=claimed_pin_revision,
-            claimed_song_pinned=claimed_song_pinned,
             claimed_force_next_revision=claimed_force_next_revision,
         )
         return (

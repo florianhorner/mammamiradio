@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Collection
+from functools import lru_cache
 
 _INTRA_WORD_PUNCTUATION_RE = re.compile(
     r"(?<=\w)['_\u2010\u2011\u2019\u02bc./\-]+(?=\w)",
@@ -66,6 +67,18 @@ def split_artist_feature_credit(value: object) -> tuple[str, str] | None:
     return (base, guest) if base and guest else None
 
 
+def primary_artist_identity(value: object) -> str:
+    """Return the performing artist without platform wrappers or a guest credit.
+
+    The single definition of "who this recording is by": a conventional
+    ``feat.`` credit names a guest without changing the base artist used by
+    bans, dedupe, queue admission, and cache rescue.
+    """
+    artist = strip_platform_artist_wrapper(value)
+    feature_credit = split_artist_feature_credit(artist)
+    return strip_platform_artist_wrapper(feature_credit[0]) if feature_credit is not None else artist
+
+
 def split_title_feature_credit(value: object) -> tuple[str, str] | None:
     """Split a syntactically explicit title-side feature group or suffix.
 
@@ -107,20 +120,21 @@ def split_title_feature_credit(value: object) -> tuple[str, str] | None:
     return None
 
 
+def fold_accents(value: object) -> str:
+    """Drop combining accents while leaving every other character in place."""
+    decomposed = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
 def normalize_song_identity_text(value: object) -> str:
     """Normalize identity text without fuzzy or transliteration guesses."""
-    decomposed = unicodedata.normalize("NFKD", str(value or ""))
-    unaccented = "".join(char for char in decomposed if not unicodedata.combining(char))
-    joined = _INTRA_WORD_PUNCTUATION_RE.sub("", unaccented)
+    joined = _INTRA_WORD_PUNCTUATION_RE.sub("", fold_accents(value))
     return _SPACE_RE.sub(" ", re.sub(r"[^\w]+", " ", joined.casefold(), flags=re.UNICODE)).strip()
 
 
 def normalize_artist_identity_text(value: object) -> str:
     """Normalize an artist using compact aliases and primary feature-credit identity."""
-    artist = strip_platform_artist_wrapper(value)
-    feature_credit = split_artist_feature_credit(artist)
-    primary_artist = strip_platform_artist_wrapper(feature_credit[0]) if feature_credit is not None else artist
-    return normalize_song_identity_text(primary_artist).replace(" ", "")
+    return normalize_song_identity_text(primary_artist_identity(value)).replace(" ", "")
 
 
 def _normalize_title_identity_text(value: object) -> str:
@@ -130,9 +144,21 @@ def _normalize_title_identity_text(value: object) -> str:
     return normalize_song_identity_text(title)
 
 
+@lru_cache(maxsize=4096)
+def _cached_song_identity_key(artist: str, title: str) -> tuple[str, str]:
+    """Memoized normalization of one stored key.
+
+    Normalization is ~20 regex and Unicode passes, and the hard-policy gates run
+    it on the same handful of stored blocklist keys for every playlist entry, on
+    every source switch, and per queued segment on every status poll. Stored keys
+    are immutable ``str`` pairs, so the result can be reused verbatim.
+    """
+    return normalize_artist_identity_text(artist), _normalize_title_identity_text(title)
+
+
 def normalize_song_identity_key(key: tuple[str, str]) -> tuple[str, str]:
     """Return the shared exact-equivalence form of an ``(artist, title)`` key."""
-    return normalize_artist_identity_text(key[0]), _normalize_title_identity_text(key[1])
+    return _cached_song_identity_key(key[0], key[1])
 
 
 def song_identity_keys_match(left: tuple[str, str], right: tuple[str, str]) -> bool:
@@ -145,4 +171,7 @@ def song_identity_key_is_blocklisted(
     blocklist: Collection[tuple[str, str]],
 ) -> bool:
     """Return whether any supplied policy key is exactly equivalent to ``candidate``."""
-    return any(song_identity_keys_match(candidate, blocked) for blocked in blocklist)
+    if not blocklist:
+        return False
+    normalized_candidate = normalize_song_identity_key(candidate)
+    return any(normalize_song_identity_key(blocked) == normalized_candidate for blocked in blocklist)
