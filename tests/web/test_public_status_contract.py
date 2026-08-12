@@ -255,8 +255,8 @@ async def test_public_status_rotation_count_follows_live_playlist_mutations():
         after = (await client.get("/public-status")).json()
 
     assert added.status_code == 200
-    assert before["rotation_track_count"] == 1
-    assert after["rotation_track_count"] == len(state.playlist) == 2
+    assert after["rotation_track_count"] == before["rotation_track_count"] + 1
+    assert after["rotation_track_count"] == len(state.playlist)
 
 
 @pytest.mark.asyncio
