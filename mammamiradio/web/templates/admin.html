@@ -2725,11 +2725,21 @@ const FIRST_LISTEN_GUIDES={
   ai:{file:'ai.mp3',version:'3342f2aafbe5'},
   success:{file:'success.mp3',version:'00ff13f5a775'},
 };
+// One <audio> serves all eight clips, so a click that supersedes an in-flight
+// one must not let the older attempt tidy up the shared element underneath it.
+// Every attempt takes a ticket and drops out if it is no longer the current one.
+let _firstListenGuideAttempt=0;
+// A clip that never delivers bytes settles neither play() nor an error event,
+// so the load is time-boxed rather than left waiting on the network.
+const FIRST_LISTEN_GUIDE_LOAD_MS=8000;
 function firstListenGuideAudio(){return document.getElementById('firstListenGuideAudio')}
 function firstListenGuideContainer(button){return button?.closest('.guide-audio')||null}
 function firstListenGuideLocksRoomProof(){
+  // Narration decorates the journey, it never gates it. Only a clip that is
+  // genuinely playing holds the room proof; a slow or missing one leaves
+  // "Yes, I hear it" and "Not yet" exactly where the operator left them.
   const state=firstListenGuideContainer(_firstListenUi.guideButton)?.dataset.state||'';
-  return state==='loading'||state==='playing';
+  return state==='playing';
 }
 function firstListenGuideIdleLabel(button){
   if(!button)return'';
@@ -2767,6 +2777,7 @@ async function toggleFirstListenGuide(key,button){
     return;
   }
   if(_firstListenUi.guideButton!==button)stopFirstListenGuide();
+  const attempt=++_firstListenGuideAttempt;
   _firstListenUi.guideKey=key;
   _firstListenUi.guideButton=button;
   const container=firstListenGuideContainer(button);
@@ -2778,18 +2789,26 @@ async function toggleFirstListenGuide(key,button){
     audio.src=`${_base}/static/audio/first_listen/${guide.file}?v=${guide.version}`;
     audio.load();
   }
+  let deadline=null;
   try{
-    await audio.play();
+    await Promise.race([
+      audio.play(),
+      new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('guide_audio_timeout')),FIRST_LISTEN_GUIDE_LOAD_MS)}),
+    ]);
+    if(attempt!==_firstListenGuideAttempt)return;
     if(container)container.dataset.state='playing';
     button.textContent='Pause example';
     renderFirstListenProgress();
   }catch(error){
+    if(attempt!==_firstListenGuideAttempt)return;
     console.error('first_listen_guide_audio',error);
     resetFirstListenGuideSource(audio);
     if(container)container.dataset.state='error';
     button.textContent='Try example again';
     button.setAttribute('aria-pressed','false');
     renderFirstListenProgress();
+  }finally{
+    if(deadline)clearTimeout(deadline);
   }
 }
 function initFirstListenGuideAudio(){

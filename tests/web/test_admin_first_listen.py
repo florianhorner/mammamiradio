@@ -711,7 +711,10 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     guides_end = html.index("function initFirstListenTechnicalDetails", guides_start)
     guide_code = html[guides_start:guides_end]
     assert "/static/audio/first_listen/${guide.file}" in guide_code
-    assert "await audio.play()" in guide_code
+    # Playback is raced against a load deadline, so the clip still starts from a
+    # click and nothing else, but a stalled one cannot wait forever.
+    assert "await Promise.race([" in guide_code
+    assert "audio.play()," in guide_code
     assert "function resetFirstListenGuideSource(audio)" in guide_code
     assert "audio.removeAttribute('src')" in guide_code
     assert "if(!audio.getAttribute('src'))" in guide_code
@@ -745,7 +748,11 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
 
     lock = _function("firstListenGuideLocksRoomProof", "firstListenGuideIdleLabel")
     assert "dataset.state||''" in lock
-    assert "state==='loading'||state==='playing'" in lock
+    # Only a clip that is actually playing may hold the room proof. Locking on
+    # 'loading' let a clip that never arrived disable "Yes, I hear it" and
+    # "Not yet" with no way back short of a reload.
+    assert "return state==='playing'" in lock
+    assert "loading" not in lock
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "const browserGuidePlaying=firstListenGuideLocksRoomProof()" in progress
     assert "playBtn.disabled=" in progress and "speakerBusy||browserGuidePlaying" in progress
@@ -938,3 +945,57 @@ def test_every_first_listen_mutation_carries_a_deadline_and_a_way_out() -> None:
         assert "firstListenTimedOut(error)" in body, f"{owner} cannot tell a timeout from a failure"
         assert "taking longer than usual" in body, f"{owner} names no way out on a timeout"
         assert "}finally{" in body and latch in body, f"{owner} can leave its latch set"
+
+
+def test_a_slow_or_missing_guide_clip_cannot_block_setup() -> None:
+    """Narration decorates the journey. It is never allowed to gate it.
+
+    A clip whose bytes never arrive settles neither play() nor an error event,
+    so without a deadline the container stays on 'loading' forever. That state
+    used to hold the room-proof lock, which disabled "Yes, I hear it" and
+    "Not yet" with no message and no exit short of a page reload.
+    """
+    html = _html()
+
+    assert "const FIRST_LISTEN_GUIDE_LOAD_MS=" in html
+    toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    assert "await Promise.race([" in toggle
+    assert "guide_audio_timeout" in toggle
+    assert "FIRST_LISTEN_GUIDE_LOAD_MS" in toggle
+    # The deadline is always cleared, so a clip that plays leaves no pending timer.
+    assert "}finally{" in toggle and "clearTimeout(deadline)" in toggle
+    # A timed-out clip lands in the error state with its retry affordance.
+    assert "container.dataset.state='error'" in toggle
+    assert "button.textContent='Try example again'" in toggle
+
+    # The lock itself must not depend on a state a stalled clip can reach.
+    lock = _function("firstListenGuideLocksRoomProof", "firstListenGuideIdleLabel")
+    assert "return state==='playing'" in lock
+    assert "loading" not in lock
+
+
+def test_a_superseded_guide_clip_never_tidies_up_the_shared_player() -> None:
+    """All eight clips share one <audio>, so attempts must not touch each other.
+
+    Clicking a second guide calls stopFirstListenGuide, whose load() rejects the
+    first pending play() with AbortError. Without a ticket, that older attempt's
+    catch ran resetFirstListenGuideSource on the shared element and killed the
+    clip the second click had just started, leaving both buttons on the error
+    label when nothing had actually failed.
+    """
+    html = _html()
+
+    assert html.count('<audio id="firstListenGuideAudio"') == 1
+    assert "let _firstListenGuideAttempt=0;" in html
+
+    toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    assert "const attempt=++_firstListenGuideAttempt;" in toggle
+    # The ticket is taken before the await, and both outcomes check it.
+    assert toggle.index("const attempt=++_firstListenGuideAttempt;") < toggle.index("await Promise.race([")
+    assert toggle.count("if(attempt!==_firstListenGuideAttempt)return;") == 2
+    success_guard = toggle.index("if(attempt!==_firstListenGuideAttempt)return;")
+    assert success_guard < toggle.index("container.dataset.state='playing'")
+    assert toggle.index("}catch(error){") < toggle.rindex("if(attempt!==_firstListenGuideAttempt)return;")
+    assert toggle.rindex("if(attempt!==_firstListenGuideAttempt)return;") < toggle.index(
+        "resetFirstListenGuideSource(audio)"
+    )
