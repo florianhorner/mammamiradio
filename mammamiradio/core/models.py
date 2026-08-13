@@ -577,6 +577,10 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
+    # Frugal Carosello experiment: process-local receipts for fully completed ad
+    # breaks. No timestamps, listener data, persistence, or long-term analytics.
+    ad_experiment_completed_breaks: int = 0
+    ad_experiment_brand_airings: dict[str, int] = field(default_factory=dict)
     session_stopped: bool = False
     # Set by streamer when session_stopped flips False, so producer's
     # stopped-state sleep wakes immediately instead of polling up to 1s.
@@ -1833,6 +1837,31 @@ class StationState:
                 transition_motif=transition_motif,
             )
         )
+
+    def record_completed_ad_break(self, brands: Collection[str]) -> None:
+        """Count one fully aired ad break in the process-local experiment."""
+        normalized = [brand.strip() for brand in brands if isinstance(brand, str) and brand.strip()]
+        if not normalized:
+            return
+        self.ad_experiment_completed_breaks += 1
+        for brand in normalized:
+            self.ad_experiment_brand_airings[brand] = self.ad_experiment_brand_airings.get(brand, 0) + 1
+
+    def ad_experiment_snapshot(self) -> dict[str, object]:
+        """Return the public, restart-ephemeral Carosello receipt shape."""
+        brands = [
+            {"brand": brand, "completed_airings": count}
+            for brand, count in sorted(
+                self.ad_experiment_brand_airings.items(),
+                key=lambda item: (-item[1], item[0].casefold(), item[0]),
+            )
+        ]
+        return {
+            "scope": "runtime",
+            "completed_breaks": self.ad_experiment_completed_breaks,
+            "completed_spots": sum(self.ad_experiment_brand_airings.values()),
+            "brands": brands,
+        }
 
     def after_ad(self, brands: list[str] | None = None) -> None:
         """Mark one full ad break as produced (called once per break, not per-spot)."""

@@ -100,6 +100,164 @@ def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():
     }
 
 
+def test_completed_ad_eof_records_runtime_receipt_with_plural_brands():
+    state = StationState()
+    segment = _segment(
+        {"brands": [" Prezzoforte ", "", 17, "TeleCuore"]},
+        seg_type=SegmentType.AD,
+    )
+
+    _emit_stream_result(
+        state,
+        segment,
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        accepted_delivery=True,
+    )
+
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 1,
+        "completed_spots": 2,
+        "brands": [
+            {"brand": "Prezzoforte", "completed_airings": 1},
+            {"brand": "TeleCuore", "completed_airings": 1},
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("bytes_sent", "was_skipped", "listeners", "terminal_reason", "metadata"),
+    [
+        (5000, True, 1, "skip", {"brands": ["Skipped"]}),
+        (5000, False, 1, "cancelled", {"brands": ["Cancelled"]}),
+        (5000, False, 1, "aborted", {"brands": ["Aborted"]}),
+        (5000, False, 0, "eof", {"brands": ["Unheard"]}),
+        (5000, False, 1, "eof", {"brands": ["Fallback"], "fallback": True}),
+        (0, False, 1, "eof", {"brands": ["Empty send"]}),
+    ],
+)
+def test_ad_experiment_rejects_non_completed_or_non_aired_outcomes(
+    bytes_sent,
+    was_skipped,
+    listeners,
+    terminal_reason,
+    metadata,
+):
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment(metadata, seg_type=SegmentType.AD),
+        bytes_sent=bytes_sent,
+        was_skipped=was_skipped,
+        listeners=listeners,
+        terminal_reason=terminal_reason,
+        accepted_delivery=True,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+
+
+def test_ad_experiment_rejects_eof_when_no_listener_accepted_audio():
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment({"brands": ["Unheard"]}, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        accepted_delivery=False,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"brands": "not-a-list"},
+        {"brands": []},
+        {"brands": [None, "", "   "]},
+        {"brand": ""},
+    ],
+)
+def test_ad_experiment_ignores_completed_break_without_a_valid_brand(metadata):
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment(metadata, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        accepted_delivery=True,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+
+
+def test_ad_experiment_uses_singular_brand_fallback_and_accumulates_repeats():
+    state = StationState()
+    for metadata in (
+        {"brand": "TeleCuore"},
+        {"brands": [], "brand": "TeleCuore"},
+        {"brands": ["Prezzoforte"], "brand": "Ignored"},
+    ):
+        _emit_stream_result(
+            state,
+            _segment(metadata, seg_type=SegmentType.AD),
+            bytes_sent=5000,
+            was_skipped=False,
+            listeners=1,
+            terminal_reason="eof",
+            accepted_delivery=True,
+        )
+
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 3,
+        "completed_spots": 3,
+        "brands": [
+            {"brand": "TeleCuore", "completed_airings": 2},
+            {"brand": "Prezzoforte", "completed_airings": 1},
+        ],
+    }
+
+
+def test_ad_experiment_requires_explicit_eof_terminal_reason():
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment({"brands": ["Partial"]}, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        accepted_delivery=True,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+
+
+def test_ad_experiment_failure_never_escapes_stream_result():
+    state = StationState()
+
+    def _boom(_brands):
+        raise RuntimeError("experiment failed")
+
+    state.record_completed_ad_break = _boom  # type: ignore[method-assign]
+    _emit_stream_result(
+        state,
+        _segment({"brands": ["TeleCuore"]}, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        accepted_delivery=True,
+    )
+
+    assert state.stream_outcome_history[-1]["result"] == "aired"
+
+
 def test_release_campaign_runs_even_when_ledger_disabled():
     class _Campaign:
         def __init__(self):

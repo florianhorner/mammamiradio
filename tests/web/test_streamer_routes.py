@@ -1241,6 +1241,40 @@ async def test_air_start_stamp_needs_a_listener_to_accept_the_chunk(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("accepted", "expected_breaks"), [(False, 0), (True, 1)])
+async def test_ad_experiment_receipt_uses_send_loop_accepted_delivery(tmp_path, accepted, expected_breaks):
+    """A start-of-segment listener is not enough; one queue must accept audio."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "carosello.mp3"
+    audio_path.write_bytes(b"x" * 8192)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.AD,
+            path=audio_path,
+            metadata={"brands": ["Prezzoforte", "TeleCuore"]},
+            ephemeral=False,
+        )
+    )
+    if not accepted:
+        app.state.stream_hub.broadcast = AsyncMock(return_value=0)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=2.0)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    receipt = state.ad_experiment_snapshot()
+    assert receipt["completed_breaks"] == expected_breaks
+    assert receipt["completed_spots"] == expected_breaks * 2
+
+
+@pytest.mark.asyncio
 async def test_continuity_reservation_reports_a_bridge_fire_from_the_send_loop(tmp_path):
     """Reserved safety audio reports a bridge ONLY once a listener has it.
 

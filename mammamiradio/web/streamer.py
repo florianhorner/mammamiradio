@@ -1372,6 +1372,33 @@ def _record_continuity_air(state: StationState, segment: Segment) -> None:
         logger.debug("continuity air telemetry failed", exc_info=True)
 
 
+def _record_ad_experiment_receipt(
+    state: StationState,
+    segment: Segment,
+    *,
+    result: str,
+    terminal_reason: str | None,
+    accepted_delivery: bool,
+) -> None:
+    """Best-effort receipt for a completed ad break a listener accepted."""
+    try:
+        if segment.type is not SegmentType.AD or result != "aired" or terminal_reason != "eof" or not accepted_delivery:
+            return
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        raw_brands = metadata.get("brands")
+        brands = (
+            [brand for brand in raw_brands if isinstance(brand, str) and brand.strip()]
+            if isinstance(raw_brands, list | tuple)
+            else []
+        )
+        if not brands:
+            brand = metadata.get("brand")
+            brands = [brand] if isinstance(brand, str) else []
+        state.record_completed_ad_break(brands)
+    except Exception:  # pragma: no cover - the experiment must never break audio
+        logger.debug("Carosello experiment receipt failed", exc_info=True)
+
+
 # Floor of rotation tracks a BULK ban must leave behind. Below this the producer
 # leans on the rescue path (demo assets / forced banter) — the emergency surface,
 # not routine. A bulk ban that would cross the floor is rejected with a warm
@@ -3529,6 +3556,7 @@ async def run_playback_loop(app) -> None:
                 was_skipped,
                 start_listeners,
                 terminal_reason=terminal_reason,
+                accepted_delivery=air_start_stamped,
             )
             # Best-effort unlink: a raw unlink here can raise a non-missing OSError
             # and escape the finally, killing the playback loop after we already
@@ -3605,6 +3633,7 @@ def _emit_stream_result(
     listeners: int,
     *,
     terminal_reason: str | None = None,
+    accepted_delivery: bool = False,
 ) -> None:
     """Tier-3: record the TRUE aired outcome after the send loop.
 
@@ -3622,6 +3651,13 @@ def _emit_stream_result(
             bytes_sent=bytes_sent,
             listeners=listeners,
             fallback_active=is_fallback_active(meta),
+        )
+        _record_ad_experiment_receipt(
+            state,
+            segment,
+            result=result,
+            terminal_reason=terminal_reason,
+            accepted_delivery=accepted_delivery,
         )
         state.record_stream_outcome(
             segment_type=segment.type.value,
@@ -3714,6 +3750,15 @@ def _ad_cast_status_payload(config) -> dict[str, object]:
         else []
     )
     return {"excluded_campaigns": excluded, "warnings": warnings}
+
+
+def _ad_experiment_status(state: StationState) -> dict[str, object]:
+    """Return the process-local experiment without compromising status."""
+    try:
+        return state.ad_experiment_snapshot()
+    except Exception:  # pragma: no cover - the experiment must never break status
+        logger.debug("Carosello experiment status failed", exc_info=True)
+        return {"scope": "runtime", "completed_breaks": 0, "completed_spots": 0, "brands": []}
 
 
 def _record_operator_action(request, action: str, old_value, new_value) -> None:
@@ -7317,6 +7362,9 @@ def _public_status_payload(request: Request) -> dict:
             ),
         },
         "ha_moments": ha_moments,
+        # Disposable, restart-ephemeral Carosello experiment. Admin inherits this
+        # exact object through the shared public payload; there is no second view.
+        "ad_experiment": _ad_experiment_status(state),
         # Brand-fiction layer (PR-A schema). Listener renders against this.
         "brand": _serialize_brand(config.brand),
         # Capability flags (listener-safe subset). Listener JS reads these every

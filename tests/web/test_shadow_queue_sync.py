@@ -2902,6 +2902,30 @@ def test_purge_clears_queue_even_when_ephemeral_unlink_fails():
     bad_path.unlink.assert_called_once()
 
 
+def test_purge_queued_ad_does_not_create_runtime_experiment_receipt():
+    q: asyncio.Queue = asyncio.Queue()
+    segment = Segment(
+        type=SegmentType.AD,
+        path=Path("/tmp/unplayed_ad.mp3"),
+        metadata={"brands": ["Prezzoforte", "TeleCuore"], "queue_id": "queued-ad"},
+        ephemeral=False,
+    )
+    q.put_nowait(segment)
+
+    state = StationState()
+    state.queued_segments = [{"id": "queued-ad", "type": "ad"}]
+
+    count = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
+
+    assert count == 1
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 0,
+        "completed_spots": 0,
+        "brands": [],
+    }
+
+
 def test_purge_restores_queued_release_beat_attempt():
     q: asyncio.Queue = asyncio.Queue()
     release_segment = Segment(

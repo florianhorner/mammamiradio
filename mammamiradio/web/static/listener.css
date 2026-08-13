@@ -234,6 +234,67 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-stat-n#stat-hosts { font-family: var(--font-body); font-style: normal; font-weight: 600; font-size: 14px; line-height: 1.4; color: var(--cream); }
 .mmr-stat-l { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
 
+/* Frugal Carosello experiment — a collapsed runtime receipt, not an archive. */
+.mmr-ad-session {
+  width: 100%;
+  max-width: 420px;
+  margin-top: 18px;
+  border-top: 1px solid var(--card-line);
+  color: var(--cream-dk);
+}
+.mmr-ad-session[hidden] { display: none; }
+.mmr-ad-session summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--brand-primary, var(--sun2));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.mmr-ad-session summary::-webkit-details-marker { display: none; }
+.mmr-ad-session summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 16px;
+}
+.mmr-ad-session[open] summary::after { content: "−"; }
+.mmr-ad-session summary:focus-visible {
+  outline: 2px solid var(--sun);
+  outline-offset: 2px;
+}
+.mmr-ad-session ul {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+.mmr-ad-session li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px solid rgba(245,237,216,0.08);
+  font-size: 11px;
+}
+.mmr-ad-session-brand {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--cream);
+}
+.mmr-ad-session-count {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
 /* Casa card */
 .mmr-casa { margin-top: 28px; width: 260px; background: rgba(14,12,10,0.95); backdrop-filter: blur(12px); border: 1px solid rgba(245,237,216,0.14); border-radius: 10px; padding: 11px 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.6); font-size: 12px; }
 .mmr-casa .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--brand-primary, var(--sun2)); margin-bottom: 8px; display: block; font-family: var(--font-body); }

@@ -87,6 +87,31 @@ def test_ad_history_capped_at_20():
     assert state.ad_history[0].brand == "Brand5"
 
 
+def test_ad_experiment_snapshot_is_runtime_only_sorted_and_fresh_by_default():
+    state = StationState()
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 0,
+        "completed_spots": 0,
+        "brands": [],
+    }
+
+    state.record_completed_ad_break([" Bravo ", "Alfa"])
+    state.record_completed_ad_break(["alfa", "Bravo", "Bravo"])
+    state.record_completed_ad_break(["", "   "])
+
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 2,
+        "completed_spots": 5,
+        "brands": [
+            {"brand": "Bravo", "completed_airings": 3},
+            {"brand": "Alfa", "completed_airings": 1},
+            {"brand": "alfa", "completed_airings": 1},
+        ],
+    }
+
+
 def test_segment_log_capped_at_50():
     state = StationState()
     for i in range(60):
