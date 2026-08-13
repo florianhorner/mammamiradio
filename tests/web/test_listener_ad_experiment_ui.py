@@ -53,10 +53,41 @@ def test_visible_and_media_session_ad_copy_share_one_formatter() -> None:
 def test_carosello_copy_exists_in_both_listener_modes() -> None:
     assert COPY["en"]["np_ad_break"] == "This ad break"
     assert COPY["it"]["np_ad_break"] == "Carosello in onda"
+    assert COPY["en"]["ad_session_summary_one"] == "This session · 1 completed spot"
     assert COPY["en"]["ad_session_summary"] == "This session · {n} completed spots"
+    assert COPY["it"]["ad_session_summary_one"] == "Questa diretta · 1 spot completato"
     assert COPY["it"]["ad_session_summary"] == "Questa diretta · {n} spot completati"
+    assert COPY["en"]["ad_session_airings_one"] == "1 completed airing"
     assert COPY["en"]["ad_session_airings"] == "{n} completed airings"
+    assert COPY["it"]["ad_session_airings_one"] == "1 passaggio completato"
     assert COPY["it"]["ad_session_airings"] == "{n} passaggi completati"
+
+
+def test_session_receipt_uses_singular_only_for_exactly_one() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    formatter = _function_block(js, "adReceiptCountText", "renderAdExperiment")
+    render = _function_block(js, "renderAdExperiment", "renderProgress")
+
+    assert "const singular = count === 1;" in formatter
+    assert "singular ? singularKey : pluralKey" in formatter
+    assert "singular ? singularFallback : pluralFallback" in formatter
+
+    assert "'ad_session_summary_one'" in render
+    assert "'ad_session_summary'" in render
+    assert "'ad_session_airings_one'" in render
+    assert "'ad_session_airings'" in render
+
+    expected = {
+        ("en", 1): ("This session · 1 completed spot", "1 completed airing"),
+        ("en", 2): ("This session · 2 completed spots", "2 completed airings"),
+        ("it", 1): ("Questa diretta · 1 spot completato", "1 passaggio completato"),
+        ("it", 2): ("Questa diretta · 2 spot completati", "2 passaggi completati"),
+    }
+    for (lang, count), result in expected.items():
+        suffix = "_one" if count == 1 else ""
+        summary = COPY[lang][f"ad_session_summary{suffix}"].replace("{n}", str(count))
+        airings = COPY[lang][f"ad_session_airings{suffix}"].replace("{n}", str(count))
+        assert (summary, airings) == result
 
 
 def test_session_receipt_is_collapsed_bounded_and_clears_on_empty_poll() -> None:

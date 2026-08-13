@@ -63,11 +63,12 @@ jobs:
       - name: Run normalizer real-ffmpeg integration tests
         run: pytest tests/audio/test_normalizer_real_ffmpeg.py -m requires_ffmpeg -v
 
-      - name: Cold-launch first-byte smoke (process-start to audio)
+      - name: Fresh-process listener-to-first-byte smoke (<= 2s)
         # The perf smoke assumes an already-running station; this launches a real
-        # cold uvicorn on temp cache/tmp and asserts a connecting listener hears
-        # audio within the 1-2s INSTANT AUDIO promise (default <= 2s), the
-        # add-on-restart reality the perf smoke never measured.
+        # cold uvicorn on temp cache/tmp, waits separately for TCP readiness, and
+        # then asserts a connecting listener hears audio within the 1-2s INSTANT
+        # AUDIO promise (default <= 2s). This is request-to-first-byte, not
+        # process-spawn-to-audio; startup has its own 60s readiness budget.
         # Invoke the script directly: this job installs into the system Python,
         # so `make launch-smoke` (which uses .venv/bin/python) would not resolve.
         run: python scripts/ha-green-launch-smoke.py

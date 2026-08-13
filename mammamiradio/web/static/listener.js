@@ -487,6 +487,14 @@
     updateMediaSession(np);
   }
 
+  function adReceiptCountText(count, singularKey, singularFallback, pluralKey, pluralFallback) {
+    const singular = count === 1;
+    return _t(
+      singular ? singularKey : pluralKey,
+      singular ? singularFallback : pluralFallback
+    ).replace('{n}', String(count));
+  }
+
   function renderAdExperiment(status) {
     const details = $('ad-session-receipt');
     const summary = $('ad-session-summary');
@@ -506,10 +514,13 @@
     }
 
     const total = Math.floor(completedSpots);
-    const summaryText = _t(
+    const summaryText = adReceiptCountText(
+      total,
+      'ad_session_summary_one',
+      'This session · 1 completed spot',
       'ad_session_summary',
       'This session · {n} completed spots'
-    ).replace('{n}', String(total));
+    );
 
     const brands = experiment && Array.isArray(experiment.brands)
       ? experiment.brands
@@ -520,13 +531,17 @@
       const names = normalizeAdBrandNames({ brand: entry.brand });
       const count = Number(entry.completed_airings);
       if (!names.length || !Number.isFinite(count) || count <= 0) return;
+      const completedAirings = Math.floor(count);
 
       rows.push({
         brand: names[0],
-        airings: _t(
+        airings: adReceiptCountText(
+          completedAirings,
+          'ad_session_airings_one',
+          '1 completed airing',
           'ad_session_airings',
           '{n} completed airings'
-        ).replace('{n}', String(Math.floor(count))),
+        ),
       });
     });
 
@@ -556,15 +571,29 @@
     details.hidden = false;
   }
 
+  // A second or two past the end is normal — the server reports elapsed as
+  // wall-clock since the segment started, and we read it on a poll interval, so
+  // a track can briefly measure longer than itself. Clamp that quietly.
+  //
+  // A large overshoot is a different thing: it means the segment we are timing
+  // is not what is still playing. A 4-second continuity clip that has been on
+  // air for minutes reported "3:24 / 0:04" to listeners. Clamping would only
+  // trade that for "0:04 / 0:04" frozen at the end, which reads as a stuck
+  // player. When the numbers have stopped describing anything, show nothing —
+  // a live stream with no time code is ordinary; a lying one is not.
+  const PROGRESS_OVERSHOOT_GRACE_SEC = 5;
+
   function renderProgress(progressSec, durationSec) {
     const fill = $('np-fill');
     const tCur = $('np-time-cur');
     const tTot = $('np-time-tot');
     if (!fill) return;
-    const pct = durationSec > 0 ? Math.min(100, (progressSec / durationSec) * 100) : 0;
-    fill.style.width = pct + '%';
-    if (tCur) tCur.textContent = fmtTime(progressSec);
-    if (tTot) tTot.textContent = durationSec > 0 ? fmtTime(durationSec) : '—';
+    const trustworthy = durationSec > 0
+      && progressSec <= durationSec + PROGRESS_OVERSHOOT_GRACE_SEC;
+    const shown = trustworthy ? Math.min(progressSec, durationSec) : 0;
+    fill.style.width = (trustworthy ? (shown / durationSec) * 100 : 0) + '%';
+    if (tCur) tCur.textContent = trustworthy ? fmtTime(shown) : '—';
+    if (tTot) tTot.textContent = trustworthy ? fmtTime(durationSec) : '—';
   }
 
   function renderHeroStats(status, caps) {
@@ -579,10 +608,8 @@
     }
     const stat2 = $('stat-tracks');
     if (stat2) {
-      const played = status && typeof status.tracks_played === 'number' ? status.tracks_played : null;
-      const queued = status && status.upcoming ? status.upcoming.length : 0;
-      const value = played !== null ? played : queued;
-      stat2.textContent = value > 0 ? value : '—';
+      const rotationCount = status ? status.rotation_track_count : null;
+      stat2.textContent = Number.isInteger(rotationCount) && rotationCount >= 0 ? String(rotationCount) : '—';
     }
     const stat3 = $('stat-hosts');
     if (stat3 && caps && caps.hosts && caps.hosts.length) {

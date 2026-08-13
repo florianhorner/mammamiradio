@@ -8,7 +8,7 @@ says 'IN ONDA' — different code paths producing different state).
 Cathedral standard:
 - Strict subset: every field in /public-status must also exist in /status
 - Bytes-identical for shared fields: capabilities dict, brand dict, uptime,
-  tracks_played, session_stopped, now_streaming, upcoming/upcoming_mode,
+  tracks_played, rotation_track_count, session_stopped, now_streaming, upcoming/upcoming_mode,
   runtime_health, playback_actions, ha_moments
 - Shape snapshot: catches accidental field additions on the listener side
 """
@@ -269,9 +269,36 @@ async def test_public_status_returns_uptime_and_tracks():
     body = resp.json()
     assert "uptime_sec" in body
     assert "tracks_played" in body
+    assert "rotation_track_count" in body
     assert isinstance(body["uptime_sec"], int)
     assert isinstance(body["tracks_played"], int)
+    assert isinstance(body["rotation_track_count"], int)
     assert body["tracks_played"] >= 0
+    assert body["rotation_track_count"] == len(app.state.station_state.playlist)
+
+
+@pytest.mark.asyncio
+async def test_public_status_rotation_count_follows_live_playlist_mutations():
+    """The listener count follows the active pool, not stale source metadata."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.playlist_source = PlaylistSource(
+        kind="local",
+        label="Local music",
+        track_count=len(state.playlist),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        before = (await client.get("/public-status")).json()
+        added = await client.post(
+            "/api/playlist/add",
+            json={"title": "Fresh Song", "artist": "Fresh Artist", "duration_ms": 180_000},
+        )
+        after = (await client.get("/public-status")).json()
+
+    assert added.status_code == 200
+    assert after["rotation_track_count"] == before["rotation_track_count"] + 1
+    assert after["rotation_track_count"] == len(state.playlist)
 
 
 @pytest.mark.asyncio
@@ -297,6 +324,7 @@ async def test_admin_listener_facts_agree():
     # Bytes-identical shared fields
     assert admin["uptime_sec"] == public["uptime_sec"]
     assert admin["tracks_played"] == public["tracks_played"]
+    assert admin["rotation_track_count"] == public["rotation_track_count"]
     assert admin["session_stopped"] == public["session_stopped"]
     assert admin.get("now_streaming") == public.get("now_streaming")
     assert admin["brand"] == public["brand"]

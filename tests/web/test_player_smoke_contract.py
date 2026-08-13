@@ -76,6 +76,7 @@ def test_player_smoke_target_is_opt_in_and_uses_the_bounded_runner() -> None:
     smoke_commands = {line.strip() for line in smoke_run.splitlines()}
     assert "make player-smoke" in smoke_commands
     assert "python -m pytest tests/web/test_admin_browser_smoke.py -q" in smoke_commands
+    assert "python -m pytest tests/web/test_first_listen_browser_smoke.py -q" in smoke_commands
     for lifecycle_guard in (
         "setsid python -m uvicorn",
         'kill -TERM -- "-$server_pid"',
@@ -123,6 +124,14 @@ def test_player_smoke_pins_the_listener_interaction_contract() -> None:
         "visible document title disagrees with authoritative identity",
         "nav wordmark disagrees with authoritative identity",
         "server identity did not repair stale localStorage",
+        "mobileNavGeometry",
+        "320px nav status pill escaped viewport",
+        "320px nav content overflowed its inner row",
+        "Tracks in Rotation ignored live rotation size",
+        "Tracks in Rotation changed with played history",
+        "Tracks in Rotation did not update with playlist mutation",
+        "Known empty rotation did not render zero",
+        "Missing rotation count fell back to source or played history",
         "focusing the dedication form started audio",
         "empty dedication reached the request API",
         "success_shoutout",

@@ -28,6 +28,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Voice catalog (Edge, OpenAI, Azure voice IDs)      | `mammamiradio/audio/voice_catalog.py`        |
 | Generate TTS audition clips and manifest           | `scripts/audition_tts_voices.py`            |
 | Home Assistant polling / state formatting          | `mammamiradio/home/ha_context.py`            |
+| Detached preview value (useful / ambient / empty)  | `mammamiradio/home/context_value.py`         |
+| HA speaker discovery + Media Source playback       | `mammamiradio/home/ha_playback.py`           |
 | Install-scoped Home authorization projection       | `mammamiradio/home/authorization.py`         |
 | Legacy Home install-origin + provenance bridge     | `mammamiradio/home/migration.py`             |
 | Home Context Director selection / lifecycle        | `mammamiradio/home/context_director.py`      |
@@ -48,12 +50,15 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | `radio.toml` parsing + `.env`                      | `mammamiradio/core/config.py`                |
 | Shared data models (Track, Segment, etc.)          | `mammamiradio/core/models.py`                |
 | Capability flags + tier derivation                 | `mammamiradio/core/capabilities.py`          |
-| Legacy setup-status classification                 | `mammamiradio/core/setup_status.py`          |
+| Canonical guided setup + First Listen projection   | `mammamiradio/core/setup_status.py`          |
+| First Listen receipt + install-origin witnesses    | `mammamiradio/core/first_listen.py`          |
+| First Listen packaged mini-show eligibility        | `mammamiradio/core/first_listen_show.py`     |
 | SQLite schema / migrations                         | `mammamiradio/core/sync.py`                  |
 | App startup / shutdown lifecycle                   | `mammamiradio/main.py`                       |
 | Demo MP3s / SFX / studio bleeds / logo             | `mammamiradio/assets/`                       |
 | HACS/Home Assistant integration                    | `custom_components/mammamiradio/`            |
 | Home Assistant add-on packaging                    | `ha-addon/mammamiradio/` + `ha-addon/mammamiradio-edge/` |
+| Disposable local HA + VLC speaker lab              | `scripts/first-listen-lab.sh`                |
 
 ## Tests
 
@@ -86,6 +91,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Deploy / production reality      | `docs/operations.md`             |
 | Common failures + recovery       | `docs/troubleshooting.md`        |
 | HA addon release process         | `docs/runbooks/ha-addon.md`      |
+| Disposable First Listen HA lab   | `docs/runbooks/first-listen-local-ha.md` |
 | HACS/Home Assistant integration  | `docs/integrations/ha-integration.md` |
 | HA privacy + upstream proposals  | `docs/integrations/ha-privacy-and-upstream-proposals.md` |
 | Festival Mode (operator guide)   | `docs/festival-mode.md`          |
@@ -102,8 +108,8 @@ Two modules carry a `# TODO: split` marker referencing the cathedral plan
 (`docs/archive/2026-04-28-cathedral-restructure.md`, PRs 5 & 6, deferred after "the
 cathedral has walls"):
 
-- `mammamiradio/web/streamer.py` (~5,100 LOC after the status-payload leaf extraction)
-- `mammamiradio/hosts/scriptwriter.py` (~2,800 LOC)
+- `mammamiradio/web/streamer.py` (after the status-payload leaf extraction)
+- `mammamiradio/hosts/scriptwriter.py`
 
 **Status — first cost-probe cut extracted, remaining train still tripwire-gated.** This
 is real debt, but no full multi-cut program is committed. No cadence or floor; remaining

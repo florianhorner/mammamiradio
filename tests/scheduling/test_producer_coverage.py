@@ -1929,11 +1929,11 @@ async def test_prewarm_first_segment_renders_in_foreground_not_background(tmp_pa
 
 @pytest.mark.asyncio
 async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
-    """When the queue drains to zero after at least one segment is produced,
-    the drain guard inserts a canned banter clip to prevent dead air."""
+    """With an empty norm cache, a drained queue falls back to canned banter."""
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     canned_clip = tmp_path / "canned_banter.mp3"
@@ -2031,7 +2031,9 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
     norm_file.write_bytes(b"fake norm audio" * 100)
     save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -2063,7 +2065,9 @@ async def test_drain_guard_emergency_tone_when_no_canned_clip_or_norm_cache(tmp_
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -2094,7 +2098,9 @@ async def test_drain_guard_emergency_tone_failure_is_contained(tmp_path):
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -2126,7 +2132,9 @@ async def test_drain_guard_records_bridge_fire_for_canned_clip(tmp_path):
     canned_clip.parent.mkdir(parents=True)
     canned_clip.write_bytes(b"canned banter audio" * 50)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -2168,7 +2176,9 @@ async def test_drain_guard_does_not_record_bridge_fire_when_enqueue_rejected(tmp
     canned_clip = tmp_path / "canned.mp3"
     canned_clip.write_bytes(b"canned banter audio" * 50)
 
-    async def _reject_segment(segment: Segment) -> bool:
+    async def _reject_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         return False  # enqueue rejected (e.g. session stopped)
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):

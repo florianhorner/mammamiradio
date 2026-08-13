@@ -64,10 +64,11 @@ jobs:
             echo "Current tag $VERSION is older than newest stable version $LATEST_STABLE; :latest will not be moved"
           fi
 
-      - name: Validate tag matches config.yaml + manifest version
+      - name: Validate tag matches the full cut contract
         run: |
           CONFIG_VERSION=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}' | tr -d '"')
           MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('custom_components/mammamiradio/manifest.json')).get('version',''))")
+          PYPROJECT_VERSION=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' pyproject.toml | head -1)
           TAG_VERSION="${{ steps.semver.outputs.version }}"
           if [ "$CONFIG_VERSION" != "$TAG_VERSION" ]; then
             echo "::error::config.yaml version ($CONFIG_VERSION) does not match tag ($TAG_VERSION) — bump all three version files before tagging"
@@ -79,9 +80,35 @@ jobs:
             echo "::error::custom_components/mammamiradio/manifest.json version ($MANIFEST_VERSION) does not match tag ($TAG_VERSION) — bump the integration manifest with the release"
             exit 1
           fi
-          echo "Version match confirmed: config.yaml and manifest.json at $CONFIG_VERSION"
+          # pyproject is the third version file and the one that reaches runtime:
+          # the addon Dockerfile pip-installs it, so it becomes the installed
+          # dist-info that _ASSET_VERSION and bridge_app_version read. PR CI covers
+          # this via pre-release-check.sh, but a hand-pushed or mistargeted tag never
+          # sees PR CI — so the release path checks it against the tagged checkout too.
+          if [ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::pyproject.toml version ($PYPROJECT_VERSION) does not match tag ($TAG_VERSION) — bump all three version files before tagging"
+            exit 1
+          fi
+          # The tagged commit must also describe its own release. Under the
+          # cut-don't-open model the changelog fold lands IN the cut commit, so the
+          # first versioned ha-addon CHANGELOG header is the release being tagged.
+          # Trailing whitespace/CR is trimmed before the Unreleased comparison; without
+          # it a stray space after "## Unreleased" would be read as a version heading.
+          CHANGELOG_VERSION=$(awk '/^## / {v=$0; sub(/^##[[:space:]]+/, "", v); gsub(/[[:space:]\r]+$/, "", v); if (v != "Unreleased" && v != "[Unreleased]") {split(v, a, /[[:space:]]+/); h=a[1]; gsub(/^\[|\]$/, "", h); print h; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
+          if [ "$CHANGELOG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::ha-addon/mammamiradio/CHANGELOG.md's newest versioned heading is '${CHANGELOG_VERSION:-missing}' but the tag is $TAG_VERSION — fold the changelog in the cut commit, before tagging"
+            exit 1
+          fi
+          # The cut folds BOTH changelogs, so both must describe the tag. The root file
+          # uses bracketed headings (## [X.Y.Z] - date); the same extractor handles it.
+          ROOT_CHANGELOG_VERSION=$(awk '/^## / {v=$0; sub(/^##[[:space:]]+/, "", v); gsub(/[[:space:]\r]+$/, "", v); if (v != "Unreleased" && v != "[Unreleased]") {split(v, a, /[[:space:]]+/); h=a[1]; gsub(/^\[|\]$/, "", h); print h; exit}}' CHANGELOG.md)
+          if [ "$ROOT_CHANGELOG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::CHANGELOG.md's newest versioned heading is '${ROOT_CHANGELOG_VERSION:-missing}' but the tag is $TAG_VERSION — fold the changelog in the cut commit, before tagging"
+            exit 1
+          fi
+          echo "Cut contract confirmed at $TAG_VERSION: config.yaml, manifest.json, pyproject.toml, both CHANGELOGs"
 
-      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -116,50 +143,83 @@ jobs:
           done
 
   smoke-prebuilt:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: pre-flight
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            docker_arch: amd64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            docker_arch: arm64
     steps:
-      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull amd64 SHA image
-        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+      - name: Pull exact prebuilt SHA image
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+        run: docker pull "$IMAGE_REF"
 
-      - name: Run SHA image smoke test
+      - name: Run exact prebuilt SHA launch smoke
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+        run: python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"
+
+      - name: Verify exact prebuilt SHA published add-on port
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          EXPECTED_DOCKER_ARCH: ${{ matrix.docker_arch }}
+          SMOKE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          # Gate stable publishing on the exact image built by addon-build.yml.
-          # Supervisor always sets SUPERVISOR_TOKEN; the addon's tokenless-LAN-admin
-          # path requires it (see config._is_addon). Without it the image boots in
-          # standalone mode, where binding 0.0.0.0 with no admin token is a fatal
-          # config error and uvicorn never starts.
-          docker run -d --name mamma-smoke \
-            -p 8765:8000 \
-            -e LOG_LEVEL=WARNING \
-            -e SUPERVISOR_TOKEN=smoke-ci \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
-          sleep 40
-          HEALTH=$(curl -sS --retry 8 --retry-delay 3 --retry-connrefused http://localhost:8765/healthz)
-          echo "$HEALTH"
-          STATUS=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
-          QE=$(echo "$HEALTH" | python3 -c 'import json,sys; print(float(json.load(sys.stdin).get("queue_empty_elapsed_s",0) or 0))')
-          if [ "$STATUS" = "failing" ] || awk "BEGIN{exit !($QE > 30)}"; then
-            echo "::error::Smoke failed: status=$STATUS queue_empty_elapsed_s=$QE"
-            docker logs mamma-smoke 2>&1 | tail -50
+          ACTUAL_DOCKER_ARCH="$(docker image inspect "$IMAGE_REF" --format '{{.Architecture}}')"
+          if [ "$ACTUAL_DOCKER_ARCH" != "$EXPECTED_DOCKER_ARCH" ]; then
+            echo "::error::Expected $SMOKE_ARCH image architecture $EXPECTED_DOCKER_ARCH, got $ACTUAL_DOCKER_ARCH"
             exit 1
           fi
-          echo "Smoke OK: status=$STATUS queue_empty_elapsed_s=$QE"
-          docker logs mamma-smoke 2>&1 | tail -50
 
-      - name: Cleanup
-        if: always()
-        run: docker stop mamma-smoke && docker rm mamma-smoke || true
+          CONTAINER_NAME="mamma-release-published-${SMOKE_ARCH}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run --detach \
+            --name "$CONTAINER_NAME" \
+            --publish 127.0.0.1:8765:8000 \
+            --env LOG_LEVEL=WARNING \
+            --env SUPERVISOR_TOKEN=smoke-ci \
+            "$IMAGE_REF"
+
+          HEALTH="$(
+            curl --fail --silent --show-error \
+              --retry 20 --retry-all-errors --retry-delay 1 \
+              --max-time 3 \
+              http://127.0.0.1:8765/healthz
+          )"
+          python3 - "$HEALTH" <<'PY'
+          import json
+          import sys
+
+          payload = json.loads(sys.argv[1])
+          if payload.get("status") != "ok":
+              raise SystemExit(f"published /healthz was not healthy: {payload}")
+          print("Exact prebuilt SHA published add-on port is reachable and healthy")
+          PY
 
   promote:
     runs-on: ubuntu-latest
@@ -179,7 +239,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -235,7 +295,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}

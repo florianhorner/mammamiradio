@@ -4,11 +4,20 @@ async (page) => {
   const baseUrl = markerIndex >= 0 ? markerUrl.slice(markerIndex + 1).replace(/\/+$/, '') : '';
   const requestPosts = [];
   const streamRequests = [];
+  const statusPolls = [];
   const streamFixture = 'mammamiradio/assets/demo/recovery/continuity_1.mp3';
   let requestScenario = 'success_shoutout';
   let streamScenario = 'audio';
   let sessionStopped = false;
   let casaScenario = 'recent';
+  let tracksPlayed = 5;
+  let rotationTrackCount = 84;
+  // Deliberately stale: the hero must render the live rotation count instead.
+  const currentSource = {
+    kind: 'charts',
+    label: 'Italian charts',
+    track_count: 999,
+  };
   const casaReceipts = {
     recent: [
       { label: 'One minute ritual', ago_min: 1, status: 'aired' },
@@ -75,6 +84,7 @@ async (page) => {
   assert(authoritativeName, 'authoritative /public-status has no station identity');
 
   await page.route('**/public-status', async (route) => {
+    statusPolls.push(Date.now());
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -84,7 +94,9 @@ async (page) => {
         capabilities: { ha: true },
         session_stopped: sessionStopped,
         uptime_sec: 90,
-        tracks_played: 1,
+        tracks_played: tracksPlayed,
+        rotation_track_count: rotationTrackCount,
+        current_source: currentSource,
         now_streaming: sessionStopped
           ? { type: 'stopped', label: 'Session stopped', metadata: {} }
           : { type: 'music', label: 'Mina — Città vuota', metadata: {} },
@@ -152,7 +164,38 @@ async (page) => {
     await waitForLivePage();
   }
 
+  // A value that is expected to CHANGE proves itself: the wait can only succeed
+  // once the new payload has rendered. A value expected NOT to move cannot, so
+  // it passes settle — the page repolls /public-status every 3s, and a second
+  // counted poll means the render for the first one has already landed.
+  async function expectRotationStat(expected, message, { settle = false } = {}) {
+    if (settle) {
+      const before = statusPolls.length;
+      await waitForRouteCount(
+        () => statusPolls.length,
+        before + 2,
+        10000,
+        `${message} (the page never refetched)`,
+      );
+    }
+    await page.waitForFunction(
+      (value) => (document.getElementById('stat-tracks')?.textContent || '').trim() === value,
+      expected,
+      { timeout: 5000, polling: 250 },
+    ).catch(() => assert(false, message));
+  }
+
   await loadFreshPage();
+
+  await expectRotationStat('84', 'Tracks in Rotation ignored live rotation size');
+  tracksPlayed = 9;
+  await expectRotationStat('84', 'Tracks in Rotation changed with played history', { settle: true });
+  rotationTrackCount = 27;
+  await expectRotationStat('27', 'Tracks in Rotation did not update with playlist mutation');
+  rotationTrackCount = 0;
+  await expectRotationStat('0', 'Known empty rotation did not render zero');
+  rotationTrackCount = null;
+  await expectRotationStat('—', 'Missing rotation count fell back to source or played history');
 
   const identityState = await page.evaluate(() => ({
     title: document.title.trim(),
@@ -164,6 +207,39 @@ async (page) => {
   assert(identityState.navWordmark === authoritativeName, 'nav wordmark disagrees with authoritative identity');
   assert(identityState.footerWordmark === authoritativeName, 'footer wordmark disagrees with authoritative identity');
   assert(identityState.cached === authoritativeName, 'server identity did not repair stale localStorage');
+
+  await page.setViewportSize({ width: 320, height: 640 });
+  const mobileNavGeometry = await page.evaluate(() => {
+    const nav = document.querySelector('.mmr-nav-inner');
+    const brand = document.querySelector('.mmr-brand');
+    const status = document.getElementById('nav-cta');
+    const viewportWidth = document.documentElement.clientWidth;
+    const rect = (element) => {
+      const box = element?.getBoundingClientRect();
+      return box ? { left: box.left, right: box.right, width: box.width } : null;
+    };
+    return {
+      viewportWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      navWidth: nav?.clientWidth || 0,
+      navScrollWidth: nav?.scrollWidth || 0,
+      brand: rect(brand),
+      status: rect(status),
+    };
+  });
+  assert(
+    mobileNavGeometry.status && mobileNavGeometry.status.right <= mobileNavGeometry.viewportWidth + 1,
+    `320px nav status pill escaped viewport: ${JSON.stringify(mobileNavGeometry)}`,
+  );
+  assert(
+    mobileNavGeometry.brand && mobileNavGeometry.brand.left >= -1,
+    `320px nav brand escaped viewport: ${JSON.stringify(mobileNavGeometry)}`,
+  );
+  assert(
+    mobileNavGeometry.navScrollWidth <= mobileNavGeometry.navWidth + 1,
+    `320px nav content overflowed its inner row: ${JSON.stringify(mobileNavGeometry)}`,
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   const copy = await page.evaluate(() => {
     const el = document.getElementById('mmr-copy-bootstrap');
@@ -455,7 +531,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 15,
+    checks: 23,
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),

@@ -1,0 +1,132 @@
+name: Advertised version drift
+
+# Backstop for the invariant in docs/release-process.md: main's stable
+# config.yaml must always name an add-on image that actually exists, so Home
+# Assistant never offers a version nobody can install.
+#
+# This is NOT the primary detector. A failed `addon-release.yml` is the loud,
+# immediate signal that a cut went wrong, and the runbook's recovery step is to
+# revert the whole cut commit straight away. This job only catches the case where
+# that never happened and the drift went quiet — which is exactly what went
+# unnoticed for 74 of 76 days before 2026-08-02.
+#
+# A legitimate cut window (merge -> build -> tag -> promote) is well under an
+# hour, so a daily run essentially never sees one. If it does, the cut has been
+# stuck for most of a day and deserves the flag.
+
+on:
+  schedule:
+    # 09:15 UTC daily. Off the hour to avoid the scheduler's busiest minute.
+    - cron: "15 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advertised-version
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # A fork running this by workflow_dispatch would probe the upstream image: path
+    # and file an issue on the fork about someone else's release.
+    if: github.repository == 'florianhorner/mammamiradio'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check the advertised add-on version resolves
+        id: check
+        run: |
+          set +e
+          OUTPUT="$(bash scripts/check-advertised-version.sh 2>&1)"
+          set -e
+          echo "$OUTPUT"
+          # Read the verdict, not the exit code. PASS and UNKNOWN both exit 0, so
+          # branching on the code alone would let an unreachable registry close a
+          # live drift issue with a false all-clear.
+          VERDICT="$(printf '%s\n' "$OUTPUT" | sed -n 's/^VERDICT: //p' | tail -1)"
+          [ -n "$VERDICT" ] || VERDICT="unknown"
+          {
+            echo "output<<GHEOF"
+            echo "$OUTPUT"
+            echo "GHEOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open or close the drift issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ steps.check.outputs.verdict }}
+          DETAIL: ${{ steps.check.outputs.output }}
+          TITLE: "Stable add-on advertises a version that is not published"
+          LABEL: "release-drift"
+        run: |
+          # The single-quoted printf args below are literal markdown — the
+          # backticks are code fences, not command substitution — so they are
+          # deliberately not expanded. (actionlint's shellcheck pass reports
+          # SC2016 at info level here; that is the intended behaviour.)
+          set -euo pipefail
+
+          # Strongly-consistent REST list, not --search: the search index lags, so a
+          # dispatch shortly after the scheduled run could miss a just-created issue
+          # and file a duplicate. Match on the label, not the title, so a human
+          # editing the title does not orphan the issue forever.
+          EXISTING="$(gh issue list --state open --label "$LABEL" --limit 100 \
+            --json number --jq '[.[].number] | first // empty')"
+
+          if [ "$VERDICT" = "fail" ]; then
+            if [ -n "$EXISTING" ]; then
+              echo "Drift already tracked in #$EXISTING; not opening a duplicate."
+              exit 0
+            fi
+            # Idempotent: succeeds the first time, harmless every time after.
+            gh label create "$LABEL" \
+              --description "main advertises an add-on version with no published image" \
+              --color B60205 2>/dev/null || true
+
+            BODY="$RUNNER_TEMP/advertised-version-issue.md"
+            {
+              printf '%s\n' 'Home Assistant is currently offering an add-on version that cannot be installed.'
+              printf '%s\n' 'A fresh install fails and rolls back; an update fails to download. A station that'
+              printf '%s\n' 'is already playing keeps playing, because the Supervisor downloads the new image'
+              printf '%s\n\n' 'before stopping the running one.'
+              printf '%s\n' '```'
+              printf '%s\n' "$DETAIL"
+              printf '%s\n\n' '```'
+              printf '%s\n' '**Fix:** if a release is mid-flight, wait for `addon-release.yml` to finish'
+              printf '%s\n' 'promoting both architectures. If you are deliberately soaking the cut commit'
+              printf '%s\n\n' 'on edge, that also holds this open; close this and carry on.'
+              printf '%s\n' 'If the release failed or was abandoned, land `git revert <cut-sha>` immediately.'
+              printf '%s\n' 'Revert the commit, not just the version files: the cut folded both changelogs'
+              printf '%s\n' 'too, so a partial revert is refused by `check-changelog-sync.sh` locally and by'
+              printf '%s\n\n' '`pre-release-check.sh` in CI.'
+              printf '%s\n' 'This issue closes itself once the advertised version resolves.'
+              printf '%s\n' 'Invariant and procedure: `docs/release-process.md`.'
+            } > "$BODY"
+            gh issue create --title "$TITLE" --label "$LABEL" --body-file "$BODY"
+            exit 0
+          fi
+
+          # Close only on a clean pass. "unknown" means the registry never answered,
+          # which is not the same as resolved: closing on it would retire a live
+          # drift issue with a false all-clear.
+          if [ "$VERDICT" != "pass" ]; then
+            echo "Verdict is '$VERDICT'; the registry did not confirm a published tag."
+            echo "Leaving any open drift issue alone."
+            exit 0
+          fi
+
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" \
+              --comment "The advertised version resolves again. Closing automatically."
+          else
+            echo "Advertised version resolves; nothing to report."
+          fi

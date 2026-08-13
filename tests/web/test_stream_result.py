@@ -96,6 +96,7 @@ def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():
         "result": "aired",
         "bytes_sent": 4096,
         "starting_listener_count": 1,
+        "accepted_listener_count": 1,
         "terminal_reason": "eof",
     }
 
@@ -114,7 +115,8 @@ def test_completed_ad_eof_records_runtime_receipt_with_plural_brands():
         was_skipped=False,
         listeners=1,
         terminal_reason="eof",
-        accepted_delivery=True,
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
     )
 
     assert state.ad_experiment_snapshot() == {
@@ -129,20 +131,21 @@ def test_completed_ad_eof_records_runtime_receipt_with_plural_brands():
 
 
 @pytest.mark.parametrize(
-    ("bytes_sent", "was_skipped", "listeners", "terminal_reason", "metadata"),
+    ("bytes_sent", "was_skipped", "listeners", "accepted_listeners", "terminal_reason", "metadata"),
     [
-        (5000, True, 1, "skip", {"brands": ["Skipped"]}),
-        (5000, False, 1, "cancelled", {"brands": ["Cancelled"]}),
-        (5000, False, 1, "aborted", {"brands": ["Aborted"]}),
-        (5000, False, 0, "eof", {"brands": ["Unheard"]}),
-        (5000, False, 1, "eof", {"brands": ["Fallback"], "fallback": True}),
-        (0, False, 1, "eof", {"brands": ["Empty send"]}),
+        (5000, True, 1, 1, "skip", {"brands": ["Skipped"]}),
+        (5000, False, 1, 1, "cancelled", {"brands": ["Cancelled"]}),
+        (5000, False, 1, 1, "aborted", {"brands": ["Aborted"]}),
+        (5000, False, 1, 0, "eof", {"brands": ["Unheard"]}),
+        (5000, False, 1, 1, "eof", {"brands": ["Fallback"], "fallback": True}),
+        (0, False, 1, 0, "eof", {"brands": ["Empty send"]}),
     ],
 )
 def test_ad_experiment_rejects_non_completed_or_non_aired_outcomes(
     bytes_sent,
     was_skipped,
     listeners,
+    accepted_listeners,
     terminal_reason,
     metadata,
 ):
@@ -154,23 +157,26 @@ def test_ad_experiment_rejects_non_completed_or_non_aired_outcomes(
         was_skipped=was_skipped,
         listeners=listeners,
         terminal_reason=terminal_reason,
-        accepted_delivery=True,
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=accepted_listeners,
     )
     assert state.ad_experiment_snapshot()["completed_breaks"] == 0
 
 
-def test_ad_experiment_rejects_eof_when_no_listener_accepted_audio():
+def test_ad_experiment_rejects_aired_eof_after_any_delivery_gap():
     state = StationState()
     _emit_stream_result(
         state,
-        _segment({"brands": ["Unheard"]}, seg_type=SegmentType.AD),
+        _segment({"brands": ["Partially delivered"]}, seg_type=SegmentType.AD),
         bytes_sent=5000,
         was_skipped=False,
         listeners=1,
         terminal_reason="eof",
-        accepted_delivery=False,
+        all_chunks_audience_delivered=False,
+        accepted_listener_count=1,
     )
     assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+    assert state.stream_outcome_history[-1]["result"] == "aired"
 
 
 @pytest.mark.parametrize(
@@ -192,7 +198,8 @@ def test_ad_experiment_ignores_completed_break_without_a_valid_brand(metadata):
         was_skipped=False,
         listeners=1,
         terminal_reason="eof",
-        accepted_delivery=True,
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
     )
     assert state.ad_experiment_snapshot()["completed_breaks"] == 0
 
@@ -211,7 +218,8 @@ def test_ad_experiment_uses_singular_brand_fallback_and_accumulates_repeats():
             was_skipped=False,
             listeners=1,
             terminal_reason="eof",
-            accepted_delivery=True,
+            all_chunks_audience_delivered=True,
+            accepted_listener_count=1,
         )
 
     assert state.ad_experiment_snapshot() == {
@@ -233,7 +241,8 @@ def test_ad_experiment_requires_explicit_eof_terminal_reason():
         bytes_sent=5000,
         was_skipped=False,
         listeners=1,
-        accepted_delivery=True,
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
     )
     assert state.ad_experiment_snapshot()["completed_breaks"] == 0
 
@@ -252,7 +261,8 @@ def test_ad_experiment_failure_never_escapes_stream_result():
         was_skipped=False,
         listeners=1,
         terminal_reason="eof",
-        accepted_delivery=True,
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
     )
 
     assert state.stream_outcome_history[-1]["result"] == "aired"
@@ -264,13 +274,14 @@ def test_release_campaign_runs_even_when_ledger_disabled():
             self.calls = []
             self.saved = False
 
-        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners):
+        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners, accepted_listeners=None):
             self.calls.append(
                 {
                     "metadata": metadata,
                     "bytes_sent": bytes_sent,
                     "was_skipped": was_skipped,
                     "listeners": listeners,
+                    "accepted_listeners": accepted_listeners,
                 }
             )
 
@@ -286,6 +297,7 @@ def test_release_campaign_runs_even_when_ledger_disabled():
         bytes_sent=5000,
         was_skipped=False,
         listeners=2,
+        accepted_listener_count=1,
     )
 
     assert led.rows == []
@@ -295,6 +307,7 @@ def test_release_campaign_runs_even_when_ledger_disabled():
             "bytes_sent": 5000,
             "was_skipped": False,
             "listeners": 2,
+            "accepted_listeners": 1,
         }
     ]
     assert campaign.saved is True
@@ -302,7 +315,7 @@ def test_release_campaign_runs_even_when_ledger_disabled():
 
 def test_release_campaign_failure_does_not_block_provenance():
     class _BoomCampaign:
-        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners):
+        def record_stream_result(self, metadata, *, bytes_sent, was_skipped, listeners, accepted_listeners=None):
             raise RuntimeError("campaign disk gone")
 
     led = _FakeLedger()
@@ -406,6 +419,33 @@ def test_memory_extraction_not_scheduled_for_partial_or_empty_send():
     schedule.assert_not_called()
 
 
+def test_home_memory_not_scheduled_when_privacy_is_revoked_mid_air():
+    """An airing Home segment may finish, but must not submit context afterward."""
+    app_state = SimpleNamespace(background_tasks=set())
+    config = SimpleNamespace(homeassistant=SimpleNamespace(context_enabled=False))
+    state = SimpleNamespace(home_context_policy_generation=10)
+    seg = _segment(
+        {
+            "home_context_generation": 9,
+            "memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]},
+        }
+    )
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=1,
+        )
+
+    schedule.assert_not_called()
+    assert app_state.background_tasks == set()
+
+
 @pytest.mark.asyncio
 async def test_memory_extraction_not_scheduled_for_zero_listener_clean_send():
     app_state = SimpleNamespace(background_tasks=set())
@@ -426,3 +466,54 @@ async def test_memory_extraction_not_scheduled_for_zero_listener_clean_send():
 
     schedule.assert_not_called()
     assert app_state.background_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_memory_extraction_not_scheduled_when_connected_listener_rejects_send():
+    app_state = SimpleNamespace(background_tasks=set())
+    state = SimpleNamespace()
+    config = SimpleNamespace()
+    seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "unheard"}]}})
+
+    with patch("mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction") as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=1,
+            accepted_listeners=0,
+        )
+
+    schedule.assert_not_called()
+    assert app_state.background_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_memory_extraction_counts_listener_that_joins_after_start_sample():
+    app_state = SimpleNamespace(background_tasks=set())
+    state = SimpleNamespace()
+    config = SimpleNamespace()
+    seg = _segment({"memory_extraction": {"script_lines": [{"host": "Marco", "text": "heard"}]}})
+    task = asyncio.create_task(asyncio.sleep(0))
+
+    with patch(
+        "mammamiradio.hosts.memory_extractor.schedule_banter_memory_extraction",
+        return_value=task,
+    ) as schedule:
+        _schedule_banter_memory_extraction_after_send(
+            app_state,
+            config,
+            state,
+            seg,
+            bytes_sent=4096,
+            send_completed_cleanly=True,
+            listeners=0,
+            accepted_listeners=1,
+        )
+
+    schedule.assert_called_once_with(config=config, state=state, metadata=seg.metadata)
+    assert task in app_state.background_tasks
+    await task

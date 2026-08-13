@@ -616,6 +616,8 @@ async def test_write_banter_keeps_chaos_delivery_neutral(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_uses_only_selected_home_fact_and_keeps_opaque_handoff(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     from mammamiradio.home.context_director import PromptFact
 
@@ -658,7 +660,45 @@ async def test_write_banter_uses_only_selected_home_fact_and_keeps_opaque_handof
 
 
 @pytest.mark.asyncio
+async def test_context_off_drops_supplied_prompt_fact_from_prompt_contract_and_handoff(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    from mammamiradio.home.context_director import PromptFact
+
+    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    response = {
+        "lines": [
+            {"host": config.hosts[0].name, "text": "The studio stays with the music."},
+            {"host": config.hosts[1].name, "text": "Always does."},
+        ],
+        "new_joke": None,
+        "home_fact_id": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ) as generate:
+        result, _ = await write_banter(state, config, prompt_fact=fact, use_directed_home_context=True)
+
+    assert len(result) == 2
+    # One call only: the contract must expect null, not force a repair round
+    # for a cue the model never received.
+    assert generate.await_count == 1
+    prompt = generate.await_args.kwargs["prompt"]
+    assert "AMBIENT CUE" not in prompt
+    assert "Sole e 24 gradi." not in prompt
+    assert "opaque-fact-1" not in prompt
+    assert "Return home_fact_id as null." in prompt
+    # The producer handoff must not attach home-fact metadata either.
+    assert state.last_banter_home_fact is None
+
+
+@pytest.mark.asyncio
 async def test_write_banter_repairs_mismatched_home_fact_id_once(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     from mammamiradio.home.context_director import PromptFact
 
@@ -686,6 +726,8 @@ async def test_write_banter_repairs_mismatched_home_fact_id_once(config, state):
 async def test_write_banter_keeps_good_banter_when_home_fact_id_unrecoverable(config, state):
     """A model that refuses the id contract twice must NOT sink good banter to
     stock copy — the banter airs, just without an attached (tracked) home fact."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     from mammamiradio.home.context_director import HomeContextDirector, PromptFact
 
@@ -1868,6 +1910,8 @@ async def test_write_banter_guest_gate_stays_closed_for_priority_blocks(config, 
     if blocker == "chaos":
         kwargs["chaos_subtype"] = ChaosSubtype.FOURTH_WALL
     elif blocker == "ha_directive":
+        config.homeassistant.enabled = True
+        config.homeassistant.context_enabled = True
         state.ha_pending_directive = "the kitchen light just came on"
     elif blocker == "listener_request":
         state.pending_requests.append({"name": "Luca", "message": "saluti", "type": "message"})
@@ -1952,6 +1996,8 @@ async def test_write_banter_prompt_is_short_by_default(config, state):
 async def test_write_banter_prompt_stretches_for_ha_directive(config, state):
     # A warranted moment (home event) earns the longer break. Festival off so the
     # stretch is attributable to the directive, not ambient festival env.
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.party_mode = None
     state.ha_pending_directive = "the kitchen light just came on"
     host_name = config.hosts[0].name
@@ -2107,6 +2153,8 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_restores_pending_directive_on_fallback(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     # Quotes are rewritten by _sanitize_prompt_data before the directive reaches
     # the prompt; the restore must put back the RAW directive, not that copy.
     raw_directive = 'Mention the "kitchen" light.'
@@ -2124,6 +2172,222 @@ async def test_write_banter_restores_pending_directive_on_fallback(config, state
 
     assert len(result) >= 2
     assert state.ha_pending_directive == raw_directive
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["", "ha", "timer", "ha:light.private_kitchen", "unknown"])
+async def test_context_off_retires_stale_home_directive_before_no_llm_return(config, state, source):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_pending_directive = "Mention the private kitchen light."
+    state.ha_pending_directive_moment_id = "private-moment"
+    state.ha_pending_directive_source = source
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+
+
+@pytest.mark.asyncio
+async def test_context_off_retires_stale_running_gag_before_no_llm_return(config, state):
+    from mammamiradio.home.moment_receipts import MomentStore
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    store = MomentStore()
+    gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
+    state.moment_store = store
+    state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = gag_id
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+    (row,) = store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "stale_context"
+
+
+@pytest.mark.asyncio
+async def test_context_off_running_gag_never_reaches_prompt_after_reenable(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    private_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag = private_gag
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = "private-gag-moment"
+    prompts: list[str] = []
+
+    async def _generate(**kwargs):
+        prompts.append(kwargs["prompt"])
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "The studio stays with the music."}],
+            "new_joke": None,
+            "home_fact_id": None,
+        }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        await write_banter(state, config)
+        # A later re-enable must start from a clean slate, not revive the
+        # gag that was observed before the disable.
+        config.homeassistant.context_enabled = True
+        await write_banter(state, config)
+
+    assert len(prompts) == 2
+    assert all(private_gag not in prompt for prompt in prompts)
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["operator", "skip_bit"])
+async def test_context_off_retires_running_gag_even_when_studio_directive_survives(config, state, source):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_pending_directive = "Play the explicit studio bit next."
+    state.ha_pending_directive_source = source
+    state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = "private-gag-moment"
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_pending_directive == "Play the explicit studio bit next."
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["operator", "skip_bit"])
+async def test_context_off_preserves_explicit_studio_directive_before_no_llm_return(config, state, source):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_pending_directive = "Play the explicit studio bit next."
+    state.ha_pending_directive_moment_id = ""
+    state.ha_pending_directive_source = source
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_pending_directive == "Play the explicit studio bit next."
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == source
+
+
+@pytest.mark.asyncio
+async def test_context_off_clears_stale_home_directive_from_state_and_llm_prompt(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    raw_directive = "Mention the private kitchen light."
+    state.ha_pending_directive = raw_directive
+    state.ha_pending_directive_moment_id = "private-moment"
+    state.ha_pending_directive_source = "ha:light.private_kitchen"
+    prompts: list[str] = []
+
+    async def _generate(**kwargs):
+        prompts.append(kwargs["prompt"])
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "The studio stays with the music."}],
+            "new_joke": None,
+            "home_fact_id": None,
+        }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert lines == [DialogueLine(config.hosts[0], "The studio stays with the music.")]
+    assert raw_directive not in prompts[0]
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+
+
+@pytest.mark.asyncio
+async def test_revoked_home_directive_stays_retired_across_next_banter_iteration(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    raw_directive = "Mention the private kitchen light."
+    state.ha_pending_directive = raw_directive
+    state.ha_pending_directive_moment_id = "private-moment"
+    state.ha_pending_directive_source = "ha:light.private_kitchen"
+    submission_allowed = True
+    prompts: list[str] = []
+    calls = 0
+
+    async def _generate(**kwargs):
+        nonlocal calls, submission_allowed
+        calls += 1
+        prompts.append(kwargs["prompt"])
+        if calls == 1:
+            submission_allowed = False
+            raise RuntimeError("script submission revoked before provider call")
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "The studio stays with the music."}],
+            "new_joke": None,
+            "home_fact_id": None,
+        }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        first, _ = await write_banter(state, config, submission_guard=lambda: submission_allowed)
+        assert len(first) >= 2  # deterministic stock fallback still keeps audio moving
+        assert state.ha_pending_directive == ""
+        assert state.ha_pending_directive_moment_id == ""
+        assert state.ha_pending_directive_source == ""
+
+        config.homeassistant.context_enabled = False
+        second, _ = await write_banter(state, config, submission_guard=lambda: True)
+
+    assert second == [DialogueLine(config.hosts[0], "The studio stays with the music.")]
+    assert raw_directive in prompts[0]
+    assert raw_directive not in prompts[1]
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["operator", "skip_bit"])
+async def test_revoked_submission_restores_only_explicit_non_home_directives(config, state, source):
+    directive = "Play the explicit studio bit again."
+    state.ha_pending_directive = directive
+    state.ha_pending_directive_source = source
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(side_effect=RuntimeError("script submission revoked before provider call")),
+    ):
+        result, _ = await write_banter(state, config, submission_guard=lambda: False)
+
+    assert len(result) >= 2
+    assert state.ha_pending_directive == directive
+    assert state.ha_pending_directive_source == source
 
 
 @pytest.mark.asyncio
@@ -2151,6 +2415,8 @@ async def test_write_banter_releases_gag_key_on_fallback(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_hands_off_moment_id_on_success(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     host_name = config.hosts[0].name
     state.ha_pending_directive = "The coffee machine just woke up — react."
@@ -2173,6 +2439,8 @@ async def test_write_banter_hands_off_moment_id_on_success(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_restores_moment_id_on_fallback(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_pending_directive = "Mention the kitchen light."
     state.ha_pending_directive_moment_id = "moment456def"
     mock_client = MagicMock()
@@ -2196,6 +2464,10 @@ async def test_write_banter_restores_moment_id_on_fallback(config, state):
 async def test_write_banter_drops_gag_moment_row_on_fallback(config, state):
     from mammamiradio.home.moment_receipts import MomentStore
 
+    # The gag only rides a generation while home context is enabled; with
+    # context off it is retired as stale before generation starts.
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     store = MomentStore()
     gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
     state.moment_store = store
@@ -2646,13 +2918,11 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     assert record.prompt_tokens == 11
     assert record.completion_tokens == 7
     switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
-    assert switch_records, "expected provider switch telemetry when Anthropic falls back to OpenAI"
-    switch = switch_records[-1]
-    assert switch.provider_class == "script_provider"
-    assert switch.from_provider == "anthropic"
-    assert switch.to_provider == "openai"
-    assert switch.reason == "anthropic_exception"
-    assert state.runtime_events[-1].provider_class == "script_provider"
+    assert switch_records == []
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "anthropic_exception"
+    assert state.runtime_provider_state["script_provider"]["last_switch_timestamp"] is None
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio
@@ -2712,8 +2982,9 @@ async def test_anthropic_max_tokens_truncation_is_labelled_honestly(config, stat
     assert fallback_records[-1].fallback_reason == "anthropic_max_tokens_truncated"
 
     switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
-    assert switch_records, "expected provider switch telemetry on truncation fallback"
-    assert switch_records[-1].reason == "anthropic_max_tokens_truncated"
+    assert switch_records == []
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "anthropic_max_tokens_truncated"
+    assert state.runtime_provider_state["script_provider"]["last_switch_timestamp"] is None
     # Illusion preserved: listener still gets banter via the OpenAI fallback —
     # whose visible floor inherits the ESCALATED budget, not the original.
     assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
@@ -3348,6 +3619,100 @@ async def test_write_banter_populates_api_tokens_by_model(config, state):
 
 
 @pytest.mark.asyncio
+async def test_generate_json_response_submission_guard_blocks_all_provider_calls(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    anthropic_client = MagicMock()
+    anthropic_client.messages = MagicMock()
+    anthropic_client.messages.create = AsyncMock()
+    openai_client = _mock_openai_response(json.dumps({"ok": True}))
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_client", return_value=anthropic_client) as get_anthropic,
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client) as get_openai,
+        pytest.raises(RuntimeError, match="submission revoked"),
+    ):
+        await _generate_json_response(
+            prompt="private Home context",
+            config=config,
+            state=state,
+            model="claude-test",
+            max_tokens=100,
+            caller="banter",
+            submission_guard=lambda: False,
+        )
+
+    get_anthropic.assert_not_called()
+    anthropic_client.messages.create.assert_not_awaited()
+    get_openai.assert_not_called()
+    openai_client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_json_response_rechecks_submission_guard_before_openai_fallback(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    anthropic_client = MagicMock()
+    anthropic_client.messages = MagicMock()
+    anthropic_client.messages.create = AsyncMock(return_value=_good_anthropic_response("not-json"))
+    anthropic_client.with_options.return_value = anthropic_client
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    guard = MagicMock(side_effect=[True, False])
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_client", return_value=anthropic_client),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        pytest.raises(RuntimeError, match="submission revoked"),
+    ):
+        await _generate_json_response(
+            prompt="private Home context",
+            config=config,
+            state=state,
+            model="claude-test",
+            max_tokens=100,
+            caller="banter",
+            submission_guard=guard,
+        )
+
+    assert guard.call_count == 2
+    anthropic_client.messages.create.assert_awaited_once()
+    openai_client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_json_response_rechecks_submission_guard_before_anthropic_retry(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = ""
+    anthropic_client = MagicMock()
+    anthropic_client.messages = MagicMock()
+    anthropic_client.messages.create = AsyncMock(return_value=_truncated_anthropic_response())
+    anthropic_client.with_options.return_value = anthropic_client
+    guard = MagicMock(side_effect=[True, False])
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._get_client", return_value=anthropic_client),
+        pytest.raises(RuntimeError, match="submission revoked"),
+    ):
+        await _generate_json_response(
+            prompt="private Home context",
+            config=config,
+            state=state,
+            model="claude-test",
+            max_tokens=100,
+            caller="banter",
+            submission_guard=guard,
+        )
+
+    assert guard.call_count == 2
+    anthropic_client.messages.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "category"),
     [
@@ -3466,7 +3831,7 @@ async def test_malformed_anthropic_response_does_not_mark_anthropic_active(confi
 
     assert result == {"ok": "fallback"}
     assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
-    assert [event.to_provider for event in state.runtime_events] == ["openai"]
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio
@@ -4223,6 +4588,8 @@ async def test_repair_banter_without_listener_context_skips_without_llm(config, 
 
 @pytest.mark.asyncio
 async def test_write_banter_prompt_includes_optional_context_blocks(config, state, tmp_path):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
@@ -4301,6 +4668,8 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
 
 @pytest.mark.asyncio
 async def test_write_banter_keeps_interrupt_directive_until_producer_queues(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     state.ha_pending_directive = "La pasta scotta. Interrompi tutto."
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
@@ -4326,6 +4695,8 @@ async def test_write_banter_keeps_interrupt_directive_until_producer_queues(conf
 
 @pytest.mark.asyncio
 async def test_write_banter_prompt_excludes_connection_arrival_block(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_home_mood = "Mood sconosciuto"
     state.ha_home_mood_en = "Unknown mood"
     state.ha_weather_arc = "Pioggia in avvicinamento"
@@ -5011,6 +5382,8 @@ async def test_write_ad_ensures_voice_part_when_llm_returns_none(config, state):
 
 @pytest.mark.asyncio
 async def test_write_ad_prompt_includes_campaign_and_home_context(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     captured = {}
     state.ha_context = "Il balcone e aperto."
@@ -5337,6 +5710,8 @@ async def test_write_news_flash_sports_prompt_prioritizes_clarity(config, state)
 @pytest.mark.asyncio
 async def test_write_news_flash_weather_injects_real_forecast(config, state):
     """Real-weather meteo: a live HA forecast is grounded into the weather flash."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     state.ha_weather_arc = "Meteo: pioggia, 12°C."
     state.ha_home_mood = "Serata cinema"
@@ -5366,6 +5741,8 @@ async def test_write_news_flash_weather_injects_real_forecast(config, state):
 @pytest.mark.asyncio
 async def test_write_news_flash_weather_forecast_without_mood(config, state):
     """Forecast present but no home mood: grounded prompt, no 'Home mood:' line."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     state.ha_weather_arc = "Meteo: soleggiato, 22°C."
     state.ha_home_mood = ""
@@ -5435,6 +5812,8 @@ async def test_write_news_flash_english_station_uses_english_weather_arc(config,
     """#627: an English station grounds the meteo flash in the ENGLISH arc, never
     the Italian one — injecting Italian reference data into an English prompt was
     the bug."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.station.language = "en"
     state.ha_weather_arc = "Meteo: pioggia battente, 12C."
     state.ha_weather_arc_en = "Forecast: heavy rain, 12C."
@@ -6295,6 +6674,8 @@ async def test_write_banter_dedup_drops_identical_consecutive_lines(config, stat
 @pytest.mark.asyncio
 async def test_banter_ha_tiered_no_mood(config, state):
     """When no mood is active, prompt says 'ONE item'."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_context = "Luci accese."
 
     captured = {}
@@ -6313,6 +6694,8 @@ async def test_banter_ha_tiered_no_mood(config, state):
 @pytest.mark.asyncio
 async def test_banter_ha_tiered_with_mood(config, state):
     """When mood is active, prompt says 'UP TO TWO'."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     state.ha_context = "Luci accese."
     state.ha_home_mood = "Serata cinema"
@@ -6333,6 +6716,8 @@ async def test_banter_ha_tiered_with_mood(config, state):
 @pytest.mark.asyncio
 async def test_banter_weather_mood_fusion(config, state):
     """When both weather and mood are set, fusion instruction appears."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     state.ha_context = "Luci accese."
     state.ha_home_mood = "Serata cinema"
@@ -6371,6 +6756,8 @@ async def test_banter_weather_only_no_fusion(config, state):
 @pytest.mark.asyncio
 async def test_banter_security_boundary_preserved(config, state):
     """HA instructions must be OUTSIDE <home_state_data> tags."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.super_italian_mode = True
     state.ha_context = "Test data."
     state.ha_home_mood = "Serata cinema"
@@ -6947,6 +7334,8 @@ async def test_key_rotation_clears_block(config, state):
 @pytest.mark.asyncio
 async def test_write_banter_injects_running_gag_with_instruction_outside_fence(config, state):
     """Gag DATA goes inside <home_state_data>; the use/no-use INSTRUCTION outside it."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_running_gag = "La macchina del caffè: spento/a → acceso/a, di nuovo stasera."
     captured = {}
 

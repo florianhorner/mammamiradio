@@ -107,11 +107,11 @@ def test_console_and_tabbar_share_one_sticky_deck() -> None:
     assert "position:sticky" not in tabbar_rule
 
 
-def test_motore_tab_alert_is_wired() -> None:
-    """The Motore tab alert dot must be driven by the same needs-action signal as
-    the in-panel dot, so 'setup needs attention' is visible from any tab."""
+def test_first_listen_tab_alert_is_wired() -> None:
+    """Setup attention belongs on the dedicated First Listen tab."""
     html = _html()
-    assert "getElementById('motoreTabAlert')" in html
+    assert "getElementById('firstListenTabAlert')" in html
+    assert "getElementById('motoreTabAlert')" not in html
 
 
 def test_empty_pending_requests_collapses() -> None:
@@ -155,10 +155,11 @@ def test_active_tab_persists_in_sessionstorage() -> None:
     """The chosen tab persists across reloads; an unknown stored tab falls back to
     Scaletta so the work area is never blank."""
     html = _html()
+    show = html[html.index("function showAdminTab(") : html.index("function initFirstListenPanelMount")]
     init = html[html.index("function initTabs()") : html.index("initTabs();")]
-    assert "sessionStorage.setItem('adminTab'" in init
+    assert "sessionStorage.setItem('adminTab'" in show
     assert "sessionStorage.getItem('adminTab')" in init
-    assert "name='scaletta'" in init  # unknown-tab fallback
+    assert "name='scaletta'" in show  # unknown-tab fallback
 
 
 def test_ban_trigger_is_always_visible_not_hover_gated() -> None:

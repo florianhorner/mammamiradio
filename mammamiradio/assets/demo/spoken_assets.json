@@ -14,6 +14,13 @@
       "kind": "tone",
       "language": "none",
       "transcript": ""
+    },
+    {
+      "path": "first_listen/first_listen_show.mp3",
+      "sha256": "f03a1dc3184f9f108ae502a27e89ca7eebf626ee54cc28e555a63a5b08ab7af8",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Marco: Mamma Mi Radio. Il tipo di stazione che entra con la musica e cinque minuti dopo sa già che il tuo salotto ha bisogno di più basso. Giulia: Non sa niente del tuo salotto, Marco. Non ancora. Ed è esattamente il punto. Marco: Perfetto. Allora partiamo da qui. Volume su."
     }
   ]
 }

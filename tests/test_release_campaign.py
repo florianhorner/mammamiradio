@@ -238,6 +238,61 @@ def test_delivery_counts_only_active_listeners_positive_bytes_and_not_skipped(tm
     assert camp.ledger.status == ACTIVE
 
 
+def test_delivery_rejects_bytes_that_no_listener_accepted(tmp_path):
+    """Starting listeners are not proof that a release beat reached one."""
+    camp = campaign(tmp_path)
+    offer = camp.begin_attempt(now=BASE)
+    assert offer is not None
+    camp.mark_generation_result(attempt_id=offer.attempt_id, release_beat_used=True, queue_id="q1")
+
+    counted = camp.record_stream_result(
+        offer.segment_metadata(),
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=1,
+        accepted_listeners=0,
+        now=BASE + 10,
+    )
+
+    assert counted is False
+    assert camp.ledger.aired_count == 0
+    assert camp.ledger.status == ACTIVE
+
+
+def test_rejected_ordinary_segment_does_not_advance_campaign_spacing(tmp_path):
+    camp = campaign(tmp_path)
+
+    camp.record_stream_result(
+        {},
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=1,
+        accepted_listeners=0,
+        now=BASE + 10,
+    )
+
+    assert camp.ledger.non_release_segments_since_last_airing == 0
+
+
+def test_delivery_counts_listener_that_joins_after_start_sample(tmp_path):
+    camp = campaign(tmp_path)
+    offer = camp.begin_attempt(now=BASE)
+    assert offer is not None
+    camp.mark_generation_result(attempt_id=offer.attempt_id, release_beat_used=True, queue_id="q1")
+
+    counted = camp.record_stream_result(
+        offer.segment_metadata(),
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=0,
+        accepted_listeners=1,
+        now=BASE + 10,
+    )
+
+    assert counted is True
+    assert camp.ledger.aired_count == 1
+
+
 def test_repeat_airing_waits_for_time_or_non_release_spacing(tmp_path):
     camp = campaign(tmp_path)
     offer = camp.begin_attempt(now=BASE)
