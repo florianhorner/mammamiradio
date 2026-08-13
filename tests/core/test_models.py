@@ -377,6 +377,8 @@ def test_stream_delivery_diagnostics_coalesce_and_keep_only_anonymous_bounded_va
 
     snapshot = state.stream_delivery_snapshot(now=102.5, monotonic_now=11.0)
 
+    # Deliberate literal pin: retuning the lead must fail here first.
+    assert snapshot["target_lead_ms"] == 4_000
     assert snapshot["session"] == {"late": 3, "underrun": 1, "overrun_rebased": 0, "total": 4}
     assert snapshot["window_15m"] == snapshot["session"]
     assert [event["count"] for event in snapshot["recent"]] == [2, 1, 1]

@@ -524,7 +524,7 @@ starve forever on short-track stations.
 
 `runtime_status.stream_delivery` is a **private, admin-only** diagnostic surface
 (authenticated `/status` only — it is never added to `/public-status`, and there
-is no listener copy or operator control). It proves when the 500 ms delivery
+is no listener copy or operator control). It proves when the 4-second delivery
 cushion (see [Delivery cushion](architecture.md#delivery-cushion-send-ahead-pacing))
 absorbed a scheduling delay versus when it was exhausted, and distinguishes an
 app-side segment outcome, a global pacing miss, and one lagging listener — all
@@ -534,7 +534,7 @@ Shape (all counters and lists are present from boot, zeroed / empty / `idle`
 before anything is recorded; `slow_listener_drops.last_drop_at` is `null` until
 the first overflow, because no timestamp exists yet):
 
-- `target_lead_ms` — the fixed send-ahead target (`500`).
+- `target_lead_ms` — the send-ahead target the live pacer is running at (`4000`).
 - `late_threshold_ms` — the lateness that records an event (`50`).
 - `session` / `window_15m` — counts of `late`, `underrun`, `overrun_rebased`, and
   `total`, for the whole session and a rolling 15-minute window.

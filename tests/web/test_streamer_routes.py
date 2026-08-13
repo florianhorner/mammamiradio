@@ -59,6 +59,7 @@ from mammamiradio.web.streamer import (
     FIRST_BYTE_GRACE_SECONDS,
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
+    STREAM_LATE_THRESHOLD_SECONDS,
     STREAM_MAX_PACKET_SECONDS,
     STREAM_TARGET_LEAD_SECONDS,
     LiveStreamHub,
@@ -125,10 +126,19 @@ class _FakeMonotonic:
         self.now += max(0.0, seconds)
 
 
+# Short synthetic cushion; these tests assert ratios, not the shipped value.
+SHORT_TEST_LEAD_SECONDS = 0.5
+
+
 def _paced_send(pacer: StreamPacer, clock: _FakeMonotonic, chunk_bytes: int = 4096):
     decision = pacer.after_send(chunk_bytes)
     clock.advance(decision.sleep_seconds)
     return decision
+
+
+def _packets_to_fill_lead(pacer: StreamPacer, chunk_bytes: int) -> int:
+    """Packets a pacer must send before its send-ahead cushion is full."""
+    return round(pacer.target_lead_seconds * pacer.bytes_per_second / chunk_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +193,8 @@ def _make_test_app(
     app.state.first_listen_bootstrap_snapshot_authoritative = True
     # Drive run_playback_loop integration tests with a real-time pacer (no
     # send-ahead lead) so their queue/rescue timing assertions stay
-    # deterministic. The 500 ms delivery cushion itself is covered directly by
-    # the StreamPacer unit tests, not through these wall-clock loop tests.
+    # deterministic. The production delivery cushion itself is covered directly
+    # by the StreamPacer unit tests, not through these wall-clock loop tests.
     app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(bytes_per_second, target_lead_seconds=0.0)
     return app
 
@@ -226,19 +236,21 @@ def test_ha_green_queue_fallback_budget_is_shorter_than_health_failure():
     assert QUEUE_FALLBACK_WAIT_SECONDS < SILENCE_FAILURE_SECONDS
 
 
-def test_stream_pacer_builds_one_500ms_lead_and_keeps_natural_segments_on_the_same_timeline():
+def test_stream_pacer_builds_the_configured_lead_and_keeps_natural_segments_on_the_same_timeline():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    bytes_per_second = 24_000
+    chunk_size = _stream_chunk_size(bytes_per_second)
+    pacer = StreamPacer(bytes_per_second, monotonic=clock)
 
-    initial = [_paced_send(pacer, clock) for _ in range(4)]
+    initial = [_paced_send(pacer, clock, chunk_size) for _ in range(_packets_to_fill_lead(pacer, chunk_size))]
     assert all(decision.sleep_seconds >= 0 for decision in initial)
-    assert pacer.media_seconds - clock.now == pytest.approx(0.5, abs=0.001)
+    assert pacer.media_seconds - clock.now == pytest.approx(STREAM_TARGET_LEAD_SECONDS, abs=0.001)
 
     media_at_boundary = pacer.media_seconds
-    first_packet_of_next_natural_segment = _paced_send(pacer, clock)
+    first_packet_of_next_natural_segment = _paced_send(pacer, clock, chunk_size)
     assert pacer.reset_count == 0
-    assert pacer.media_seconds == pytest.approx(media_at_boundary + 4096 / 24_000)
-    assert first_packet_of_next_natural_segment.sleep_seconds == pytest.approx(4096 / 24_000)
+    assert pacer.media_seconds == pytest.approx(media_at_boundary + chunk_size / bytes_per_second)
+    assert first_packet_of_next_natural_segment.sleep_seconds == pytest.approx(chunk_size / bytes_per_second)
 
 
 def test_source_packet_cap_bounds_low_bitrate_delivery_lead():
@@ -249,7 +261,8 @@ def test_source_packet_cap_bounds_low_bitrate_delivery_lead():
     clock = _FakeMonotonic()
     pacer = StreamPacer(bytes_per_second, monotonic=clock)
     maximum_lead = 0.0
-    for _ in range(8):
+    # Fill the cushion, then run on into the steady state the cap governs.
+    for _ in range(_packets_to_fill_lead(pacer, chunk_size) + 8):
         decision = pacer.after_send(chunk_size)
         maximum_lead = max(maximum_lead, pacer.media_seconds - clock.now)
         clock.advance(decision.sleep_seconds)
@@ -257,9 +270,25 @@ def test_source_packet_cap_bounds_low_bitrate_delivery_lead():
     assert maximum_lead <= STREAM_TARGET_LEAD_SECONDS + STREAM_MAX_PACKET_SECONDS + 0.0001
 
 
+def test_stream_pacer_absorbs_the_measured_sonos_scheduler_stall_without_an_underrun():
+    clock = _FakeMonotonic()
+    bytes_per_second = 24_000
+    chunk_size = _stream_chunk_size(bytes_per_second)
+    pacer = StreamPacer(bytes_per_second, monotonic=clock)
+    for _ in range(_packets_to_fill_lead(pacer, chunk_size)):
+        _paced_send(pacer, clock, chunk_size)
+
+    clock.advance(1.781)
+    delayed = _paced_send(pacer, clock, chunk_size)
+
+    assert delayed.kind == "late"
+    assert delayed.deficit_seconds == 0
+    assert delayed.remaining_lead_seconds == pytest.approx(STREAM_TARGET_LEAD_SECONDS - 1.781, abs=0.001)
+
+
 def test_stream_pacer_records_100ms_lateness_without_moving_the_media_timeline():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    pacer = StreamPacer(24_000, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
     for _ in range(4):
         _paced_send(pacer, clock)
 
@@ -294,7 +323,7 @@ def test_stream_pacer_resets_only_for_named_transport_discontinuities(reason: st
 
 def test_stream_pacer_absorbs_sub_lead_pause_without_rebase_or_negative_sleep():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    pacer = StreamPacer(24_000, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
     for _ in range(4):
         _paced_send(pacer, clock)
 
@@ -308,7 +337,7 @@ def test_stream_pacer_absorbs_sub_lead_pause_without_rebase_or_negative_sleep():
 
 def test_stream_pacer_caps_overlong_pause_recovery_at_three_chunks_then_rebases_once():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    pacer = StreamPacer(24_000, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
     for _ in range(4):
         _paced_send(pacer, clock)
 
@@ -784,7 +813,7 @@ async def test_run_playback_loop_restarts_default_cushion_for_midsegment_reconne
 
         await asyncio.wait_for(second_packet_sent.wait(), timeout=1.0)
         pacer = created_pacers[0]
-        assert pacer.target_lead_seconds == pytest.approx(0.5)
+        assert pacer.target_lead_seconds == pytest.approx(STREAM_TARGET_LEAD_SECONDS)
         assert pacer.reset_count == 1
         assert await asyncio.wait_for(reconnected_queue.get(), timeout=0.1) == b"x" * _stream_chunk_size(4_000)
     finally:
@@ -801,7 +830,7 @@ async def test_run_playback_loop_records_bounded_recovery_after_scheduler_stall(
     created_pacers: list[StreamPacer] = []
 
     def _pacer(bytes_per_second: float) -> StreamPacer:
-        pacer = StreamPacer(bytes_per_second, monotonic=clock)
+        pacer = StreamPacer(bytes_per_second, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
         created_pacers.append(pacer)
         return pacer
 
@@ -823,8 +852,8 @@ async def test_run_playback_loop_records_bounded_recovery_after_scheduler_stall(
     async def _broadcast(chunk: bytes) -> None:
         nonlocal broadcasts
         broadcasts += 1
-        # Four packets establish the 500 ms cushion; the fifth normally waits
-        # one packet. Stall before the sixth send to exhaust that cushion.
+        # Four packets establish the short test cushion; the fifth waits one
+        # packet. Stall before the sixth to exhaust it.
         if broadcasts == 6:
             clock.advance(1.2)
         await real_broadcast(chunk)
@@ -850,6 +879,9 @@ async def test_run_playback_loop_records_bounded_recovery_after_scheduler_stall(
     delivery = app.state.station_state.stream_delivery_snapshot()
     assert delivery["session"] == {"late": 0, "underrun": 1, "overrun_rebased": 1, "total": 2}
     assert [event["kind"] for event in delivery["recent"]] == ["underrun", "overrun_rebased"]
+    # The diagnostic reports the pacer this loop actually built, not the shipped
+    # constant — otherwise it would describe a cushion nothing is running at.
+    assert delivery["target_lead_ms"] == round(SHORT_TEST_LEAD_SECONDS * 1000)
 
 
 @pytest.mark.asyncio
@@ -3674,13 +3706,14 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     caplog.set_level(logging.WARNING)
 
     demo_dir = tmp_path / "demo" / "music"
     demo_dir.mkdir(parents=True)
     rescue_mp3 = demo_dir / "Pino Daniele - Napule E.mp3"
-    rescue_mp3.write_bytes(b"x" * 4096)
+    rescue_audio = b"x" * 4096
+    rescue_mp3.write_bytes(rescue_audio)
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -3705,11 +3738,12 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not rescue from demo assets")
                 await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    assert app.state.station_state.queue_empty_since is None
+    assert rescue_audio.startswith(heard)
     assert any("rescuing with demo asset" in record.message for record in caplog.records)
 
     now_meta = app.state.station_state.now_streaming.get("metadata", {})
@@ -3799,12 +3833,13 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
     must air from the queue, not get pre-empted by the rescue ladder."""
     app = _make_test_app()
     app.state.config.audio.bitrate = 64
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     state = app.state.station_state
     state.queued_segments = [{"type": "music", "label": "Normal Grace"}]
 
     audio_path = tmp_path / "normal-grace.mp3"
-    audio_path.write_bytes(b"x" * 8192)
+    normal_audio = b"x" * 8192
+    audio_path.write_bytes(normal_audio)
     segment = Segment(
         type=SegmentType.MUSIC,
         path=audio_path,
@@ -3830,6 +3865,7 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not stream queued segment inside the grace window")
                 await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -3838,8 +3874,8 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
     assert now_meta.get("title") == "Normal Grace"
     assert now_meta.get("fallback") is not True
     assert now_meta.get("audio_source") not in {"norm_cache", "fallback_demo_asset"}
-    assert state.queue_empty_since is None
     assert state.queued_segments == []
+    assert normal_audio.startswith(heard)
     pick_canned_clip.assert_not_called()
     select_norm_cache_rescue.assert_not_called()
 
@@ -4696,8 +4732,8 @@ async def test_stream_delivery_diagnostics_are_bounded_anonymous_and_admin_only(
         public = (await client.get("/public-status")).json()
 
     delivery = admin["runtime_status"]["stream_delivery"]
-    assert delivery["target_lead_ms"] == 500
-    assert delivery["late_threshold_ms"] == 50
+    assert delivery["target_lead_ms"] == round(STREAM_TARGET_LEAD_SECONDS * 1000)
+    assert delivery["late_threshold_ms"] == round(STREAM_LATE_THRESHOLD_SECONDS * 1000)
     assert delivery["session"]["late"] == 1
     assert len(delivery["recent"]) == 1
     assert len(delivery["recent_stream_outcomes"]) == 20
