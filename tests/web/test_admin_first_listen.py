@@ -175,10 +175,16 @@ def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None
 
 def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> None:
     html = _html()
-    assert "apiResponse('POST','/api/setup/first-listen/players',{})" in html
-    assert "apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId})" in html
-    assert "apiResponse('POST','/api/setup/first-listen/receipt/retry',{entity_id:entityId})" in html
-    assert "apiResponse('POST','/api/setup/first-listen/verify',{attempt_id:attemptId,heard:requestedHeard})" in html
+    assert "apiResponse('POST','/api/setup/first-listen/players',{},FIRST_LISTEN_TIMEOUTS.players)" in html
+    assert "apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.play)" in html
+    assert (
+        "apiResponse('POST','/api/setup/first-listen/receipt/retry',"
+        "{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.receipt)" in html
+    )
+    assert (
+        "apiResponse('POST','/api/setup/first-listen/verify',"
+        "{attempt_id:attemptId,heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)" in html
+    )
     assert "media-source://mammamiradio/live" in html
     assert "Play in this room" in html
     assert "Yes, I hear it" in html
@@ -310,25 +316,27 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
         (
             "findFirstListenPlayers",
             "firstListenPlayerChanged",
-            "apiResponse('POST','/api/setup/first-listen/players',{})",
+            "apiResponse('POST','/api/setup/first-listen/players',{},FIRST_LISTEN_TIMEOUTS.players)",
             "_firstListenUi.players=players",
         ),
         (
             "startFirstListen",
             "saveFirstListenAttempt",
-            "apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId})",
+            "apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.play)",
             "_firstListenUi.dispatch='accepted'",
         ),
         (
             "saveFirstListenAttempt",
             "verifyFirstListen",
-            "apiResponse('POST','/api/setup/first-listen/receipt/retry',{entity_id:entityId})",
+            "apiResponse('POST','/api/setup/first-listen/receipt/retry',"
+            "{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.receipt)",
             "_firstListenUi.attemptId=attemptId",
         ),
         (
             "verifyFirstListen",
             "loadHomeContextPreview",
-            "apiResponse('POST','/api/setup/first-listen/verify',{attempt_id:attemptId,heard:requestedHeard})",
+            "apiResponse('POST','/api/setup/first-listen/verify',"
+            "{attempt_id:attemptId,heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)",
             "_firstListenUi.verification=requestedHeard?'heard':'not_yet'",
         ),
         (
@@ -549,7 +557,10 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "_firstListenUi.repairOpen=true" in save
     assert "_firstListenUi.receiptSaving=true" in save
     assert "_firstListenUi.receiptSaving=false" in save
-    assert "apiResponse('POST','/api/setup/first-listen/receipt/retry',{entity_id:entityId})" in save
+    assert (
+        "apiResponse('POST','/api/setup/first-listen/receipt/retry',"
+        "{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.receipt)" in save
+    )
     assert "/api/setup/first-listen/play" not in save
     assert "resp?.receipt_persisted!==true||!attemptId" in save
     assert "_firstListenUi.dispatch='accepted'" in save
@@ -891,3 +902,39 @@ def test_step_status_chips_become_visible_once_they_carry_real_state() -> None:
     assert ".first-listen-panel [hidden]" in css
     set_chip = _function("firstListenSetChip", "firstListenSetActionTone")
     assert "el.removeAttribute('hidden')" in set_chip
+
+
+def test_every_first_listen_mutation_carries_a_deadline_and_a_way_out() -> None:
+    """A hung request must not be able to freeze the journey.
+
+    apiResponse only arms an AbortController when a 4th argument is passed, and
+    renderFirstListen refuses to hydrate from the server while `busy` is set. So
+    a mutation without a deadline latches the whole flow until a reload, with
+    nothing on screen explaining why every control went dead.
+    """
+    html = _html()
+
+    assert "const FIRST_LISTEN_TIMEOUTS={" in html
+    assert "function firstListenTimedOut(error){return Boolean(error&&error.name==='AbortError')}" in html
+
+    for route, budget in (
+        ("/api/setup/first-listen/players", "FIRST_LISTEN_TIMEOUTS.players"),
+        ("/api/setup/first-listen/play", "FIRST_LISTEN_TIMEOUTS.play"),
+        ("/api/setup/first-listen/receipt/retry", "FIRST_LISTEN_TIMEOUTS.receipt"),
+        ("/api/setup/first-listen/verify", "FIRST_LISTEN_TIMEOUTS.verify"),
+    ):
+        call = re.search(rf"apiResponse\('POST','{re.escape(route)}',[^;]*?\);", html)
+        assert call is not None, f"{route} is no longer called through apiResponse"
+        assert budget in call.group(0), f"{route} is dispatched with no deadline"
+
+    # Every timeout tells the operator what to do next, never just that it failed.
+    for owner, nxt, latch in (
+        ("findFirstListenPlayers", "firstListenPlayerChanged", "_firstListenUi.busy=false"),
+        ("startFirstListen", "saveFirstListenAttempt", "_firstListenUi.busy=false"),
+        ("saveFirstListenAttempt", "verifyFirstListen", "_firstListenUi.receiptSaving=false"),
+        ("verifyFirstListen", "loadHomeContextPreview", "_firstListenUi.busy=false"),
+    ):
+        body = _function(owner, nxt)
+        assert "firstListenTimedOut(error)" in body, f"{owner} cannot tell a timeout from a failure"
+        assert "taking longer than usual" in body, f"{owner} names no way out on a timeout"
+        assert "}finally{" in body and latch in body, f"{owner} can leave its latch set"

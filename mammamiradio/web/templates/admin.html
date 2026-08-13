@@ -2677,6 +2677,13 @@ const FIRST_LISTEN_ERRORS={
   persistence_failed:{title:'Mamma Mi Radio could not save that change',message:'The station kept the safer choice shown below.',action:'Try saving the choice again.'},
   invalid_request:{title:'This setup view is out of date',message:'This setup screen no longer matches the running station.',action:'Refresh Setup, then try the action again.'},
 };
+// Every First Listen mutation needs a deadline. apiResponse only arms an
+// AbortController when a timeout is passed, and renderFirstListen refuses to
+// hydrate from the server while _firstListenUi.busy is set — so a request that
+// never settles used to freeze the whole journey until the operator reloaded,
+// with nothing on screen saying so.
+const FIRST_LISTEN_TIMEOUTS={players:20000,play:30000,receipt:15000,verify:15000};
+function firstListenTimedOut(error){return Boolean(error&&error.name==='AbortError')}
 const _firstListenUi={
   projection:null,
   players:[],
@@ -5039,7 +5046,7 @@ async function findFirstListenPlayers(el){
   if(el)el.setAttribute('aria-busy','true');
   firstListenSetStatus('firstListenSpeakerStatus','Looking for speakers already set up in Home Assistant…');
   try{
-    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/players',{});
+    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/players',{},FIRST_LISTEN_TIMEOUTS.players);
     const resp=payload&&typeof payload==='object'?payload:{};
     const discoveryReady=response.ok===true&&resp?.ok===true&&resp?.media_source_ready===true&&resp?.media_source_uri===FIRST_LISTEN_MEDIA_SOURCE;
     if(!discoveryReady){
@@ -5076,7 +5083,7 @@ async function findFirstListenPlayers(el){
     const projectedRecovery=firstListenReceiptRecoveryEntity(firstListenProjection().first);
     const pendingRecovery=projectedRecovery||(_firstListenUi.dispatch==='receipt_failed'?_firstListenUi.selectedEntityId:'');
     renderFirstListenPlayers([], '', pendingRecovery);
-    firstListenSetStatus('firstListenSpeakerStatus',firstListenErrorMessage({error:{code:'ha_unreachable'}}),'blocked');
+    firstListenSetStatus('firstListenSpeakerStatus',firstListenTimedOut(error)?'Looking for speakers is taking longer than usual. Give Home Assistant a moment, then tap Find my speakers again.':firstListenErrorMessage({error:{code:'ha_unreachable'}}),'blocked');
   }finally{
     _firstListenUi.busy=false;
     if(el)el.removeAttribute('aria-busy');
@@ -5153,7 +5160,7 @@ async function startFirstListen(el){
   if(el)el.setAttribute('aria-busy','true');
   firstListenSetStatus('firstListenSpeakerStatus',`Starting Mamma Mi Radio on ${_firstListenUi.selectedName||'your speaker'}…`);
   try{
-    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId});
+    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.play);
     const resp=payload&&typeof payload==='object'?payload:{};
     const acceptedWithoutReceipt=response.ok===false&&response.status===503&&resp?.ok===false&&resp?.accepted===true&&resp?.receipt_persisted===false&&resp?.entity_id===entityId&&resp?.error?.code==='receipt_unavailable';
     if(acceptedWithoutReceipt){
@@ -5189,7 +5196,7 @@ async function startFirstListen(el){
   }catch(error){
     console.error('first_listen_play',error);
     _firstListenUi.dispatch='rejected';
-    firstListenSetStatus('firstListenSpeakerStatus',firstListenErrorMessage({error:{code:'ha_unreachable'}}),'blocked');
+    firstListenSetStatus('firstListenSpeakerStatus',firstListenTimedOut(error)?'Starting the station in that room is taking longer than usual. Give it a moment, then try the room again.':firstListenErrorMessage({error:{code:'ha_unreachable'}}),'blocked');
   }finally{
     _firstListenUi.busy=false;
     if(el)el.removeAttribute('aria-busy');
@@ -5206,7 +5213,7 @@ async function saveFirstListenAttempt(el){
   firstListenSetStatus('firstListenVerifyStatus','Restoring this sound check. The station will not play again.');
   let focusTarget='';
   try{
-    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/receipt/retry',{entity_id:entityId});
+    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/receipt/retry',{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.receipt);
     const resp=payload&&typeof payload==='object'?payload:{};
     if(!response.ok||resp?.ok!==true||resp?.accepted!==true||resp?.entity_id!==entityId){
       const code=String(resp?.error?.code||'');
@@ -5238,7 +5245,7 @@ async function saveFirstListenAttempt(el){
     focusTarget='firstListenVerifyHeading';
   }catch(error){
     console.error('first_listen_receipt_retry',error);
-    firstListenSetStatus('firstListenVerifyStatus',firstListenErrorMessage({error:{code:'receipt_unavailable'}}),'degraded');
+    firstListenSetStatus('firstListenVerifyStatus',firstListenTimedOut(error)?'Saving this sound check is taking longer than usual. Give it a moment, then try again — the station will not play again.':firstListenErrorMessage({error:{code:'receipt_unavailable'}}),'degraded');
   }finally{
     _firstListenUi.receiptSaving=false;
     if(el)el.removeAttribute('aria-busy');
@@ -5256,7 +5263,7 @@ async function verifyFirstListen(heard,el){
   if(el)el.setAttribute('aria-busy','true');
   firstListenSetStatus('firstListenVerifyStatus',requestedHeard?'Saving your listening check…':'Saving “Not yet” and opening help…');
   try{
-    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/verify',{attempt_id:attemptId,heard:requestedHeard});
+    const {response,payload}=await apiResponse('POST','/api/setup/first-listen/verify',{attempt_id:attemptId,heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify);
     const resp=payload&&typeof payload==='object'?payload:{};
     const verificationMatches=resp?.attempt_id===attemptId&&resp?.heard===requestedHeard&&(!requestedHeard||resp?.first_listen_achieved===true);
     if(!response.ok||resp?.ok!==true||!verificationMatches){
@@ -5276,7 +5283,7 @@ async function verifyFirstListen(heard,el){
     }
   }catch(error){
     console.error('first_listen_verify',error);
-    firstListenSetStatus('firstListenVerifyStatus',firstListenErrorMessage({error:{code:'ha_unreachable'}}),'blocked');
+    firstListenSetStatus('firstListenVerifyStatus',firstListenTimedOut(error)?'Saving your answer is taking longer than usual. Give it a moment, then tap again.':firstListenErrorMessage({error:{code:'ha_unreachable'}}),'blocked');
   }finally{
     _firstListenUi.busy=false;
     if(el)el.removeAttribute('aria-busy');
