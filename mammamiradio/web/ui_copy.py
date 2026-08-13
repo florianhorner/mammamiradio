@@ -28,9 +28,14 @@ COPY: dict[str, dict[str, str]] = {
         "footer_listen": "Listen",
         # Listener page — stat labels under hero
         "stat_airtime": "On Air Today",
-        "casa_moments_title": "Live from your home",
+        "casa_moments_title": "On-air moments from your home",
+        "casa_moments_helper": "This is a record of home moments that made it on air—not every change at home.",
         "casa_moment_airing": "on air now",
         "casa_moment_minutes_ago": "{m} min ago",
+        "casa_moment_hours_ago": "{h} hr ago",
+        "casa_moment_yesterday": "yesterday",
+        "casa_moment_days_ago": "{d} days ago",
+        "casa_moment_stale": "Nothing newer has made it on air yet.",
         "stat_tracks": "Tracks in Rotation",
         "stat_hosts": "Hosts",
         # Listener page — placeholders / loading copy
@@ -98,9 +103,16 @@ COPY: dict[str, dict[str, str]] = {
         "install_app": "Installa app",
         "footer_listen": "Ascolta",
         "stat_airtime": "In onda oggi",
-        "casa_moments_title": "In diretta da casa tua",
+        "casa_moments_title": "Momenti dalla tua casa andati in onda",
+        "casa_moments_helper": (
+            "Questo è il registro dei momenti di casa andati in onda, non di ogni cambiamento a casa."
+        ),
         "casa_moment_airing": "in onda ora",
         "casa_moment_minutes_ago": "{m} min fa",
+        "casa_moment_hours_ago": "{h} h fa",
+        "casa_moment_yesterday": "ieri",
+        "casa_moment_days_ago": "{d} giorni fa",
+        "casa_moment_stale": "Non ci sono ancora momenti più recenti andati in onda.",
         "stat_tracks": "Tracce in playlist",
         "stat_hosts": "I conduttori",
         "tuning_in": "Stiamo accendendo la radio…",

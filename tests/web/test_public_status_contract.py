@@ -47,6 +47,24 @@ async def test_render_timings_are_admin_only():
 
 
 @pytest.mark.asyncio
+async def test_rescue_rotation_is_admin_only():
+    """The rescue-rotation diagnostics live inside admin runtime_status only; the
+    listener payload never carries the cooldown bookkeeping."""
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert "rescue_rotation" not in public
+    rr = admin["runtime_status"]["rescue_rotation"]
+    assert rr["cooldown_seconds"] == 3600.0
+    assert rr["tracked"] == 0
+    assert rr["cooling"] == 0
+    assert rr["most_recent"] == ""
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_brand_block():
     """Public listener payload must include the brand-fiction layer."""
     app = _make_test_app()
@@ -365,6 +383,25 @@ async def test_public_status_strict_subset_of_admin():
         f"Listener payload has keys admin doesn't expose: {listener_only_keys}. "
         "/public-status must be a strict subset of /status for shared fields."
     )
+
+
+@pytest.mark.asyncio
+async def test_listener_session_diagnostics_are_admin_only_and_legacy_counts_stay_stable():
+    app = _make_test_app()
+    hub = app.state.stream_hub
+    listener_id, _queue = hub.subscribe()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+    hub.unsubscribe(listener_id)
+
+    assert "listener_session" not in public
+    assert "connections_total" not in public
+    assert admin["listeners"] == {"active": 1, "peak": 1, "total": 1}
+    assert admin["connections_total"] == 1
+    assert admin["listener_session"]["epoch"] == 1
+    assert admin["listener_session"]["phase"] == "active"
 
 
 @pytest.mark.asyncio

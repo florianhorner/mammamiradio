@@ -110,6 +110,25 @@
     if (diff < 60) return Math.round(diff) + ' ' + _t('minutes_ago', 'min ago');
     return Math.round(diff / 60) + ' ' + _t('hours_ago', 'hr ago');
   }
+  function casaMomentAgeMinutes(agoMin) {
+    const minutes = Number(agoMin);
+    return Number.isFinite(minutes) && minutes >= 0 ? Math.floor(minutes) : null;
+  }
+  function formatCasaMomentAge(agoMin) {
+    // Public receipts carry only a coarse minute count. Keep the raw field in
+    // the API, but give listeners a natural, localized description.
+    const minutes = Math.max(1, casaMomentAgeMinutes(agoMin) || 0);
+    if (minutes < 60) {
+      return _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
+    }
+    if (minutes < 24 * 60) {
+      return _t('casa_moment_hours_ago', '{h} hr ago').replace('{h}', String(Math.floor(minutes / 60)));
+    }
+    if (minutes < 48 * 60) {
+      return _t('casa_moment_yesterday', 'yesterday');
+    }
+    return _t('casa_moment_days_ago', '{d} days ago').replace('{d}', String(Math.floor(minutes / (24 * 60))));
+  }
   function segmentKindLabel(type) {
     switch ((type || '').toLowerCase()) {
       case 'music': return _t('seg_music', 'Music');
@@ -428,15 +447,29 @@
     updateMediaSession(np);
   }
 
+  // A second or two past the end is normal — the server reports elapsed as
+  // wall-clock since the segment started, and we read it on a poll interval, so
+  // a track can briefly measure longer than itself. Clamp that quietly.
+  //
+  // A large overshoot is a different thing: it means the segment we are timing
+  // is not what is still playing. A 4-second continuity clip that has been on
+  // air for minutes reported "3:24 / 0:04" to listeners. Clamping would only
+  // trade that for "0:04 / 0:04" frozen at the end, which reads as a stuck
+  // player. When the numbers have stopped describing anything, show nothing —
+  // a live stream with no time code is ordinary; a lying one is not.
+  const PROGRESS_OVERSHOOT_GRACE_SEC = 5;
+
   function renderProgress(progressSec, durationSec) {
     const fill = $('np-fill');
     const tCur = $('np-time-cur');
     const tTot = $('np-time-tot');
     if (!fill) return;
-    const pct = durationSec > 0 ? Math.min(100, (progressSec / durationSec) * 100) : 0;
-    fill.style.width = pct + '%';
-    if (tCur) tCur.textContent = fmtTime(progressSec);
-    if (tTot) tTot.textContent = durationSec > 0 ? fmtTime(durationSec) : '—';
+    const trustworthy = durationSec > 0
+      && progressSec <= durationSec + PROGRESS_OVERSHOOT_GRACE_SEC;
+    const shown = trustworthy ? Math.min(progressSec, durationSec) : 0;
+    fill.style.width = (trustworthy ? (shown / durationSec) * 100 : 0) + '%';
+    if (tCur) tCur.textContent = trustworthy ? fmtTime(shown) : '—';
+    if (tTot) tTot.textContent = trustworthy ? fmtTime(durationSec) : '—';
   }
 
   function renderHeroStats(status, caps) {
@@ -583,7 +616,11 @@
       el.setAttribute('hidden', '');
       return;
     }
-    const recent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
+    const rawRecent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
+    // Defense in depth: the public API already projects only aired/airing
+    // receipts, and the listener keeps that privacy promise if a malformed
+    // payload ever reaches the browser.
+    const recent = rawRecent.filter((m) => m && (m.status === 'airing' || m.status === 'aired'));
     if (!ha || (!ha.mood && !ha.weather && !ha.last_event_label && !recent.length)) {
       el.setAttribute('hidden', '');
       return;
@@ -607,13 +644,24 @@
        from the wire is ever interpreted as HTML. */
     const momentsWrap = $('casa-moments');
     const momentsRows = $('casa-moments-rows');
+    const staleNote = $('casa-moments-stale');
     if (momentsWrap && momentsRows) {
       if (!recent.length) {
         momentsWrap.setAttribute('hidden', '');
         momentsRows.textContent = '';
+        if (staleNote) staleNote.setAttribute('hidden', '');
       } else {
         momentsWrap.removeAttribute('hidden');
         momentsRows.textContent = '';
+        const hasAiring = recent.some((m) => m.status === 'airing');
+        const latestReceiptAge = recent.reduce((newest, m) => {
+          const age = casaMomentAgeMinutes(m.ago_min);
+          return age !== null && (newest === null || age < newest) ? age : newest;
+        }, null);
+        if (staleNote) {
+          const showStaleNote = !hasAiring && latestReceiptAge !== null && latestReceiptAge >= 24 * 60;
+          staleNote.toggleAttribute('hidden', !showStaleNote);
+        }
         recent.forEach((m) => {
           const row = document.createElement('div');
           row.className = 'row' + (m.status === 'airing' ? '' : ' dim');
@@ -621,10 +669,9 @@
           ico.className = 'ico';
           ico.textContent = m.status === 'airing' ? '●' : '·';
           const text = document.createElement('span');
-          const minutes = m.ago_min || 1;
           text.textContent = m.status === 'airing'
             ? (m.label || '') + ' · ' + _t('casa_moment_airing', 'on air now')
-            : (m.label || '') + ' · ' + _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
+            : (m.label || '') + ' · ' + formatCasaMomentAge(m.ago_min);
           row.appendChild(ico);
           row.appendChild(text);
           momentsRows.appendChild(row);

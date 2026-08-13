@@ -35,6 +35,7 @@ MAX_LABEL_LENGTH = 80
 _CATALOG_LOCK = asyncio.Lock()
 _generation_scheduled: bool = False
 _generation_tasks: set[asyncio.Task] = set()
+_generation_policy_epoch: int = 0
 _catalog_cache: dict | None = None
 _catalog_cache_path: Path | None = None
 
@@ -51,6 +52,10 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 # Italian-friendly labels for entity states
 ENTITY_LABELS = {
+    # Synthetic, privacy-safe R0 ambient projections. These IDs never identify
+    # the operator's real HA source entity.
+    "weather.ambient": "Meteo",
+    "sun.ambient": "Luce del giorno",
     "switch.bar_kaffeemaschine_steckdose": "La macchina del caffè",
     "input_select.kaffee_dad_jokes": "Dad joke del caffè",
     "vacuum.goldstaubsucher": "Robot aspirapolvere Goldstaubsucher",
@@ -93,6 +98,8 @@ ENTITY_LABELS = {
 
 # English entity labels for admin UI display (parallel to ENTITY_LABELS)
 ENTITY_LABELS_EN: dict[str, str] = {
+    "weather.ambient": "Weather",
+    "sun.ambient": "Daylight",
     "switch.bar_kaffeemaschine_steckdose": "Coffee machine",
     "input_select.kaffee_dad_jokes": "Coffee dad joke",
     "vacuum.goldstaubsucher": "Robot vacuum Goldstaubsucher",
@@ -158,7 +165,10 @@ def _empty_catalog() -> dict:
 
 def reset_catalog_cache() -> None:
     """Clear in-memory catalog state for tests and hot-reload style workflows."""
-    global _catalog_cache, _catalog_cache_path, _generation_scheduled
+    global _catalog_cache, _catalog_cache_path, _generation_scheduled, _generation_policy_epoch
+    _generation_policy_epoch += 1
+    for task in tuple(_generation_tasks):
+        task.cancel()
     _catalog_cache = None
     _catalog_cache_path = None
     _generation_scheduled = False
@@ -287,6 +297,26 @@ def validate_label(label: str, entity_id: str) -> bool:
     return not _looks_sensitive_value(text)
 
 
+def load_catalog_snapshot(cache_dir: Path | None) -> dict:
+    """Read a detached catalog snapshot without touching the module cache.
+
+    This is safe for the HA projection worker: it performs the same tolerant
+    file validation as :func:`load_catalog` but owns the returned object and
+    never races with the event-loop cache.
+    """
+    if cache_dir is None:
+        return _empty_catalog()
+    try:
+        data = json.loads(_catalog_path(Path(cache_dir)).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        data = _empty_catalog()
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+        data = _empty_catalog()
+    if not isinstance(data.get("entries"), dict):
+        data = _empty_catalog()
+    return data
+
+
 def load_catalog(cache_dir: Path | None) -> dict:
     """Load the generated catalog once per cache path, degrading to empty."""
     global _catalog_cache, _catalog_cache_path
@@ -295,14 +325,7 @@ def load_catalog(cache_dir: Path | None) -> dict:
     path = _catalog_path(Path(cache_dir))
     if _catalog_cache is not None and _catalog_cache_path == path:
         return _catalog_cache
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError):
-        data = _empty_catalog()
-    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
-        data = _empty_catalog()
-    if not isinstance(data.get("entries"), dict):
-        data = _empty_catalog()
+    data = load_catalog_snapshot(cache_dir)
     _catalog_cache = data
     _catalog_cache_path = path
     return data
@@ -445,7 +468,38 @@ def select_label_candidates(
 
 def generation_in_progress() -> bool:
     """Return True if a label refresh is scheduled or currently running."""
-    return _generation_scheduled or _CATALOG_LOCK.locked()
+    return _generation_scheduled or bool(_generation_tasks) or _CATALOG_LOCK.locked()
+
+
+def invalidate_label_generation() -> tuple[asyncio.Task, ...]:
+    """Synchronously fence and cancel label work at a privacy cutover."""
+    global _generation_policy_epoch, _generation_scheduled
+    _generation_policy_epoch += 1
+    tasks = tuple(_generation_tasks)
+    for task in tasks:
+        task.cancel()
+    _generation_scheduled = False
+    return tasks
+
+
+async def drain_invalidated_label_generation(tasks: tuple[asyncio.Task, ...]) -> None:
+    """Bound the cleanup wait after synchronous label invalidation."""
+    if not tasks:
+        return
+    done, _pending = await asyncio.wait(tasks, timeout=1.0)
+    if done:
+        await asyncio.gather(*done, return_exceptions=True)
+
+
+async def revoke_label_generation() -> None:
+    """Invalidate, cancel, and briefly drain detached label tasks.
+
+    Cancellation is best-effort because a provider client may delay honoring
+    it.  The epoch checks around the provider call and catalog publication are
+    the durable fence: an old task can neither start a later provider call nor
+    write results after this function advances the policy era.
+    """
+    await drain_invalidated_label_generation(invalidate_label_generation())
 
 
 def schedule_label_generation(
@@ -460,12 +514,13 @@ def schedule_label_generation(
     global _generation_scheduled
     if cache_dir is None or not config.anthropic_api_key:
         return False
-    if _generation_scheduled or _CATALOG_LOCK.locked():
+    if _generation_scheduled or _generation_tasks or _CATALOG_LOCK.locked():
         return False
     candidates = select_label_candidates(states, cache_dir=cache_dir, score_by_entity=score_by_entity, force=force)
     if not candidates:
         return False
     _generation_scheduled = True
+    policy_epoch = _generation_policy_epoch
     task = asyncio.create_task(
         _run_scheduled_generation(
             states,
@@ -473,6 +528,7 @@ def schedule_label_generation(
             config=config,
             score_by_entity=score_by_entity,
             force=force,
+            policy_epoch=policy_epoch,
         )
     )
     _generation_tasks.add(task)
@@ -487,6 +543,7 @@ async def _run_scheduled_generation(
     config: StationConfig,
     score_by_entity: dict[str, float] | None,
     force: bool,
+    policy_epoch: int,
 ) -> None:
     """Run one catalog refresh and always clear the scheduled flag when done."""
     global _generation_scheduled
@@ -497,6 +554,7 @@ async def _run_scheduled_generation(
             config=config,
             score_by_entity=score_by_entity,
             force=force,
+            _expected_policy_epoch=policy_epoch,
         )
     finally:
         _generation_scheduled = False
@@ -509,6 +567,7 @@ async def generate_label_catalog(
     config: StationConfig,
     score_by_entity: dict[str, float] | None = None,
     force: bool = False,
+    _expected_policy_epoch: int | None = None,
 ) -> dict:
     """Refresh generated labels, preserving the old catalog on any LLM failure."""
     if _CATALOG_LOCK.locked():
@@ -523,10 +582,14 @@ async def generate_label_catalog(
         )
         if not candidates or not config.anthropic_api_key:
             return catalog
+        if _expected_policy_epoch is not None and _expected_policy_epoch != _generation_policy_epoch:
+            return catalog
         try:
             generated = await _call_anthropic_labels(candidates, config, role="fast")
         except Exception as exc:
             logger.warning("HA label generation failed; preserving existing catalog: %s", exc)
+            return catalog
+        if _expected_policy_epoch is not None and _expected_policy_epoch != _generation_policy_epoch:
             return catalog
 
         by_entity = {candidate.entity_id: candidate for candidate in candidates}

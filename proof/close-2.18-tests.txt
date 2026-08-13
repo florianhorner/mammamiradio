@@ -1,0 +1,24 @@
+# 2.18 closeout — build / tests / lint verification
+branch: florianhorner/chore/close-2.18-release
+
+## Full test suite (make test)
+result: 5413 passed, 3 skipped, 21 deselected; coverage 92.39% (floor 92%)
+## FFmpeg tests (pytest -m requires_ffmpeg)
+result: 21 passed
+
+## make check (ruff lint + ruff format --check + mypy + vulture + coverage floors)
+All checks passed
+
+## make pre-release (version sync x3 + add-on changelog gate + invariants + merge-gate)
+All checks passed. Safe to bump the version.
+check-merge-gate: all merge-gate settings intact.
+
+## release invariants (Python 3.11 — CI interpreter)
+  Passed: 11  Failed: 0
+All invariants passed.
+
+## add-on validation (validate-addon.sh)
+[0;34mAll checks passed.[0m Safe to push.
+
+## changelog editorial lint
+Changelog lint clean.

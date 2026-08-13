@@ -15,9 +15,18 @@ go-librespot/state.json
 .cache
 .claude/
 .gstack/
+# Track the shared Conductor contract; keep personal overrides and other
+# workspace-local Conductor state ignored.
+!.conductor/
+.conductor/*
+!.conductor/settings.toml
 *.app
 *.webloc
 .coverage
+# Per-process data files from [tool.coverage.run] parallel mode (needed so
+# coverage can follow the spawned HA projection worker). A completed run
+# combines and erases them; an interrupted one leaves them behind.
+.coverage.*
 coverage.json
 htmlcov/
 .playwright-cli/
@@ -27,3 +36,7 @@ htmlcov/
 
 # Playwright QA scratch — ad-hoc visual-capture scripts + screenshots, regenerable, never committed.
 output/
+
+# Contract-window marker — created only by Florian to open a contract
+# maintenance window (see CONTRACT.md). Never committed.
+.contract-window

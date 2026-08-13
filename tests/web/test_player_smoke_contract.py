@@ -51,7 +51,7 @@ def test_player_smoke_target_is_opt_in_and_uses_the_bounded_runner() -> None:
     assert quality.get("timeout-minutes") == 45, "the complete quality job needs an external deadline"
 
     node_step = _workflow_step(quality, "Set up Node.js for browser smoke")
-    assert node_step.get("uses") == "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+    assert node_step.get("uses") == "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
     assert node_step.get("with") == {"node-version": "22.17.1", "check-latest": False}
 
     install_step = _workflow_step(quality, "Install listener smoke browser")
@@ -76,6 +76,7 @@ def test_player_smoke_target_is_opt_in_and_uses_the_bounded_runner() -> None:
     smoke_commands = {line.strip() for line in smoke_run.splitlines()}
     assert "make player-smoke" in smoke_commands
     assert "python -m pytest tests/web/test_admin_browser_smoke.py -q" in smoke_commands
+    assert "python -m pytest tests/web/test_first_listen_browser_smoke.py -q" in smoke_commands
     for lifecycle_guard in (
         "setsid python -m uvicorn",
         'kill -TERM -- "-$server_pid"',
@@ -123,6 +124,9 @@ def test_player_smoke_pins_the_listener_interaction_contract() -> None:
         "visible document title disagrees with authoritative identity",
         "nav wordmark disagrees with authoritative identity",
         "server identity did not repair stale localStorage",
+        "mobileNavGeometry",
+        "320px nav status pill escaped viewport",
+        "320px nav content overflowed its inner row",
         "focusing the dedication form started audio",
         "empty dedication reached the request API",
         "success_shoutout",
@@ -158,6 +162,31 @@ def test_player_smoke_pins_the_listener_interaction_contract() -> None:
     assert "async function waitForRouteCount" in code
     assert "const deadline = Date.now() + timeoutMs" in code
     assert ".catch(() => {})" not in code, "smoke assertions must never suppress browser failures."
+
+
+def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
+    """The opt-in browser smoke protects the listener-facing receipt meaning.
+
+    It uses the actual page and listener.js with only the public-status boundary
+    mocked, so the status filter, localized relative time, and stale-state note
+    are exercised together rather than duplicated in Python.
+    """
+    code = RUN_CODE.read_text(encoding="utf-8")
+    for needle in (
+        "casaScenario = 'recent'",
+        "capabilities: { ha: true }",
+        "Private dropped ritual",
+        "Casa receipt title did not use active-language copy",
+        "Casa receipt helper did not explain the on-air-only record",
+        "Casa receipt exposed a dropped private row",
+        "Casa one-minute boundary was not humanized",
+        "Casa one-hour boundary was not humanized",
+        "Casa yesterday boundaries were not humanized",
+        "Casa whole-day boundary was not humanized",
+        "Casa stale note did not appear after a day without an on-air receipt",
+        "Casa on-air receipt did not render",
+    ):
+        assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
 
 
 def test_default_listener_identity_fixture_is_canonical() -> None:

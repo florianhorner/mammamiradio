@@ -94,8 +94,9 @@ def test_home_preview_actions_do_not_interpolate_entity_ids_into_inline_handlers
 
     assert 'onclick="setHaEntityMuted' not in render_block
     assert "setHaEntityMuted('${" not in render_block
-    assert 'data-ha-entity-id="${esc(row.entity_id)}"' in render_block
-    assert 'data-ha-muted-next="${muted?' in render_block
+    assert "mute.dataset.haEntityId=entityId" in render_block
+    assert "mute.dataset.haMutedNext=muted?'false':'true'" in render_block
+    assert ".innerHTML" not in render_block
 
     listener_block = html[
         html.index(

@@ -6,8 +6,13 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import StationState, Track
+from mammamiradio.hosts.language_policy import normal_mode_language_ok
 from mammamiradio.hosts.scriptwriter import write_transition
-from mammamiradio.hosts.transitions import _transition_text_usable
+from mammamiradio.hosts.transitions import (
+    _TRANSITION_REWRITE_MAP_NORMAL,
+    _massage_transition_text,
+    _transition_text_usable,
+)
 
 
 @pytest.mark.parametrize(
@@ -44,3 +49,22 @@ async def test_write_transition_ascii_terminal_cutoff_uses_stock_fallback(cutoff
 
     assert text == "Stay close, amici — a quick word from our sponsors."
     assert played_track_ref is None
+
+
+def test_normal_mode_rewrite_stays_english_led_after_language_guard() -> None:
+    """A repeated opener must not reintroduce the old Italian-only rewrite."""
+    text = _massage_transition_text(
+        "Che pezzo, mamma mia.",
+        "ad",
+        ["Che pezzo assurdo.", "Che pezzo, davvero."],
+        super_italian=False,
+    )
+
+    assert text in _TRANSITION_REWRITE_MAP_NORMAL["ad"]
+    assert "pubblicita" not in text.lower()
+    assert "sponsors" in text.lower() or "ad break" in text.lower()
+
+
+def test_normal_mode_rewrite_inventory_satisfies_short_copy_rule() -> None:
+    for candidates in _TRANSITION_REWRITE_MAP_NORMAL.values():
+        assert all(normal_mode_language_ok(candidate) for candidate in candidates)

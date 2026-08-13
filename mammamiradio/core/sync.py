@@ -9,6 +9,10 @@ import sqlite3
 from pathlib import Path
 
 from mammamiradio.audio.normalizer import normalize
+from mammamiradio.core.first_listen import (
+    FirstListenOriginSentinelState,
+    ensure_first_listen_origin_sentinel,
+)
 from mammamiradio.core.models import Track
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,13 @@ CREATE TABLE IF NOT EXISTS listener_persona (
 
 -- Seed the default persona row so UPDATE-based methods never no-op
 INSERT OR IGNORE INTO listener_persona (id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS listener_session_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    process_token TEXT NOT NULL,
+    logical_session_id TEXT NOT NULL,
+    committed_at TEXT DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS track_rules (
     id INTEGER PRIMARY KEY,
@@ -88,14 +99,24 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             raise
 
 
-def init_db(db_path: Path) -> None:
-    """Create the SQLite database and tables if they don't exist."""
+def init_db(db_path: Path) -> FirstListenOriginSentinelState:
+    """Create the schema and report whether the feature sentinel existed.
+
+    The First Listen table remains empty here. Its witness row and matching
+    sidecar are written only by the bounded post-audio migration. Existing
+    callers may continue to ignore the return value.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
-    conn.executescript(DB_SCHEMA)
-    _migrate_schema(conn)
-    conn.close()
+    try:
+        conn.executescript(DB_SCHEMA)
+        _migrate_schema(conn)
+        sentinel_state = ensure_first_listen_origin_sentinel(conn)
+        conn.commit()
+    finally:
+        conn.close()
     logger.info("Database initialized: %s", db_path)
+    return sentinel_state
 
 
 def _resolve_cookies_arg() -> list[str]:

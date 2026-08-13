@@ -1,0 +1,61 @@
+# Runtime proof — admin control-room defects
+# repo: florianhorner/mammamiradio   branch: florianhorner/fix/admin-qa-blockers
+# host: Darwin arm64   driver: Playwright/Chromium, 1440x900 and 375x812
+# server: uvicorn 127.0.0.1:8137, isolated cache/tmp, yt-dlp off, HA off
+#
+# Contrast is read from the live DOM: computed colour, ancestor chain
+# composited back-to-front, WCAG 2.x relative luminance. Each row is measured
+# against its own backing, which differs per rule.
+
+== setup strip paint order ==
+.setup-strip is a child of the sticky .mmr-deck, whose ::before paints an
+opaque var(--bg) rect. .mmr-console and .mmr-tabbar each carry z-index:1;
+.setup-strip did not, so it painted underneath.
+
+The overlay is pointer-events:none, so hit testing never intercepted:
+document.elementFromPoint() returns #setupStrip in BOTH states and is not a
+valid probe here. Verified on rendered pixels instead.
+
+  position:static  z-index:auto   deck renders console, blank 66px gap, tab bar
+  position:relative z-index:1     same region renders the strip and its button
+
+  computed after: position=relative  z-index=1  height=66px
+  status chip keeps its shape glyph alongside colour
+
+== accessible names ==
+  .ha input[type=range]      15 found, 0 unnamed, 15 distinct
+                             Marco / Giulia / Hans Gunther x
+                             Energy, Chaos, Warmth, Verbosity, Nostalgia
+  #qualityProfile            aria-label="AI Quality"
+
+== filter chip state ==
+  .filter-pill               12 total, 12 carry aria-pressed
+  aria-pressed vs .active    matches on all 12
+
+== cadence slider target, 375px ==
+  pBanter / pAds / pSpots    hit height 6px -> 44px
+  visible track              6px, unchanged (background-clip: content-box)
+
+== contrast ==
+                        before    after    rendered fg / bg
+  .pace-counter         3.40:1   5.18:1    rgb(151,144,130) / rgb(37,30,25)
+  .empty                2.92:1   5.33:1    rgb(148,142,128) / rgb(30,25,21)
+  .btn-danger-outline   2.82:1   8.33:1    #E8A29B          / rgb(31,25,22)
+  .pace-hint            2.92:1   5.18:1    computed; node not mounted in this
+                                           state, same rule and alpha as
+                                           .pace-counter
+
+--surface, --surface-strong and --line-strong are byte-identical to
+origin/main. Only foregrounds moved.
+
+#E8A29B is the lifted red already used by .pl-ban, .btn-ban and
+.btn-chip-danger in this file.
+
+== suite ==
+  pytest tests/            5916 passed, 3 skipped, 21 deselected
+  ruff check .             clean under 0.15.22 and 0.16.1
+  ruff format --check .    328 files already formatted
+
+tests/scheduling/test_producer_extended.py carries the only non-admin
+change. Under ruff 0.16.1 origin/main reports one RUF036 and this branch
+reports none.

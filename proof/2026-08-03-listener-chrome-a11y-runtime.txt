@@ -1,0 +1,65 @@
+# Runtime proof — listener chrome and touch targets
+# repo: florianhorner/mammamiradio   branch: florianhorner/fix/listener-chrome-a11y
+# host: Darwin arm64   driver: Playwright/Chromium, 1440x900
+# server: uvicorn 127.0.0.1:8139, isolated cache/tmp, yt-dlp off, HA off
+#
+# Contrast is read from the live DOM: computed colour, ancestor chain
+# composited back-to-front, WCAG 2.x relative luminance.
+
+== In Onda badge ==
+--brand-accent defaults to accent_color, whose radio.toml default #B82C20 is
+the same Lancia red the badge ground rgba(160,32,24,0.18) is made of, so the
+label sat on a tinted copy of itself.
+
+  before  #B82C20 on rgb(45,20,17)   2.80:1  at 9px
+  after   #F5EDD8 on rgb(45,20,17)  14.76:1  at 10px
+
+--brand-accent stays on the dot. core/config.py validates accent_color for
+hex validity and states that it never carries body text.
+
+== touch targets ==
+  .mmr-dedica-form-input      38px -> 44px
+  .mmr-footer .foot-col a     20px -> 44px
+  .mmr-footer .foot-link-btn  20px -> 44px
+
+== hidden install button ==
+#pwa-install-btn ships with the hidden attribute and is revealed only when
+beforeinstallprompt fires. `hidden` is UA-origin display:none, so an author
+`display` on .foot-link-btn overrides it.
+
+Headless Chromium fires beforeinstallprompt, so the attribute has to be set
+back on to observe the state a real iOS Safari or Firefox visitor gets.
+
+  author display, hidden set    display=flex  height=44px  rendered=true
+  [hidden] reset, hidden set    display=none  height=0     rendered=false
+  [hidden] reset, hidden off    display=flex  height=44px  rendered=true
+
+.mmr-share-btn[hidden] carries the same reset 64 lines below.
+
+== progress readout ==
+status_payload.py reports elapsed as unbounded wall-clock since segment
+start. renderProgress clamped the bar but wrote the elapsed text raw.
+
+  progress / duration    elapsed    total
+  3 / 180                0:03       3:00
+  9 / 4                  0:04       0:04    (within grace, clamped)
+  204 / 4                —          —       (was 3:24 / 0:04)
+
+The 0:04 case is the 4.44s packaged continuity clip, web/streamer.py.
+
+Display only. status_payload.py is unchanged; it still computes progress
+with no bound against duration.
+
+The readout sits inside <div class="mmr-np-progress" aria-hidden="true">,
+listener.html, so no assistive technology reads either form.
+
+== guards ==
+tests/web/test_listener_mobile_invariants.py, four tests in the file's
+existing static-parse idiom. Each fails against origin/main sources and
+passes against this branch. The progress guard is a shape check and says so
+in its docstring: this repo has no JavaScript test runner.
+
+== suite ==
+  pytest tests/            5919 passed, 3 skipped, 21 deselected
+  ruff check .             clean
+  ruff format --check .    328 files already formatted

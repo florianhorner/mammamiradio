@@ -10,9 +10,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import PlaylistSource, Track
+from mammamiradio.core.models import PlaylistSource, StationState, Track
 from mammamiradio.playlist.playlist import (
     DEMO_TRACKS,
+    _load_local_music_tracks,
     fetch_chart_refresh,
     fetch_startup_playlist,
     load_explicit_source,
@@ -79,6 +80,100 @@ def test_no_credentials_uses_live_charts_when_ytdlp_enabled(config, monkeypatch)
     assert tracks[0].title == "Chart One"
     assert source.kind == "charts"
     assert source.label == "Current Italian charts"
+
+
+def test_music_dir_override_drives_chart_local_blend(config, tmp_path):
+    music_dir = tmp_path / "operator-music"
+    music_dir.mkdir()
+    (music_dir / "Local Artist - Local Song.mp3").touch()
+    config.music_dir = music_dir
+    config.allow_ytdlp = True
+    chart = Track(title="Chart Song", artist="Chart Artist", duration_ms=210000, spotify_id="chart")
+
+    with patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[chart]):
+        tracks, source, _ = fetch_startup_playlist(config)
+
+    assert {track.source for track in tracks} == {"youtube", "local"}
+    assert source.readiness_evidence is not None
+    assert source.readiness_evidence.entries["local"].candidates == 1
+    assert source.readiness_evidence.entries["charts"].candidates == 1
+
+
+def test_source_evidence_records_chart_jamendo_and_local_blend(config, tmp_path):
+    config.allow_ytdlp = True
+    config.playlist.jamendo_client_id = "client"
+    config.music_dir = tmp_path / "music"
+    config.music_dir.mkdir()
+    (config.music_dir / "Local Artist - Local Song.mp3").touch()
+    chart = Track(title="Chart Song", artist="Chart Artist", duration_ms=210000, spotify_id="chart")
+    jamendo = Track(title="CC Song", artist="CC Artist", duration_ms=210000, spotify_id="jamendo")
+
+    with (
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[chart]),
+        patch("mammamiradio.playlist.playlist._fetch_jamendo_playlist", return_value=[jamendo]),
+    ):
+        tracks, source, _ = fetch_startup_playlist(config)
+
+    assert len(tracks) == 3
+    evidence = source.readiness_evidence
+    assert evidence is not None
+    assert evidence.entries["charts"].candidates == 1
+    assert evidence.entries["jamendo"].candidates == 1
+    assert evidence.entries["local"].candidates == 1
+    assert evidence.entries["recovery"].bundled is True
+    state = StationState(playlist=tracks, playlist_source=source)
+    assert state.source_readiness.entries["charts"].candidates == 1
+    assert state.source_readiness.entries["jamendo"].candidates == 1
+    assert state.source_readiness.entries["local"].candidates == 1
+
+
+def test_source_evidence_keeps_unavailable_chart_separate_from_demo(config):
+    config.allow_ytdlp = True
+    config.playlist.jamendo_client_id = ""
+    with (
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[]),
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
+        patch("mammamiradio.playlist.playlist._load_demo_asset_tracks", return_value=[]),
+    ):
+        _tracks, source, _ = fetch_startup_playlist(config)
+
+    evidence = source.readiness_evidence
+    assert evidence is not None
+    assert evidence.entries["charts"].attempted is True
+    assert evidence.entries["charts"].failure == "Live charts returned no candidates"
+    assert evidence.entries["demo"].bundled is False
+    assert evidence.entries["demo"].candidates == len(DEMO_TRACKS)
+    assert evidence.entries["demo"].playable == 0
+
+
+def test_local_directory_enumeration_bounds_raw_entries_before_mp3_filtering(tmp_path):
+    yielded = 0
+
+    class CountingScandir:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def __iter__(self):
+            nonlocal yielded
+            for index in range(10_000):
+                yielded += 1
+                yield SimpleNamespace(
+                    name=f"not-music-{index}.txt",
+                    path=str(tmp_path / f"not-music-{index}.txt"),
+                    is_file=lambda: True,
+                )
+
+    with (
+        patch("mammamiradio.playlist.playlist.os.scandir", return_value=CountingScandir()),
+        patch("mammamiradio.playlist.playlist._MAX_LOCAL_DIRECTORY_ENTRIES", 8),
+    ):
+        tracks = _load_local_music_tracks(tmp_path)
+
+    assert tracks == []
+    assert yielded == 9
 
 
 # --- _fetch_current_italy_charts ---
@@ -652,6 +747,13 @@ def test_load_local_music_tracks_missing_dir(tmp_path):
     assert result == []
 
 
+def test_load_local_music_tracks_unreadable_dir_returns_empty(tmp_path):
+    with patch("mammamiradio.playlist.playlist.os.scandir", side_effect=PermissionError("denied")):
+        result = _load_local_music_tracks(tmp_path)
+
+    assert result == []
+
+
 def test_local_music_deduplicates_against_chart_artist_title(config, monkeypatch, tmp_path):
     """A local file with same artist+title as a chart track is not double-added."""
     from mammamiradio.playlist.playlist import _load_local_music_tracks
@@ -1071,7 +1173,7 @@ def test_download_sync_jamendo_cache_hit_skips_direct_url_fetch(tmp_path):
     mock_direct.assert_not_called()
 
 
-def test_download_sync_direct_url_failure_falls_back_to_silence(tmp_path):
+def test_download_sync_direct_url_failure_marks_track_unavailable(tmp_path):
     from mammamiradio.playlist.downloader import _download_sync
 
     cache_dir = tmp_path / "cache"
@@ -1096,7 +1198,7 @@ def test_download_sync_direct_url_failure_falls_back_to_silence(tmp_path):
     ):
         result = _download_sync(track, cache_dir, music_dir)
 
-    assert result.name.startswith("_silence_")
+    assert result.name.startswith("_failed_")
     assert result.exists()
 
 

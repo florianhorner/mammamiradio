@@ -1,0 +1,33 @@
+Pre-ship verification for fix(release): advertise only published add-on versions on main
+Commit: fe7139dcf0f90e6df2830a553dcc93c74dd1348e
+Generated: 2026-08-02T00:46:49Z
+
+== full test suite + coverage ratchet ==
+Required test coverage of 92.0% reached. Total coverage: 92.53%
+5903 passed, 3 skipped, 21 deselected, 1 warning in 236.83s (0:03:56)
+All coverage floors held. Total: 93% (floor: 92%)
+
+== workflow self-tests ==
+All 19 advertised-version cases passed.
+All 20 cut-edge-release cases passed.
+
+== lint / format / types ==
+All checks passed!
+328 files already formatted
+Success: no issues found in 299 source files
+shellcheck scripts/*.sh: clean
+
+== release gates ==
+  Passed: 17  Failed: 0
+  Passed: 16  Failed: 0
+[0;34mAll checks passed.[0m Safe to push.
+
+== the guard, against the tree it ships with ==
+
+PASS: every architecture publishes 2.17.0.
+VERDICT: pass
+
+== the guard against the state main was in for 20 days ==
+  [FAIL] florianhorner/mammamiradio-addon-amd64:2.18.0 does not exist
+  [FAIL] florianhorner/mammamiradio-addon-aarch64:2.18.0 does not exist
+FAIL: main advertises 2.18.0, which is not published for: florianhorner/mammamiradio-addon-amd64 florianhorner/mammamiradio-addon-aarch64

@@ -76,7 +76,7 @@ async def test_callback_lands_retires_gag(tmp_path):
     gid = next(iter(state.verbal_gag_ledger.gags))
     gag = state.verbal_gag_ledger.gags[gid]
 
-    async def _flash(state_arg, config_arg, callback_gag=None):
+    async def _flash(state_arg, config_arg, callback_gag=None, submission_guard=None):
         if callback_gag:
             state_arg.pending_callback_landed = True  # model landed it
         return (host, "Flash con un ventilatore!", "sports")
@@ -106,7 +106,7 @@ async def test_callback_ignored_does_not_retire(tmp_path):
     gid = next(iter(state.verbal_gag_ledger.gags))
     gag = state.verbal_gag_ledger.gags[gid]
 
-    async def _flash(state_arg, config_arg, callback_gag=None):
+    async def _flash(state_arg, config_arg, callback_gag=None, submission_guard=None):
         if callback_gag:
             state_arg.pending_callback_landed = False  # model ignored it
         return (host, "Flash senza riferimenti.", "sports")
@@ -145,10 +145,14 @@ async def test_discarded_segment_does_not_retire(tmp_path):
         offer_calls += 1
         return (gid, gag) if offer_calls == 1 else None  # only the discarded one carries the gag
 
-    async def _flash(state_arg, config_arg, callback_gag=None):
+    async def _flash(state_arg, config_arg, callback_gag=None, submission_guard=None):
         if callback_gag:
             state_arg.pending_callback_landed = True  # would retire IF it queued
-            state_arg.playlist_revision += 1  # source switch mid-generation -> discard
+            # A real source switch mid-generation, which is what this test always
+            # meant: bumping playlist_revision alone no longer discards a flash,
+            # because a news flash is not bound to a rotation row.
+            state_arg.source_revision += 1
+            state_arg.playlist_revision += 1
         return (host, "Flash che verra scartato.", "sports")
 
     with (
@@ -181,7 +185,7 @@ async def test_flash_empty_ledger_no_callback_no_dead_air(tmp_path):
     flash_path.write_bytes(b"\x00" * 2048)
     seen_callback_gag = []
 
-    async def _flash(state_arg, config_arg, callback_gag=None):
+    async def _flash(state_arg, config_arg, callback_gag=None, submission_guard=None):
         seen_callback_gag.append(callback_gag)
         return (host, "Flash normale.", "sports")
 
@@ -209,7 +213,7 @@ async def test_flash_offer_raises_is_guarded(tmp_path):
     flash_path.write_bytes(b"\x00" * 2048)
     seen_callback_gag = []
 
-    async def _flash(state_arg, config_arg, callback_gag=None):
+    async def _flash(state_arg, config_arg, callback_gag=None, submission_guard=None):
         seen_callback_gag.append(callback_gag)
         return (host, "Flash normale.", "sports")
 
@@ -274,6 +278,7 @@ async def test_ad_callback_lands_retires_gag(tmp_path):
         sonic=None,
         spot_index=None,
         callback_gag=None,
+        submission_guard=None,
     ):
         if callback_gag:
             state_arg.pending_callback_landed = True
@@ -315,6 +320,7 @@ async def test_ad_callback_ignored_does_not_retire(tmp_path):
         sonic=None,
         spot_index=None,
         callback_gag=None,
+        submission_guard=None,
     ):
         if callback_gag:
             state_arg.pending_callback_landed = False

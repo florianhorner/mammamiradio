@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +21,23 @@ from mammamiradio.web.streamer import _run_provider_verdict as _real_run_provide
 MODULE = "mammamiradio.main"
 TEST_TMP = Path("/tmp/mammamiradio-test-main-tmp")
 TEST_CACHE = Path("/tmp/mammamiradio-test-main-cache")
+
+
+def _privacy_startup_config(tmp_path: Path) -> MagicMock:
+    config = MagicMock()
+    config.station.name = "TestRadio"
+    config.station.language = "it"
+    config.bind_host = "127.0.0.1"
+    config.port = 8000
+    config.pacing.lookahead_segments = 3
+    config.max_cache_size_mb = 500
+    config.tmp_dir = tmp_path / "tmp"
+    config.cache_dir = tmp_path / "cache"
+    config.homeassistant.enabled = False
+    config.ha_token = ""
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    return config
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +115,43 @@ def test_immediate_audio_index_skips_non_files_and_unknown_durations(tmp_path):
     assert _build_immediate_audio_index(tmp_path, bitrate_kbps=None) == {}
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", True),
+        ("1", True),
+        ("YES", True),
+        ("false", False),
+        ("0", False),
+        ("No", False),
+        # Values outside config's vocabulary must read as omitted, not
+        # explicit: config loading ignores them and keeps the radio.toml
+        # setting, so treating them as an explicit choice here would let the
+        # two readers disagree (e.g. an "off" that purges the evening ledger
+        # while context stays enabled).
+        ("on", None),
+        ("off", None),
+        ("", None),
+        ("maybe", None),
+    ],
+)
+def test_explicit_bool_env_matches_config_vocabulary(monkeypatch, raw, expected):
+    from mammamiradio.main import _explicit_bool_env
+
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raw)
+
+    assert _explicit_bool_env("MAMMAMIRADIO_HA_CONTEXT_ENABLED") is expected
+
+
+def test_explicit_bool_env_shares_config_boolean_sets():
+    """Guard the single source: main must read the exact sets config loads with."""
+    from mammamiradio import main as main_module
+    from mammamiradio.core import config as config_module
+
+    assert main_module._CONFIG_TRUTHY is config_module._TRUTHY
+    assert main_module._CONFIG_FALSY is config_module._FALSY
+
+
 @pytest.mark.asyncio
 async def test_startup_creates_state_and_tasks():
     """startup() loads config, fetches playlist, sets app.state, creates tasks."""
@@ -132,6 +188,1028 @@ async def test_startup_creates_state_and_tasks():
         assert hasattr(app.state, "producer_task")
         assert hasattr(app.state, "playback_task")
         assert app.state.station_state.playlist == demo_tracks
+
+
+@pytest.mark.asyncio
+async def test_startup_cold_install_stays_narrow_after_database_created_and_restart(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import (
+        load_legacy_home_database_preflight_v1,
+        load_legacy_home_preflight_v1,
+        preflight_path,
+    )
+
+    config = _privacy_startup_config(tmp_path)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert (config.cache_dir / "mammamiradio.db").exists()
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+        # Even loss of the sidecar cannot let the now-existing DB reclassify
+        # this cold install: the DB-local origin sentinel restores false.
+        preflight_path(config.cache_dir / "state").unlink()
+        await startup()
+
+    preflight = load_legacy_home_preflight_v1(config.cache_dir / "state")
+    assert preflight is not None
+    assert preflight.database_preexisted is False
+    assert load_legacy_home_database_preflight_v1(config.cache_dir / "mammamiradio.db") == preflight
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    assert app.state.station_state.home_entity_ids_observer is None
+
+
+@pytest.mark.asyncio
+async def test_startup_preexisting_database_gets_legacy_bridge_and_metadata_only_provenance(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LEGACY_HOME_MANIFEST_V1, load_legacy_home_provenance_v1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    state = app.state.station_state
+    assert state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+    assert state.home_entity_ids_observer is not None
+    state.home_entity_ids_observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+    await app.state.legacy_home_provenance_task
+    provenance = load_legacy_home_provenance_v1(
+        config.cache_dir / "state",
+        config.cache_dir / "mammamiradio.db",
+    )
+    assert provenance is not None
+    assert provenance.manifest_digest == LEGACY_HOME_MANIFEST_V1.entity_id_digest
+
+
+@pytest.mark.asyncio
+async def test_first_listen_fresh_addon_omission_stays_off_and_migrates_after_audio_tasks(tmp_path, monkeypatch):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    events: list[str] = []
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    async def producer(*_args, **_kwargs):
+        events.append("producer")
+
+    async def playback(*_args, **_kwargs):
+        events.append("playback")
+
+    async def migrate(*args, **kwargs):
+        events.append("migration")
+        assert config.homeassistant.context_enabled is False
+        return await real_migrate(*args, **kwargs)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", side_effect=producer),
+        patch(f"{MODULE}.run_playback_loop", side_effect=playback),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=migrate),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert events.index("producer") < events.index("migration")
+    assert events.index("playback") < events.index("migration")
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
+    assert config.homeassistant.context_enabled is False
+    assert app.state.home_context_choice_explicit is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coordinator_ready", [False, True])
+async def test_first_listen_existing_addon_omission_restores_legacy_on_only_after_proof(
+    tmp_path, monkeypatch, coordinator_ready
+):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    coordinator = MagicMock()
+    producer_ready = asyncio.Event()
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    async def producer(_queue, state, _config, **_kwargs):
+        if coordinator_ready:
+            state.ha_context_refresh_mailbox = coordinator
+        producer_ready.set()
+
+    async def migrate(*args, **kwargs):
+        await producer_ready.wait()
+        assert config.homeassistant.context_enabled is False
+        return await real_migrate(*args, **kwargs)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", side_effect=producer),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=migrate),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
+    assert config.homeassistant.context_enabled is True
+    assert app.state.home_context_choice_explicit is False
+    if coordinator_ready:
+        coordinator.enable.assert_called_once_with()
+    else:
+        coordinator.enable.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_existing_install_omitted_context_choice_preserves_evening_ledger(tmp_path, monkeypatch):
+    """Provisional First Listen off is not an operator revocation.
+
+    A proven pre-feature install must retain its durable Home-event history
+    while install-origin classification runs behind the already-started audio
+    workers.
+    """
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus, FirstListenReceiptLoadStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    seed = EveningLedger()
+    seed.buckets["legacy-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
+    assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.MISSING
+    assert config.homeassistant.context_enabled is True
+    assert app.state.home_context_off_ledger_persist_task is None
+    assert "legacy-home-event" in app.state.station_state.evening_ledger.buckets
+    assert "legacy-home-event" in EveningLedger.load(config.cache_dir).buckets
+
+
+@pytest.mark.asyncio
+async def test_explicit_context_off_purges_evening_ledger_after_audio_tasks(tmp_path, monkeypatch):
+    """An explicit privacy-off choice purges durably without delaying audio."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    seed = EveningLedger()
+    seed.buckets["private-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    events: list[str] = []
+    real_save = EveningLedger.save_if_dirty
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+
+    async def playback(*_args, **_kwargs):
+        events.append("playback")
+
+    async def producer(*_args, **_kwargs):
+        events.append("producer")
+
+    def save_after_audio(self, cache_dir):
+        events.append("persist")
+        real_save(self, cache_dir)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", side_effect=producer),
+        patch(f"{MODULE}.run_playback_loop", side_effect=playback),
+        patch.object(EveningLedger, "save_if_dirty", new=save_after_audio),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.playback_task,
+            app.state.producer_task,
+            app.state.home_context_off_ledger_persist_task,
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert events.index("playback") < events.index("persist")
+    assert events.index("producer") < events.index("persist")
+    assert app.state.station_state.evening_ledger.buckets == {}
+    assert EveningLedger.load(config.cache_dir).buckets == {}
+
+
+@pytest.mark.asyncio
+async def test_explicit_context_off_ledger_save_failure_stays_fail_closed(tmp_path, monkeypatch, caplog):
+    """A deferred disk failure must not revive Home-derived state or fail startup."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    seed = EveningLedger()
+    seed.buckets["private-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch.object(EveningLedger, "save_if_dirty", side_effect=OSError("disk unavailable")),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.home_context_off_ledger_persist_task
+        await asyncio.gather(
+            app.state.prewarm_task,
+            app.state.playback_task,
+            app.state.producer_task,
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.station_state.evening_ledger.buckets == {}
+    assert "Explicit Home-context ledger purge could not be saved" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_explicit_context_off_ledger_save_is_drained_when_shutdown_cancels(tmp_path, monkeypatch, caplog):
+    """Cancellation drains the non-cancellable filesystem worker before propagating."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True)
+    seed = EveningLedger()
+    seed.buckets["private-home-event"] = GagBucket(
+        "switch.kitchen",
+        "Kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", "false")
+
+    def fail_after_release(*_args, **_kwargs):
+        worker_started.set()
+        assert release_worker.wait(timeout=5)
+        raise OSError("disk unavailable")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch.object(EveningLedger, "save_if_dirty", side_effect=fail_after_release),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        persist_task = app.state.home_context_off_ledger_persist_task
+        await asyncio.wait_for(asyncio.to_thread(worker_started.wait), timeout=2)
+        persist_task.cancel()
+        release_worker.set()
+        with pytest.raises(asyncio.CancelledError):
+            await persist_task
+        await asyncio.gather(
+            app.state.prewarm_task,
+            app.state.playback_task,
+            app.state.producer_task,
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.station_state.evening_ledger.buckets == {}
+    assert "Explicit Home-context ledger purge could not be saved" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_first_listen_background_failures_preserve_startup_and_privacy_safe_state(tmp_path, caplog):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus, FirstListenReceiptLoadStatus
+    from mammamiradio.core.first_listen_show import first_listen_show_required
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(
+            f"{MODULE}.migrate_first_listen_install_origin",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("origin unavailable"),
+        ),
+        patch(
+            f"{MODULE}.FirstListenReceiptStore.load_result",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("receipt unavailable"),
+        ),
+        caplog.at_level(logging.WARNING, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.UNKNOWN
+    assert app.state.first_listen_receipt is None
+    assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.UNAVAILABLE
+    assert first_listen_show_required(app.state) is False
+    assert hasattr(app.state, "producer_task")
+    assert hasattr(app.state, "playback_task")
+    assert "First-listen install-origin migration failed" in caplog.text
+    assert "First-listen receipt is unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_later_fresh_boot_receipt_load_failure_does_not_replay_prelude(tmp_path):
+    from mammamiradio.core.first_listen import (
+        FirstListenInstallOriginStatus,
+        FirstListenInstallOriginV1,
+        FirstListenReceiptLoadStatus,
+    )
+    from mammamiradio.core.first_listen_show import first_listen_show_required
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(
+            f"{MODULE}.migrate_first_listen_install_origin",
+            new_callable=AsyncMock,
+            return_value=FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH),
+        ),
+        patch(
+            f"{MODULE}.FirstListenReceiptStore.load_result",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("receipt unavailable"),
+        ),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await asyncio.gather(
+            app.state.first_listen_origin_task,
+            app.state.first_listen_receipt_task,
+        )
+
+    assert app.state.first_listen_cold_install is False
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
+    assert app.state.first_listen_receipt is None
+    assert app.state.first_listen_receipt_load_status is FirstListenReceiptLoadStatus.UNAVAILABLE
+    assert first_listen_show_required(app.state) is False
+
+
+@pytest.mark.asyncio
+async def test_stalled_first_listen_bootstrap_cannot_block_audio_startup(tmp_path):
+    from mammamiradio.core.first_listen import (
+        FirstListenInstallOriginStatus,
+        FirstListenInstallOriginV1,
+        FirstListenReceiptLoadResult,
+        FirstListenReceiptLoadStatus,
+    )
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    release_bootstrap = asyncio.Event()
+    release_audio_workers = asyncio.Event()
+    origin_started = asyncio.Event()
+    receipt_started = asyncio.Event()
+    producer_started = asyncio.Event()
+    playback_started = asyncio.Event()
+
+    async def blocked_origin(*_args, **_kwargs):
+        origin_started.set()
+        await release_bootstrap.wait()
+        return FirstListenInstallOriginV1(FirstListenInstallOriginStatus.UNKNOWN)
+
+    async def blocked_receipt(*_args, **_kwargs):
+        receipt_started.set()
+        await release_bootstrap.wait()
+        return FirstListenReceiptLoadResult(FirstListenReceiptLoadStatus.MISSING)
+
+    async def blocked_producer(*_args, **_kwargs):
+        producer_started.set()
+        await release_audio_workers.wait()
+
+    async def blocked_playback(*_args, **_kwargs):
+        playback_started.set()
+        await release_audio_workers.wait()
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_producer", side_effect=blocked_producer),
+        patch(f"{MODULE}.run_playback_loop", side_effect=blocked_playback),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=blocked_origin),
+        patch(f"{MODULE}.FirstListenReceiptStore.load_result", side_effect=blocked_receipt),
+    ):
+        from mammamiradio.main import app, startup
+
+        await asyncio.wait_for(startup(), timeout=2)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    origin_started.wait(),
+                    receipt_started.wait(),
+                    producer_started.wait(),
+                    playback_started.wait(),
+                ),
+                timeout=1,
+            )
+            assert app.state.producer_task.done() is False
+            assert app.state.playback_task.done() is False
+            assert app.state.first_listen_origin_task.done() is False
+            assert app.state.first_listen_receipt_task.done() is False
+        finally:
+            release_bootstrap.set()
+            release_audio_workers.set()
+            await asyncio.gather(
+                app.state.prewarm_task,
+                app.state.producer_task,
+                app.state.playback_task,
+                app.state.first_listen_origin_task,
+                app.state.first_listen_receipt_task,
+            )
+
+
+@pytest.mark.asyncio
+async def test_partial_cold_boot_database_never_reclassifies_as_existing(tmp_path, monkeypatch):
+    """The older pre-database cold witness vetoes a later feature-era false positive."""
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import rewrite_legacy_home_preflight_cold_v1
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = True
+    config.cache_dir.mkdir(parents=True)
+    db_path = config.cache_dir / "mammamiradio.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE partial_cold_boot (id INTEGER PRIMARY KEY)")
+    rewrite_legacy_home_preflight_cold_v1(config.cache_dir / "state")
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.UNKNOWN
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    assert config.homeassistant.context_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_first_listen_explicit_keep_off_wins_over_late_existing_install_migration(tmp_path, monkeypatch):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+    from mammamiradio.main import migrate_first_listen_install_origin as real_migrate
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = True
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    migration_entered = asyncio.Event()
+    allow_migration = asyncio.Event()
+    monkeypatch.delenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", raising=False)
+
+    async def migrate(*args, **kwargs):
+        migration_entered.set()
+        await allow_migration.wait()
+        return await real_migrate(*args, **kwargs)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.migrate_first_listen_install_origin", side_effect=migrate),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await migration_entered.wait()
+        app.state.home_context_choice_explicit = True
+        config.homeassistant.context_enabled = False
+        allow_migration.set()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.EXISTING
+    assert config.homeassistant.context_enabled is False
+    assert app.state.home_context_choice_explicit is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("explicit", "expected"), [("false", False), ("true", True)])
+async def test_first_listen_explicit_context_choice_wins_on_fresh_addon(tmp_path, monkeypatch, explicit, expected):
+    from mammamiradio.core.first_listen import FirstListenInstallOriginStatus
+    from mammamiradio.core.models import Track
+
+    config = _privacy_startup_config(tmp_path)
+    config.is_addon = True
+    config.homeassistant.context_enabled = expected
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    monkeypatch.setenv("MAMMAMIRADIO_HA_CONTEXT_ENABLED", explicit)
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.first_listen_origin_task
+
+    assert app.state.first_listen_install_origin.status is FirstListenInstallOriginStatus.FRESH
+    assert config.homeassistant.context_enabled is expected
+    assert app.state.home_context_choice_explicit is True
+
+
+@pytest.mark.asyncio
+async def test_startup_legacy_with_ha_and_anthropic_logs_label_generation_notice(tmp_path, caplog):
+    """A legacy install with HA + Anthropic configured logs the label-generation
+    metadata notice; narrow installs never reach that gated line."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()  # pre-existing DB => legacy bridge
+    config.homeassistant.enabled = True
+    config.ha_token = "ha-token"
+    config.anthropic_api_key = "sk-test"
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        caplog.at_level(logging.INFO, logger="mammamiradio"),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.LEGACY
+    assert "Label generation sends entity metadata" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_cold_preflight_write_failure_stops_before_database_init(tmp_path):
+    config = _privacy_startup_config(tmp_path)
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.capture_legacy_home_preflight_v1", side_effect=OSError("disk full")),
+        patch(f"{MODULE}.init_db") as init_db,
+        pytest.raises(RuntimeError, match="cold-install Home context boundary"),
+    ):
+        from mammamiradio.main import startup
+
+        await startup()
+
+    init_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_preexisting_preflight_write_failure_fails_narrow(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.load_legacy_home_database_preflight_v1", return_value=None),
+        patch(f"{MODULE}.capture_legacy_home_preflight_v1", side_effect=OSError("disk full")),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_disagreeing_durable_witnesses_fail_narrow(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LegacyHomePreflightV1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(
+            f"{MODULE}.load_legacy_home_database_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=False),
+        ),
+        patch(
+            f"{MODULE}.capture_legacy_home_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=True),
+        ),
+        patch(f"{MODULE}.load_authoritative_legacy_home_preflight_v1", return_value=None),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_transplanted_sidecar_with_cold_database_fails_narrow(tmp_path):
+    """A durable sidecar claiming a pre-existing DB while none exists is a
+    transplanted/leftover witness and must never promote a cold install to
+    legacy. The guard demotes the in-memory claim; the cold-correction then
+    rewrites the poisoned sidecar and seeds the redundant DB witness as False,
+    so persist runs with the corrected COLD preflight (never the true claim)."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LegacyHomePreflightV1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    # Deliberately NO mammamiradio.db file — this is a cold install.
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    persist = MagicMock()
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.load_legacy_home_database_preflight_v1", return_value=None),
+        patch(
+            f"{MODULE}.capture_legacy_home_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=True),
+        ),
+        patch(f"{MODULE}.persist_legacy_home_database_preflight_v1", persist),
+        patch(f"{MODULE}.load_authoritative_legacy_home_preflight_v1", return_value=None),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    # The redundant DB witness is seeded from the CORRECTED cold preflight
+    # (database_preexisted=False), not the transplanted true claim — this is
+    # what stops a second boot from self-agreeing into legacy.
+    assert persist.call_count == 1
+    _, persisted_preflight = persist.call_args.args
+    assert persisted_preflight.database_preexisted is False
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_cold_correction_write_failure_fails_narrow(tmp_path):
+    """If correcting the cold witness on disk fails, the boot still fails narrow
+    rather than proceeding on an uncorrected sidecar."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    # Cold install — no database file present at process start.
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.rewrite_legacy_home_preflight_cold_v1", side_effect=OSError("disk full")),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_transplanted_sidecar_stays_narrow_across_two_boots(tmp_path):
+    """End-to-end regression: a transplanted sidecar lying about a pre-existing
+    database on a cold install must stay narrow on BOTH boots. Boot 1 creates the
+    DB and corrects the poisoned witness; boot 2 (DB now exists, transplant guard
+    no longer fires) must not self-agree into legacy off the stale claim."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import load_legacy_home_preflight_v1, preflight_path
+
+    config = _privacy_startup_config(tmp_path)
+    state_dir = config.cache_dir / "state"
+    state_dir.mkdir(parents=True)
+    # Seed a transplanted/leftover durable sidecar (partial backup restore / cloned
+    # config) claiming a pre-existing DB, with NO database file present (cold).
+    preflight_path(state_dir).write_text('{"database_preexisted": true}\n', encoding="utf-8")
+
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        assert (config.cache_dir / "mammamiradio.db").exists()
+        assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+        corrected = load_legacy_home_preflight_v1(state_dir)
+        assert corrected is not None and corrected.database_preexisted is False
+
+        # Second boot with the DB now present — the promotion path the fix closes.
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    final = load_legacy_home_preflight_v1(state_dir)
+    assert final is not None and final.database_preexisted is False
+
+
+@pytest.mark.asyncio
+async def test_startup_database_origin_write_failure_fails_narrow(tmp_path):
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import LegacyHomePreflightV1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.load_legacy_home_database_preflight_v1", return_value=None),
+        patch(
+            f"{MODULE}.capture_legacy_home_preflight_v1",
+            return_value=LegacyHomePreflightV1(database_preexisted=True),
+        ),
+        patch(f"{MODULE}.persist_legacy_home_database_preflight_v1", side_effect=RuntimeError("locked")),
+        patch(f"{MODULE}.load_authoritative_legacy_home_preflight_v1", return_value=None),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+
+
+@pytest.mark.asyncio
+async def test_startup_invalid_database_origin_fails_narrow_without_repairing_sidecar(tmp_path):
+    import sqlite3
+
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.authorization import HomeAuthorizationMode
+    from mammamiradio.home.migration import DATABASE_ORIGIN_TABLE, preflight_path
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    db_path = config.cache_dir / "mammamiradio.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(f"CREATE TABLE {DATABASE_ORIGIN_TABLE} (wrong_column INTEGER)")
+        connection.commit()
+    finally:
+        connection.close()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+
+    assert app.state.station_state.home_authorization.mode is HomeAuthorizationMode.NARROW
+    assert app.state.station_state.home_entity_ids_observer is None
+    assert not preflight_path(config.cache_dir / "state").exists()
+
+
+@pytest.mark.asyncio
+async def test_startup_provenance_observer_runs_fsync_work_off_event_loop(tmp_path):
+    import threading
+
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.migration import LEGACY_HOME_MANIFEST_V1
+
+    config = _privacy_startup_config(tmp_path)
+    config.cache_dir.mkdir(parents=True)
+    (config.cache_dir / "mammamiradio.db").touch()
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+    started = threading.Event()
+    release = threading.Event()
+    seal_calls = 0
+
+    def _slow_seal(*_args, **_kwargs):
+        nonlocal seal_calls
+        seal_calls += 1
+        if seal_calls > 1:
+            return None
+        started.set()
+        release.wait(timeout=2.0)
+        raise RuntimeError("disk fault")
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.seal_legacy_home_provenance_v1", side_effect=_slow_seal) as seal,
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        observer = app.state.station_state.home_entity_ids_observer
+        assert observer is not None
+        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+
+        assert await asyncio.to_thread(started.wait, 1.0)
+        task = app.state.legacy_home_provenance_task
+        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+        assert app.state.legacy_home_provenance_task is task
+        assert not task.done()
+        assert task in app.state.background_tasks
+        # Event-loop work continues while the durability call is blocked in its thread.
+        await asyncio.sleep(0)
+        release.set()
+        await task
+        observer(LEGACY_HOME_MANIFEST_V1.entity_ids)
+        retry_task = app.state.legacy_home_provenance_task
+        assert retry_task is not task
+        await retry_task
+
+    assert task not in app.state.background_tasks
+    assert retry_task not in app.state.background_tasks
+    assert seal.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -586,6 +1664,7 @@ async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_
 
     with (
         patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}._explicit_bool_env", return_value=True),
         patch(f"{MODULE}.read_persisted_source", return_value=None),
         patch(f"{MODULE}.fetch_startup_playlist", return_value=(demo_tracks, None, "")),
         patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
@@ -601,6 +1680,59 @@ async def test_startup_purges_running_gag_buckets_for_entities_muted_in_a_prior_
     reloaded = EveningLedger.load(tmp_path)
     assert "k" not in reloaded.buckets
     assert "other" in reloaded.buckets
+
+
+@pytest.mark.asyncio
+async def test_startup_context_off_cannot_revive_latent_gags_when_resave_fails(tmp_path):
+    """An off boot clears stale disk buckets in memory even when disk remains
+    unwritable, so a later in-process enable cannot resurrect private events."""
+    from mammamiradio.core.models import Track
+    from mammamiradio.home.evening_memory import EveningLedger, GagBucket
+    from mammamiradio.web.streamer import _enable_home_context_runtime
+
+    config = _privacy_startup_config(tmp_path)
+    config.homeassistant.context_enabled = False
+    config.running_gags.domain_allowlist = []
+    config.running_gags.entity_allowlist = []
+    config.running_gags.entity_denylist = []
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    seed = EveningLedger()
+    seed.buckets["private"] = GagBucket(
+        "switch.private_kitchen",
+        "Private kitchen",
+        "off",
+        "on",
+        count=3,
+        last_ts=time.time(),
+    )
+    seed._dirty = True
+    seed.save_if_dirty(config.cache_dir)
+    tracks = [Track(title="Song", artist="Art", duration_ms=1000, spotify_id="t1")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=config),
+        patch(f"{MODULE}._explicit_bool_env", return_value=False),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch.object(EveningLedger, "save_if_dirty", return_value=None),
+    ):
+        from mammamiradio.main import app, startup
+
+        await startup()
+        await app.state.home_context_off_ledger_persist_task
+
+    ledger = app.state.station_state.evening_ledger
+    assert ledger.buckets == {}
+    # The no-op save models the prior persistence failure: stale data really
+    # remains on disk, while the live runtime is nevertheless fail-closed.
+    assert "private" in EveningLedger.load(config.cache_dir).buckets
+
+    _enable_home_context_runtime(app.state)
+    assert config.homeassistant.context_enabled is True
+    assert ledger.offer_gag(now=time.time()) is None
 
 
 @pytest.mark.asyncio
@@ -907,12 +2039,14 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
 
         # Verify clip ring buffer was created
         from mammamiradio.main import app
-        from mammamiradio.web.streamer import CLIP_MAX_SEGMENT_SECONDS
+        from mammamiradio.web.streamer import CLIP_MAX_SEGMENT_SECONDS, _stream_chunk_size
 
         assert hasattr(app.state, "clip_ring_buffer")
         # Happy-path maxlen is sized for the longest shareable ad/banter segment
         # (not the 240 fallback), and the lookback slot starts empty.
-        expected_maxlen = max(240, 192 * 1000 // 8 * CLIP_MAX_SEGMENT_SECONDS // 4096)
+        bytes_per_second = 192 * 1000 // 8
+        chunk_size = _stream_chunk_size(bytes_per_second)
+        expected_maxlen = max(240, -(-bytes_per_second * CLIP_MAX_SEGMENT_SECONDS // chunk_size))
         assert app.state.clip_ring_buffer.maxlen == expected_maxlen
         assert expected_maxlen > 240
         assert app.state.last_shareworthy_clip is None
@@ -1024,7 +2158,8 @@ async def test_shutdown_cancels_tasks():
     prewarm_task = AsyncMock()
     producer_task = AsyncMock()
     playback_task = AsyncMock()
-    for task in (prewarm_task, producer_task, playback_task):
+    listener_session_task = AsyncMock()
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
         task.cancel = MagicMock()
 
     main_mod._prewarm_task = prewarm_task
@@ -1034,6 +2169,10 @@ async def test_shutdown_cancels_tasks():
     main_mod.app.state.producer_task = producer_task
     main_mod.app.state.playback_task = playback_task
     main_mod.app.state.stream_hub = MagicMock()
+    main_mod.app.state.station_state = SimpleNamespace(
+        listener_session_tasks={listener_session_task},
+        _restart_handoff_tasks=set(),
+    )
     # Isolate from prior tests that may have left a verdict probe / background
     # tasks on the shared app.state — this test asserts exactly the 3 lifecycle
     # tasks are gathered.
@@ -1043,9 +2182,15 @@ async def test_shutdown_cancels_tasks():
     with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
         await main_mod.shutdown()
 
-    for task in (prewarm_task, producer_task, playback_task):
+    for task in (prewarm_task, producer_task, playback_task, listener_session_task):
         task.cancel.assert_called_once()
-    mock_gather.assert_called_once_with(prewarm_task, producer_task, playback_task, return_exceptions=True)
+    mock_gather.assert_called_once_with(
+        prewarm_task,
+        producer_task,
+        playback_task,
+        listener_session_task,
+        return_exceptions=True,
+    )
     assert main_mod.app.state.prewarm_task is None
     assert main_mod.app.state.producer_task is None
     assert main_mod.app.state.playback_task is None
@@ -1055,6 +2200,7 @@ async def test_shutdown_cancels_tasks():
     main_mod._prewarm_task = None
     main_mod._producer_task = None
     main_mod._playback_task = None
+    main_mod.app.state.station_state = None
 
 
 @pytest.mark.asyncio
@@ -1209,6 +2355,10 @@ async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
     """Ring buffer maxlen falls back to 240 when config.audio.bitrate raises ValueError."""
     from mammamiradio.core.models import Track
 
+    class _InvalidBitrate:
+        def __int__(self) -> int:
+            raise ValueError("not a number")
+
     mock_config = MagicMock()
     mock_config.station.name = "TestRadio"
     mock_config.station.language = "it"
@@ -1220,8 +2370,7 @@ async def test_startup_clip_ring_buffer_fallback_to_240(tmp_path: Path):
     mock_config.cache_dir = tmp_path / "cache"
     mock_config.homeassistant.enabled = False
     mock_config.allow_ytdlp = False
-    # Simulate a config value that causes ValueError when int() is called
-    mock_config.audio.bitrate = MagicMock(side_effect=ValueError("not a number"))
+    mock_config.audio.bitrate = _InvalidBitrate()
 
     tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
 
@@ -2310,3 +3459,296 @@ def test_clear_persisted_heading_swallows_oserror():
     _clear_persisted_heading(config)  # must not raise
 
     bad_path.unlink.assert_called_once()
+
+
+# Disk-safe cache ceiling
+# A limit above free space does not trigger eviction. The cache can fill the
+# volume and affect the database and ledger that share /data on the add-on.
+
+
+def _fake_usage(free_bytes: int) -> SimpleNamespace:
+    return SimpleNamespace(total=free_bytes * 4, used=free_bytes * 3, free=free_bytes)
+
+
+def test_disk_safe_ceiling_keeps_configured_value_when_space_allows(tmp_path):
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(20_000 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == (1500, False)
+
+
+def test_disk_safe_ceiling_trims_when_disk_is_tight(tmp_path):
+    """1200 MB free and 512 MB reserved leave 688 MB for the cache."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(1200 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == (688, True)
+
+
+def test_disk_safe_ceiling_counts_existing_cache_as_reclaimable(tmp_path):
+    """Cached bytes can be reclaimed by eviction, so include them in the calculation.
+
+    A full cache should not be treated as a full disk on every boot.
+    """
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(1200 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=9) == (697, True)
+
+
+def test_disk_safe_ceiling_never_trims_below_the_config_floor(tmp_path):
+    """Keep the 200 MB floor when the disk is nearly full.
+
+    The playback loop uses the norm cache for ready-track fallback, and startup
+    reports when the disk may not have room for the floor.
+    """
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(64 * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == (200, True)
+
+
+def test_disk_safe_ceiling_exact_affordable_equals_configured(tmp_path):
+    """Boundary: affordable == configured must pass through, not trim by one."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage((1500 + 512) * 1024 * 1024)):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == (1500, False)
+
+
+def test_disk_safe_ceiling_survives_an_unreadable_mount(tmp_path):
+    """A disk usage probe failure must leave startup running."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", side_effect=OSError("mount gone")):
+        assert _disk_safe_cache_ceiling_mb(tmp_path, 1500, cached_mb=0) == (1500, False)
+
+
+def test_disk_safe_ceiling_reports_disk_limited_even_when_the_value_is_unchanged(tmp_path):
+    """A station already configured at the floor gets the same number back on a full
+    disk. Reporting on the number changing would then stay silent exactly when the
+    operator most needs telling, so the flag — not the value — drives the warning."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(64 * 1024 * 1024)):
+        ceiling, disk_limited = _disk_safe_cache_ceiling_mb(tmp_path, 200, cached_mb=0)
+
+    assert ceiling == 200  # unchanged from configured...
+    assert disk_limited is True  # ...but the disk, not the config, decided it
+
+
+def test_disk_safe_ceiling_never_returns_below_the_floor(tmp_path):
+    """The contract is a hard floor. load_config clamps to 200 so this cannot happen
+    in practice, but the helper must not depend on its caller to hold its own line."""
+    from mammamiradio.main import _disk_safe_cache_ceiling_mb
+
+    with patch(f"{MODULE}.shutil.disk_usage", return_value=_fake_usage(20_000 * 1024 * 1024)):
+        ceiling, _ = _disk_safe_cache_ceiling_mb(tmp_path, 50, cached_mb=0)
+    assert ceiling >= 200
+
+    with patch(f"{MODULE}.shutil.disk_usage", side_effect=OSError("mount gone")):
+        ceiling, _ = _disk_safe_cache_ceiling_mb(tmp_path, 50, cached_mb=0)
+    assert ceiling >= 200
+
+
+# Cache directory scan
+
+
+def test_scan_cache_dir_counts_norm_tracks_and_total_size(tmp_path):
+    from mammamiradio.main import _scan_cache_dir
+
+    (tmp_path / "norm_a.mp3").write_bytes(b"\0" * (2 * 1024 * 1024))
+    (tmp_path / "norm_b.mp3").write_bytes(b"\0" * (3 * 1024 * 1024))
+    (tmp_path / "fm_a.mp3").write_bytes(b"\0" * (1 * 1024 * 1024))
+    (tmp_path / "notes.txt").write_bytes(b"ignored")
+
+    norm_count, total_mb = _scan_cache_dir(tmp_path)
+    assert norm_count == 2  # fm_ bakes are cached bytes but not pre-normalized tracks
+    assert total_mb == 6  # all three mp3s count toward disk usage
+
+
+def test_scan_cache_dir_skips_a_file_evicted_mid_scan(tmp_path):
+    """A file can disappear between glob() and stat() during startup housekeeping.
+
+    The scan should skip that file and continue.
+    """
+    from mammamiradio.main import _scan_cache_dir
+
+    (tmp_path / "norm_present.mp3").write_bytes(b"\0" * (4 * 1024 * 1024))
+    (tmp_path / "norm_vanishing.mp3").write_bytes(b"\0" * (4 * 1024 * 1024))
+
+    real_stat = Path.stat
+
+    def _stat_with_one_vanished(self, *args, **kwargs):
+        if self.name == "norm_vanishing.mp3":
+            raise FileNotFoundError(2, "No such file or directory")
+        return real_stat(self, *args, **kwargs)
+
+    with patch.object(Path, "stat", _stat_with_one_vanished):
+        norm_count, total_mb = _scan_cache_dir(tmp_path)
+
+    assert norm_count == 2  # the name was globbed, so it still counts as a track
+    assert total_mb == 4  # but its bytes are gone and must not be counted
+
+
+def test_scan_cache_dir_survives_an_unreadable_directory(tmp_path):
+    from mammamiradio.main import _scan_cache_dir
+
+    with patch.object(Path, "glob", side_effect=OSError("gone")):
+        assert _scan_cache_dir(tmp_path) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_warns_when_the_cache_ceiling_is_trimmed(tmp_path, caplog):
+    """The startup log must show both limits and give the operator an action."""
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 4000
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}._disk_safe_cache_ceiling_mb", return_value=(900, True)),
+        patch(f"{MODULE}.evict_cache_lru") as mock_evict,
+        caplog.at_level(logging.WARNING),
+    ):
+        from mammamiradio.main import _lifespan, app
+
+        async with _lifespan(app):
+            pass
+
+    assert "4000" in caplog.text and "900" in caplog.text
+    # Eviction must use the effective value.
+    assert mock_evict.call_args.args[1] == 900
+    # The value is written back for the producer's periodic eviction pass.
+    assert mock_config.max_cache_size_mb == 900
+
+
+@pytest.mark.asyncio
+async def test_lifespan_says_plainly_when_the_disk_is_genuinely_full(tmp_path, caplog):
+    """At the 200 MB floor, available space may still be insufficient.
+
+    The log must state that condition and tell the operator to free space.
+    """
+    from mammamiradio.core.models import Track
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 1500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = tmp_path / "cache"
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}._disk_safe_cache_ceiling_mb", return_value=(200, True)),
+        patch(f"{MODULE}.evict_cache_lru"),
+        caplog.at_level(logging.WARNING),
+    ):
+        from mammamiradio.main import _lifespan, app
+
+        async with _lifespan(app):
+            pass
+
+    assert "nearly full" in caplog.text
+    assert "Free space" in caplog.text
+    # The message must not say that the trim solved the disk problem.
+    assert "trimmed from" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_trim_leaves_a_norm_cache_rescue_candidate(tmp_path, caplog):
+    """Exercise startup trim, eviction, and rescue selection with real cache files.
+
+    Patch disk_usage so the test enters the trim branch on any host. The norm
+    cache must retain a ready-track fallback after startup.
+    """
+    import json
+
+    from mammamiradio.audio.norm_cache import select_norm_cache_rescue
+    from mammamiradio.core.models import Track
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    # Each track is large enough for the cache total to exceed the 200 MB floor.
+    # Sparse files keep the test fast while giving eviction real work to do.
+    cached_paths = []
+    sidecar_paths = []
+    for i in range(6):
+        track = cache_dir / f"norm_track{i}_192k.mp3"
+        track.write_bytes(b"\0" * 1024)
+        with track.open("ab") as fh:
+            fh.truncate(40 * 1024 * 1024)
+        sidecar = cache_dir / f"norm_track{i}_192k.mp3.json"
+        sidecar.write_text(json.dumps({"title": f"Song {i}", "artist": "Test Artist"}))
+        cached_paths.append(track)
+        sidecar_paths.append(sidecar)
+
+    mock_config = MagicMock()
+    mock_config.station.name = "TestRadio"
+    mock_config.station.language = "it"
+    mock_config.bind_host = "127.0.0.1"
+    mock_config.port = 8000
+    mock_config.pacing.lookahead_segments = 3
+    mock_config.max_cache_size_mb = 1500
+    mock_config.tmp_dir = tmp_path / "tmp"
+    mock_config.cache_dir = cache_dir
+
+    tracks = [Track(title="S", artist="A", duration_ms=1, spotify_id="x")]
+
+    # 300 MB free plus 240 MB reclaimable leaves 28 MB after the 512 MB reserve.
+    # Startup therefore uses the 200 MB floor and takes the nearly-full path.
+    tight = SimpleNamespace(total=8000 * 1024 * 1024, used=7700 * 1024 * 1024, free=300 * 1024 * 1024)
+
+    with (
+        patch(f"{MODULE}.load_config", return_value=mock_config),
+        patch(f"{MODULE}.read_persisted_source", return_value=None),
+        patch(f"{MODULE}.fetch_startup_playlist", return_value=(tracks, None, "")),
+        patch(f"{MODULE}.run_producer", new_callable=AsyncMock),
+        patch(f"{MODULE}.run_playback_loop", new_callable=AsyncMock),
+        patch(f"{MODULE}.shutil.disk_usage", return_value=tight),
+        caplog.at_level(logging.WARNING),
+    ):
+        from mammamiradio.main import _lifespan, app
+
+        async with _lifespan(app):
+            state = app.state.station_state
+
+    # Startup applied the floor and stored it for the periodic eviction pass.
+    assert mock_config.max_cache_size_mb == 200
+    assert "nearly full" in caplog.text
+
+    # The cache starts at 240 MB, so eviction removes tracks above the 200 MB floor.
+    survivors = list(cache_dir.glob("norm_*.mp3"))
+    assert len(survivors) < len(cached_paths), "startup trim did not evict a track above the effective floor"
+    # Eviction stopped short of emptying the rescue pool the playback loop needs.
+    assert survivors, "startup trim + eviction emptied the norm-cache rescue pool"
+    # Eviction unlinks only the .mp3, and rescue selection uses the sidecar's
+    # title/artist, so the surviving sidecars must remain available.
+    assert all(s.exists() for s in sidecar_paths)
+    # Permissive: this asserts the rescue POOL survived eviction, so it models the
+    # deep rung where a recently-heard song still beats the emergency tone. The
+    # policy itself is unit-tested both ways in tests/audio/test_norm_cache.py.
+    assert select_norm_cache_rescue(cache_dir, state, allow_recent_repeat=True) is not None

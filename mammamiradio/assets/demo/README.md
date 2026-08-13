@@ -14,12 +14,22 @@ demo-asset contract decision (see the 2026-04-16 documentation audit in
   `emergency_tone.mp3` is the required 2-second cold-cache/no-clip final rung.
   Keep both under this package tree so they are available without rendering in
   standalone and Home Assistant add-on builds.
-- `welcome/` — placeholder for onboarding clips (currently a README stub).
-- `banter/`, `ads/`, `music/`, `jingles/` — not committed yet. The runtime tolerates absence: banter falls back to stock copy, ads get skipped, music falls through local files and then the recovery ladder.
+- `first_listen/` — one reviewed, content-addressed 27-second mini-show with an
+  original music bed, station identity, and the free Edge fallback voices for
+  Marco and Giulia. Fresh unfinished clients hear it before they join the
+  shared live stream; it is onboarding, not a rotation source.
+- `spoken_assets.json` — reviewed transcript, language, role, and SHA-256 for
+  every MP3 inventoried under recovery/banter/first_listen. Missing, changed,
+  unlisted, or listener-unsafe speech fails closed. Runtime may admit approved
+  recovery and neutral banter speech; welcome discovery stays disabled.
+- `welcome/` — historical generator documentation only. The runtime no longer
+  discovers welcome or unmanifested banter clips from directory contents.
+- `banter/`, `ads/`, `music/`, `jingles/` — not committed yet. The runtime tolerates absence: banter falls back to stock copy, ads get skipped, music falls through local files and then the recovery ladder. The First Listen mini-show does not make any of these folders a bundled music catalog. Any future packaged banter must also be declared in `spoken_assets.json` before runtime can use it.
 
 ## Generation
 
-Welcome clips have a generator: `scripts/generate_welcome_clips.py` renders the fixed welcome-clip contract through the existing TTS pipeline (free Edge engine by default — no API key). Run it, listen, and commit the MP3s if they sound right.
+The historical welcome-clip generator now emits neutral station-continuity
+lines for local review only. Its output is not runtime-discoverable.
 
 The `banter/`, `ads/`, `music/`, and `jingles/` directories stay empty pending the demo-asset contract decision (see the 2026-04-16 documentation audit in `docs/`). If and when we ship a generator for those, it will likewise route through the existing TTS pipeline.
 

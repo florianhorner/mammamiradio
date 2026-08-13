@@ -158,12 +158,23 @@ def test_classic_source_year_stamp(config, monkeypatch):
 
 
 def test_classic_source_ytdlp_disabled_raises(config, monkeypatch):
+    from mammamiradio.core.models import SourceReadinessEvidence
     from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
 
     monkeypatch.setattr("mammamiradio.playlist.downloader._ytdlp_enabled", lambda: False)
+    readiness = SourceReadinessEvidence()
 
     with pytest.raises(ExplicitSourceError, match="temporarily unavailable"):
-        load_explicit_source(config, PlaylistSource(kind="classic", url="classic://italian/80s"))
+        load_explicit_source(
+            config,
+            PlaylistSource(kind="classic", label="Classici anni '80", url="classic://italian/80s"),
+            readiness=readiness,
+        )
+
+    assert readiness.current_rotation_kind == "classic"
+    assert readiness.advanced is not None
+    assert readiness.advanced.attempted is True
+    assert readiness.advanced.failure == "Classic Italian returned no playable candidates"
 
 
 def test_classic_source_post_restart(config, tmp_path, monkeypatch):

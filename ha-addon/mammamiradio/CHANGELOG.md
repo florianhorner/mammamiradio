@@ -2,16 +2,43 @@
 
 ## Unreleased
 
-### Added
+- **First Listen never traps an install it cannot serve.** A station running without Home Assistant access keeps the guided path optional instead of mandatory and can always reach the AI-key step, and a proven prior install upgrading into this release keeps its classification and its home behavior — only a bare or unreadable leftover database file still fails closed to the cautious path.
+- **First Listen now takes a fresh add-on install from setup to real radio before asking for anything optional.** The opening control-room flow explains source readiness in plain language, finds one compatible-looking `media_player`, starts `media-source://mammamiradio/live`, and asks whether the station was heard. It works with stock hosts and no AI key, repairs an accepted-but-unsaved listening check without replaying audio, and keeps filtered Home context behind an explicit privacy preview; all origin and receipt work remains outside the instant-audio startup path.
 
-- **The control room now shows where a slow build spent its time, and what safety audio is standing by.** The admin Engine Room gains two honest, admin-only readouts. "Last render" breaks the most recent segment down into its slowest stage — finding music, writing, voices, mixing, the on-air finish — so an operator can see why a build took a while instead of guessing. "Protected continuity" shows any ready safety audio the add-on is holding in reserve outside the normal queue. Both are diagnostics only: never shown to listeners, and never able to change what actually airs.
-- **Home context now rotates instead of repeating itself.** A casual host break gets at most one safe ambient cue, and a topic rests for 30 minutes after it starts airing. Room-presence moments stay off until explicitly enabled for that sensor; the add-on never adds extra Home Assistant polling, and its public status never exposes the internal cue bookkeeping.
+## 2.18.0 - 2026-08-07
 
-### Fixed
+The station stops going quiet. v2.18 closes every path we could find where a control, a failure, or a busy moment became silence or a repeated song — and starts new Home Assistant installations with a deliberately small home context.
 
-- **Switching sources, purging, or flipping a mode can no longer open a gap or bring back a song you removed.** Every control that rebuilds the playback queue — source switches, playlist purges, panic, Chaos and Festival cutovers, and the everyday shuffle, add, move, and ban edits — now rebuilds the queue and its rundown in one step and reserves only audio that is already safe to play: the branded continuity clip first, then eligible cached music, then a packaged emergency tone as the cold-cache last resort. Songs already banned or removed when the reserve is rebuilt are excluded from that instant-audio reserve, and a track that was being prepared for the old lineup is discarded instead of arriving after the change. If the reserve bookkeeping ever hiccups, the show simply plays on.
+### The show keeps playing
 
-## 2.18.0
+- Every control that rebuilds the queue — source switches, purges, Panic, Chaos, Festival, everyday edits — keeps the last safe audio playing and reserves only audio that is proven playable.
+- The song on the air can no longer be picked as the song that plays next, and cached rescues rotate instead of repeating one track during a stall.
+- A curly apostrophe or an unusual letter in a station name no longer silences the stream. Typing a name on a phone or Mac substitutes a smart quote, which the stream headers could not carry, and every listener got an error while the station reported healthy.
+- If every voice provider fails, speech falls through to canned copy or music — never a silent segment. One mismatched cloud voice no longer sidelines every other voice on that provider.
+- Blocked or rejected music sources are marked unavailable before they can become silent songs, and adding songs no longer throws away the track being prepared.
+- The backup writer steps in sooner when the main AI writer is briefly busy, and delivery is cushioned so one busy moment is less likely to reach listeners.
+
+### A smaller, more honest home layer
+
+- Fresh installations start with coarse daylight and one unambiguous weather source only; existing stations keep their current home behavior through a continuity bridge.
+- Home references rotate like radio, not a dashboard: one ambient cue per casual break, and a topic rests after airing.
+- Temperatures are read in the unit they were measured in — 68 °F is no longer announced as "sixty-eight degrees" Celsius.
+- Home Assistant context work moved off the path that keeps audio moving, and hot backups no longer omit the app when generated audio changes mid-copy.
+
+### A control room you can trust
+
+- Rotazione leads with Record Hunt: type where the station should go next and it highlights what it will favor.
+- Rotation edits carry the song's own identity, so a shifted list can never make a Ban or Next hit the wrong track.
+- Admin controls and pacing survive restarts, Stop/Resume is restart-safe, and the AI spend estimate counts a paid voice the moment the provider confirms it.
+- The control room works with a screen reader, on a phone, and in dim light; the listener page's badges, name field, and footer links are legible and comfortable to tap.
+
+### Also in this release
+
+- The add-on's music cache grows to 1500 MB by default with a new **Music cache size (MB)** setting, sized so a full rotation stays ready to play.
+- Normal Mode holds its English-led balance across the whole break, and a host can no longer end up answering themselves when a line is dropped.
+- A long listening stretch can earn one honest companionship beat; the time counter can no longer run past the end of what is playing.
+- The v1 integration contract is frozen and machine-checked on every pull request.
+- Installing and updating the add-on works again: the repository now names only published versions, with a daily check if that ever slips.
 
 ## 2.17.0 - 2026-07-12
 

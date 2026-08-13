@@ -22,8 +22,8 @@ def test_language_mode_rule_unmapped_code_degrades_not_keyerror():
     assert language_mode_rule(True, "de") == "ALL text in de."
     assert language_mode_rule(True, "") == "ALL text in Italian."
     assert language_mode_rule(True, "   ") == "ALL text in Italian."
-    # OFF ignores the code entirely — the static 70/30 rule, no map lookup.
-    assert "70% English" in language_mode_rule(False, "de")
+    # OFF ignores the code entirely — the static 75/25 rule, no map lookup.
+    assert "75% English" in language_mode_rule(False, "de")
 
 
 @pytest.fixture()
@@ -42,13 +42,13 @@ def test_off_omits_full_italian_directive(config):
     assert "amici miei" not in prompt
 
 
-def test_off_targets_70_30_mix(config):
-    """OFF mode is the international mix: 70/30 with real Italian sentences allowed."""
+def test_off_targets_75_25_mix(config):
+    """OFF mode is the international mix: 75/25 with real Italian flavor allowed."""
     config.super_italian_mode = False
     prompt = _build_system_prompt(config)
-    assert "70% English" in prompt
-    assert "30% Italian" in prompt
-    assert "one line in three" in prompt
+    assert "75% English" in prompt
+    assert "25% Italian" in prompt
+    assert "one word in four" in prompt
 
 
 def test_on_demands_full_italian_directive(config):
@@ -57,7 +57,7 @@ def test_on_demands_full_italian_directive(config):
     prompt = _build_system_prompt(config)
     assert "100% in Italian" in prompt
     assert "amici miei" in prompt
-    assert "70% English" not in prompt
+    assert "75% English" not in prompt
 
 
 def test_cache_invalidates_on_mode_flip(config):

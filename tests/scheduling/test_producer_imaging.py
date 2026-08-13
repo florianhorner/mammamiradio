@@ -12,6 +12,7 @@ import pytest
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import HostPersonality, Segment, SegmentType, StationState, Track
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.scheduling.handoff import PreparedMusicHandoff
 from mammamiradio.scheduling.producer import (
     RenderedMusicTrack,
@@ -49,6 +50,7 @@ def _make_state() -> StationState:
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
         listeners_active=1,
+        home_authorization=HomeAuthorization.legacy(),
     )
 
 
@@ -903,6 +905,7 @@ async def test_ha_context_refreshed_for_news_flash(tmp_path, category):
     host = config.hosts[0]
 
     mock_context = MagicMock()
+    mock_context.authorization_mode = HomeAuthorizationMode.LEGACY.value
     mock_context.summary = "Il tempo e' bello"
     mock_context.events_summary = ""
     mock_context.events_summary_en = ""

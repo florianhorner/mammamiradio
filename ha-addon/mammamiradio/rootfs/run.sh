@@ -10,7 +10,9 @@ echo "[mammamiradio] Starting add-on..."
 OPTIONS_FILE="/data/options.json"
 SECRETS_FILE="/config/secrets.env"
 SUPERVISOR_API="${SUPERVISOR_API:-http://supervisor}"
-RECOVERY_MARKER_FILE="${RECOVERY_MARKER_FILE:-/data/.provider_recovery_checked}"
+# Version 2 deliberately supersedes the old marker: older builds could write
+# /data/.provider_recovery_checked before recovered secrets were durable.
+RECOVERY_MARKER_FILE="${RECOVERY_MARKER_FILE:-/data/.provider_recovery_checked_v2}"
 if [ -f "$OPTIONS_FILE" ] || [ -f "$SECRETS_FILE" ]; then
     OPTS_LOG="/tmp/opts-parse.log"
     if ! OPTS_EXPORT=$(python3 -c "
@@ -105,13 +107,15 @@ if os.path.exists('$SECRETS_FILE'):
 # *successful* Supervisor response (an authoritative answer, whether or not it
 # contained any of the missing keys — post-removal there is no way for a new
 # legacy value to appear in Supervisor's store, since the schema fields that
-# fed it are gone). A network error or timeout does NOT write the marker, so a
-# transient failure keeps retrying on later boots instead of losing the
-# recovery chance permanently.
+# fed it are gone) and, when keys were recovered, only after secrets.env was
+# durably replaced. A network error, malformed response, or secrets write
+# failure does NOT write the marker, so a transient failure keeps retrying on
+# later boots instead of losing the recovery chance permanently.
 RECOVERY_MARKER = '$RECOVERY_MARKER_FILE'
 missing_keys = [k for k in secret_keys if not provider_values.get(k)]
 supervisor_token = os.environ.get('SUPERVISOR_TOKEN') or os.environ.get('HASSIO_TOKEN') or ''
 recovered = {}
+supervisor_check_succeeded = False
 if missing_keys and supervisor_token and not os.path.exists(RECOVERY_MARKER):
     try:
         import urllib.request
@@ -121,21 +125,30 @@ if missing_keys and supervisor_token and not os.path.exists(RECOVERY_MARKER):
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             info = json.load(resp)
-        stored = (info.get('data') or {}).get('options') or {}
-        if isinstance(stored, dict):
-            for opt_key, env_key in provider_option_map:
-                if env_key in missing_keys:
-                    val = stored.get(opt_key, '')
-                    if val:
-                        recovered[env_key] = str(val)
-        provider_values.update(recovered)
-        try:
-            with open(RECOVERY_MARKER, 'w', encoding='utf-8') as marker_file:
-                marker_file.write('checked\n')
-        except OSError:
-            pass
+        if not isinstance(info, dict) or info.get('result') != 'ok':
+            raise ValueError('invalid Supervisor response')
+        data = info.get('data')
+        if not isinstance(data, dict) or not isinstance(data.get('options'), dict):
+            raise ValueError('invalid Supervisor response')
+        stored = data['options']
+        candidate_recovered = {}
+        for opt_key, env_key in provider_option_map:
+            if env_key in missing_keys:
+                val = stored.get(opt_key, '')
+                if val:
+                    value = str(val)
+                    if '\n' in value or '\r' in value:
+                        raise ValueError('invalid legacy provider credential')
+                    # Strip to the read-back parser's fixed point (parse_secret_value
+                    # always strips) so a legacy value with surrounding whitespace
+                    # doesn't fail its own post-write verification below.
+                    candidate_recovered[env_key] = value.strip()
+        recovered = candidate_recovered
+        supervisor_check_succeeded = True
     except Exception as exc:
+        recovered = {}
         warning(f'could not check Supervisor for legacy provider keys: {exc}')
+recovered_secrets_persisted = not recovered
 if recovered:
     try:
         existing_lines = []
@@ -147,10 +160,50 @@ if recovered:
         fd, tmp_name = tempfile.mkstemp(prefix='.secrets-', dir=secrets_dir)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as tmp_file:
+                os.fchmod(tmp_file.fileno(), 0o600)
                 tmp_file.write('\n'.join(new_lines) + '\n')
-            os.chmod(tmp_name, 0o600)
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
+            verified_recovered = {}
+            with open(tmp_name, encoding='utf-8') as persisted_secret_file:
+                for line_no, raw_line in enumerate(persisted_secret_file, 1):
+                    line = raw_line.rstrip('\n').rstrip('\r')
+                    if line_no == 1:
+                        line = line.lstrip('\ufeff')
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('#'):
+                        continue
+                    if stripped.startswith('export '):
+                        stripped = stripped[7:].lstrip()
+                    if '=' not in stripped:
+                        continue
+                    key, raw_value = stripped.split('=', 1)
+                    key = key.strip()
+                    if key not in recovered:
+                        continue
+                    value = parse_secret_value(raw_value, line_no)
+                    if value:
+                        verified_recovered[key] = value
+            if any(verified_recovered.get(key) != value for key, value in recovered.items()):
+                raise OSError('recovered secret verification failed')
+            if os.stat(tmp_name).st_mode & 0o777 != 0o600:
+                raise OSError('recovered secret permissions are unsafe')
             os.replace(tmp_name, '$SECRETS_FILE')
-            warning('moved legacy provider keys from the old add-on options into /config/secrets.env')
+            provider_values.update(recovered)
+            try:
+                dir_fd = os.open(secrets_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                warning(
+                    'moved legacy provider keys into /config/secrets.env, '
+                    'but could not confirm crash durability; recovery remains armed'
+                )
+            else:
+                recovered_secrets_persisted = True
+                warning('moved legacy provider keys from the old add-on options into /config/secrets.env')
         except Exception:
             try:
                 os.unlink(tmp_name)
@@ -159,6 +212,12 @@ if recovered:
             raise
     except Exception as exc:
         warning(f'could not persist recovered provider keys to secrets.env: {exc}')
+if supervisor_check_succeeded and recovered_secrets_persisted:
+    try:
+        with open(RECOVERY_MARKER, 'w', encoding='utf-8') as marker_file:
+            marker_file.write('checked\n')
+    except OSError:
+        pass
 
 for env_key in secret_keys:
     val = provider_values.get(env_key, '')
@@ -186,9 +245,13 @@ if legacy_claude_model:
 enabled = opts.get('enable_home_assistant', True)
 ha_val = 'true' if enabled else 'false'
 print('export HA_ENABLED=' + ha_val)
-context_enabled = opts.get('ha_context_enabled', True)
-context_val = 'true' if context_enabled else 'false'
-print('export MAMMAMIRADIO_HA_CONTEXT_ENABLED=' + context_val)
+# Absence is meaningful for the First Listen privacy migration.  Export only
+# an explicit operator choice; app startup classifies omitted legacy installs
+# after audio tasks are already running.
+if 'ha_context_enabled' in opts:
+    context_enabled = opts.get('ha_context_enabled') is True
+    context_val = 'true' if context_enabled else 'false'
+    print('export MAMMAMIRADIO_HA_CONTEXT_ENABLED=' + context_val)
 context_poll = opts.get('ha_context_poll_interval', 300)
 try:
     context_poll_int = int(context_poll)
@@ -216,9 +279,10 @@ guest_host = opts.get('guest_host', True)
 gh_val = 'true' if guest_host else 'false'
 print('export MAMMAMIRADIO_GUEST_HOST=' + gh_val)
 # Pacing sliders. Only export when the operator actually set a value (addon
-# config, or the admin slider persisting into /data/options.json) so an unset
-# option leaves radio.toml's default in charge. A non-int value is skipped, not
-# fatal, so one bad key can't drop every export.
+# config, or the admin slider saved through Supervisor and projected into this
+# generated file at startup) so an unset option leaves radio.toml's default in
+# charge. A non-int value is skipped, not fatal, so one bad key can't drop
+# every export.
 for _pace_opt, _pace_env in (
     ('songs_between_banter', 'MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER'),
     ('songs_between_ads', 'MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS'),
@@ -232,6 +296,21 @@ for _pace_opt, _pace_env in (
     except (TypeError, ValueError):
         continue
     print('export ' + _pace_env + '=' + shlex.quote(str(_pace_int)))
+# Normalization cache ceiling. A larger cache keeps more of the rotation ready and
+# reduces cold renders. Config loading clamps the value, so malformed input uses a
+# safe bound instead of stopping startup.
+cache_mb = opts.get('norm_cache_mb', 1500)
+try:
+    # Python treats bool as an int. Without this guard, True becomes a 1 MB cache.
+    # Reject bool before conversion to match _apply_addon_options in core/config.py.
+    if isinstance(cache_mb, bool):
+        raise ValueError
+    cache_mb_int = int(cache_mb)
+    if cache_mb_int <= 0:
+        raise ValueError
+except (TypeError, ValueError):
+    cache_mb_int = 1500
+print('export MAMMAMIRADIO_MAX_CACHE_MB=' + shlex.quote(str(cache_mb_int)))
 " 2>"$OPTS_LOG"); then
         echo "[mammamiradio] WARNING: Failed to parse add-on config, continuing with defaults"
         cat "$OPTS_LOG" 2>/dev/null
@@ -269,8 +348,9 @@ export MAMMAMIRADIO_LEDGER_ENABLED="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Point cache/tmp at persistent /data ----
+# ---- Point runtime data at persistent /data ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
+export MAMMAMIRADIO_MUSIC_DIR="/data/music"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
 
 # ---- Ensure directories exist ----
@@ -279,8 +359,9 @@ if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.e
     echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
     echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
     export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
+    export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"
     export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
-    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$FALLBACK_BASE/music" "$MAMMAMIRADIO_TMP_DIR"
+    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"
 fi
 
 # ---- Validate critical files exist ----

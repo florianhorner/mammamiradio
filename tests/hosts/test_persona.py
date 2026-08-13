@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from mammamiradio.hosts.persona import ListenerPersona, PersonaStore, compute_arc_phase
@@ -74,20 +76,51 @@ async def test_get_recent_plays_empty_on_fresh_db(store):
 
 
 @pytest.mark.asyncio
-async def test_maybe_new_session_returns_true_on_gap(store):
-    """maybe_new_session returns True when enough time has passed since the last session."""
-    import time
+async def test_start_session_commits_once_per_receipt(store):
+    """The same station epoch cannot increment the durable counter twice."""
+    assert await store.start_session("listener-epoch-1") is True
+    assert await store.start_session("listener-epoch-1") is True
+    persona = await store.get_persona()
+    assert persona.session_count == 1
 
-    from mammamiradio.hosts.persona import SESSION_GAP_SECONDS
 
-    # First call with no prior activity: should return True
-    result = store.maybe_new_session()
-    assert result is True
+@pytest.mark.asyncio
+async def test_fresh_store_with_same_process_token_reuses_durable_receipt(tmp_path):
+    from mammamiradio.core.sync import init_db
 
-    # Simulate a gap by rolling back the timestamp
-    store._last_listener_at = time.time() - SESSION_GAP_SECONDS - 1
-    result = store.maybe_new_session()
-    assert result is True
+    db_path = tmp_path / "same-process.db"
+    init_db(db_path)
+    first = PersonaStore(db_path, process_token="process-a")
+    second = PersonaStore(db_path, process_token="process-a")
+
+    assert await first.start_session("listener-epoch-1") is True
+    assert await second.start_session("listener-epoch-1") is True
+    assert (await second.get_persona()).session_count == 1
+
+
+@pytest.mark.asyncio
+async def test_new_process_token_retains_old_receipts_and_reuses_epoch_number(tmp_path):
+    from mammamiradio.core.sync import init_db
+
+    db_path = tmp_path / "new-process.db"
+    init_db(db_path)
+    first = PersonaStore(db_path, process_token="process-a")
+    assert await first.start_session("listener-epoch-1") is True
+
+    restarted = PersonaStore(db_path, process_token="process-b")
+    assert await restarted.start_session("listener-epoch-1") is True
+    assert (await restarted.get_persona()).session_count == 2
+
+    # A delayed retry from the first process still observes its committed
+    # receipt after the restart and cannot increment the persona again.
+    delayed_old_process = PersonaStore(db_path, process_token="process-a")
+    assert await delayed_old_process.start_session("listener-epoch-1") is True
+    assert (await delayed_old_process.get_persona()).session_count == 2
+    with sqlite3.connect(db_path) as db:
+        assert db.execute("SELECT process_token, logical_session_id FROM listener_session_receipts").fetchall() == [
+            ("process-a", "listener-epoch-1"),
+            ("process-b", "listener-epoch-1"),
+        ]
 
 
 @pytest.mark.asyncio
@@ -176,15 +209,13 @@ async def test_record_motif_appends_and_trims(store):
 
 
 # ---------------------------------------------------------------------------
-# maybe_new_session — False path (rapid successive calls)
+# start_session — idempotence path
 # ---------------------------------------------------------------------------
 
 
-def test_maybe_new_session_returns_false_on_rapid_calls(store):
-    """Rapid successive calls return False (same session)."""
-    assert store.maybe_new_session() is True
-    assert store.maybe_new_session() is False
-    assert store.maybe_new_session() is False
+@pytest.mark.asyncio
+async def test_start_session_rejects_empty_receipt(store):
+    assert await store.start_session("") is False
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +227,7 @@ def test_to_prompt_context_first_time_listener():
     """Empty persona with session_count=0 includes session count."""
     p = ListenerPersona()
     ctx = p.to_prompt_context()
-    assert "Sessions so far: 0" in ctx
+    assert "Station sessions so far: 0" in ctx
     # No motifs, theories, jokes, or callbacks
     assert "Music motifs" not in ctx
     assert "Theories" not in ctx
@@ -206,7 +237,7 @@ def test_to_prompt_context_returning_listener():
     """Persona with session history includes session count."""
     p = ListenerPersona(session_count=5, theories=["ama le ballate"])
     ctx = p.to_prompt_context()
-    assert "Sessions so far: 5" in ctx
+    assert "Station sessions so far: 5" in ctx
     assert "ballate" in ctx
 
 
@@ -538,3 +569,54 @@ async def test_increment_session_swallows_db_exception(tmp_path):
     with patch("aiosqlite.connect", side_effect=Exception("DB write failure")):
         # Must not raise
         await s.increment_session()
+
+
+@pytest.mark.asyncio
+async def test_start_session_commit_failure_does_not_acknowledge_receipt(tmp_path):
+    from unittest.mock import patch
+
+    from mammamiradio.core.sync import init_db
+
+    db_path = tmp_path / "session_commit_err.db"
+    init_db(db_path)
+    s = PersonaStore(db_path)
+
+    with patch("aiosqlite.connect", side_effect=Exception("DB commit failure")):
+        assert await s.start_session("listener-epoch-1") is False
+
+    assert await s.start_session("listener-epoch-1") is True
+    assert (await s.get_persona()).session_count == 1
+
+
+@pytest.mark.asyncio
+async def test_start_session_does_not_depend_on_post_commit_read(tmp_path):
+    from unittest.mock import patch
+
+    from mammamiradio.core.sync import init_db
+
+    db_path = tmp_path / "session_post_commit_read.db"
+    init_db(db_path)
+    s = PersonaStore(db_path)
+
+    with patch.object(s, "get_persona", side_effect=Exception("diagnostic read failed")):
+        assert await s.start_session("listener-epoch-1") is True
+
+    assert (await s.get_persona()).session_count == 1
+
+
+@pytest.mark.asyncio
+async def test_start_session_retry_after_post_commit_ack_interruption_is_exactly_once(tmp_path):
+    from unittest.mock import patch
+
+    from mammamiradio.core.sync import init_db
+
+    db_path = tmp_path / "session_post_commit_ack.db"
+    init_db(db_path)
+    s = PersonaStore(db_path, process_token="process-a")
+
+    with patch.object(s, "_acknowledge_session_receipt", side_effect=RuntimeError("process interrupted")):
+        assert await s.start_session("listener-epoch-1") is False
+
+    assert (await s.get_persona()).session_count == 1
+    assert await s.start_session("listener-epoch-1") is True
+    assert (await s.get_persona()).session_count == 1

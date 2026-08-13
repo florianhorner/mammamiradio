@@ -100,6 +100,37 @@ async def test_purge_empties_pool_and_drains_queue(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_purge_pool_preserves_ready_head_when_replacement_is_unavailable(tmp_path):
+    app = _make_app(tmp_path, [_track("Volare", "Modugno"), _track("Felicita", "Al Bano")])
+    state = app.state.station_state
+    head_path = tmp_path / "pool-head.mp3"
+    tail_path = tmp_path / "pool-tail.mp3"
+    head_path.write_bytes(b"head")
+    tail_path.write_bytes(b"tail")
+    head = Segment(type=SegmentType.MUSIC, path=head_path, duration_sec=180.0, metadata={"title": "Head"})
+    tail = Segment(type=SegmentType.BANTER, path=tail_path, duration_sec=10.0, metadata={"title": "Tail"})
+    app.state.queue.put_nowait(head)
+    app.state.queue.put_nowait(tail)
+    state.queued_segments = [{"type": "music", "label": "Head"}, {"type": "banter", "label": "Tail"}]
+    state.continuity_epoch = 8
+
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with _client(app) as client:
+            response = await client.post("/api/playlist/purge", json={})
+
+    assert response.status_code == 200
+    assert response.json()["purged"] == 1
+    assert state.playlist == []
+    assert state.playlist_source is None
+    assert state.force_next is SegmentType.BANTER
+    assert list(app.state.queue._queue) == [head]
+    assert len(state.queued_segments) == 1
+    assert state.continuity_epoch == 9
+    assert head_path.exists()
+    assert not tail_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_purge_reports_not_persisted_but_still_clears_pool_and_queue(tmp_path):
     app = _make_app(tmp_path, [_track("Volare", "Modugno")])
     state = app.state.station_state

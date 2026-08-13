@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import mammamiradio.scheduling.producer as producer
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.models import (
@@ -88,6 +89,73 @@ def test_pick_brand_weights_recurring():
     picks = [_pick_brand(brands, []) for _ in range(50)]
     recurring_count = sum(1 for p in picks if p.name == "Recurring")
     assert recurring_count > 25  # Should be weighted 3:1
+
+
+def test_direct_campaign_cast_failure_uses_another_safe_brand(monkeypatch):
+    invalid = AdBrand(
+        name="Invalid direct campaign",
+        tagline="nope",
+        campaign=CampaignSpine(
+            spokesperson_voice="Missing Character",
+            spokesperson_role="hammer",
+            format_pool=["live_remote"],
+        ),
+    )
+    safe = AdBrand(name="Safe campaign", tagline="yes")
+    voice = AdVoice(name="House Hammer", voice="it-IT-DiegoNeural", style="safe", role="hammer")
+
+    monkeypatch.setattr(producer, "_pick_brand", lambda brands, _history: brands[0])
+
+    selected = producer._select_safe_ad_spot(
+        [invalid, safe],
+        [],
+        StationState(),
+        [voice],
+        [],
+    )
+
+    assert selected is not None
+    assert selected[0].name == "Safe campaign"
+
+
+def test_direct_campaign_roleless_fallback_normalizes_character_name() -> None:
+    brand = AdBrand(
+        name="Scarpe Volanti",
+        tagline="T",
+        campaign=CampaignSpine(spokesperson_voice="Il Razzo", spokesperson_role="disclaimer_goblin"),
+    )
+    hammer = AdVoice(name="House Hammer", voice="hammer", style="safe", role="hammer")
+    razzo = AdVoice(name=" Il Razzo ", voice="razzo", style="fast", role="disclaimer_goblin")
+
+    selected = producer._direct_campaign_default_voice(
+        brand,
+        {"hammer": hammer, "disclaimer_goblin": razzo},
+    )
+
+    assert selected is razzo
+
+
+def test_ad_break_promo_uses_only_an_unreserved_approved_house_voice() -> None:
+    staged = AdVoice(name="Staged", voice="staged", style="x", role="hammer", airtime_approved=False)
+    quarantined = AdVoice(
+        name="Quarantined",
+        voice="quarantined",
+        style="x",
+        role="hammer",
+        direct_identity_quarantined=True,
+    )
+    reserved = AdVoice(
+        name="Reserved",
+        voice="reserved",
+        style="x",
+        role="hammer",
+        reserved_for=frozenset({"Owned Brand"}),
+    )
+    support = AdVoice(name="Support", voice="support", style="x", role="hammer", secondary_only=True)
+    house = AdVoice(name="House", voice="house", style="x", role="hammer")
+
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support, house]) is house
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -629,7 +697,7 @@ async def test_banter_quality_reject_records_generated_waste(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", None),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -949,6 +1017,55 @@ async def test_humanity_event_fires_only_once(tmp_path):
 # ---------------------------------------------------------------------------
 # Gap 4 — Ad break quality reject resets songs_since_ad
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
+    """An all-unsafe cast resets pacing without rendering or queuing an ad."""
+    state = _make_run_state()
+    state.force_next = SegmentType.AD
+    state.songs_since_ad = 5
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _no_safe_campaign(*_args, **_kwargs):
+        # Keep the next producer iteration idle so this assertion observes only
+        # the skipped AD branch, not a following music render.
+        state.listeners_active = 0
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_no_safe_campaign) as select_spot,
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock) as write_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not state.render_timings and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            if not state.render_timings:
+                raise TimeoutError("Producer did not record the skipped ad break")
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert select_spot.call_count == 1
+    write_ad.assert_not_called()
+    synthesize_ad.assert_not_called()
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert state.songs_since_ad == 0
+    timing = state.render_timings[0]
+    assert timing["kind"] == SegmentType.AD.value
+    assert timing["outcome"] == "discarded"
+    assert timing["reason"] == "no_safe_ad_campaigns"
 
 
 @pytest.mark.asyncio
@@ -1627,6 +1744,59 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prefetch_next_skips_session_rejected_candidate(tmp_path):
+    """A rejected first track must not prevent prefetching a playable sibling."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    rejected, playable = state.playlist
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, rejected.cache_key, "yt-dlp unavailable")
+        with (
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                return_value=tmp_path / "fake.mp3",
+            ) as mock_download,
+            patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "test")),
+        ):
+            await _prefetch_next(state, config)
+
+        assert mock_download.await_args.args[0] is playable
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_returns_when_every_candidate_is_session_rejected(tmp_path):
+    """Prefetch must not try another acquisition when no accepted track remains."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    clear_rejected_cache_keys()
+    try:
+        for track in state.playlist:
+            reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp unavailable")
+        with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_download:
+            await _prefetch_next(state, config)
+
+        mock_download.assert_not_awaited()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_prefetch_next_all_candidates_failed_returns_early(tmp_path):
     """_prefetch_next returns early when every playlist track is in _failed_keys."""
     from mammamiradio.scheduling.producer import _prefetch_next
@@ -1759,11 +1929,11 @@ async def test_prewarm_first_segment_renders_in_foreground_not_background(tmp_pa
 
 @pytest.mark.asyncio
 async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
-    """When the queue drains to zero after at least one segment is produced,
-    the drain guard inserts a canned banter clip to prevent dead air."""
+    """With an empty norm cache, a drained queue falls back to canned banter."""
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     canned_clip = tmp_path / "canned_banter.mp3"
@@ -1861,7 +2031,9 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
     norm_file.write_bytes(b"fake norm audio" * 100)
     save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -1893,7 +2065,9 @@ async def test_drain_guard_emergency_tone_when_no_canned_clip_or_norm_cache(tmp_
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -1924,7 +2098,9 @@ async def test_drain_guard_emergency_tone_failure_is_contained(tmp_path):
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -1956,7 +2132,9 @@ async def test_drain_guard_records_bridge_fire_for_canned_clip(tmp_path):
     canned_clip.parent.mkdir(parents=True)
     canned_clip.write_bytes(b"canned banter audio" * 50)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -1998,7 +2176,9 @@ async def test_drain_guard_does_not_record_bridge_fire_when_enqueue_rejected(tmp
     canned_clip = tmp_path / "canned.mp3"
     canned_clip.write_bytes(b"canned banter audio" * 50)
 
-    async def _reject_segment(segment: Segment) -> bool:
+    async def _reject_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         return False  # enqueue rejected (e.g. session stopped)
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
@@ -2042,7 +2222,7 @@ async def test_banter_metadata_has_no_tail_before_a_pair_commits(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", None),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -2106,7 +2286,7 @@ async def test_banter_metadata_includes_transition_track_ref(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", "youtube|abc123"),
+            return_value=(host, "Tra poco, ancora musica.", "youtube|abc123"),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -2177,7 +2357,7 @@ async def test_canned_banter_quality_fallback_clears_transition_track_ref(tmp_pa
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati.", "youtube|abc123"),
+            return_value=(host, "Tra poco, ancora musica.", "youtube|abc123"),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),

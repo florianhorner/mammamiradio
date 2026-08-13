@@ -20,15 +20,16 @@ from mammamiradio.scheduling.handoff import (
     mark_handoff_segment_selected,
 )
 from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow
+from mammamiradio.scheduling.queue_mutations import drop_matching_segments
 from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 from mammamiradio.web.streamer import (
     LiveStreamHub,
     _cancel_active_handoff_from_queue,
-    _purge_blocklisted_from_queue,
     _purge_home_fact_banter_from_queue,
     _purge_queue_and_shadow,
     _request_skip,
     _reserve_continuity_runway,
+    _segment_blocklist_key,
     router,
 )
 
@@ -300,7 +301,14 @@ async def test_skip_carries_handoff_original_exclusions_across_cancellation(tmp_
 def test_ban_removes_orphaned_successor_when_its_music_head_is_dropped(tmp_path: Path) -> None:
     queue, state, _music, successor, _original, _head = _pair(tmp_path)
 
-    assert _purge_blocklisted_from_queue(queue, state, {("artist", "song")}) == 2
+    banned_keys = {("artist", "song")}
+    purged = drop_matching_segments(
+        queue,
+        state,
+        should_drop=lambda seg: seg.type is SegmentType.MUSIC and _segment_blocklist_key(seg) in banned_keys,
+        reason=GenerationWasteReason.OPERATOR_BAN,
+    )
+    assert purged == 2
 
     assert queue.empty()
     assert not successor.path.exists()
@@ -311,7 +319,7 @@ def test_home_fact_queue_removal_restores_unstarted_music_and_removes_tail_succe
     queue, state, music, successor, original, head = _pair(tmp_path)
     successor.metadata["home_fact_entity_id"] = "sensor.kitchen"
 
-    assert _purge_home_fact_banter_from_queue(queue, state, "sensor.kitchen") == 1
+    assert _purge_home_fact_banter_from_queue(queue, state, {"sensor.kitchen"}) == 1
 
     assert _queue_items(queue) == [music]
     assert music.path == original

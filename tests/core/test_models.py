@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,21 +12,226 @@ from mammamiradio.core.models import (
     HEADING_MAX_LIFT,
     HEADING_MIN_LIFT,
     HEADING_TARGET_SHARE,
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     ChaosSubtype,
+    DialogueLine,
     GenerationWasteReason,
     Heading,
+    HostPersonality,
     ListenerProfile,
+    PlaylistSource,
     Segment,
     SegmentType,
+    SourceReadinessEvidence,
     StationState,
     Track,
     normalized_track_key,
+    segment_track_key,
 )
 from mammamiradio.playlist.preferences import PREFERENCE_UP_WEIGHT
 
 
 def _track(n: int = 1) -> Track:
     return Track(title=f"Song {n}", artist=f"Artist {n}", duration_ms=200000, spotify_id=f"id{n}")
+
+
+def test_dialogue_line_keeps_delivery_sidecar_out_of_legacy_tuple_contract():
+    host = HostPersonality(name="Marco", voice="voice", style="energetic")
+    line = DialogueLine(host=host, text="Ciao Windor", delivery="energetic")
+
+    assert tuple(line) == (host, "Ciao Windor")
+    assert line[0] is host
+    assert line[1] == "Ciao Windor"
+    assert len(line) == 2
+    assert line.delivery == "energetic"
+    with pytest.raises(FrozenInstanceError):
+        line.delivery = "neutral"  # type: ignore[misc]
+
+
+def test_source_readiness_ignores_unknown_sources_and_bad_counts():
+    evidence = SourceReadinessEvidence()
+
+    evidence.configure("unknown")
+    evidence.mark_attempted(None)
+    evidence.mark_candidates("custom", 4)
+    evidence.mark_attempted("charts", failure="  download\nfailed  ")
+    evidence.mark_candidates("charts", object())
+    evidence.mark_candidates("charts", "not-a-number")
+    evidence.observe_tracks(None)
+
+    charts = evidence.entries["charts"]
+    assert charts.configured is True
+    assert charts.attempted is True
+    assert charts.candidates == 0
+    assert charts.failure == "download failed"
+    assert evidence.advanced is None
+
+
+def test_source_readiness_tracks_advanced_rotation_without_promoting_recovery():
+    evidence = SourceReadinessEvidence()
+    evidence.set_current_rotation("classic", "  Classic rotation  ")
+
+    evidence.mark_playable("classic", "2")
+    assert evidence.advanced is not None
+    assert evidence.advanced.playable == 2
+    assert evidence.advanced.failure == ""
+
+    evidence.mark_failure("classic", "  temporarily\nmissing  ")
+    assert evidence.advanced.failure == "temporarily missing"
+
+    evidence.mark_playable("another-custom-source")
+    evidence.mark_failure("another-custom-source", "ignored")
+    evidence.mark_playable("recovery", 9)
+
+    assert evidence.advanced.playable == 2
+    assert evidence.advanced.failure == "temporarily missing"
+    assert evidence.entries["recovery"].playable == 0
+
+
+def test_source_readiness_distinguishes_candidate_failure_from_terminal_exhaustion():
+    evidence = SourceReadinessEvidence()
+    evidence.mark_candidates("charts", 2)
+
+    evidence.mark_failure("youtube", "One candidate failed")
+    assert evidence.entries["charts"].exhausted is False
+
+    evidence.mark_playable("charts")
+    evidence.mark_exhausted("charts", "No found track could be prepared")
+    assert evidence.entries["charts"].exhausted is True
+    assert evidence.entries["charts"].playable == 0
+    assert evidence.entries["charts"].failure == "No found track could be prepared"
+
+    evidence.clear_exhausted("charts")
+    assert evidence.entries["charts"].exhausted is False
+
+    evidence.mark_exhausted("charts", "No found track could be prepared")
+    evidence.mark_playable("youtube")
+    assert evidence.entries["charts"].exhausted is False
+    assert evidence.entries["charts"].failure == ""
+
+
+def test_source_readiness_reconciles_policy_filtered_and_removed_tracks():
+    charts = Track(title="Chart", artist="Artist", duration_ms=180_000, source="youtube")
+    local = Track(title="Local", artist="Artist", duration_ms=180_000, source="local")
+    evidence = SourceReadinessEvidence()
+    evidence.observe_tracks([charts, local])
+    evidence.mark_playable("charts")
+    evidence.mark_playable("local")
+
+    evidence.reconcile_active_tracks([local], removed_tracks=[charts])
+
+    assert evidence.entries["charts"].candidates == 0
+    assert evidence.entries["charts"].playable == 0
+    assert evidence.entries["charts"].exhausted is True
+    assert evidence.entries["local"].candidates == 1
+    assert evidence.entries["local"].playable == 1
+
+    evidence.observe_tracks([charts])
+    assert evidence.entries["charts"].candidates == 1
+    assert evidence.entries["charts"].exhausted is False
+    assert evidence.entries["charts"].failure == ""
+
+
+def test_source_readiness_reconciles_advanced_rotation_after_policy_filters():
+    survivor = Track(title="Classic A", artist="Artist", duration_ms=180_000, source="classic")
+    removed = Track(title="Classic B", artist="Artist", duration_ms=180_000, source="classic")
+    evidence = SourceReadinessEvidence()
+    evidence.set_current_rotation("classic", "Classic rotation")
+    evidence.mark_advanced_candidates(2)
+    evidence.mark_playable("classic", 2)
+
+    evidence.reconcile_active_tracks([survivor], removed_tracks=[removed])
+
+    assert evidence.advanced is not None
+    assert evidence.advanced.candidates == 1
+    # Playable evidence belonged to the pre-filter pool, so the surviving track
+    # must prove itself instead of inheriting the removed track's preparation.
+    assert evidence.advanced.playable == 0
+    assert evidence.advanced.exhausted is False
+    assert evidence.advanced.failure == ""
+
+    evidence.mark_playable("classic")
+    evidence.reconcile_active_tracks([], removed_tracks=[survivor])
+
+    assert evidence.advanced.candidates == 0
+    assert evidence.advanced.playable == 0
+    assert evidence.advanced.exhausted is True
+    assert evidence.advanced.failure == ("No found track remains in the active rotation after local policy filters.")
+
+
+def test_station_state_reconciles_loader_evidence_after_policy_filters_and_switch():
+    chart_evidence = SourceReadinessEvidence()
+    chart_evidence.set_current_rotation("charts", "Live charts")
+    chart_evidence.mark_candidates("charts", 1)
+    charts = PlaylistSource(
+        kind="charts",
+        label="Live charts",
+        track_count=1,
+        readiness_evidence=chart_evidence,
+    )
+
+    # Models the startup doorway after the only loader candidate was removed by
+    # the operator blocklist before StationState adopted the active rotation.
+    state = StationState(playlist=[], playlist_source=charts)
+
+    assert charts.track_count == 0
+    assert state.source_readiness.entries["charts"].candidates == 0
+    assert state.source_readiness.entries["charts"].exhausted is True
+
+    jamendo_track = Track(title="CC song", artist="Artist", duration_ms=180_000, source="jamendo")
+    jamendo_evidence = SourceReadinessEvidence()
+    jamendo_evidence.set_current_rotation("jamendo", "Jamendo")
+    jamendo_evidence.mark_candidates("jamendo", 1)
+    jamendo = PlaylistSource(
+        kind="jamendo",
+        label="Jamendo",
+        track_count=1,
+        readiness_evidence=jamendo_evidence,
+    )
+
+    state.switch_playlist([jamendo_track], jamendo)
+
+    assert state.source_readiness.entries["charts"].exhausted is False
+    assert state.source_readiness.entries["jamendo"].candidates == 1
+    assert state.playlist_source is jamendo
+
+
+def test_source_readiness_advanced_exhaustion_reopens_on_candidates():
+    evidence = SourceReadinessEvidence()
+    evidence.set_current_rotation("classic", "Classic rotation")
+
+    evidence.mark_exhausted("classic", "  No selectable\ntrack remains  ")
+    assert evidence.advanced is not None
+    assert evidence.advanced.attempted is True
+    assert evidence.advanced.exhausted is True
+    assert evidence.advanced.failure == "No selectable track remains"
+
+    evidence.clear_exhausted("classic")
+    assert evidence.advanced.exhausted is False
+
+    evidence.mark_exhausted("classic", "Still empty")
+    evidence.mark_advanced_candidates("not-a-count")
+    assert evidence.advanced.candidates == 0
+    assert evidence.advanced.exhausted is True
+    assert evidence.advanced.failure == "Still empty"
+
+    evidence.mark_advanced_candidates("3")
+    assert evidence.advanced.candidates == 3
+    assert evidence.advanced.exhausted is False
+    assert evidence.advanced.failure == ""
+
+
+def test_source_readiness_exhaustion_ignores_recovery_and_absent_advanced_rotation():
+    evidence = SourceReadinessEvidence()
+
+    evidence.mark_exhausted("recovery", "Continuity is not a music source")
+    evidence.mark_exhausted("unknown", "ignored")
+    evidence.clear_exhausted("unknown")
+    evidence.mark_advanced_candidates(4)
+
+    assert evidence.entries["recovery"].exhausted is False
+    assert evidence.entries["recovery"].failure == ""
+    assert evidence.advanced is None
 
 
 def test_after_music_updates_counters():
@@ -94,6 +300,105 @@ def test_render_timings_are_bounded_newest_first_and_sanitized():
     assert state.render_timings[0]["stages_ms"] == {"script": 6}
     assert "reason" not in state.render_timings[0]
     assert "reason" in state.render_timings[-1]
+
+
+def test_stream_delivery_diagnostics_coalesce_and_keep_only_anonymous_bounded_values():
+    """The private egress diagnostics aggregate timing without retaining identity."""
+    state = StationState()
+    state.listeners_active = 3
+    state.gen_phase = "mastering"
+    state.gen_kind = "ad"
+    state.ha_context_refresh_in_flight = True
+    state.ha_context_refresh_active_foreground_timed_out = True
+    state.set_ha_context_refresh_stage("projection", started=10.0)
+
+    state.record_stream_pacing_event(
+        "not-a-real-kind",
+        lateness_ms=1,
+        remaining_lead_ms=1,
+        segment_type="music",
+        timestamp=99.0,
+        monotonic_now=10.0,
+    )
+    state.record_stream_pacing_event(
+        "late",
+        lateness_ms=-2,
+        remaining_lead_ms=-3,
+        deficit_ms=-4,
+        segment_type="",
+        timestamp=100.0,
+        monotonic_now=10.1,
+    )
+    state.record_stream_pacing_event(
+        "late",
+        lateness_ms=25,
+        remaining_lead_ms=200,
+        deficit_ms=0,
+        segment_type="",
+        timestamp=100.5,
+        # The coarse HA snapshot is deliberately part of the coalescing key.
+        # Keep it identical here so this proves the aggregation path itself.
+        monotonic_now=10.1,
+    )
+    # A later event must not be folded into the earlier one merely because it
+    # has the same context; the rolling counters retain both sends.
+    state.record_stream_pacing_event(
+        "late",
+        lateness_ms=30,
+        remaining_lead_ms=150,
+        segment_type="music",
+        timestamp=102.0,
+        monotonic_now=10.3,
+    )
+    state.record_stream_pacing_event(
+        "underrun",
+        lateness_ms=600,
+        remaining_lead_ms=0,
+        deficit_ms=100,
+        segment_type="music",
+        timestamp=102.5,
+        monotonic_now=10.4,
+    )
+    state.record_stream_outcome(
+        segment_type="",
+        result="",
+        bytes_sent=-1,
+        starting_listener_count=-2,
+        terminal_reason="not-a-real-reason",
+        timestamp=102.5,
+    )
+    state.record_slow_listener_drops(0, timestamp=100.0)
+    state.record_slow_listener_drops(2, timestamp=100.0)
+    state.record_slow_listener_drops(3, timestamp=100.5)
+
+    snapshot = state.stream_delivery_snapshot(now=102.5, monotonic_now=11.0)
+
+    assert snapshot["session"] == {"late": 3, "underrun": 1, "overrun_rebased": 0, "total": 4}
+    assert snapshot["window_15m"] == snapshot["session"]
+    assert [event["count"] for event in snapshot["recent"]] == [2, 1, 1]
+    assert snapshot["recent"][0]["segment_type"] == "unknown"
+    assert snapshot["recent"][0]["lateness_ms"] == 25
+    assert snapshot["recent"][0]["remaining_lead_ms"] == 0
+    assert snapshot["recent"][0]["generator"] == {"phase": "mastering", "kind": "ad"}
+    assert snapshot["recent"][0]["ha_refresh"] == {
+        "in_flight": True,
+        "foreground_timed_out": True,
+        "stage": "projection",
+        "stage_elapsed_ms": 100,
+    }
+    assert snapshot["ha_refresh"]["stage_elapsed_ms"] == 1000
+    assert snapshot["recent_stream_outcomes"] == [
+        {
+            "timestamp": 102.5,
+            "segment_type": "unknown",
+            "result": "not_streamed",
+            "bytes_sent": 0,
+            "starting_listener_count": 0,
+            "accepted_listener_count": 0,
+            "terminal_reason": "file_error",
+        }
+    ]
+    assert snapshot["slow_listener_drops"] == {"session": 5, "window_15m": 5, "last_drop_at": 100.5}
 
 
 def test_new_render_attempt_records_an_abandoned_previous_attempt():
@@ -180,6 +485,271 @@ def test_on_stream_segment_updates_now_streaming():
     assert state.now_streaming["duration_sec"] == 5.0
     assert len(state.stream_log) == 1
     assert state.stream_log[0].duration_sec == 5.0
+
+
+def test_selected_segment_does_not_commit_listener_audible_bookkeeping():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/readable.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Readable",
+            "title_only": "Readable",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+
+    selected_epoch = state.on_stream_segment_selected(seg)
+
+    assert selected_epoch == state.playback_epoch == 1
+    assert state.now_streaming["label"] == "Artist – Readable"
+    assert state.current_stream_audible is False
+    assert state.audible_playback_epoch == 0
+    assert state.runtime_provider_state == {}
+    assert list(state.played_track_log) == []
+
+
+def test_audible_segment_commit_is_exactly_once():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/audible.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Audible",
+            "title_only": "Audible",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+    state.on_stream_segment_selected(seg)
+
+    assert state.on_stream_segment_audible(seg) is True
+    assert state.on_stream_segment_audible(seg) is False
+    assert state.current_stream_audible is True
+    assert state.audible_playback_epoch == state.playback_epoch == 1
+    assert len(state.played_track_log) == 1
+    assert state.runtime_provider_state["audio_source"]["current_provider"] == "charts"
+
+
+def test_audible_music_keeps_render_bound_source_after_source_swap():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/audible.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Audible",
+            "title_only": "Audible",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+            SEGMENT_PLAYLIST_SOURCE_KIND_KEY: "charts",
+        },
+    )
+    state.on_stream_segment_selected(seg)
+    state.playlist_source = PlaylistSource(kind="local", label="Local files")
+
+    assert state.on_stream_segment_audible(seg) is True
+    provider = state.runtime_provider_state["audio_source"]
+    assert provider["current_provider"] == "charts"
+    assert provider["primary_provider"] == "charts"
+
+
+def test_unheard_selection_never_becomes_a_listener_outcome():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    audible_music = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/audible.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Audible",
+            "title_only": "Audible",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+    unheard_music = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/unheard.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Unheard",
+            "title_only": "Unheard",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+    later_banter = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/later.mp3"),
+        duration_sec=10.0,
+        metadata={"title": "Later banter"},
+    )
+
+    state.on_stream_segment_selected(audible_music)
+    assert state.on_stream_segment_audible(audible_music) is True
+    state.on_stream_segment_selected(unheard_music)
+    state.on_stream_segment_selected(later_banter)
+    assert state.on_stream_segment_audible(later_banter) is True
+
+    assert state.listener.songs_played == 1
+    assert [outcome["track"] for outcome in state.listener.recent_outcomes] == ["Artist – Audible"]
+    assert all(outcome["track"] != "Artist – Unheard" for outcome in state.listener.recent_outcomes)
+
+
+def test_provider_observation_reason_does_not_rewrite_switch_history():
+    state = StationState()
+
+    first = state.update_runtime_provider(
+        "audio_source",
+        current_provider="norm_cache",
+        primary_provider="charts",
+        fallback_active=True,
+        reason="Chart download failed",
+        timestamp=10.0,
+    )
+    same_route = state.update_runtime_provider(
+        "audio_source",
+        current_provider="norm_cache",
+        primary_provider="charts",
+        fallback_active=True,
+        reason="Serving the reserved cache runway",
+        timestamp=20.0,
+    )
+
+    saved = state.runtime_provider_state["audio_source"]
+    assert first is not None
+    assert same_route is None
+    assert saved["current_reason"] == "Serving the reserved cache runway"
+    assert saved["last_switch_reason"] == "Chart download failed"
+    assert saved["last_switch_timestamp"] == 10.0
+    assert len(state.runtime_events) == 1
+
+
+def test_provider_observation_updates_current_without_switch_history():
+    state = StationState()
+
+    observation = state.observe_runtime_provider(
+        "script_provider",
+        current_provider="openai",
+        primary_provider="anthropic",
+        fallback_active=True,
+        reason="anthropic_exception",
+        timestamp=10.0,
+    )
+
+    saved = state.runtime_provider_state["script_provider"]
+    assert observation.current_provider == "openai"
+    assert saved["current_provider"] == "openai"
+    assert saved["current_reason"] == "anthropic_exception"
+    assert saved["last_switch_timestamp"] is None
+    assert saved["last_switch_reason"] is None
+    assert list(state.runtime_events) == []
+
+
+def test_provider_observation_scope_returns_and_collects_render_ownership():
+    state = StationState()
+    scope = state.bind_runtime_provider_observation_scope("render-123")
+    try:
+        observation = state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+
+    assert observation.observation_token == "render-123"
+    snapshot = state.snapshot_runtime_provider_observations("render-123")
+    assert snapshot == {"script_provider": observation}
+    snapshot.clear()
+    assert state.snapshot_runtime_provider_observations("render-123") == {
+        "script_provider": observation,
+    }
+    assert state.take_runtime_provider_observations("render-123") == {
+        "script_provider": observation,
+    }
+    assert state.snapshot_runtime_provider_observations("render-123") == {}
+    assert state.take_runtime_provider_observations("render-123") == {}
+
+
+def test_provider_observation_preserves_legacy_audible_baseline():
+    state = StationState()
+    state.runtime_provider_state["audio_source"] = {
+        "current_provider": "norm_cache",
+        "primary_provider": "charts",
+        "fallback_active": True,
+        "reason": "Chart download failed",
+        "last_switch_timestamp": 5.0,
+    }
+
+    event = state.update_runtime_provider(
+        "audio_source",
+        current_provider="norm_cache",
+        primary_provider="charts",
+        fallback_active=True,
+        reason="Serving the reserved cache runway",
+        timestamp=10.0,
+    )
+
+    saved = state.runtime_provider_state["audio_source"]
+    assert event is None
+    assert saved["last_audible_provider"] == "norm_cache"
+    assert saved["last_audible_primary_provider"] == "charts"
+    assert saved["last_audible_fallback_active"] is True
+    assert saved["last_audible_reason"] == "Serving the reserved cache runway"
+    assert saved["last_switch_timestamp"] == 5.0
+    assert saved["last_switch_reason"] == "Chart download failed"
+
+
+@pytest.mark.parametrize("provider_class", ["script_provider", "tts_provider"])
+def test_audible_provider_commit_is_once_and_preserves_newer_observation(provider_class):
+    state = StationState()
+    audible_observation = state.observe_runtime_provider(
+        provider_class,
+        current_provider="fallback",
+        primary_provider="primary",
+        fallback_active=True,
+        reason="primary unavailable",
+        timestamp=10.0,
+    )
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/provider-observation.mp3"),
+        metadata={"title": "Provider observation"},
+        runtime_provider_observations={provider_class: audible_observation},
+    )
+    state.on_stream_segment_selected(segment)
+    state.observe_runtime_provider(
+        provider_class,
+        current_provider="primary",
+        primary_provider="primary",
+        fallback_active=False,
+        reason="primary recovered",
+        timestamp=20.0,
+    )
+
+    assert state.on_stream_segment_audible(segment) is True
+    assert state.on_stream_segment_audible(segment) is False
+
+    saved = state.runtime_provider_state[provider_class]
+    assert saved["current_provider"] == "primary"
+    assert saved["current_reason"] == "primary recovered"
+    assert saved["last_audible_provider"] == "fallback"
+    assert saved["last_audible_primary_provider"] == "primary"
+    assert saved["last_audible_reason"] == "primary unavailable"
+    assert saved["last_switch_reason"] == "primary unavailable"
+    assert len(state.runtime_events) == 1
+    assert state.runtime_events[0].provider_class == provider_class
 
 
 def test_chaos_subtypes_are_not_segment_types():
@@ -308,17 +878,19 @@ def test_switch_playlist_clears_played_track_log():
 
 def test_on_stream_segment_records_previous_music_as_completed():
     state = StationState()
-    state.now_streaming = {
-        "type": "music",
-        "label": "Prev Song",
-        "started": 100.0,
-    }
+    previous = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/previous.mp3"),
+        metadata={"title": "Prev Song", "duration_ms": 180_000},
+    )
     seg = Segment(
         type=SegmentType.BANTER,
         path=Path("/tmp/fake2.mp3"),
         metadata={"title": "Banter"},
     )
 
+    with patch("mammamiradio.core.models.time.time", return_value=100.0):
+        state.on_stream_segment(previous)
     with patch("mammamiradio.core.models.time.time", return_value=130.0):
         state.on_stream_segment(seg)
 
@@ -891,6 +1463,15 @@ def test_on_stream_segment_counts_canned_clips():
     state.on_stream_segment(seg2)
     assert state.canned_clips_streamed == 2
 
+    # Packaged continuity speech is a rescue rung, not a shareware banter use.
+    rescue = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/continuity.mp3"),
+        metadata={"type": "banter", "canned": True, "rescue": True},
+    )
+    state.on_stream_segment(rescue)
+    assert state.canned_clips_streamed == 2
+
 
 def test_on_stream_segment_adds_generated_banter_to_bleed_pool():
     state = StationState()
@@ -1193,7 +1774,7 @@ def test_record_bridge_fire_counts_total_by_type_and_event():
     state.record_bridge_fire("drain", "canned", timestamp=100.0)
 
     assert state.bridge_fires_total == 1
-    assert state.bridge_fires_by_type == {"drain": 1, "resume": 0, "idle": 0}
+    assert state.bridge_fires_by_type == {"drain": 1, "resume": 0, "idle": 0, "continuity": 0}
     assert list(state.bridge_events) == [{"bridge_type": "drain", "source": "canned", "timestamp": 100.0}]
 
 
@@ -1203,14 +1784,15 @@ def test_record_bridge_fire_accumulates_across_types():
     state.record_bridge_fire("resume", "norm_cache", timestamp=2.0)
     state.record_bridge_fire("idle", "canned", timestamp=3.0)
     state.record_bridge_fire("drain", "emergency_tone", timestamp=4.0)
+    state.record_bridge_fire("continuity", "norm_cache", timestamp=5.0)
 
-    assert state.bridge_fires_total == 4
-    assert state.bridge_fires_by_type == {"drain": 2, "resume": 1, "idle": 1}
+    assert state.bridge_fires_total == 5
+    assert state.bridge_fires_by_type == {"drain": 2, "resume": 1, "idle": 1, "continuity": 1}
     # last_fire is the deque tail
     assert state.bridge_events[-1] == {
-        "bridge_type": "drain",
-        "source": "emergency_tone",
-        "timestamp": 4.0,
+        "bridge_type": "continuity",
+        "source": "norm_cache",
+        "timestamp": 5.0,
     }
 
 
@@ -1242,7 +1824,7 @@ def test_record_bridge_fire_ignores_unknown_bridge_type_in_by_type():
     state.record_bridge_fire("mystery", "canned", timestamp=1.0)
 
     assert state.bridge_fires_total == 1
-    assert state.bridge_fires_by_type == {"drain": 0, "resume": 0, "idle": 0}
+    assert state.bridge_fires_by_type == {"drain": 0, "resume": 0, "idle": 0, "continuity": 0}
     assert state.bridge_events[-1]["bridge_type"] == "mystery"
 
 
@@ -1369,3 +1951,68 @@ def test_generation_waste_reason_string_values_are_stable():
     assert GenerationWasteReason.QUALITY_GATE_REJECT == "quality_gate_reject"
     assert GenerationWasteReason.STALE_PLAYLIST == "stale_playlist"
     assert GenerationWasteReason.STALE_SOURCE == "stale_source"
+
+
+# ---------------------------------------------------------------------------
+# segment_track_key — the segment-side mirror of normalized_track_key.
+# ---------------------------------------------------------------------------
+
+
+def test_segment_track_key_matches_normalized_track_key_for_the_same_song():
+    """The invariant the rotation-membership check rests on.
+
+    A rendered music Segment carries `artist` + `title_only` verbatim from its
+    Track, so the two identity functions must agree — otherwise a finished
+    render could be judged "no longer in the rotation" while its Track sits
+    right there in the pool.
+    """
+    track = Track(title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000, spotify_id="x")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/norm_x.mp3"),
+        metadata={"title": track.display, "title_only": track.title, "artist": track.artist},
+    )
+
+    assert segment_track_key(segment) == normalized_track_key(track)
+
+
+def test_segment_track_key_normalizes_case_and_whitespace_and_survives_junk():
+    """Same shape as Track.normalized_key, and it never raises on odd metadata."""
+    padded = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/x.mp3"),
+        metadata={"title_only": "  Dont Lose Your WAY ", "artist": " Fleece  "},
+    )
+    assert segment_track_key(padded) == ("fleece", "dont lose your way")
+
+    # Norm-cache bridges and rescue fills stamp only `title`.
+    title_only_fallback = Segment(
+        type=SegmentType.MUSIC, path=Path("/cache/x.mp3"), metadata={"title": "Io Vagabondo", "artist": "Nomadi"}
+    )
+    assert segment_track_key(title_only_fallback) == ("nomadi", "io vagabondo")
+
+    # Missing / non-dict metadata degrades to empty rather than raising into
+    # the audio path.
+    assert segment_track_key(Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={})) == ("", "")
+    bad = Segment(type=SegmentType.BANTER, path=Path("/x.mp3"))
+    bad.metadata = "not a dict"  # type: ignore[assignment]
+    assert segment_track_key(bad) == ("", "")
+
+
+def test_segment_track_key_coalesces_an_explicit_none_artist():
+    """An explicit ``artist: None`` keys as "", never the string "none".
+
+    No site stamps a null artist today — every construction omits the key when
+    it is falsy — so this pins the contract rather than a live bug. It matters
+    because the hand-rolled copy in ``_apply_ban`` used ``.get("artist", "")``,
+    where a null artist becomes ``str(None)`` -> "none" and the segment stops
+    matching any ban. That copy now delegates here; this keeps the canonical
+    definition safe for whichever site stamps a null artist first.
+    """
+    nulled = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/x.mp3"),
+        metadata={"title_only": "Senza Nome", "artist": None},
+    )
+    assert segment_track_key(nulled) == ("", "senza nome")
+    assert "none" not in segment_track_key(nulled)

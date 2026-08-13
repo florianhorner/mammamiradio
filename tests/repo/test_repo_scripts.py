@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -16,9 +18,11 @@ CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
+ADDON_BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "addon-build.yml"
 TEST_ADDON_LOCAL = ROOT / "scripts" / "test-addon-local.sh"
 HA_GREEN_PERF_SMOKE = ROOT / "scripts" / "ha-green-perf-smoke.py"
 HA_GREEN_LAUNCH_SMOKE = ROOT / "scripts" / "ha-green-launch-smoke.py"
+REQUIRED_RECOVERY_ASSETS = ("continuity_1.mp3", "emergency_tone.mp3")
 
 
 def _run(cmd: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -44,9 +48,14 @@ def _write_release_check_repo(
     version: str = "1.1.0",
     manifest_version: str | None = "1.1.0",
     addon_changelog: str = "# Changelog\n\n## Unreleased\n\n## 1.1.0\n",
+    root_changelog: str | None = None,
 ) -> None:
     """Minimal repo layout that scripts/pre-release-check.sh inspects, in a state that
-    passes every check. Override one field to exercise a single gate."""
+    passes every check. Override one field to exercise a single gate.
+
+    Both changelogs are written because the cut folds both and the script checks
+    both. `root_changelog` defaults to a bracketed heading at `version`, matching
+    the root file's house style."""
     _write(tmp_path / "ha-addon/mammamiradio/config.yaml", f"version: {version}\n")
     _write(tmp_path / "pyproject.toml", f'[project]\nname = "mammamiradio"\nversion = "{version}"\n')
     if manifest_version is not None:
@@ -55,13 +64,24 @@ def _write_release_check_repo(
             '{\n  "domain": "mammamiradio",\n  "version": "' + manifest_version + '"\n}\n',
         )
     _write(tmp_path / "ha-addon/mammamiradio/CHANGELOG.md", addon_changelog)
+    if root_changelog is None:
+        root_changelog = f"# Changelog\n\n## [Unreleased]\n\n## [{version}] - 2026-01-01\n"
+    _write(tmp_path / "CHANGELOG.md", root_changelog)
     _write(
         tmp_path / "mammamiradio/audio/normalizer.py",
         'music_eq_chain = (\n    "equalizer=f=200"\n    "equalizer=f=3000"\n)\n',
     )
     _write(tmp_path / "mammamiradio/web/streamer.py", "QUEUE_FALLBACK_WAIT_SECONDS = 5.0\n")
     _write(tmp_path / "mammamiradio/scheduling/producer.py", "# producer recovery ladder\n")
-    _write(tmp_path / "mammamiradio/assets/demo/recovery/continuity.mp3", "x" * 2048)
+    demo_assets = ROOT / "mammamiradio/assets/demo"
+    spoken_manifest_path = demo_assets / "spoken_assets.json"
+    spoken_manifest = json.loads(spoken_manifest_path.read_text(encoding="utf-8"))
+    for entry in spoken_manifest["assets"]:
+        asset_path = Path(entry["path"])
+        target = tmp_path / "mammamiradio/assets/demo" / asset_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(demo_assets / asset_path, target)
+    shutil.copy2(spoken_manifest_path, tmp_path / "mammamiradio/assets/demo/spoken_assets.json")
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -72,6 +92,32 @@ def _write_release_check_repo(
     os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
     _write(tmp_path / "scripts/ha-green-launch-smoke.py", "#!/usr/bin/env python3\n")
     os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
+
+
+@pytest.fixture
+def fake_ffprobe_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep repository-script tests independent of host multimedia packages."""
+
+    bin_dir = tmp_path / ".test-bin"
+    ffprobe = bin_dir / "ffprobe"
+    _write(
+        ffprobe,
+        """#!/usr/bin/env python3
+from pathlib import Path
+import sys
+
+payload = Path(sys.argv[-1]).read_bytes()
+is_mp3 = payload.startswith(b"ID3") or (
+    len(payload) >= 2 and payload[0] == 0xFF and payload[1] & 0xE0 == 0xE0
+)
+if not is_mp3:
+    print("invalid audio", file=sys.stderr)
+    raise SystemExit(1)
+print("audio")
+""",
+    )
+    ffprobe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
 def _load_ha_green_perf_smoke() -> types.ModuleType:
@@ -316,7 +362,10 @@ def test_check_changelog_lint_rejects_digit_phase_and_track_labels(tmp_path: Pat
     assert r"\bTrack [A-Z]\b" in result.stdout
 
 
-def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Path) -> None:
+def test_pre_release_check_skips_unreleased_addon_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     _write_release_check_repo(tmp_path)
 
     result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
@@ -326,7 +375,10 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(tmp_path: Pa
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
 
 
-def test_pre_release_check_fails_on_manifest_version_mismatch(tmp_path: Path) -> None:
+def test_pre_release_check_fails_on_manifest_version_mismatch(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     # The HACS integration manifest must ride the release number (docs/release-process.md).
     _write_release_check_repo(tmp_path, version="1.1.0", manifest_version="1.0.0")
 
@@ -336,7 +388,10 @@ def test_pre_release_check_fails_on_manifest_version_mismatch(tmp_path: Path) ->
     assert "manifest.json version is '1.0.0' but config.yaml is 1.1.0" in result.stdout
 
 
-def test_pre_release_check_fails_cleanly_on_unreadable_manifest(tmp_path: Path) -> None:
+def test_pre_release_check_fails_cleanly_on_unreadable_manifest(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     # Malformed manifest must produce a clean [FAIL], never a Python traceback that
     # aborts the release gate.
     _write_release_check_repo(tmp_path, manifest_version=None)
@@ -349,7 +404,10 @@ def test_pre_release_check_fails_cleanly_on_unreadable_manifest(tmp_path: Path) 
     assert "manifest.json version is 'unreadable'" in result.stdout
 
 
-def test_pre_release_check_accepts_dated_addon_changelog_heading(tmp_path: Path) -> None:
+def test_pre_release_check_accepts_dated_addon_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
     # Guards the dated-header parse: "## 1.1.0 - 2026-06-21" reduces to "1.1.0".
     _write_release_check_repo(
         tmp_path,
@@ -360,6 +418,114 @@ def test_pre_release_check_accepts_dated_addon_changelog_heading(tmp_path: Path)
 
     assert result.returncode == 0
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
+
+
+def test_pre_release_check_rejects_stale_root_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    """A cut that folds the ha-addon changelog but not the root one must fail here.
+
+    addon-release.yml's tag pre-flight also checks the root file, but that fires
+    inside the open cut window: the mismatch would pass every pre-merge gate,
+    merge, leave main advertising an unpublished image, and only then fail. This
+    moves the failure to the cut PR, where the fix is an edit not a revert.
+    """
+    _write_release_check_repo(
+        tmp_path,
+        root_changelog="# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n",
+    )
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "root CHANGELOG latest version is ## 1.0.0 but config.yaml is 1.1.0" in result.stdout
+
+
+def test_pre_release_check_accepts_bracketed_root_changelog_heading(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    """The root file's bracketed house style must satisfy the same extractor."""
+    _write_release_check_repo(
+        tmp_path,
+        root_changelog="# Changelog\n\n## [Unreleased]\n\n## [1.1.0] - 2026-06-21\n",
+    )
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "root CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
+
+
+def test_pre_release_check_requires_each_recovery_asset(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    _write_release_check_repo(tmp_path)
+    (tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3").unlink()
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "emergency_tone.mp3" in result.stdout
+
+
+def test_pre_release_check_rejects_recovery_asset_hash_drift(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    _write_release_check_repo(tmp_path)
+    asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
+    asset.write_bytes(asset.read_bytes() + b"tampered")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
+    assert "recovery/emergency_tone.mp3 sha256 does not match" in result.stderr
+
+
+def test_pre_release_check_rejects_manifest_approved_non_audio(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    _write_release_check_repo(tmp_path)
+    asset = tmp_path / "mammamiradio/assets/demo/recovery/emergency_tone.mp3"
+    payload = b"x" * 2048
+    asset.write_bytes(payload)
+    manifest_path = tmp_path / "mammamiradio/assets/demo/spoken_assets.json"
+    manifest = json.loads(manifest_path.read_text())
+    entry = next(item for item in manifest["assets"] if item["path"] == "recovery/emergency_tone.mp3")
+    entry["sha256"] = hashlib.sha256(payload).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "emergency_tone.mp3 is not ffprobe-readable audio" in result.stdout
+
+
+def test_pre_release_check_rejects_manifest_approved_unsafe_transcript(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    """The release gate must enforce listener truth, not only asset paths and hashes."""
+
+    _write_release_check_repo(tmp_path)
+    manifest_path = tmp_path / "mammamiradio/assets/demo/spoken_assets.json"
+    manifest = json.loads(manifest_path.read_text())
+    entry = next(item for item in manifest["assets"] if item["path"] == "recovery/continuity_1.mp3")
+    audio_path = tmp_path / "mammamiradio/assets/demo/recovery/continuity_1.mp3"
+    assert entry["sha256"] == hashlib.sha256(audio_path.read_bytes()).hexdigest()
+    entry["transcript"] = "Bentornato, ti stavamo aspettando."
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
+    assert "transcript contains listener arrival/return copy" in result.stderr
 
 
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
@@ -374,20 +540,50 @@ def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     assert "/stream" in body
 
 
-def test_ha_green_launch_smoke_is_cold_start_strict() -> None:
+def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
     body = HA_GREEN_LAUNCH_SMOKE.read_text()
 
     # Launches a real process (the perf smoke does not) ...
     assert "uvicorn" in body
     assert "mammamiradio.main:app" in body
-    # ... on throwaway temp cache/tmp so no warm state leaks in ...
+    # ... on throwaway state, once with warm norm-cache music and once with
+    # only packaged recovery audio ...
     assert "TemporaryDirectory" in body
     assert "MAMMAMIRADIO_CACHE_DIR" in body
+    assert "warm norm-cache" in body
+    assert "cold packaged-only" in body
+    assert "_seed_warm_norm_cache" in body
+    # ... while every external network-backed source is disabled and a child
+    # process socket guard enforces that contract.
+    assert "_write_network_guard" in body
+    assert "external network disabled by launch smoke" in body
+    assert '"MAMMAMIRADIO_ALLOW_YTDLP": "false"' in body
+    assert '"JAMENDO_CLIENT_ID": ""' in body
+    assert '"HA_ENABLED": "false"' in body
     # ... and asserts a STRICT first-byte bound (default 2s, not the perf
     # smoke's 8s already-running budget).
     assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
     assert '"2.0"' in body
     assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
+    # A fresh install answers first byte from the client-local First Listen
+    # prelude before joining the live hub, so both modes must also hold a
+    # draining listener and wait for /readyz before the post-stream contract.
+    assert "MAMMAMIRADIO_LAUNCH_READY_S" in body
+    assert "First Listen" in body
+    assert "_hold_listener_until_ready" in body
+    # definition + local-mode subprocess + image-mode docker exec
+    assert body.count("_HELD_LISTENER_READY_SOURCE") >= 3
+    # CI can exercise the exact pulled image without overlaying repository
+    # source: isolated /data volumes, the image's default /run.sh command,
+    # Docker-level network denial, and listener-byte checks over loopback.
+    assert "--image" in body
+    assert '"--network"' in body
+    assert '"none"' in body
+    assert '"volume"' in body
+    assert "_image_launch_command" in body
+    assert "_image_perf_command" in body
+    assert "docker" in body
+    assert "/public-status" in body
 
 
 @pytest.mark.parametrize(
@@ -399,6 +595,13 @@ def test_ha_green_launch_smoke_is_cold_start_strict() -> None:
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "soon", "must be a float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "nan", "must be a finite positive float in seconds"),
         ("MAMMAMIRADIO_LAUNCH_STARTUP_S", "inf", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "soon", "must be a float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "nan", "must be a finite positive float in seconds"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "inf", "must be a finite positive float in seconds"),
+        # A budget above the packaged prelude runway would let the smoke pass
+        # after listener coverage ended.
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "30", "must stay at or under 22s"),
+        ("MAMMAMIRADIO_LAUNCH_READY_S", "22.5", "must stay at or under 22s"),
     ],
 )
 def test_ha_green_launch_smoke_validates_timeout_env_vars(
@@ -420,6 +623,229 @@ def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match=r"ffmpeg is required for scripts/ha-green-launch-smoke\.py"):
         smoke._seed_warm_norm_cache(str(tmp_path))
+
+
+def test_ha_green_launch_smoke_held_listener_source_is_runnable_python() -> None:
+    smoke = _load_ha_green_launch_smoke()
+    source = smoke._HELD_LISTENER_READY_SOURCE
+
+    # Runs as `python3 -c` both locally and inside the built image, so it must
+    # be valid standalone Python that holds /stream open and gates readiness
+    # on an authoritative /readyz verdict, not on stream bytes alone.
+    compile(source, "<held-listener-ready>", "exec")
+    assert '"/stream"' in source
+    assert '"/readyz"' in source
+    assert "status == 200" in source
+    assert 'payload.get("ready") is True' in source
+    # The deadline is enforced on the response, not just the request start: a
+    # poll may never outlive the remaining budget, and a reply that lands past
+    # the deadline must not count as ready.
+    assert "min(3.0, remaining)" in source
+    assert "received after the readiness deadline" in source
+
+
+def test_ha_green_launch_smoke_env_clears_network_sources(tmp_path: Path) -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    env = smoke._launch_env(
+        port=8123,
+        cache_dir=str(tmp_path / "cache"),
+        tmp_dir=str(tmp_path / "tmp"),
+        guard_dir=str(tmp_path / "guard"),
+    )
+
+    assert env["MAMMAMIRADIO_ALLOW_YTDLP"] == "false"
+    assert env["JAMENDO_CLIENT_ID"] == ""
+    assert env["ANTHROPIC_API_KEY"] == ""
+    assert env["OPENAI_API_KEY"] == ""
+    assert env["AZURE_SPEECH_KEY"] == ""
+    assert env["ELEVENLABS_API_KEY"] == ""
+    assert env["HA_ENABLED"] == "false"
+    assert env["HA_TOKEN"] == ""
+    assert env["NO_PROXY"] == "127.0.0.1,localhost,::1"
+    assert env["PYTHONPATH"].split(os.pathsep)[:2] == [str(tmp_path / "guard"), str(ROOT)]
+
+
+def test_ha_green_launch_smoke_builds_isolated_exact_image_commands() -> None:
+    smoke = _load_ha_green_launch_smoke()
+    image = "ghcr.io/example/mammamiradio-addon-amd64:sha"
+    volume = "mmr-launch-volume"
+    container = "mmr-launch-container"
+
+    warm_seed = smoke._image_seed_command(image, volume, seed_warm_cache=True)
+    cold_seed = smoke._image_seed_command(image, volume, seed_warm_cache=False)
+    launch = smoke._image_launch_command(image, volume, container)
+    perf = smoke._image_perf_command(container)
+
+    assert warm_seed[:5] == ["run", "--rm", "--network", "none", "--volume"]
+    assert f"{volume}:/data" in warm_seed
+    assert "MAMMAMIRADIO_SMOKE_WARM=1" in warm_seed
+    assert "MAMMAMIRADIO_SMOKE_WARM=0" in cold_seed
+    seed_entrypoint = warm_seed.index("--entrypoint")
+    assert warm_seed[seed_entrypoint : seed_entrypoint + 3] == [
+        "--entrypoint",
+        "python3",
+        image,
+    ]
+    assert warm_seed[-2] == "-c"
+    assert warm_seed.count(image) == 1
+
+    assert launch[:4] == ["run", "--detach", "--name", container]
+    assert launch[-1] == image
+    assert launch[4:6] == ["--network", "none"]
+    assert f"{volume}:/data" in launch
+    assert "SUPERVISOR_TOKEN=smoke-ci" in launch
+    assert not any(arg.startswith("-p") or arg == "--publish" for arg in launch)
+    # The image reference is last: Docker executes its baked default /run.sh,
+    # not a repository-mounted or caller-supplied app command.
+    assert launch.count(image) == 1
+
+    assert perf[:2] == ["exec", "--interactive"]
+    assert container in perf
+    assert perf[-2:] == ["python3", "-"]
+    assert f"MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S={smoke.FIRST_BYTE_S}" in perf
+
+
+def test_ha_green_launch_smoke_rejects_emergency_tone_as_valid_cold_open() -> None:
+    smoke = _load_ha_green_launch_smoke()
+    cold = next(scenario for scenario in smoke._LAUNCH_SCENARIOS if scenario[0] == "cold packaged-only")
+
+    assert "packaged_recovery" in cold[2]
+    assert "emergency_tone" not in cold[2]
+
+
+@pytest.mark.parametrize(
+    ("statuses", "message"),
+    [
+        (
+            {
+                "/healthz": (503, {"status": "failing"}),
+                "/readyz": (200, {"status": "ready", "ready": True}),
+                "/public-status": (200, {"session_stopped": False, "now_streaming": {"type": "music"}}),
+            },
+            "/healthz",
+        ),
+        (
+            {
+                "/healthz": (200, {"status": "ok"}),
+                "/readyz": (503, {"status": "starting", "ready": False}),
+                "/public-status": (200, {"session_stopped": False, "now_streaming": {"type": "music"}}),
+            },
+            "/readyz",
+        ),
+        (
+            {
+                "/healthz": (200, {"status": "ok"}),
+                "/readyz": (200, {"status": "ready", "ready": True}),
+                "/public-status": (200, {"session_stopped": True, "now_streaming": {"type": "stopped"}}),
+            },
+            "/public-status",
+        ),
+    ],
+)
+def test_ha_green_launch_smoke_rejects_false_post_stream_health(
+    statuses: dict[str, tuple[int, dict]],
+    message: str,
+) -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    with pytest.raises(RuntimeError, match=message):
+        smoke._assert_post_stream_status(statuses)
+
+
+def test_ha_green_launch_smoke_accepts_truthful_post_stream_health() -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    smoke._assert_post_stream_status(
+        {
+            "/healthz": (200, {"status": "ok"}),
+            "/readyz": (200, {"status": "ready", "ready": True}),
+            "/public-status": (
+                200,
+                {"session_stopped": False, "now_streaming": {"type": "music"}},
+            ),
+        }
+    )
+
+
+def test_ha_green_launch_smoke_image_scenario_cleans_exact_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_ha_green_launch_smoke()
+    docker_calls: list[list[str]] = []
+
+    def fake_docker(
+        args: list[str],
+        *,
+        input_text: str | None = None,
+        capture_output: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        del input_text, capture_output
+        command = list(args)
+        docker_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(smoke, "_run_docker", fake_docker)
+    monkeypatch.setattr(smoke, "_seed_image_volume", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(smoke, "_wait_for_image_server", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(smoke, "_run_image_perf_smoke", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        smoke,
+        "_image_post_stream_statuses",
+        lambda *_args, **_kwargs: {
+            "/healthz": (200, {"status": "ok"}),
+            "/readyz": (200, {"status": "ready", "ready": True}),
+            "/public-status": (200, {"session_stopped": False, "now_streaming": {}}),
+        },
+    )
+    monkeypatch.setattr(smoke, "_image_current_audio_source", lambda *_args, **_kwargs: ("norm_cache", {}))
+
+    assert smoke._run_image_launch_scenario(
+        "example/image:sha",
+        "warm norm-cache",
+        seed_warm_cache=True,
+        expected_sources=frozenset({"norm_cache"}),
+    )
+
+    volume_create = next(call for call in docker_calls if call[:2] == ["volume", "create"])
+    launch = next(call for call in docker_calls if call[:2] == ["run", "--detach"])
+    container_remove = next(call for call in docker_calls if call[:2] == ["rm", "--force"])
+    volume_remove = next(call for call in docker_calls if call[:3] == ["volume", "rm", "--force"])
+
+    volume_name = volume_create[-1]
+    container_name = launch[launch.index("--name") + 1]
+    assert f"{volume_name}:/data" in launch
+    assert launch[-1] == "example/image:sha"
+    assert container_remove[-1] == container_name
+    assert volume_remove[-1] == volume_name
+
+
+def test_ha_green_launch_smoke_network_guard_blocks_external_dns(tmp_path: Path) -> None:
+    smoke = _load_ha_green_launch_smoke()
+    smoke._write_network_guard(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(tmp_path)
+
+    result = _run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import socket\n"
+                "socket.getaddrinfo('127.0.0.1', 8000)\n"
+                "try:\n"
+                "    socket.getaddrinfo('example.com', 443)\n"
+                "except OSError as exc:\n"
+                "    assert 'external network disabled by launch smoke' in str(exc)\n"
+                "else:\n"
+                "    raise SystemExit('external lookup was not blocked')\n"
+            ),
+        ],
+        cwd=tmp_path,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_makefile_has_launch_smoke_target() -> None:
@@ -455,11 +881,107 @@ def test_ha_green_perf_smoke_rejects_unexpected_readyz_500() -> None:
         raise AssertionError("unexpected /readyz 500 must fail the smoke gate")
 
 
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (200, {"status": "ready", "ready": True}, "ready"),
+        (503, {"status": "starting", "ready": False}, "starting"),
+        (
+            503,
+            {"status": "stopped", "ready": False, "session_stopped": True},
+            "stopped",
+        ),
+    ],
+)
+def test_ha_green_perf_smoke_classifies_truthful_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    payload: dict,
+    expected: str,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    monkeypatch.setattr(smoke, "_fetch_json", lambda _path: (status, payload))
+
+    assert smoke._check_readiness() == expected
+
+
+def test_ha_green_perf_smoke_rejects_unconfirmed_stopped_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    monkeypatch.setattr(
+        smoke,
+        "_fetch_json",
+        lambda _path: (503, {"status": "stopped", "ready": False}),
+    )
+
+    with pytest.raises(SystemExit):
+        smoke._check_readiness()
+
+
+@pytest.mark.parametrize(("expect_stopped", "session_stopped"), [(False, True), (True, False)])
+def test_ha_green_perf_smoke_rejects_public_stop_disagreement(
+    monkeypatch: pytest.MonkeyPatch,
+    expect_stopped: bool,
+    session_stopped: bool,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    monkeypatch.setattr(
+        smoke,
+        "_fetch_json",
+        lambda _path: (
+            200,
+            {
+                "session_stopped": session_stopped,
+                "runtime_health": {
+                    "queue_empty_elapsed_s": 0,
+                    "silence_with_listeners": False,
+                },
+            },
+        ),
+    )
+
+    with pytest.raises(SystemExit):
+        smoke._check_public_status(expect_stopped=expect_stopped)
+
+
+@pytest.mark.parametrize(("readiness", "stream_expected"), [("ready", True), ("starting", True), ("stopped", False)])
+def test_ha_green_perf_smoke_skips_stream_only_for_intentional_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    readiness: str,
+    stream_expected: bool,
+) -> None:
+    smoke = _load_ha_green_perf_smoke()
+    calls: list[object] = []
+    monkeypatch.setattr(smoke, "_wait_for_health", lambda: calls.append("health"))
+    monkeypatch.setattr(smoke, "_check_readiness", lambda: readiness)
+    monkeypatch.setattr(
+        smoke,
+        "_check_public_status",
+        lambda *, expect_stopped: calls.append(("public", expect_stopped)),
+    )
+    monkeypatch.setattr(smoke, "_check_first_stream_byte", lambda: calls.append("stream"))
+
+    assert smoke.main() == 0
+    assert ("public", readiness == "stopped") in calls
+    assert ("stream" in calls) is stream_expected
+
+
 def test_release_invariants_guard_ha_green_perf_budget() -> None:
     release_body = (ROOT / "scripts" / "check-release-invariants.sh").read_text()
     pre_release_body = (ROOT / "scripts" / "pre-release-check.sh").read_text()
 
     for body in (release_body, pre_release_body):
+        assert "REQUIRED_RECOVERY_ASSETS=(" in body
+        assert '"continuity_1.mp3"' in body
+        assert '"emergency_tone.mp3"' in body
+        assert "manifest/hash" in body
+        assert (
+            "is_approved_packaged_audio_asset" in body
+            or "hashlib.sha256" in body
+            or "validate-spoken-assets.py" in body
+        )
+        assert "ffprobe" in body
         assert "QUEUE_FALLBACK_WAIT_SECONDS" in body
         assert "norm_files\\[0\\]" in body
         assert "ha-green-perf-smoke.py" in body
@@ -506,6 +1028,23 @@ def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -
     assert r"\bsuperseded\b" in result.stdout
 
 
+VALIDATE_ADDON_BACKUP_CONTRACT = (
+    "backup: hot",
+    "backup_exclude:",
+    '  - "tmp"',
+    '  - "cache/.ytdlp_tmp"',
+    '  - "cache/restart_handoff"',
+    '  - "cache/clips"',
+    '  - "cache/*.mp3"',
+    '  - "cache/*.mp3.json"',
+    '  - "cache/*.m4a"',
+    '  - "cache/*.webm"',
+    '  - "*.part"',
+    '  - "*.ytdl"',
+    '  - "*.tmp"',
+)
+
+
 def _create_validate_addon_repo(
     tmp_path: Path,
     *,
@@ -526,6 +1065,7 @@ def _create_validate_addon_repo(
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  anthropic_api_key: ""',
                 '  openai_api_key: ""',
@@ -783,6 +1323,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  anthropic_api_key: ""',
                 '  openai_api_key: ""',
@@ -824,6 +1365,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  station_name: "Test"',
                 '  quality_profile: "balanced"',
@@ -887,6 +1429,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
                 "timeout: 300",
                 "host_network: true",
                 "ingress_port: 8000",
+                *VALIDATE_ADDON_BACKUP_CONTRACT,
                 "options:",
                 '  station_name: "Test"',
                 "schema:",
@@ -1079,6 +1622,35 @@ def test_validate_addon_build_passes_home_assistant_label_args() -> None:
     assert '--build-arg BUILD_ARCH="$BUILD_ARCH"' in validator
 
 
+@pytest.mark.parametrize(
+    ("validator_path", "start_marker", "end_marker"),
+    [
+        (VALIDATE_ADDON, "assert_image_recovery_assets() {", "assert_image_model_registry() {"),
+        (
+            ADDON_BUILD_WORKFLOW,
+            "- name: Assert installed recovery assets",
+            "- name: Assert installed model registry",
+        ),
+    ],
+)
+def test_addon_image_validator_checks_every_required_recovery_asset(
+    validator_path: Path,
+    start_marker: str,
+    end_marker: str,
+) -> None:
+    """Image gates must inspect the full required subset, not accept the first good clip."""
+    body = validator_path.read_text()
+    recovery_block = body.split(start_marker, 1)[1].split(end_marker, 1)[0]
+
+    for asset_name in REQUIRED_RECOVERY_ASSETS:
+        assert asset_name in recovery_block, f"{validator_path} does not require {asset_name}"
+    assert "resources.files" in recovery_block
+    assert "> 1024" in recovery_block or "<= 1024" in recovery_block
+    assert "is_approved_packaged_audio_asset" in recovery_block or "validate_spoken_asset_manifest" in recovery_block
+    assert "ffprobe" in recovery_block
+    assert "raise SystemExit(0)" not in recovery_block
+
+
 def test_validate_addon_rejects_dockerfile_missing_hass_labels(tmp_path: Path) -> None:
     """validate-addon.sh must exit non-zero when the Dockerfile lacks io.hass.* labels.
 
@@ -1261,3 +1833,53 @@ def test_addon_schema_has_no_provider_secret_fields() -> None:
     run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
     missing = [field for field in provider_fields if f"'{field}'" not in run_sh]
     assert not missing, "run.sh lost the legacy options.json fallback for: " + ", ".join(missing)
+
+
+def test_addon_cache_default_is_consistent_across_files() -> None:
+    """Check that the add-on cache default is identical in all five config paths.
+
+    A mismatch would leave the Configuration tab and runtime using different values.
+    """
+    import re
+
+    stable_yaml = (ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text()
+    edge_yaml = (ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml").read_text()
+    run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+    config_py = (ROOT / "mammamiradio" / "core" / "config.py").read_text()
+
+    found: dict[str, str] = {}
+
+    for label, text in (("stable config.yaml", stable_yaml), ("edge config.yaml", edge_yaml)):
+        m = re.search(r"^\s*norm_cache_mb:\s*(\d+)\s*$", text, re.MULTILINE)
+        assert m, f"norm_cache_mb option default not found in {label}"
+        found[label] = m.group(1)
+
+    # Both the .get() default and the except-branch fallback in run.sh.
+    run_defaults = re.findall(r"norm_cache_mb'\s*,\s*(\d+)\)|cache_mb_int\s*=\s*(\d+)", run_sh)
+    flat = [g for pair in run_defaults for g in pair if g]
+    assert len(flat) == 2, f"expected 2 cache defaults in run.sh, found {flat}"
+    found["run.sh get default"] = flat[0]
+    found["run.sh fallback"] = flat[1]
+
+    m = re.search(r"^ADDON_MAX_CACHE_SIZE_MB\s*=\s*(\d+)", config_py, re.MULTILINE)
+    assert m, "ADDON_MAX_CACHE_SIZE_MB not found in config.py"
+    found["config.py ADDON_MAX_CACHE_SIZE_MB"] = m.group(1)
+
+    assert len(set(found.values())) == 1, f"add-on cache default drifted across files: {found}"
+
+
+def test_addon_cache_schema_bounds_match_config_py() -> None:
+    """The Supervisor schema and runtime must use the same cache bounds."""
+    import re
+
+    config_py = (ROOT / "mammamiradio" / "core" / "config.py").read_text()
+    lo = re.search(r"^MIN_MAX_CACHE_SIZE_MB\s*=\s*(\d+)", config_py, re.MULTILINE)
+    hi = re.search(r"^MAX_MAX_CACHE_SIZE_MB\s*=\s*(\d+)", config_py, re.MULTILINE)
+    assert lo and hi, "cache clamp bounds not found in config.py"
+
+    for addon in ("mammamiradio", "mammamiradio-edge"):
+        text = (ROOT / "ha-addon" / addon / "config.yaml").read_text()
+        m = re.search(r"^\s*norm_cache_mb:\s*int\((\d+),\s*(\d+)\)\?", text, re.MULTILINE)
+        assert m, f"norm_cache_mb schema bounds not found in {addon}/config.yaml"
+        assert m.group(1) == lo.group(1), f"{addon} schema minimum drifted from MIN_MAX_CACHE_SIZE_MB"
+        assert m.group(2) == hi.group(1), f"{addon} schema maximum drifted from MAX_MAX_CACHE_SIZE_MB"

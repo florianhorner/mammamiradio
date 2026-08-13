@@ -7,7 +7,9 @@ import base64
 import json
 import os
 import time
+import unicodedata
 from pathlib import Path
+from threading import Event
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -20,7 +22,13 @@ from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, Stati
 from mammamiradio.playlist.playlist import ExplicitSourceError
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
-from mammamiradio.web.streamer import CLIP_DURATION_SECONDS, LiveStreamHub, router
+from mammamiradio.web.streamer import (
+    CLIP_DURATION_SECONDS,
+    LiveStreamHub,
+    _admin_track_id,
+    _header_safe,
+    router,
+)
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 
@@ -38,8 +46,9 @@ def _no_real_dotenv_writes():
     PATCH now reaches ``_save_dotenv`` and would write a real .env. No-op it by
     default. Tests that assert ON persistence (the pacing-persistence tests, the
     credentials tests) nest their own ``with patch(...)`` which shadows this.
-    Only ``_save_dotenv`` is guarded — ``_save_addon_option`` is left real so the
-    add-on-mode tests that exercise its file write still work.
+    Only ``_save_dotenv`` is guarded globally. Add-on route tests patch the
+    Supervisor persistence helpers explicitly so an isolated test never reaches
+    the real Supervisor network.
     """
     with patch("mammamiradio.web.streamer._save_dotenv"):
         yield
@@ -73,6 +82,29 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
     app.state.config = config
     app.state.start_time = time.time()
     return app
+
+
+def _row_target(app: FastAPI, index: int) -> dict[str, object]:
+    state = app.state.station_state
+    track = state.playlist[index]
+    return {
+        "revision": state.playlist_revision,
+        "index": index,
+        "id": _admin_track_id(track),
+    }
+
+
+def _move_target(app: FastAPI, source: int, destination: int) -> dict[str, object]:
+    state = app.state.station_state
+    source_track = state.playlist[source]
+    destination_track = state.playlist[destination]
+    return {
+        "revision": state.playlist_revision,
+        "from": source,
+        "from_id": _admin_track_id(source_track),
+        "to": destination,
+        "to_id": _admin_track_id(destination_track),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -121,10 +153,15 @@ async def test_readyz_starting():
 
 
 @pytest.mark.asyncio
-async def test_readyz_ready():
+async def test_readyz_ready_after_listener_accepted_audio(tmp_path):
     app = _make_test_app()
-    # Put something in queue
-    app.state.queue.put_nowait(MagicMock())
+    app.state.station_state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=tmp_path / "accepted-readyz.mp3",
+            metadata={"title": "Accepted"},
+        )
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/readyz")
@@ -228,6 +265,36 @@ async def test_purge_with_segments(tmp_path):
     assert not fake_file.exists()  # File should be deleted
 
 
+@pytest.mark.asyncio
+async def test_purge_preserves_playable_head_when_replacement_audio_is_unavailable(tmp_path):
+    """A purge frees tail capacity without discarding the last ready runway."""
+    app = _make_test_app()
+    state = app.state.station_state
+    head_path = tmp_path / "purge-head.mp3"
+    tail_path = tmp_path / "purge-tail.mp3"
+    head_path.write_bytes(b"head")
+    tail_path.write_bytes(b"tail")
+    head = Segment(type=SegmentType.MUSIC, path=head_path, duration_sec=180.0, metadata={"title": "Head"})
+    tail = Segment(type=SegmentType.BANTER, path=tail_path, duration_sec=10.0, metadata={"title": "Tail"})
+    app.state.queue.put_nowait(head)
+    app.state.queue.put_nowait(tail)
+    state.queued_segments = [{"type": "music", "label": "Head"}, {"type": "banter", "label": "Tail"}]
+    state.continuity_epoch = 9
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/purge")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "purged": 1}
+    assert list(app.state.queue._queue) == [head]
+    assert len(state.queued_segments) == 1
+    assert state.continuity_epoch == 10
+    assert head_path.exists()
+    assert not tail_path.exists()
+
+
 # ---------------------------------------------------------------------------
 # Queue remove item
 # ---------------------------------------------------------------------------
@@ -266,6 +333,52 @@ async def test_queue_remove_item_demotes_carried_moment_receipt(tmp_path):
     assert row.drop_reason == "operator_queue_remove"
 
 
+@pytest.mark.asyncio
+async def test_queue_remove_item_fails_closed_on_exposed_ordinary_music_tail(tmp_path):
+    """Removing the queue tail must not blindly re-trust the newly exposed tail.
+
+    Same invariant _apply_ban was hardened for: an arbitrary single-item
+    removal can expose a previously-interior, untrusted (non-rescue) music
+    segment as the new tail. That segment may carry an egress-processed
+    path, so it must not become the "clean" speech-bed adjacency source.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    ordinary_path = tmp_path / "ordinary-survivor.mp3"
+    ordinary_path.write_bytes(b"ordinary")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={"artist": "Safe Artist", "title_only": "Safe Song", "queue_id": "q1"},
+        ephemeral=False,
+    )
+    removable_path = tmp_path / "removable-tail.mp3"
+    removable_path.write_bytes(b"removable")
+    removable = Segment(
+        type=SegmentType.MUSIC,
+        path=removable_path,
+        duration_sec=180.0,
+        metadata={"artist": "Removed Artist", "title_only": "Removed Song", "queue_id": "q2"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(ordinary)
+    app.state.queue.put_nowait(removable)
+    state.queued_segments = [{"id": "q1", "label": "Safe Song"}, {"id": "q2", "label": "Removed Song"}]
+    state.last_music_file = removable_path
+    state.last_enqueued_type = SegmentType.MUSIC
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/queue/remove", json={"id": "q2"})
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert list(app.state.queue._queue) == [ordinary]
+    assert state.last_enqueued_type is None
+
+
 # ---------------------------------------------------------------------------
 # Skip
 # ---------------------------------------------------------------------------
@@ -290,36 +403,48 @@ async def test_skip_nothing_streaming():
 async def test_remove_track_valid_index():
     app = _make_test_app()
     starting_revision = app.state.station_state.playlist_revision
+    payload = _row_target(app, 1)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/remove", json={"index": 1})
+        resp = await client.post("/api/playlist/remove", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
     assert "Song B" in body["removed"]
     assert len(app.state.station_state.playlist) == 2
     assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert body["playlist_revision"] == starting_revision + 1
 
 
 @pytest.mark.asyncio
 async def test_remove_track_invalid_index():
     app = _make_test_app()
+    state = app.state.station_state
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/remove", json={"index": 99})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/remove",
+            json={"revision": state.playlist_revision, "index": 99, "id": "t2"},
+        )
+    assert resp.status_code == 409
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "stale_playlist"
 
 
 @pytest.mark.asyncio
 async def test_remove_track_rejects_non_integer_index_without_mutating_playlist():
     app = _make_test_app()
+    state = app.state.station_state
     before = [t.spotify_id for t in app.state.station_state.playlist]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/remove", json={"index": "abc"})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/remove",
+            json={"revision": state.playlist_revision, "index": "abc", "id": "t2"},
+        )
+    assert resp.status_code == 422
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "invalid_target"
     assert [t.spotify_id for t in app.state.station_state.playlist] == before
 
 
@@ -332,9 +457,10 @@ async def test_remove_track_rejects_non_integer_index_without_mutating_playlist(
 async def test_move_track_valid():
     app = _make_test_app()
     starting_revision = app.state.station_state.playlist_revision
+    payload = _move_target(app, 2, 0)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move", json={"from": 2, "to": 0})
+        resp = await client.post("/api/playlist/move", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
@@ -342,27 +468,50 @@ async def test_move_track_valid():
     # Song C should now be first
     assert app.state.station_state.playlist[0].title == "Song C"
     assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert body["playlist_revision"] == starting_revision + 1
 
 
 @pytest.mark.asyncio
 async def test_move_track_invalid_indices():
     app = _make_test_app()
+    state = app.state.station_state
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move", json={"from": -1, "to": 100})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/move",
+            json={
+                "revision": state.playlist_revision,
+                "from": 2,
+                "from_id": "t3",
+                "to": 100,
+                "to_id": "t1",
+            },
+        )
+    assert resp.status_code == 409
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "stale_playlist"
 
 
 @pytest.mark.asyncio
 async def test_move_track_rejects_non_integer_indices_without_mutating_playlist():
     app = _make_test_app()
+    state = app.state.station_state
     before = [t.spotify_id for t in app.state.station_state.playlist]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move", json={"from": "x", "to": 0})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/move",
+            json={
+                "revision": state.playlist_revision,
+                "from": "x",
+                "from_id": "t3",
+                "to": 0,
+                "to_id": "t1",
+            },
+        )
+    assert resp.status_code == 422
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "invalid_target"
     assert [t.spotify_id for t in app.state.station_state.playlist] == before
 
 
@@ -379,9 +528,10 @@ async def test_move_to_next_valid(tmp_path):
     app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
     app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
     starting_revision = app.state.station_state.playlist_revision
+    payload = _row_target(app, 2)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
+        resp = await client.post("/api/playlist/move_to_next", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
@@ -390,6 +540,7 @@ async def test_move_to_next_valid(tmp_path):
     assert app.state.station_state.pinned_track.title == "Song C"
     assert app.state.station_state.force_next == SegmentType.MUSIC
     assert app.state.station_state.playlist_revision == starting_revision + 1
+    assert body["playlist_revision"] == starting_revision + 1
     # Pre-rendered segments are intentionally preserved — no purge on move_to_next
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
     assert app.state.queue.qsize() == 1
@@ -399,11 +550,16 @@ async def test_move_to_next_valid(tmp_path):
 @pytest.mark.asyncio
 async def test_move_to_next_invalid():
     app = _make_test_app()
+    state = app.state.station_state
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move_to_next", json={"index": 99})
-    assert resp.status_code == 200
+        resp = await client.post(
+            "/api/playlist/move_to_next",
+            json={"revision": state.playlist_revision, "index": 99, "id": "t3"},
+        )
+    assert resp.status_code == 409
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "stale_playlist"
 
 
 @pytest.mark.asyncio
@@ -414,12 +570,14 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
     app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=queued_file, metadata={"title": "Queued"}))
     app.state.station_state.queued_segments = [{"type": "banter", "label": "Queued"}]
     starting_revision = app.state.station_state.playlist_revision
+    payload = {"revision": starting_revision, "index": "abc", "id": "t3"}
     before = [t.spotify_id for t in app.state.station_state.playlist]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await client.post("/api/playlist/move_to_next", json={"index": "abc"})
-    assert resp.status_code == 200
+        resp = await client.post("/api/playlist/move_to_next", json=payload)
+    assert resp.status_code == 422
     assert resp.json()["ok"] is False
+    assert resp.json()["reason"] == "invalid_target"
     assert [t.spotify_id for t in app.state.station_state.playlist] == before
     assert app.state.station_state.playlist_revision == starting_revision
     assert app.state.station_state.queued_segments == [{"type": "banter", "label": "Queued"}]
@@ -431,9 +589,10 @@ async def test_move_to_next_rejects_non_integer_index_without_side_effects(tmp_p
 async def test_move_to_next_does_not_fake_public_upcoming_preview():
     app = _make_test_app()
     app.state.station_state.segments_produced = 1
+    payload = _row_target(app, 2)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        move_resp = await client.post("/api/playlist/move_to_next", json={"index": 2})
+        move_resp = await client.post("/api/playlist/move_to_next", json=payload)
         status_resp = await client.get("/public-status")
 
     assert move_resp.status_code == 200
@@ -443,6 +602,199 @@ async def test_move_to_next_does_not_fake_public_upcoming_preview():
     assert body["upcoming_mode"] == "building"
     assert app.state.station_state.pinned_track is not None
     assert app.state.station_state.pinned_track.display == "Artist C – Song C"
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/playlist/remove", {"index": 1}),
+        ("/api/playlist/move", {"from": 2, "to": 0}),
+        ("/api/playlist/move_to_next", {"index": 2}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_playlist_row_mutations_reject_legacy_index_only_payloads(path, payload):
+    app = _make_test_app()
+    state = app.state.station_state
+    before = ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(path, json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["reason"] == "invalid_target"
+    assert ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track) == before
+
+
+@pytest.mark.parametrize(
+    "payload_override",
+    [
+        {"revision": "0"},
+        {"index": True},
+        {"id": "   "},
+    ],
+)
+@pytest.mark.asyncio
+async def test_move_to_next_rejects_wrong_target_field_types_without_side_effects(payload_override):
+    app = _make_test_app()
+    state = app.state.station_state
+    payload = _row_target(app, 1)
+    payload.update(payload_override)
+    before = (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["reason"] == "invalid_target"
+    assert (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+    ) == before
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_rejects_cached_index_after_an_earlier_row_is_removed():
+    app = _make_test_app()
+    state = app.state.station_state
+    cached_target = _row_target(app, 1)
+
+    state.playlist.pop(0)
+    state.playlist_revision += 1
+    revision_after_remove = state.playlist_revision
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=cached_target)
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "stale_playlist"
+    assert state.pinned_track is None
+    assert state.force_next is None
+    assert state.playlist_revision == revision_after_remove
+    assert [track.title for track in state.playlist] == ["Song B", "Song C"]
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_rejects_wrong_row_id_without_side_effects():
+    app = _make_test_app()
+    state = app.state.station_state
+    payload = _row_target(app, 1)
+    payload["id"] = "t3"
+    before = ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "stale_playlist"
+    assert ([track.spotify_id for track in state.playlist], state.playlist_revision, state.pinned_track) == before
+
+
+@pytest.mark.asyncio
+async def test_move_to_next_disambiguates_duplicate_tokens_with_revision_and_index():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.playlist = [
+        Track(title="First", artist="Artist", duration_ms=180_000, spotify_id="duplicate"),
+        Track(title="Second", artist="Artist", duration_ms=180_000, spotify_id="duplicate"),
+    ]
+    payload = _row_target(app, 1)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move_to_next", json=payload)
+
+    assert response.status_code == 200
+    assert state.pinned_track is state.playlist[1]
+    assert state.pinned_track.title == "Second"
+
+
+@pytest.mark.asyncio
+async def test_move_track_validates_both_source_and_destination_tokens():
+    app = _make_test_app()
+    state = app.state.station_state
+    payload = _move_target(app, 2, 0)
+    payload["to_id"] = "t2"
+    before = ([track.spotify_id for track in state.playlist], state.playlist_revision)
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/playlist/move", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "stale_playlist"
+    assert ([track.spotify_id for track in state.playlist], state.playlist_revision) == before
+
+
+@pytest.mark.asyncio
+async def test_playlist_row_mutations_fail_fast_while_rotation_lock_is_busy():
+    app = _make_test_app()
+    state = app.state.station_state
+    requests = [
+        ("/api/playlist/remove", _row_target(app, 1)),
+        ("/api/playlist/move", _move_target(app, 2, 0)),
+        ("/api/playlist/move_to_next", _row_target(app, 2)),
+    ]
+    before = (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+        dict(state.blocklist),
+    )
+
+    await app.state.source_switch_lock.acquire()
+    try:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            responses = [await client.post(path, json=payload) for path, payload in requests]
+    finally:
+        app.state.source_switch_lock.release()
+
+    assert [response.status_code for response in responses] == [409, 409, 409]
+    assert [response.json()["reason"] for response in responses] == ["rotation_updating"] * 3
+    assert (
+        [track.spotify_id for track in state.playlist],
+        state.playlist_revision,
+        state.pinned_track,
+        state.force_next,
+        dict(state.blocklist),
+    ) == before
+
+
+@pytest.mark.asyncio
+async def test_playlist_row_mutation_releases_rotation_lock_on_success():
+    """A successful row mutation must release the shared source_switch_lock.
+
+    The three row endpoints acquire ``source_switch_lock`` — the same lock source
+    switching uses — and release it in a ``finally``. If a regression drops that
+    release, the lock wedges permanently: the next source switch and every later
+    row mutation would return ``rotation_updating`` forever. Guard it by asserting
+    the lock is free after a 200 and by driving a second consecutive mutation.
+    """
+    app = _make_test_app()
+    lock = app.state.source_switch_lock
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/playlist/move", json=_move_target(app, 2, 0))
+        assert first.status_code == 200
+        assert not lock.locked()
+
+        # A second mutation only succeeds if the first actually released the lock.
+        second = await client.post("/api/playlist/remove", json=_row_target(app, 1))
+        assert second.status_code == 200
+        assert second.json()["ok"] is True
+        assert not lock.locked()
 
 
 @pytest.mark.asyncio
@@ -506,6 +858,44 @@ async def test_playlist_enrich_adds_source_without_cutover(tmp_path):
     }
     assert app.state.station_state.playlist_revision == starting_revision + 1
     assert app.state.station_state.playlist[-1].spotify_id == "fresh1"
+
+
+@pytest.mark.asyncio
+async def test_playlist_enrich_crossing_stop_resume_adds_metadata_without_runway(tmp_path):
+    app = _make_test_app()
+    state = app.state.station_state
+    loaded_tracks = [Track(title="Fresh Song", artist="Fresh Artist", duration_ms=180_000, spotify_id="fresh1")]
+    resolved_source = PlaylistSource(kind="classic", url="classic://italian/80s", label="Anni '80 italiani")
+    load_started = Event()
+    release_load = Event()
+
+    def _slow_load(*_args, **_kwargs):
+        load_started.set()
+        assert release_load.wait(timeout=2.0)
+        return loaded_tracks, resolved_source
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer.load_explicit_source", side_effect=_slow_load):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request_task = asyncio.create_task(client.post("/api/playlist/enrich", json={"url": resolved_source.url}))
+            deadline = time.monotonic() + 1.0
+            while not load_started.is_set():
+                if time.monotonic() > deadline:
+                    raise AssertionError("playlist enrichment did not begin")
+                await asyncio.sleep(0)
+            state.session_stopped = True
+            state.continuity_epoch += 1
+            state.session_stopped = False
+            release_load.set()
+            response = await asyncio.wait_for(request_task, timeout=2.0)
+
+    assert response.json()["ok"] is True
+    assert response.json()["metadata_only"] is True
+    assert response.json()["resume_required"] is False
+    assert state.playlist[-1].spotify_id == "fresh1"
+    assert app.state.queue.empty()
+    assert state.continuity_slot is None
+    assert not app.state.skip_event.is_set()
 
 
 @pytest.mark.asyncio
@@ -892,6 +1282,108 @@ async def test_commit_external_download_probe_failure_falls_back_to_metadata(tmp
 
 
 @pytest.mark.asyncio
+async def test_external_download_crossing_stop_resume_commits_metadata_without_audio(tmp_path):
+    """Slow admin ingress can retain play-next ownership without admitting audio."""
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    track = Track(title="Late Arrival", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+    download_started = asyncio.Event()
+    release_download = asyncio.Event()
+
+    async def _slow_download(*_args, **_kwargs):
+        download_started.set()
+        await release_download.wait()
+        return raw_path
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new=AsyncMock(side_effect=_slow_download),
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=None),
+    ):
+        task = asyncio.create_task(
+            streamer._commit_external_download(
+                track,
+                app.state,
+                state.source_revision,
+                should_commit=lambda: True,
+                should_pin=lambda: True,
+            )
+        )
+        await asyncio.wait_for(download_started.wait(), timeout=1.0)
+        state.session_stopped = True
+        state.continuity_epoch += 1
+        state.session_stopped = False
+        release_download.set()
+        status = await asyncio.wait_for(task, timeout=1.0)
+
+    assert status == "pinned"
+    assert track in state.playlist
+    assert state.pinned_track is track
+    assert state.force_next is SegmentType.MUSIC
+    assert app.state.queue.empty()
+    assert state.continuity_slot is None
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_reaccepts_a_recovered_denied_track(tmp_path):
+    """An admitted retry of the same YouTube ID must remain eligible to play next."""
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+    from mammamiradio.web import streamer
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    track = Track(title="Recovered", artist="Artist", duration_ms=180_000, youtube_id="dQw4w9WgXcQ")
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+    marker_path = tmp_path / f"_failed_{track.cache_key}.mp3"
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(tmp_path, track.cache_key, "yt-dlp unavailable")
+        marker_path.write_text("yt-dlp unavailable")
+        raw_path.write_bytes(b"downloaded audio")
+
+        with (
+            patch(
+                "mammamiradio.playlist.downloader.download_external_track",
+                new_callable=AsyncMock,
+                return_value=raw_path,
+            ),
+            patch("mammamiradio.web.streamer.probe_duration_sec", return_value=None),
+        ):
+            status = await streamer._commit_external_download(
+                track,
+                app.state,
+                state.source_revision,
+                should_commit=lambda: True,
+                should_pin=lambda: True,
+            )
+
+        assert status == "pinned"
+        assert state.pinned_track is track
+        assert not is_rejected_cache_key(track.cache_key)
+        assert not marker_path.exists()
+        assert _select_accepted_music_track(state, app.state.config) is track
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_add_track_play_next():
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -909,6 +1401,31 @@ async def test_add_track_play_next():
     assert resp.status_code == 200
     assert resp.json()["position"] == "next"
     assert app.state.station_state.playlist[0].title == "Priority Song"
+
+
+@pytest.mark.asyncio
+async def test_add_track_numeric_spotify_id_remains_readable_in_playlist_and_search():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        add_response = await client.post(
+            "/api/playlist/add",
+            json={
+                "title": "Numeric ID Song",
+                "artist": "Artist",
+                "duration_ms": 200_000,
+                "spotify_id": 123,
+            },
+        )
+        playlist_response = await client.get("/api/playlist")
+        search_response = await client.get("/api/search?q=Numeric&include_external=false")
+
+    assert add_response.status_code == 200
+    assert playlist_response.status_code == 200
+    assert search_response.status_code == 200
+    playlist_track = next(track for track in playlist_response.json()["tracks"] if track["title"] == "Numeric ID Song")
+    assert playlist_track["id"] == "123"
+    assert search_response.json()["results"][0]["id"] == "123"
 
 
 @pytest.mark.asyncio
@@ -990,9 +1507,156 @@ async def test_playlist_load_purges_queue_and_skips():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
     assert resp.json()["ok"] is True
+    assert resp.json()["skipped"] is True
     assert app.state.queue.qsize() == 1
     assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_playlist_load_does_not_skip_when_no_ready_cutover_runway(tmp_path):
+    """A source change may apply, but it cannot cut the only audio into dead air."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.json()["ok"] is True
+    assert response.json()["skipped"] is False
+    assert app.state.queue.empty()
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_playlist_load_keeps_ready_runway_when_assets_are_missing(tmp_path):
+    """An assetless source switch keeps queued audio and a valid slot on air."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+
+    queued_path = tmp_path / "queued_head.mp3"
+    queued_path.write_bytes(b"queued-audio")
+    queued_head = Segment(
+        type=SegmentType.MUSIC,
+        path=queued_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "ready-head", "title": "Ready head", "artist": "Artist"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(queued_head)
+    state.queued_segments = [{"id": "ready-head", "type": "music", "label": "Ready head"}]
+
+    slot_path = tmp_path / "continuity-slot.mp3"
+    slot_path.write_bytes(b"continuity-audio")
+    slot = Segment(
+        type=SegmentType.BANTER,
+        path=slot_path,
+        duration_sec=4.44,
+        metadata={"title": "Protected continuity", "continuity_reservation": True},
+        ephemeral=False,
+    )
+    state.continuity_slot = slot
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.json()["ok"] is True
+    assert response.json()["skipped"] is False
+    assert not app.state.skip_event.is_set()
+    assert list(app.state.queue._queue) == [queued_head]
+    assert state.queued_segments == [{"id": "ready-head", "type": "music", "label": "Ready head"}]
+    assert state.continuity_slot is slot
+
+
+@pytest.mark.asyncio
+async def test_playlist_load_preserves_old_source_head_without_fresh_runway(tmp_path):
+    """A preserved old-source head prevents a source switch from cutting early."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    old_head_path = tmp_path / "old_source_head.mp3"
+    old_head_path.write_bytes(b"old-source-audio")
+    old_head = Segment(
+        type=SegmentType.MUSIC,
+        path=old_head_path,
+        duration_sec=180.0,
+        metadata={"title": "Old source head", "title_only": "Old source head", "artist": "Old Artist"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(old_head)
+    state.queued_segments = [{"label": "Old source head"}]
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] is False
+    assert not app.state.skip_event.is_set()
+    assert list(app.state.queue._queue) == [old_head]
+    assert state.queued_segments[0]["label"] == "Old source head"
+    assert state.playlist[0].title == "URL Track"
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1672,7 @@ async def test_search_empty_query():
         resp = await client.get("/api/search?q=")
     assert resp.status_code == 200
     body = resp.json()
+    assert body["revision"] == app.state.station_state.playlist_revision
     assert body["results"] == []
     assert body["external"] == []
     assert body["total"] == 0
@@ -1140,6 +1805,7 @@ async def test_search_returns_playlist_and_external_results():
             resp = await client.get("/api/search?q=Song")
     assert resp.status_code == 200
     body = resp.json()
+    assert body["revision"] == app.state.station_state.playlist_revision
     assert len(body["results"]) >= 1
     assert body["results"][0]["album_art"] == "https://img.example/song-a.jpg"
     assert body["results"][0]["source"] == "classic"
@@ -1168,12 +1834,47 @@ async def test_search_playlist_results_are_paginated_with_absolute_indices():
             resp = await client.get("/api/search?q=Song&offset=2&limit=3")
     assert resp.status_code == 200
     body = resp.json()
+    assert body["revision"] == app.state.station_state.playlist_revision
     assert [track["title"] for track in body["results"]] == ["Song 2", "Song 3", "Song 4"]
     assert [track["index"] for track in body["results"]] == [2, 3, 4]
     assert body["total"] == 7
     assert body["offset"] == 2
     assert body["limit"] == 3
     assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_keeps_captured_revision_and_rows_across_slow_external_lookup():
+    app = _make_test_app()
+    state = app.state.station_state
+    captured_revision = state.playlist_revision
+    search_started = Event()
+    release_search = Event()
+
+    def _held_external_search(_query: str, _limit: int):
+        search_started.set()
+        assert release_search.wait(timeout=2)
+        return []
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch(
+        "mammamiradio.playlist.downloader.search_ytdlp_metadata",
+        side_effect=_held_external_search,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request_task = asyncio.create_task(client.get("/api/search?q=Song"))
+            assert await asyncio.to_thread(search_started.wait, 1)
+            state.playlist.pop(0)
+            state.playlist_revision += 1
+            release_search.set()
+            response = await request_task
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["revision"] == captured_revision
+    assert [row["index"] for row in body["results"]] == [0, 1, 2]
+    assert [row["title"] for row in body["results"]] == ["Song A", "Song B", "Song C"]
+    assert state.playlist_revision == captured_revision + 1
 
 
 @pytest.mark.asyncio
@@ -3281,6 +3982,381 @@ async def test_stream_icy_name_uses_resolved_identity_and_strips_crlf():
 
 
 @pytest.mark.asyncio
+async def test_stream_survives_smart_quote_in_station_name():
+    """A curly apostrophe in the station name must not kill the stream.
+
+    Regression: HA add-on options carried a name whose apostrophe was U+2019,
+    because macOS smart-quote substitution replaces the straight one as you
+    type. Starlette encodes response headers with latin-1, so icy-name raised
+    UnicodeEncodeError and every single /stream request returned 500 — no
+    audio for any listener until the name was edited.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Let’s see how long this can get"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Let's see how long this can get"
+
+
+@pytest.mark.asyncio
+async def test_stream_theme_survives_unencodable_characters():
+    """icy-genre carries operator text too, so it needs the same guard."""
+    app = _make_test_app()
+    app.state.config.station.theme = "sole — mare … 🎵"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            # No trailing space: the folded-away emoji leaves one behind, and a
+            # field value with edge whitespace is illegal (see the h11 test below).
+            assert resp.headers["icy-genre"] == "sole - mare ..."
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_italian_accents_in_icy_name():
+    """latin-1 covers accented Latin letters, so the fix must not flatten them."""
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Città — Caffè"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Città - Caffè"
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_accents_next_to_an_unencodable_character():
+    """The fold must be per character, so an emoji cannot flatten nearby accents.
+
+    Guards the slow path specifically. A whole-string
+    ``unicodedata.normalize("NFKD", value).encode("latin-1", "ignore")`` also
+    survives an emoji and passes every other test in this suite, but it
+    decomposes ``à`` into ``a`` plus a combining accent that then gets dropped,
+    so ``Radio Città 🎵`` would air as ``Radio Citta``, contradicting the promise
+    shipping in the changelog beside it.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Città 🎵"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Città"
+
+
+@pytest.mark.asyncio
+async def test_stream_every_response_header_is_latin1_encodable():
+    """No header on /stream may carry text a latin-1 encode would reject.
+
+    Asserting over the whole header set rather than icy-name alone means a NEW
+    header added later from config text fails here instead of in production,
+    without anyone having to remember this incident.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Let’s — Città 🎵"
+    app.state.config.station.theme = "sole ’ mare … 北京"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            for name, value in resp.headers.items():
+                name.encode("latin-1")
+                value.encode("latin-1")
+                assert "\r" not in value and "\n" not in value, name
+                assert value == value.strip(), name
+
+
+@pytest.mark.asyncio
+async def test_stream_icy_genre_capped_at_64_after_folding():
+    """The fold expands one ``…`` to three characters, so the cap must run after it."""
+    app = _make_test_app()
+    app.state.config.station.theme = "…" * 40
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert len(resp.headers["icy-genre"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_european_letters_outside_latin1():
+    """A Polish or Czech station name must degrade to letters, not lose them.
+
+    ``Ł`` has no canonical decomposition, so NFKD leaves it whole and the
+    latin-1 pass deletes it outright: ``Radio Łódź`` became ``Radio ódz``,
+    which reads as a typo rather than a graceful degradation.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "Radio Łódź"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Lódz"
+
+
+def test_header_safe_output_is_always_a_legal_http_field_value():
+    """Guard the class of bug, not just the one character that caused it.
+
+    The route tests above drive the app through ``httpx.ASGITransport``, which
+    calls the ASGI app directly and never serialises an HTTP response, so they
+    cannot see an illegal header value at all. h11 can: it rejects a field
+    value with leading or trailing whitespace, which is exactly what folding an
+    emoji away from the edge of a name leaves behind, and the failure is total
+    (no response reaches the listener), same as the encode crash this whole
+    function exists to prevent. Starlette hands the server latin-1 bytes, so
+    encode the same way here rather than passing str.
+    """
+    h11 = pytest.importorskip("h11")
+
+    hostile = [
+        "Let’s Radio",  # the reported outage
+        "🎵 Radio Mamma",  # fold leaves a leading space
+        "Radio Mamma 🎵",  # fold leaves a trailing space
+        "sole — mare … 🎵",
+        "Radio Città",  # composed accents, must survive as latin-1 bytes
+        unicodedata.normalize("NFD", "Radio Città"),  # decomposed, as macOS writes it
+        "Łódź Radio",  # letters with no decomposition
+        "Radyo Kırmızı",  # dotless i: no decomposition and no accent
+        "Radio\r\nX-Evil: 1",  # header injection
+        # C0 and DEL are illegal field content. h11 refuses NUL, VT and FF
+        # outright; the rest it tolerates but no strict server has to.
+        "Radio\x00Mamma",
+        "Radio\x0bMamma",
+        "Radio\x0cMamma",
+        "Radio\x1fMamma",
+        "Radio\x7fMamma",
+        "Radio\x07Mamma",
+        "Radio\tMamma",
+        "    ",  # exotic whitespace only
+        "广播 电台",
+        "🎵🎶",
+        "",
+    ]
+    for raw in hostile:
+        value = _header_safe(raw) or "Mamma Mi Radio"
+        h11.Response(
+            status_code=200,
+            headers=[("icy-name", value.encode("latin-1"))],
+            reason=b"OK",
+        )
+
+
+@pytest.mark.asyncio
+async def test_stream_serves_audio_after_restart_with_unicode_station_name(monkeypatch):
+    """Post-restart scenario: stopped session persisted, hostile name in config.
+
+    Every other test here sets the station name on an app that is already built.
+    This one goes through the real boot path (env, `load_config`,
+    `sanitize_station_name`, identity resolution, header), so a regression that
+    only shows up in the configured representation, rather than in a value
+    assigned afterwards, cannot hide. `session_stopped` is left set the way a
+    watchdog restart leaves it, which is the state the original outage was
+    reported from: the add-on looked healthy and no listener got audio.
+    """
+    monkeypatch.setenv("STATION_NAME", "🎵 Let’s Radyo Kırmızı — Città Łódź 🎶")
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Let's Radyo Kirmizi - Città Lódz"
+            assert resp.headers["icy-name"].encode("latin-1")
+            body = b"".join([chunk async for chunk in resp.aiter_bytes()])
+            assert body == b"frame"
+
+
+def test_header_safe_removes_control_bytes_not_just_crlf():
+    """C0 and DEL are illegal field content, not only CR/LF.
+
+    `station.theme` never passes through `sanitize_station_name`, so a stray
+    control byte in `radio.toml` or `STATION_THEME` reaches the header raw. h11
+    refuses NUL, VT and FF outright, which is the same no-response-at-all
+    failure as the encode crash, and the rest of the range is illegal even
+    where a lenient parser lets it through.
+    """
+    for control in [*range(0x20), 0x7F]:
+        assert _header_safe(f"Radio{chr(control)}Mamma") == "RadioMamma", hex(control)
+
+
+def test_header_safe_derives_a_letter_rather_than_deleting_it():
+    """A letter latin-1 cannot carry must degrade, never vanish.
+
+    NFKD only helps letters built from a combining accent. Ones built from a
+    stroke, bar or hook decompose to nothing, so a Turkish name written with the
+    dotless i used to air as `Radyo Krmz`, which reads as corruption rather than
+    degradation. The Unicode name supplies the base letter instead, which is why this is not a
+    hand-curated list: 314 Latin letters fall outside latin-1 and enumerating
+    them is how the first one got missed.
+    """
+    assert _header_safe("Radyo Kırmızı") == "Radyo Kirmizi"
+    assert _header_safe("Radyo Işık") == "Radyo Isik"
+    assert _header_safe("Radio Azərbaycan") == "Radio Azerbaycan"
+    assert _header_safe("Radio Łódź") == "Radio Lódz"
+    assert _header_safe("Ŋŋ") == "Nn"
+    # Unicode hyphens are not latin-1 either and used to disappear, joining the
+    # words either side of them.
+    assert _header_safe("Radio‐Uno") == "Radio-Uno"
+    assert _header_safe("Radio‑Uno") == "Radio-Uno"
+
+
+def test_header_safe_survives_non_string_config_values():
+    """`radio.toml` is not type-coerced, so a stray int must not reach a header.
+
+    `StationSection` is built straight from parsed TOML, so `theme = 42` lands
+    here as an int and used to raise before any audio was sent.
+    """
+    assert _header_safe(42) == "42"
+    assert _header_safe(None) == ""
+    assert _header_safe(3.5) == "3.5"
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_when_whitespace_only_name_folds_away():
+    """A name that folds to whitespace must not send a blank label.
+
+    `"广播 电台"` folds to a single space, which is truthy. Without the strip the
+    `or DEFAULT_STATION_NAME` fallback misses and the listener's player shows an
+    empty station.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = "广播 电台"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Mamma Mi Radio"
+
+
+@pytest.mark.asyncio
+async def test_stream_icy_name_has_no_edge_whitespace_after_folding():
+    """Folding an emoji off the front of a name must not leave its space."""
+    app = _make_test_app()
+    app.state.config.identity.station_name = "🎵 Radio Mamma 🎶"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Mamma"
+
+
+@pytest.mark.asyncio
+async def test_stream_keeps_decomposed_accents_in_icy_name():
+    """macOS writes `à` decomposed; the combining mark alone is not latin-1.
+
+    Without composing to NFC first the accent is dropped and `Città` airs as
+    `Citta`. Before `_header_safe` existed this input crashed /stream outright,
+    exactly like the curly apostrophe did.
+    """
+    app = _make_test_app()
+    app.state.config.identity.station_name = unicodedata.normalize("NFD", "Radio Città")
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Radio Città"
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_when_station_name_folds_to_nothing():
+    """An all-emoji name must show the station, not an empty label."""
+    app = _make_test_app()
+    app.state.config.identity.station_name = "🎵🎶"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-name"] == "Mamma Mi Radio"
+
+
+@pytest.mark.asyncio
 async def test_stream_headers_match_audio_format_helper():
     """The /stream response headers and the /public-status audio_format object
     must derive from the same helper, so a config change cannot make them
@@ -3751,10 +4827,10 @@ async def test_patch_pacing_persists_standalone_all_keys_atomically():
 
 @pytest.mark.asyncio
 async def test_patch_pacing_persists_addon_one_atomic_batch_write():
-    """Addon: pacing persists to /data/options.json via ONE batch write, not .env.
+    """Addon: pacing persists through Supervisor via ONE batch write, not .env.
 
     The single grouped write is what prevents partial-persist drift — three
-    single-key writes could half-update options.json if one failed midway.
+    single-key writes could otherwise expose a partially updated durable store.
     """
     app = _make_test_app(is_addon=True)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -3826,7 +4902,7 @@ async def test_patch_pacing_persist_failure_standalone_leaves_live_untouched():
 
 @pytest.mark.asyncio
 async def test_patch_pacing_persist_failure_addon_leaves_live_untouched():
-    """Addon persist failure -> 500 and live config unchanged (no options.json drift)."""
+    """Addon persist failure -> 500 and live config unchanged."""
     app = _make_test_app(is_addon=True)
     app.state.config.pacing.ad_spots_per_break = 3
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -3902,6 +4978,9 @@ async def test_credentials_addon_mode_saves_to_secrets_env_not_dotenv():
                 new=AsyncMock(return_value={"ok": True, "providers": {}}),
             ),
         ):
+            from mammamiradio.web import persistence
+
+            save_addon_options.return_value = persistence._SECRET_WRITE_DURABLE
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-addon"})
         assert resp.status_code == 200
@@ -3915,6 +4994,25 @@ async def test_credentials_addon_mode_saves_to_secrets_env_not_dotenv():
             os.environ.pop("ANTHROPIC_API_KEY", None)
         else:
             os.environ["ANTHROPIC_API_KEY"] = previous
+
+
+@pytest.mark.asyncio
+async def test_credentials_reports_structured_500_on_addon_persistence_failure():
+    """An unconfirmed/failed add-on credential save via /api/credentials must not silently 200."""
+    app = _make_test_app(is_addon=True)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._save_addon_options") as save_addon_options:
+        from mammamiradio.web import persistence
+
+        save_addon_options.side_effect = persistence._AddonPersistenceError("Unable to persist add-on credentials")
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/credentials", json={"anthropic_api_key": "sk-addon"})
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert "failed to save credentials" in body["error"]
 
 
 @pytest.mark.asyncio
@@ -4092,73 +5190,35 @@ async def test_post_super_italian_rejects_non_dict_body():
 
 
 @pytest.mark.asyncio
-async def test_post_super_italian_addon_mode_writes_options(tmp_path, monkeypatch):
-    """In addon mode, the toggle additionally writes to /data/options.json."""
+async def test_post_super_italian_addon_mode_uses_supervisor_persistence(monkeypatch):
+    """In addon mode, the toggle persists through the Supervisor helper."""
     app = _make_test_app(is_addon=True)
     app.state.config.super_italian_mode = False
     monkeypatch.delenv("MAMMAMIRADIO_SUPER_ITALIAN", raising=False)
-    options_file = tmp_path / "options.json"
-    options_file.write_text('{"existing": "value"}')
     try:
         with (
-            patch("mammamiradio.web.streamer._save_dotenv"),
-            patch("mammamiradio.web.persistence.Path") as mock_path,
+            patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+            patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
         ):
-            mock_path.return_value = options_file
             transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
             async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                 resp = await client.post("/api/super-italian", json={"super_italian_mode": True})
 
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
-        import json as _json
-
-        options = _json.loads(options_file.read_text())
-        assert options["super_italian_mode"] is True
-        assert options["existing"] == "value"  # preserved
+        save_addon_option.assert_called_once_with("super_italian_mode", True)
+        save_dotenv.assert_not_called()
     finally:
         os.environ.pop("MAMMAMIRADIO_SUPER_ITALIAN", None)
 
 
-def test_save_super_italian_addon_options_handles_corrupt_file(tmp_path):
-    """Corrupt /data/options.json is treated as empty — write proceeds."""
+def test_save_super_italian_addon_options_delegates_to_supervisor_helper():
     from mammamiradio.web.streamer import _save_super_italian_addon_options
 
-    options_file = tmp_path / "options.json"
-    options_file.write_text("not valid json {{{")
-
-    with patch("mammamiradio.web.persistence.Path") as mock_path:
-        mock_path.return_value = options_file
+    with patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option:
         _save_super_italian_addon_options(True)
 
-    import json as _json
-
-    options = _json.loads(options_file.read_text())
-    assert options == {"super_italian_mode": True}
-
-
-def test_save_addon_option_batch_preserves_other_keys_and_writes_all(tmp_path):
-    """The atomic batch write lands every pacing key in one pass AND leaves
-    unrelated options intact — the property that prevents partial-persist drift.
-    (The route test mocks the helper, so this is the only check of the real write.)"""
-    from mammamiradio.web.persistence import _save_addon_option_batch
-
-    options_file = tmp_path / "options.json"
-    options_file.write_text('{"super_italian_mode": true, "quality_profile": "premium"}')
-
-    with patch("mammamiradio.web.persistence.Path") as mock_path:
-        mock_path.return_value = options_file
-        _save_addon_option_batch({"songs_between_banter": 5, "songs_between_ads": 9, "ad_spots_per_break": 3})
-
-    import json as _json
-
-    options = _json.loads(options_file.read_text())
-    assert options["songs_between_banter"] == 5
-    assert options["songs_between_ads"] == 9
-    assert options["ad_spots_per_break"] == 3
-    # Pre-existing unrelated options survived the write.
-    assert options["super_italian_mode"] is True
-    assert options["quality_profile"] == "premium"
+    save_addon_option.assert_called_once_with("super_italian_mode", True)
 
 
 # ---------------------------------------------------------------------------
@@ -5049,6 +6109,7 @@ async def test_public_status_playback_actions_match_skip_contract():
     assert idle_resp.json()["playback_actions"] == {"skip_ready": False, "skip_would_bridge": False}
 
     app.state.station_state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    app.state.station_state.current_stream_audible = True
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         active_resp = await client.get("/public-status")
 
@@ -5509,6 +6570,7 @@ async def test_skip_track_with_empty_queue_returns_bridged_true(tmp_path):
         "started": time.time(),
         "metadata": {"title": "Song A"},
     }
+    app.state.station_state.current_stream_audible = True
     # Queue is empty — skip should bridge
     assert app.state.queue.empty()
 
@@ -5538,6 +6600,7 @@ async def test_skip_track_with_queued_segments_not_bridged(tmp_path):
         "started": time.time(),
         "metadata": {"title": "Current"},
     }
+    app.state.station_state.current_stream_audible = True
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -5561,6 +6624,7 @@ async def test_skip_track_post_restart_empty_queue_returns_bridged_true(tmp_path
         "started": time.time(),
         "metadata": {"title": "Song A"},
     }
+    app.state.station_state.current_stream_audible = True
     assert app.state.queue.empty()
     assert app.state.station_state.queued_segments == []
 
