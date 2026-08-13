@@ -1014,16 +1014,35 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
   margin-top: var(--space-2);
 }
 
+/* Every tone pairs its colour with the canonical shape from base.css, so the
+   line still reads as ready/degraded/blocked without relying on hue. */
+.first-listen-panel .first-listen-status:is([data-tone="ready"], [data-tone="degraded"], [data-tone="blocked"])::before {
+  margin-right: 0.375rem;
+  font-weight: 700;
+}
+
 .first-listen-panel .first-listen-status[data-tone="ready"] {
   color: var(--ok-text);
+}
+
+.first-listen-panel .first-listen-status[data-tone="ready"]::before {
+  content: "\2713";
 }
 
 .first-listen-panel .first-listen-status[data-tone="degraded"] {
   color: var(--warning);
 }
 
+.first-listen-panel .first-listen-status[data-tone="degraded"]::before {
+  content: "\25B3";
+}
+
 .first-listen-panel .first-listen-status[data-tone="blocked"] {
   color: color-mix(in srgb, var(--error) 58%, var(--cream));
+}
+
+.first-listen-panel .first-listen-status[data-tone="blocked"]::before {
+  content: "\2717";
 }
 
 .first-listen-panel .first-listen-repair {

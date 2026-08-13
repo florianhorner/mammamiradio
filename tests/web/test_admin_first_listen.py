@@ -866,3 +866,28 @@ def test_post_hacs_timing_is_local_and_ends_only_on_heard_confirmation() -> None
     assert "if(requestedHeard){" in verify
     assert "completeFirstListenClock();" in verify
     assert "No telemetry leaves this browser" in html
+
+
+def test_step_status_chips_become_visible_once_they_carry_real_state() -> None:
+    """The chips ship hidden so nothing stale paints before the first render.
+
+    Every honest signal the journey has — "Review not saved", "Save check",
+    "Music missing" — is written through firstListenSetChip, so if that helper
+    does not clear `hidden`, the operator is told nothing while the smoke suite
+    still reads the text (innerText falls back to textContent on an unrendered
+    node). Keep the two halves bound together here.
+    """
+    html = _html()
+    css = _css()
+
+    for chip_id in (
+        "firstListenSpeakerChip",
+        "firstListenVerifyChip",
+        "firstListenPrivacyChip",
+        "firstListenAiChip",
+    ):
+        assert f'id="{chip_id}"' in html, f"{chip_id} disappeared from the journey"
+
+    assert ".first-listen-panel [hidden]" in css
+    set_chip = _function("firstListenSetChip", "firstListenSetActionTone")
+    assert "el.removeAttribute('hidden')" in set_chip

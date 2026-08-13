@@ -2520,7 +2520,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <fieldset class="first-listen-ai-fieldset" id="firstListenAiFieldset" disabled>
                     <legend class="sr-only">Optional AI host providers</legend>
                     <div class="setup-key-banner" id="setupKeysConfigured" data-state="ready">
-                      <span class="setup-key-banner-label" id="setupKeysLabel">AI service connected</span>
+                      <span class="setup-key-banner-label" id="setupKeysLabel">&#10003; AI service connected</span>
                       <span style="opacity:0.7;margin-left:0.5rem;font-size:0.85em" id="setupKeysDetail"></span>
                       <button type="button" class="btn btn-util setup-inline-action" id="setupKeysEditBtn" data-stopped-exempt onclick="openFirstListenKeyEditor(this)">Change AI services</button>
                     </div>
@@ -4319,6 +4319,10 @@ function firstListenSetChip(id,state,label){
   el.className='status-chip '+safe;
   el.textContent=label;
   el.setAttribute('aria-label',label+': status '+safe);
+  // The markup ships these chips hidden so nothing stale shows before the first
+  // render. Once we have a real state to report the chip has to be visible, or
+  // every degraded signal is written into an element the operator never sees.
+  el.removeAttribute('hidden');
 }
 function firstListenSetStatus(id,message,tone=''){
   const el=document.getElementById(id);
@@ -5598,7 +5602,7 @@ function renderSetup(setup){
   if(!_keysEditMode)keysForm.style.display=aiKeysConfigured?'none':'block';
   keysEditBtn.style.display=aiKeysConfigured&&!_keysEditMode?'inline-flex':'none';
   if(providerKeysConfigured){
-    document.getElementById('setupKeysLabel').textContent=providerSetupIncomplete?'AI setup needs attention':aiKeysConfigured?'AI service connected':'Voice service connected';
+    document.getElementById('setupKeysLabel').textContent=providerSetupIncomplete?'△ AI setup needs attention':aiKeysConfigured?'✓ AI service connected':'✓ Voice service connected';
     document.getElementById('setupKeysDetail').textContent=setupProviderLabels(configuredKeys).join(' · ');
   }
   updateFirstListenKeySaveState();
