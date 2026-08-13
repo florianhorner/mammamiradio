@@ -1132,6 +1132,7 @@
     // in the textarea and keep the localized next step in the live region.
     _restoreEditableRequestForm(formEl);
     if (sentEl) {
+      delete sentEl.dataset.validation;
       sentEl.style.display = '';
       sentEl.classList.add('is-visible');
     }
