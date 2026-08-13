@@ -2875,6 +2875,7 @@ _DEFAULT_STATION_ARTWORK_URL = (
 _HA_SEGMENT_TYPE_ICONS = {
     "music": "mdi:music-note",
     "banter": "mdi:microphone",
+    "home_bulletin": "mdi:home",
     "ad": "mdi:bullhorn",
     "news_flash": "mdi:newspaper",
     "station_id": "mdi:radio-tower",

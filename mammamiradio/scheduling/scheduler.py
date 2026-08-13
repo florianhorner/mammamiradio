@@ -18,6 +18,7 @@ def _reason_for_decision(reason_key: str, *, threshold: int = 0) -> str:
     reasons = {
         "first_segment_music": "Bootstrapping timeline with music.",
         "ad_due": "Ad pacing threshold reached.",
+        "casa_due": "Listener session earned Il Bollettino di Casa.",
         "banter_due": f"Banter pacing threshold reached ({threshold} songs).",
         "news_due": "News flash window opened (news cooldown reached).",
         "station_id_due": "Station ID cadence slot opened.",
@@ -36,6 +37,7 @@ def _decide_with_reason(
     songs_since_news: int = 0,
     segments_since_station_id: int = 0,
     segments_since_time_check: int = 0,
+    casa_ready: bool = False,
 ) -> tuple[SegmentType, str]:
     """Core pacing decision. Single source of truth."""
     if segments_produced == 0:
@@ -43,6 +45,12 @@ def _decide_with_reason(
 
     if songs_since_ad >= pacing.songs_between_ads:
         return SegmentType.AD, _reason_for_decision("ad_due")
+
+    # Casa is listener-earned, not clock-paced. Its caller-provided readiness
+    # predicate is pure: the scheduler chooses the slot but never claims Home
+    # context or mutates the listener-session lifecycle.
+    if casa_ready:
+        return SegmentType.HOME_BULLETIN, _reason_for_decision("casa_due")
 
     threshold = pacing.songs_between_banter
     if not deterministic:
@@ -84,6 +92,7 @@ def _decide(
     songs_since_news: int = 0,
     segments_since_station_id: int = 0,
     segments_since_time_check: int = 0,
+    casa_ready: bool = False,
 ) -> SegmentType:
     """Core pacing decision. Single source of truth."""
     seg_type, _ = _decide_with_reason(
@@ -95,11 +104,17 @@ def _decide(
         songs_since_news,
         segments_since_station_id,
         segments_since_time_check,
+        casa_ready,
     )
     return seg_type
 
 
-def next_segment_type(state: StationState, pacing: PacingSection) -> SegmentType:
+def next_segment_type(
+    state: StationState,
+    pacing: PacingSection,
+    *,
+    casa_ready: bool = False,
+) -> SegmentType:
     """Choose the next segment type from the current mutable station state."""
     return _decide(
         state.segments_produced,
@@ -109,10 +124,18 @@ def next_segment_type(state: StationState, pacing: PacingSection) -> SegmentType
         songs_since_news=state.songs_since_news,
         segments_since_station_id=state.segments_since_station_id,
         segments_since_time_check=state.segments_since_time_check,
+        casa_ready=casa_ready,
     )
 
 
-def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Track], count: int = 8) -> list[dict]:
+def preview_upcoming(
+    state: StationState,
+    pacing: PacingSection,
+    tracks: list[Track],
+    count: int = 8,
+    *,
+    casa_ready: bool = False,
+) -> list[dict]:
     """Predict the next N segments without mutating state."""
     preview = []
     songs_since_banter = state.songs_since_banter
@@ -140,6 +163,7 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Tr
                 songs_since_news=songs_since_news,
                 segments_since_station_id=segments_since_station_id,
                 segments_since_time_check=segments_since_time_check,
+                casa_ready=casa_ready,
             )
 
         if seg_type == SegmentType.MUSIC:
@@ -171,6 +195,16 @@ def preview_upcoming(state: StationState, pacing: PacingSection, tracks: list[Tr
         elif seg_type == SegmentType.BANTER:
             preview.append({"type": "banter", "label": "Host banter", "reason": reason, "predicted": True})
             songs_since_banter = 0
+        elif seg_type == SegmentType.HOME_BULLETIN:
+            preview.append(
+                {
+                    "type": "home_bulletin",
+                    "label": "Il Bollettino di Casa",
+                    "reason": reason,
+                    "predicted": True,
+                }
+            )
+            casa_ready = False
         elif seg_type == SegmentType.NEWS_FLASH:
             preview.append({"type": "news_flash", "label": "Notizie Flash", "reason": reason, "predicted": True})
             songs_since_banter = 0

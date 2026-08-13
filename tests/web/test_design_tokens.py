@@ -234,6 +234,12 @@ def test_ad_segment_color_is_distinct_from_warning() -> None:
     [
         ("music", "--seg-music", ("--ok",), "--ok (OK/connected/playing status blue)"),
         ("banter", "--seg-banter", ("--sun", "--sun2"), "--sun / --sun2 (accent golds)"),
+        (
+            "home_bulletin",
+            "--seg-casa",
+            ("--ok", "--warning", "--error", "--sun", "--sun2", "--accent-warm", "--news"),
+            "status, accent, ad, and news colors",
+        ),
     ],
 )
 def test_segment_colors_are_decoupled_from_semantic_and_accent_tokens(
@@ -266,6 +272,19 @@ def test_segment_colors_are_decoupled_from_semantic_and_accent_tokens(
     assert not offenders, f"{segment}-segment rules must use var({token}), not {forbidden_label}:\n" + "\n".join(
         offenders
     )
+
+
+def test_home_bulletin_uses_casa_token_and_label_without_adding_a_control() -> None:
+    admin = _ADMIN_HTML_TEXT
+    listener = LISTENER_CSS.read_text(encoding="utf-8")
+
+    assert '.le-type[data-t="home_bulletin"] { color: var(--seg-casa); }' in admin
+    assert ".segment-inline.segment-home_bulletin { color: var(--seg-casa); }" in admin
+    assert '.progress-fill[data-t="home_bulletin"] { background: var(--seg-casa); }' in admin
+    assert "home_bulletin:'Il Bollettino di Casa'" in admin
+    assert ".mmr-schedule .pill.pill-casa { --pill-type: var(--seg-casa); }" in listener
+    assert "doTrigger('home_bulletin'" not in admin
+    assert 'data-logtype="home_bulletin"' not in admin
 
 
 # Music is the DEFAULT segment, so its progress fills are colored by the

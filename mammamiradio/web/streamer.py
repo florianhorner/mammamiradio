@@ -81,7 +81,7 @@ from mammamiradio.core.first_listen_show import (
     first_listen_show_required,
     iter_first_listen_show_chunks,
 )
-from mammamiradio.core.listener_session import ListenerSessionCueState
+from mammamiradio.core.listener_session import CasaBulletinState, ListenerSessionCueState
 from mammamiradio.core.models import (
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     ChaosSubtype,
@@ -1018,8 +1018,38 @@ def _companionship_cue_is_current(state: StationState, epoch: int | None) -> boo
     )
 
 
-def _clear_stale_companionship_selection(state: StationState, selected_epoch: int | None) -> None:
-    """Remove provisional now-playing state for a rejected companionship cue."""
+def _casa_bulletin_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
+    """Return whether a Casa segment carries a valid listener-session epoch."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if segment.type is not SegmentType.HOME_BULLETIN or metadata.get("listener_session_cue") != "casa":
+        return False, None
+    epoch = metadata.get("listener_session_epoch")
+    if isinstance(epoch, int) and not isinstance(epoch, bool) and epoch > 0:
+        return True, epoch
+    return True, None
+
+
+def _casa_bulletin_is_current(
+    state: StationState,
+    epoch: int | None,
+    *,
+    allow_aired: bool = False,
+) -> bool:
+    """Return whether a queued/airing Casa bulletin still belongs to this room."""
+
+    allowed_states = {CasaBulletinState.QUEUED}
+    if allow_aired:
+        allowed_states.add(CasaBulletinState.AIRED)
+    if epoch is None or epoch != state.listener_session.epoch:
+        return False
+    if state.listener_session.casa_state is CasaBulletinState.AIRED and allow_aired:
+        return True
+    return state.listener_session.active_count > 0 and state.listener_session.casa_state in allowed_states
+
+
+def _clear_stale_listener_session_selection(state: StationState, selected_epoch: int | None) -> None:
+    """Remove provisional now-playing state for a listener-session-gated cue."""
     if selected_epoch is None:
         return
     now_streaming = state.now_streaming if isinstance(state.now_streaming, dict) else {}
@@ -1030,6 +1060,18 @@ def _clear_stale_companionship_selection(state: StationState, selected_epoch: in
     if state.audible_playback_epoch == selected_epoch:
         state._last_audible_stream = {}
     state.last_state_change_at = time.time()
+
+
+def _clear_stale_companionship_selection(state: StationState, selected_epoch: int | None) -> None:
+    """Remove provisional now-playing state for a rejected companionship cue."""
+
+    _clear_stale_listener_session_selection(state, selected_epoch)
+
+
+def _clear_stale_casa_selection(state: StationState, selected_epoch: int | None) -> None:
+    """Remove provisional now-playing state for a rejected Casa bulletin."""
+
+    _clear_stale_listener_session_selection(state, selected_epoch)
 
 
 def _segment_is_immediately_playable(
@@ -1046,6 +1088,9 @@ def _segment_is_immediately_playable(
         return False
     is_companionship_cue, companionship_epoch = _companionship_segment_epoch(segment)
     if is_companionship_cue and not _companionship_cue_is_current(state, companionship_epoch):
+        return False
+    is_casa_bulletin, casa_epoch = _casa_bulletin_segment_epoch(segment)
+    if is_casa_bulletin and not _casa_bulletin_is_current(state, casa_epoch):
         return False
     if segment.type is SegmentType.MUSIC:
         key = _segment_blocklist_key(segment)
@@ -1818,8 +1863,8 @@ HEADING_SEEDS = {
 }
 
 
-def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[str]) -> int:
-    """Remove unstarted banter tied to newly muted home entities.
+def _purge_home_fact_segments_from_queue(q, state: StationState, entity_ids: set[str]) -> int:
+    """Remove unstarted Home-derived segments tied to newly muted entities.
 
     ``entity_ids`` is the tightened set: the muted id plus, in narrow mode, the
     synthetic ambient id(s) a break may be tagged with when its real HA source is
@@ -1832,7 +1877,7 @@ def _purge_home_fact_banter_from_queue(q, state: StationState, entity_ids: set[s
     dropped_ids: set[str] = set()
     for segment in items:
         metadata = getattr(segment, "metadata", {}) or {}
-        if segment.type is SegmentType.BANTER and metadata.get("home_fact_entity_id") in entity_ids:
+        if metadata.get("home_fact_entity_id") in entity_ids:
             queue_id = metadata.get("queue_id")
             if isinstance(queue_id, str):
                 dropped_ids.add(queue_id)
@@ -3423,8 +3468,6 @@ def _purge_global_home_segments(queue, state: StationState) -> int:
     """Drop every unstarted generated break carrying Home-context provenance."""
 
     def _uses_home_context(segment: Segment) -> bool:
-        if segment.type not in {SegmentType.BANTER, SegmentType.AD, SegmentType.NEWS_FLASH}:
-            return False
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         return any(
             key in metadata
@@ -4200,6 +4243,32 @@ def _consume_queue_shadow(segment_queue: asyncio.Queue[Segment], state: StationS
     )
 
 
+def _schedule_ha_state_push(
+    state: StationState,
+    config,
+    ha_push_tasks: set[asyncio.Task],
+) -> None:
+    """Publish the current station state to HA without retaining the task."""
+
+    if not (config.homeassistant.enabled and config.ha_token and config.homeassistant.url):
+        return
+    task = asyncio.create_task(
+        push_state_to_ha(
+            ha_url=config.homeassistant.url,
+            ha_token=config.ha_token,
+            now_streaming=copy.deepcopy(state.now_streaming),
+            current_track=state.current_track,
+            listeners_active=state.listeners_active,
+            session_stopped=state.session_stopped,
+            queue_depth=len(state.queued_segments),
+            station_name=config.display_station_name,
+            artwork_url=config.brand.artwork_url,
+        )
+    )
+    ha_push_tasks.add(task)
+    task.add_done_callback(ha_push_tasks.discard)
+
+
 def _start_stream_segment(
     app,
     state: StationState,
@@ -4207,7 +4276,12 @@ def _start_stream_segment(
     segment: Segment,
     ha_push_tasks: set[asyncio.Task],
 ) -> int:
-    """Publish selected/readable state after the first non-empty file read."""
+    """Select a readable segment after its first non-empty file read.
+
+    Listener-session cues deliberately defer their HA state update: selection
+    alone is not a broadcast promise for those earned programmes.  The stream
+    loop schedules that update only after a listener accepts the first chunk.
+    """
 
     playback_epoch = state.on_stream_segment_selected(segment)
     logger.info(
@@ -4217,22 +4291,10 @@ def _start_stream_segment(
         segment.metadata.get("title", segment.metadata),
     )
 
-    if config.homeassistant.enabled and config.ha_token and config.homeassistant.url:
-        task = asyncio.create_task(
-            push_state_to_ha(
-                ha_url=config.homeassistant.url,
-                ha_token=config.ha_token,
-                now_streaming=copy.deepcopy(state.now_streaming),
-                current_track=state.current_track,
-                listeners_active=state.listeners_active,
-                session_stopped=state.session_stopped,
-                queue_depth=len(state.queued_segments),
-                station_name=config.display_station_name,
-                artwork_url=config.brand.artwork_url,
-            )
-        )
-        ha_push_tasks.add(task)
-        task.add_done_callback(ha_push_tasks.discard)
+    is_companionship_cue, _ = _companionship_segment_epoch(segment)
+    is_casa_bulletin, _ = _casa_bulletin_segment_epoch(segment)
+    if not (is_companionship_cue or is_casa_bulletin):
+        _schedule_ha_state_push(state, config, ha_push_tasks)
     return playback_epoch
 
 
@@ -4714,6 +4776,24 @@ async def run_playback_loop(app) -> None:
             )
             continue
 
+        is_casa_bulletin, casa_epoch = _casa_bulletin_segment_epoch(segment)
+        if is_casa_bulletin and not _casa_bulletin_is_current(state, casa_epoch):
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.LISTENER_SESSION_STALE)
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info(
+                "Discarding stale Casa bulletin before playback (segment_epoch=%s, current_epoch=%s)",
+                casa_epoch,
+                state.listener_session.epoch,
+            )
+            continue
+
         if state.session_stopped:
             # Stop landed mid-selection: drop this segment instead of airing it.
             # Unlink any ephemeral temp (a queue-pulled segment or an interrupt
@@ -4781,6 +4861,7 @@ async def run_playback_loop(app) -> None:
             send_completed_cleanly = False
             terminal_reason = "aborted"
             companionship_discard_recorded = False
+            casa_discard_recorded = False
             air_start_stamped = False
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
@@ -4830,6 +4911,28 @@ async def run_playback_loop(app) -> None:
                             )
                             break
 
+                        if is_casa_bulletin and not _casa_bulletin_is_current(
+                            state,
+                            casa_epoch,
+                            allow_aired=True,
+                        ):
+                            terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+                            was_skipped = True
+                            if not stream_selected:
+                                state.record_discard(
+                                    segment,
+                                    reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                                    already_counted_in_produced=pulled_from_queue,
+                                )
+                                casa_discard_recorded = True
+                            logger.info(
+                                "Stopping stale Casa bulletin before its next audio chunk "
+                                "(segment_epoch=%s, current_epoch=%s)",
+                                casa_epoch,
+                                state.listener_session.epoch,
+                            )
+                            break
+
                         if not stream_selected:
                             selected_playback_epoch = _start_stream_segment(
                                 app,
@@ -4873,6 +4976,17 @@ async def run_playback_loop(app) -> None:
                                 logger.error("Companionship cue could not transition QUEUED -> CONSUMED")
                                 break
 
+                        if is_casa_bulletin and not air_start_stamped and accepted_count <= 0:
+                            terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+                            state.record_discard(
+                                segment,
+                                reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                                already_counted_in_produced=pulled_from_queue,
+                            )
+                            casa_discard_recorded = True
+                            logger.info("Releasing Casa bulletin because no listener accepted its first chunk")
+                            break
+
                         # `bytes_sent` means "bytes this segment wrote", not
                         # "bytes a listener accepted" — `accepted_listener_count`
                         # below carries the audible truth. Gating it on
@@ -4882,7 +4996,7 @@ async def run_playback_loop(app) -> None:
                         # bytes left the box (file error)") rather than the
                         # honest NO_LISTENERS. A cue still only counts when heard,
                         # because an unheard cue is genuinely never delivered.
-                        if not is_companionship_cue or accepted_count > 0:
+                        if not (is_companionship_cue or is_casa_bulletin) or accepted_count > 0:
                             bytes_sent += len(chunk)
 
                         # First chunk a listener queue actually accepted. This is
@@ -4899,18 +5013,35 @@ async def run_playback_loop(app) -> None:
                         # and anything that blocks here is dead air, so no
                         # filesystem, network, or unbounded work may move behind
                         # this once-per-segment flag.
-                        if (
-                            not air_start_stamped
-                            and accepted_count > 0
-                            and _commit_audible_stream_segment(
+                        if not air_start_stamped and accepted_count > 0:
+                            audible_committed = _commit_audible_stream_segment(
                                 state,
                                 segment,
                                 accepted_listeners=accepted_count,
                             )
-                        ):
-                            air_start_stamped = True
-                            _record_rescue_airplay(state, segment)
-                            _record_continuity_air(state, segment)
+                            if audible_committed:
+                                air_start_stamped = True
+                                _record_rescue_airplay(state, segment)
+                                _record_continuity_air(state, segment)
+                                if is_companionship_cue or is_casa_bulletin:
+                                    # An earned listener-session programme is
+                                    # not on air merely because its file opened.
+                                    # Publish its HA state only after this
+                                    # accepted-listener commit, so a rejected
+                                    # first chunk cannot leave a phantom cue on
+                                    # Home Assistant's media sensor.
+                                    _schedule_ha_state_push(state, config, _ha_push_tasks)
+                            elif is_casa_bulletin:
+                                terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
+                                was_skipped = True
+                                state.record_discard(
+                                    segment,
+                                    reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                                    already_counted_in_produced=pulled_from_queue,
+                                )
+                                casa_discard_recorded = True
+                                logger.error("Casa bulletin could not transition QUEUED -> AIRED")
+                                break
 
                         # Feed the clip ring buffer for "share WTF moment"
                         clip_buf = getattr(app.state, "clip_ring_buffer", None)
@@ -5004,12 +5135,26 @@ async def run_playback_loop(app) -> None:
         finally:
             if is_companionship_cue and terminal_reason == GenerationWasteReason.LISTENER_SESSION_STALE:
                 _clear_stale_companionship_selection(state, selected_playback_epoch)
+            if is_casa_bulletin and terminal_reason == GenerationWasteReason.LISTENER_SESSION_STALE:
+                _clear_stale_casa_selection(state, selected_playback_epoch)
             if (
                 is_companionship_cue
                 and not air_start_stamped
                 and not companionship_discard_recorded
                 and companionship_epoch is not None
                 and state.listener_session.companionship_cue_state is ListenerSessionCueState.QUEUED
+            ):
+                state.record_discard(
+                    segment,
+                    reason=GenerationWasteReason.LISTENER_SESSION_STALE,
+                    already_counted_in_produced=pulled_from_queue,
+                )
+            if (
+                is_casa_bulletin
+                and not air_start_stamped
+                and not casa_discard_recorded
+                and casa_epoch is not None
+                and state.listener_session.casa_state is CasaBulletinState.QUEUED
             ):
                 state.record_discard(
                     segment,
@@ -6532,7 +6677,11 @@ async def homeassistant_entity_policy(request: Request, _: None = Depends(_requi
     elif action == "muted":
         _set_live_gag_entity_denied(state, config, entity_id, False)
     if privacy_tightened:
-        purged_pending_banter_count = _purge_home_fact_banter_from_queue(request.app.state.queue, state, tightened_ids)
+        purged_pending_banter_count = _purge_home_fact_segments_from_queue(
+            request.app.state.queue,
+            state,
+            tightened_ids,
+        )
     # The mutation already returned the authoritative just-written policy; read
     # the revision off it instead of re-reading the file we just wrote.
     current_policy_revision = int(policy.get("policy_revision", 0) or 0)
@@ -9627,13 +9776,13 @@ def _public_status_payload(request: Request) -> dict:
     both payloads must hold the same value at the same time — enforced by
     tests/web/test_public_status_contract.py.
 
-    SECOND CONSUMER — Music Assistant: the mammamiradio MA provider
-    (music-assistant/server: providers/mammamiradio/) polls /public-status to
-    drive its now-playing card, reading ``now_streaming`` (incl.
-    ``metadata.title``/``title_only``/``artist``/``album_art``/``host``),
-    ``upcoming``, ``ha_moments``, and ``brand``. Renaming or dropping any of
-    those silently degrades the merged MA provider — the MA-contract tests in
-    tests/web/test_public_status_contract.py are the drift detector.
+    The listener UI consumes ``now_streaming`` (including public metadata),
+    ``upcoming``, ``ha_moments``, and ``brand``. Music Assistant does not consume
+    this surface: its current provider polls the frozen
+    ``/api/integrations/v1/now-playing`` contract instead. The public-status
+    shape guards in tests/web/test_public_status_contract.py protect listener
+    compatibility; the separate frozen tests/integrations suite protects Music
+    Assistant and other v1 consumers.
     """
     _sync_runtime_state(request)
     state = request.app.state.station_state

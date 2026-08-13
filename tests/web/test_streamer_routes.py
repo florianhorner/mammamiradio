@@ -36,7 +36,7 @@ from mammamiradio.core.first_listen import (
     FirstListenInstallOriginV1,
     FirstListenReceiptV1,
 )
-from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
+from mammamiradio.core.listener_session import CasaBulletinState, ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
     GenerationWasteReason,
     PlaylistSource,
@@ -608,6 +608,47 @@ def _queue_companionship_cue(app: FastAPI, tmp_path: Path, *, audio: bytes = b"c
     return now, listener_id, listener_queue, segment, claim
 
 
+def _queue_casa_bulletin(app: FastAPI, tmp_path: Path, *, audio: bytes = b"casa audio"):
+    """Queue one earned Casa bulletin with a real listener-session claim."""
+
+    now = [0.0]
+    session = ListenerSession(monotonic=lambda: now[0])
+    app.state.station_state.listener_session = session
+    listener_id, listener_queue = app.state.stream_hub.subscribe()
+    for _ in range(session.CASA_QUALIFYING_MUSIC_SEGMENTS):
+        session.record_casa_music_audible()
+    epoch = session.claim_casa()
+    assert epoch is not None
+
+    path = tmp_path / "home-bulletin.mp3"
+    path.write_bytes(audio)
+    queue_id = "home-bulletin-cue"
+    segment = Segment(
+        type=SegmentType.HOME_BULLETIN,
+        path=path,
+        duration_sec=1.0,
+        metadata={
+            "title": "Il Bollettino di Casa",
+            "queue_id": queue_id,
+            "listener_session_epoch": epoch,
+            "listener_session_cue": "casa",
+            "home_context_generation": app.state.station_state.home_context_policy_generation,
+        },
+        ephemeral=False,
+    )
+    assert session.mark_casa_queued(epoch)
+    app.state.queue.put_nowait(segment)
+    app.state.station_state.queued_segments = [
+        {
+            "id": queue_id,
+            "type": "home_bulletin",
+            "label": "Il Bollettino di Casa",
+            "duration_sec": 1.0,
+        }
+    ]
+    return now, listener_id, listener_queue, segment, epoch
+
+
 @pytest.mark.asyncio
 async def test_companionship_cue_is_consumed_only_after_a_listener_accepts_audio(tmp_path):
     app = _make_test_app()
@@ -620,6 +661,85 @@ async def test_companionship_cue_is_consumed_only_after_a_listener_accepts_audio
         assert app.state.station_state.listener_session.companionship_cue_state is ListenerSessionCueState.CONSUMED
         assert app.state.station_state.now_streaming["label"] == "Companionship"
         assert claim.epoch == app.state.station_state.listener_session.epoch
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_casa_bulletin_airs_only_after_a_listener_accepts_audio(tmp_path):
+    app = _make_test_app()
+    _, _, listener_queue, _, epoch = _queue_casa_bulletin(app, tmp_path)
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://home-assistant.local"
+    app.state.config.ha_token = "test-ha-token"
+    ha_push = AsyncMock()
+
+    with patch("mammamiradio.web.streamer.push_state_to_ha", ha_push):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            assert await asyncio.wait_for(listener_queue.get(), timeout=1.0) == b"casa audio"
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+            await asyncio.sleep(0)
+            session = app.state.station_state.listener_session
+            assert session.casa_state is CasaBulletinState.AIRED
+            assert app.state.station_state.now_streaming["label"] == "Il Bollettino di Casa"
+            assert epoch == session.epoch
+            assert ha_push.await_count == 1
+            assert ha_push.await_args.kwargs["now_streaming"]["type"] == "home_bulletin"
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_casa_bulletin_without_an_accepting_listener_releases_same_epoch(tmp_path):
+    app = _make_test_app()
+    _, listener_id, listener_queue, _, _ = _queue_casa_bulletin(app, tmp_path)
+    app.state.config.homeassistant.enabled = True
+    app.state.config.homeassistant.url = "http://home-assistant.local"
+    app.state.config.ha_token = "test-ha-token"
+    ha_push = AsyncMock()
+
+    async def _reject_first_chunk(_chunk: bytes) -> int:
+        app.state.stream_hub.unsubscribe(listener_id)
+        return 0
+
+    app.state.stream_hub.broadcast = _reject_first_chunk
+    with patch("mammamiradio.web.streamer.push_state_to_ha", ha_push):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+            await asyncio.sleep(0)
+            state = app.state.station_state
+            assert listener_queue.empty()
+            assert state.listener_session.casa_state is CasaBulletinState.EARNED
+            assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+            assert state.now_streaming == {}
+            assert state.current_stream_audible is False
+            assert ha_push.await_count == 0
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_stale_queued_casa_epoch_is_discarded_before_audio(tmp_path):
+    app = _make_test_app()
+    now, listener_id, _, _, epoch = _queue_casa_bulletin(app, tmp_path)
+    app.state.stream_hub.unsubscribe(listener_id)
+    now[0] = 2400.0  # exactly ten empty minutes starts a new station epoch
+    _, new_listener_queue = app.state.stream_hub.subscribe()
+    assert app.state.station_state.listener_session.epoch == epoch + 1
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=1.0)
+        state = app.state.station_state
+        assert new_listener_queue.empty()
+        assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+        assert state.queued_segments == []
+        assert state.now_streaming.get("label") != "Il Bollettino di Casa"
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -8027,7 +8147,7 @@ async def test_homeassistant_entity_policy_mute_does_not_purge_already_rendered_
 
 
 @pytest.mark.asyncio
-async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued_presence_banter(tmp_path):
+async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued_presence_casa(tmp_path):
     """Revoking a presence opt-in must pull an unstarted queued break for that
     entity, the same privacy contract as a mute — the airing segment is untouched."""
     app = _make_test_app()
@@ -8044,14 +8164,14 @@ async def test_homeassistant_entity_policy_personal_moment_opt_out_purges_queued
             "summary": "presence",
         }
     ]
-    # A queued (not yet airing) presence break tied to that entity.
+    # A queued (not yet airing) Casa bulletin tied to that entity.
     queued = Segment(
-        type=SegmentType.BANTER,
+        type=SegmentType.HOME_BULLETIN,
         path=Path("/tmp/presence-break.mp3"),
         metadata={"queue_id": "q-presence-1", "home_fact_entity_id": "binary_sensor.living_presence"},
     )
     app.state.queue.put_nowait(queued)
-    state.queued_segments = [{"type": "banter", "label": "Presence break", "id": "q-presence-1"}]
+    state.queued_segments = [{"type": "home_bulletin", "label": "Il Bollettino di Casa", "id": "q-presence-1"}]
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

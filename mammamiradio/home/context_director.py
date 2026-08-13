@@ -431,6 +431,21 @@ class HomeContextDirector:
         self._record("selected")
         return fact
 
+    def has_eligible_casual_fact(self) -> bool:
+        """Return whether ``select(lane=\"casual\")`` could succeed without mutating state.
+
+        Scheduling needs to know whether a listener-earned Casa bulletin is
+        worth attempting before it claims a fact.  Keep that readiness probe
+        deliberately side-effect-free: it must not advance rotation, issue a
+        fact id, update counters, or reserve a topic.
+        """
+
+        now = self._now()
+        return any(
+            candidate.topic_key not in self._reserved_topics and not self._cooldown_blocks_peek(candidate, now)
+            for candidate in self._candidates.values()
+        )
+
     def is_policy_current(self, fact: PromptFact) -> bool:
         """Return whether a selected fact still belongs to the current policy."""
 
@@ -635,6 +650,19 @@ class HomeContextDirector:
             return False
         if now - cooldown.activated_at >= COOLDOWN_SECONDS:
             self._cooldowns.pop(candidate.topic_key, None)
+            return False
+        return not _reopens_early(candidate, cooldown)
+
+    def _cooldown_blocks_peek(self, candidate: _Candidate, now: float) -> bool:
+        """Return cooldown eligibility without pruning expired state.
+
+        The scheduler calls this path before it owns a Casa render, so even
+        expired-entry cleanup belongs to the later mutating select/reserve
+        boundary rather than a readiness probe.
+        """
+
+        cooldown = self._cooldowns.get(candidate.topic_key)
+        if cooldown is None or now - cooldown.activated_at >= COOLDOWN_SECONDS:
             return False
         return not _reopens_early(candidate, cooldown)
 

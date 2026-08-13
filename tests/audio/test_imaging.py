@@ -24,6 +24,43 @@ def test_pick_sweeper_sting_delegates_to_station_id_bed(tmp_path):
     mock_bed.assert_called_once_with(out, 2.0, motif)
 
 
+def test_pick_home_bulletin_sting_uses_named_asset(tmp_path):
+    assets = tmp_path / "assets"
+    stingers = assets / "stingers"
+    stingers.mkdir(parents=True)
+    (stingers / "home_bulletin.mp3").write_bytes(b"casa-ident")
+    out = tmp_path / "casa.mp3"
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    with patch("mammamiradio.audio.imaging.generate_station_id_bed") as generate:
+        result = lib.pick_home_bulletin_sting(out)
+
+    assert result == out
+    assert out.read_bytes() == b"casa-ident"
+    generate.assert_not_called()
+
+
+def test_pick_home_bulletin_sting_synthesizes_separate_cached_motif(tmp_path):
+    out = tmp_path / "casa.mp3"
+    cache_dir = tmp_path / "cache"
+    motif = [523, 659, 784, 1047]
+    lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing", cache_dir=cache_dir)
+
+    def _generate(path, duration, notes):
+        assert duration == 2.0
+        assert notes == motif
+        path.write_bytes(b"generated-casa-ident")
+        return path
+
+    with patch("mammamiradio.audio.imaging.generate_station_id_bed", side_effect=_generate) as generate:
+        result = lib.pick_home_bulletin_sting(out)
+
+    assert result == out
+    assert out.read_bytes() == b"generated-casa-ident"
+    assert generate.call_count == 1
+    assert len(list(cache_dir.glob("synth_home_bulletin_sting_*.mp3"))) == 1
+
+
 def test_pick_stinger_uses_matching_asset_before_synthetic(tmp_path):
     assets = tmp_path / "assets"
     stingers = assets / "stingers"
@@ -54,6 +91,21 @@ def test_pick_stinger_music_to_speech_falls_back_to_synthetic(tmp_path):
 
     assert result == out
     mock_generate.assert_called_once_with("music", "news_flash", out, motif, variant=2)
+
+
+def test_pick_stinger_music_to_home_bulletin_uses_speech_transition(tmp_path):
+    out = tmp_path / "transition-casa.mp3"
+    motif = [523, 659, 784, 1047]
+    lib = ImagingLibrary(motif, tmp_path, assets_dir=tmp_path / "missing")
+
+    with (
+        patch("mammamiradio.audio.imaging.next_synth_variant", return_value=0),
+        patch("mammamiradio.audio.imaging.generate_transition_sting", return_value=out) as mock_generate,
+    ):
+        result = lib.pick_stinger(SegmentType.MUSIC, SegmentType.HOME_BULLETIN, out)
+
+    assert result == out
+    mock_generate.assert_called_once_with("music", "home_bulletin", out, motif, variant=0)
 
 
 def test_pick_stinger_speech_to_music_falls_back_to_synthetic(tmp_path):

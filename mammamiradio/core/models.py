@@ -98,6 +98,7 @@ class SegmentType(Enum):
 
     MUSIC = "music"
     BANTER = "banter"
+    HOME_BULLETIN = "home_bulletin"
     AD = "ad"
     NEWS_FLASH = "news_flash"
     STATION_ID = "station_id"
@@ -117,7 +118,7 @@ class SegmentType(Enum):
         """
         if self is SegmentType.MUSIC:
             return "music"
-        if self in (SegmentType.BANTER, SegmentType.NEWS_FLASH):
+        if self in (SegmentType.BANTER, SegmentType.HOME_BULLETIN, SegmentType.NEWS_FLASH):
             return "voice"
         return "interstitial"
 
@@ -1676,6 +1677,10 @@ class StationState:
             cue_epoch = metadata.get("listener_session_epoch")
             if isinstance(cue_epoch, int) and not isinstance(cue_epoch, bool):
                 self.listener_session.abandon_companionship(cue_epoch)
+        if metadata.get("listener_session_cue") == "casa":
+            casa_epoch = metadata.get("listener_session_epoch")
+            if isinstance(casa_epoch, int) and not isinstance(casa_epoch, bool):
+                self.listener_session.release_casa(casa_epoch)
         try:
             # Isolated from the accounting body below: a director bug must not
             # skip the waste telemetry for this discard (mirrors the guard in
@@ -2089,11 +2094,20 @@ class StationState:
         if selected_epoch != self.playback_epoch or self.audible_playback_epoch == self.playback_epoch:
             return False
 
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        if segment.type is SegmentType.HOME_BULLETIN:
+            casa_epoch = metadata.get("listener_session_epoch")
+            if not (
+                isinstance(casa_epoch, int)
+                and not isinstance(casa_epoch, bool)
+                and self.listener_session.mark_casa_aired(casa_epoch)
+            ):
+                return False
+
         self.audible_playback_epoch = self.playback_epoch
         self.current_stream_audible = True
         self.force_recovery_active = False
         now = time.time()
-        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
         try:
             director = self.home_context_director
             home_fact_id = str(metadata.get("home_fact_id") or "")
@@ -2132,6 +2146,11 @@ class StationState:
         if raw_audio_source == "fallback_norm_cache":
             raw_audio_source = "norm_cache"
         fallback_active = is_fallback_active(metadata)
+        # The emergency tone is deliberately typed as MUSIC for continuity
+        # plumbing, but it is operational rescue audio rather than a song. It
+        # must never help earn a listener programme.
+        if segment.type is SegmentType.MUSIC and metadata.get("audio_source") != "emergency_tone":
+            self.listener_session.record_casa_music_audible()
         bound_playlist_source = str(metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY) or "")
         active_playlist_source = (
             bound_playlist_source or (self.playlist_source.kind if self.playlist_source is not None else "") or "stream"
@@ -2423,6 +2442,18 @@ class StationState:
         self.songs_since_banter = 0
         self.segments_produced += 1
         self._log("banter", "Host banter")
+
+    def after_home_bulletin(self) -> None:
+        """Record an admitted Casa bulletin without consuming a pacing slot.
+
+        Casa is a listener-earned programme that runs ahead of a deterministic
+        due news/break decision. It is not ordinary banter, so it must not
+        reset the banter/news/ad or micro-segment counters that choose what
+        naturally follows it.
+        """
+
+        self.segments_produced += 1
+        self._log("home_bulletin", "Il Bollettino di Casa")
 
     def after_news_flash(self, category: str = "") -> None:
         """Advance counters after successfully queuing a news flash."""

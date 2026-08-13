@@ -22,6 +22,7 @@ def test_public_metadata_removes_listener_session_and_home_return_fences():
             "title": "Companionship",
             "listener_session_epoch": 7,
             "listener_session_cue": "companionship",
+            "home_context_generation": 4,
             "home_return_fact_id": "resident-return-opaque",
         }
     )

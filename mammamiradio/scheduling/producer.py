@@ -50,6 +50,7 @@ from mammamiradio.audio.normalizer import (
 from mammamiradio.audio.tts import TTSUnavailableError, synthesize, synthesize_ad, synthesize_dialogue
 from mammamiradio.core.config import RadioEventRule, StationConfig
 from mammamiradio.core.listener_session import (
+    CasaBulletinState,
     ListenerSessionCueClaim,
     ListenerSessionCueState,
     persona_session_id,
@@ -344,6 +345,7 @@ def _timed_render_stage(state: StationState | None, stage: str) -> Iterator[None
 
 _RUNWAY_GOVERNED_TYPES = {
     SegmentType.BANTER,
+    SegmentType.HOME_BULLETIN,
     SegmentType.AD,
     SegmentType.NEWS_FLASH,
     SegmentType.STATION_ID,
@@ -351,6 +353,7 @@ _RUNWAY_GOVERNED_TYPES = {
 }
 _HOME_CONTEXT_RENDER_TYPES = {
     SegmentType.BANTER,
+    SegmentType.HOME_BULLETIN,
     SegmentType.AD,
     SegmentType.NEWS_FLASH,
 }
@@ -1366,6 +1369,41 @@ def _abandon_unowned_companionship_attempt(state: StationState) -> bool:
     return session.abandon_companionship(session.epoch)
 
 
+def _abandon_unowned_home_bulletin_attempt(state: StationState) -> bool:
+    """Release a Casa build claim that never transferred to the queue."""
+
+    session = state.listener_session
+    if session.casa_state is not CasaBulletinState.BUILDING:
+        return False
+    return session.release_casa(session.epoch)
+
+
+def _home_bulletin_ready(state: StationState, config: StationConfig) -> bool:
+    """Pure readiness gate for offering Casa to the scheduler.
+
+    This deliberately does not claim the listener-session slot or select a
+    Home fact. Those mutations happen only after the scheduler actually picks
+    Casa, keeping ordinary schedule previews and repeated readiness checks free
+    of side effects.
+    """
+
+    director = state.home_context_director
+    if (
+        not state.listener_session.casa_eligible
+        or not config.homeassistant.enabled
+        or not config.homeassistant.context_enabled
+        or not config.ha_token
+        or not config.homeassistant.url
+        or director is None
+    ):
+        return False
+    try:
+        return bool(_sw.home_bulletin_provider_ready(config) and director.has_eligible_casual_fact())
+    except Exception:
+        logger.debug("Casa readiness probe failed", exc_info=True)
+        return False
+
+
 def _companionship_banter_eligible(
     state: StationState,
     *,
@@ -1465,6 +1503,37 @@ def _mark_companionship_segment_queued(state: StationState, segment: Segment) ->
         or not state.listener_session.mark_companionship_queued(epoch)
     ):
         raise RuntimeError("companionship cue admission lost its listener-session claim")
+
+
+def _home_bulletin_admission_stale_reason(state: StationState, segment: Segment | None) -> str | None:
+    """Fence Casa against epoch/lifecycle drift at every enqueue await."""
+
+    if segment is None or not isinstance(segment.metadata, dict):
+        return None
+    if segment.metadata.get("listener_session_cue") != "casa":
+        return None
+    epoch = segment.metadata.get("listener_session_epoch")
+    session = state.listener_session
+    if (
+        not isinstance(epoch, int)
+        or isinstance(epoch, bool)
+        or epoch != session.epoch
+        or session.active_count <= 0
+        or session.casa_state is not CasaBulletinState.BUILDING
+    ):
+        return GenerationWasteReason.LISTENER_SESSION_STALE
+    return None
+
+
+def _mark_home_bulletin_segment_queued(state: StationState, segment: Segment) -> None:
+    """Commit Casa QUEUED synchronously inside queue admission."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if metadata.get("listener_session_cue") != "casa":
+        return
+    epoch = metadata.get("listener_session_epoch")
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or not state.listener_session.mark_casa_queued(epoch):
+        raise RuntimeError("Casa admission lost its listener-session claim")
 
 
 async def _consume_queued_banter_milestone(state: StationState, commit: object | None) -> None:
@@ -1587,6 +1656,7 @@ _last_music_file: Path | None = None
 _MUSIC_TYPES = {SegmentType.MUSIC}
 _SPEECH_TYPES = {
     SegmentType.BANTER,
+    SegmentType.HOME_BULLETIN,
     SegmentType.NEWS_FLASH,
     SegmentType.AD,
     SegmentType.STATION_ID,
@@ -4172,6 +4242,7 @@ async def run_producer(
         )
     finally:
         _abandon_unowned_companionship_attempt(state)
+        _abandon_unowned_home_bulletin_attempt(state)
         # This finally covers cancellation anywhere in the producer loop, not
         # just the HA preparation await.  A late task therefore cannot write
         # state after producer shutdown.
@@ -4302,6 +4373,10 @@ async def _run_producer_inner(
     _drain_guard_queued = False  # True after a drain-recovery clip is inserted, until a real segment lands
     _prefetch_failed_keys: set[str] = set()  # tracks whose prefetch failed — skip until playlist rotates
     _ha_tasks: set[asyncio.Task[None]] = set()
+    # When a claimed Casa build fails, the next natural slot deliberately runs
+    # ordinary programming once. The earned Casa state remains retryable after
+    # that cycle, without creating an immediate failure loop.
+    _home_bulletin_fallback_pending = False
 
     def _track_ha_task(task: asyncio.Task[None]) -> None:
         _ha_tasks.add(task)
@@ -4453,6 +4528,7 @@ async def _run_producer_inner(
         # Any ATTEMPTED cue reaching a new producer cycle failed before queue
         # ownership transferred. Settle it before considering another break.
         _abandon_unowned_companionship_attempt(state)
+        _abandon_unowned_home_bulletin_attempt(state)
         _sync_listener_session_persona(state)
         if observed_continuity_epoch != state.continuity_epoch:
             # A streamer control rebuilt the queue outside this coroutine. Re-read
@@ -4640,7 +4716,18 @@ async def _run_producer_inner(
             seg_type = SegmentType.BANTER
             logger.info("Release campaign first airing: forcing a safe banter slot")
         else:
-            seg_type = next_segment_type(state, config.pacing)
+            if _home_bulletin_fallback_pending:
+                # A failed Casa attempt buys exactly one ordinary natural slot.
+                # Forced/reactive/release work above still keeps its precedence.
+                _home_bulletin_fallback_pending = False
+                seg_type = next_segment_type(state, config.pacing)
+            else:
+                home_bulletin_ready = _home_bulletin_ready(state, config)
+                seg_type = (
+                    next_segment_type(state, config.pacing, casa_ready=True)
+                    if home_bulletin_ready
+                    else next_segment_type(state, config.pacing)
+                )
             natural_banter_candidate = seg_type == SegmentType.BANTER
             if seg_type in _RUNWAY_GOVERNED_TYPES:
                 should_defer, buffered = _should_defer_for_runway(queue, config.pacing.lookahead_segments)
@@ -4661,6 +4748,13 @@ async def _run_producer_inner(
                 is_operator_forced = False
         segment: Segment | None = None
         companionship_claim: ListenerSessionCueClaim | None = None
+        home_bulletin_epoch: int | None = None
+        if seg_type is SegmentType.HOME_BULLETIN:
+            home_bulletin_epoch = state.listener_session.claim_casa()
+            if home_bulletin_epoch is None:
+                logger.info("Casa slot lost before generation; running one ordinary fallback cycle")
+                _home_bulletin_fallback_pending = True
+                continue
         generation_revision = state.playlist_revision
         # source_revision bumps ONLY on a true source switch (switch_playlist),
         # while playlist_revision also bumps on benign in-place edits (shuffle/
@@ -4754,6 +4848,9 @@ async def _run_producer_inner(
                 # context, but this producer-owned generation fence is the last
                 # check before any of that result reaches StationState.
                 logger.info("Restarting producer cycle after Home-context revocation during preparation")
+                if home_bulletin_epoch is not None:
+                    state.listener_session.release_casa(home_bulletin_epoch)
+                    _home_bulletin_fallback_pending = True
                 state.finish_render_timing("discarded", reason=GenerationWasteReason.OPERATOR_PURGE)
                 continue
             # Fail-soft: the scene namer is a mood garnish, and this block runs
@@ -4968,6 +5065,9 @@ async def _run_producer_inner(
 
         if generation_chaos_epoch != state.chaos_cutover_epoch:
             logger.info("Restarting producer cycle after interrupt cutover")
+            if home_bulletin_epoch is not None:
+                state.listener_session.release_casa(home_bulletin_epoch)
+                _home_bulletin_fallback_pending = True
             state.finish_render_timing("discarded", reason=GenerationWasteReason.STALE_CHAOS)
             continue
 
@@ -5228,6 +5328,131 @@ async def _run_producer_inner(
                     _remember_rendered_music(_r, state)
 
                 success_callback = _music_callback
+
+            elif seg_type == SegmentType.HOME_BULLETIN:
+                assert home_bulletin_epoch is not None  # claimed before Home preparation
+                logger.info("Producing IL BOLLETTINO DI CASA (epoch=%d)", home_bulletin_epoch)
+                loop = asyncio.get_running_loop()
+                voice_path = config.tmp_dir / f"home_bulletin_voice_{uuid4().hex[:8]}.mp3"
+                motif_path = config.tmp_dir / f"home_bulletin_motif_{uuid4().hex[:8]}.mp3"
+                audio_path = config.tmp_dir / f"home_bulletin_{uuid4().hex[:8]}.mp3"
+                render_failure_scratch.update({voice_path, motif_path, audio_path})
+                home_bulletin_fact: PromptFact | None = None
+
+                def _home_bulletin_submission_guard(claimed_epoch: int = home_bulletin_epoch) -> bool:
+                    session = state.listener_session
+                    return bool(
+                        _home_submission_guard()
+                        and session.epoch == claimed_epoch
+                        and session.active_count > 0
+                        and session.casa_state is CasaBulletinState.BUILDING
+                    )
+
+                try:
+                    director = state.home_context_director
+                    if (
+                        director is None
+                        or not _sw.home_bulletin_provider_ready(config)
+                        or not director.has_eligible_casual_fact()
+                        or not _home_bulletin_submission_guard()
+                    ):
+                        raise RuntimeError("Casa readiness changed before generation")
+
+                    # Selection is the first Home-director mutation and must stay
+                    # strictly after the listener-session claim above.
+                    home_bulletin_fact = director.select(lane="casual")
+                    if home_bulletin_fact is None:
+                        raise RuntimeError("Casa has no eligible Home fact")
+
+                    state.set_gen("writing", "home_bulletin", "Writing Il Bollettino di Casa")
+                    _gen_ok = False
+                    try:
+                        written = await _sw.write_home_bulletin(
+                            state,
+                            config,
+                            prompt_fact=home_bulletin_fact,
+                            submission_guard=_home_bulletin_submission_guard,
+                        )
+                        _gen_ok = written is not None
+                    finally:
+                        state.end_gen(ok=_gen_ok)
+                    if written is None:
+                        raise RuntimeError("Casa script generation unavailable")
+                    host, text = written
+                    if not _home_bulletin_submission_guard():
+                        raise RuntimeError("Casa listener session changed during script generation")
+
+                    with _timed_render_stage(state, "tts"):
+                        await synthesize(
+                            text,
+                            host.voice,
+                            voice_path,
+                            engine=host.engine,
+                            edge_fallback_voice=host.edge_fallback_voice,
+                            voice_settings=host.voice_settings,
+                            elevenlabs_model=host.elevenlabs_model,
+                            delivery_profile=host.delivery_profile,
+                            host_name=host.name,
+                            state=state,
+                        )
+
+                    # Casa always has the station talk bed. A failed bed or
+                    # dedicated motif rejects this optional segment instead of
+                    # silently changing its promised sound.
+                    bedded_path = await _apply_talk_bed(
+                        voice_path,
+                        config,
+                        state,
+                        prefix="home_bulletin",
+                        source_track=_adjacent_music_source(state),
+                    )
+                    render_failure_scratch.add(bedded_path)
+                    imaging_lib = _make_imaging_lib(config)
+                    with _timed_render_stage(state, "mix"):
+                        await loop.run_in_executor(None, imaging_lib.pick_home_bulletin_sting, motif_path)
+                        await loop.run_in_executor(
+                            None,
+                            partial(
+                                concat_files,
+                                [motif_path, bedded_path],
+                                audio_path,
+                                0,
+                                False,
+                                strict_duration=True,
+                            ),
+                        )
+                    _unlink_render_paths(motif_path, bedded_path)
+                except asyncio.CancelledError:
+                    state.listener_session.release_casa(home_bulletin_epoch)
+                    _unlink_render_scratch(render_failure_scratch)
+                    raise
+                except Exception as exc:
+                    state.listener_session.release_casa(home_bulletin_epoch)
+                    _home_bulletin_fallback_pending = True
+                    _unlink_render_scratch(render_failure_scratch)
+                    logger.info("Casa build unavailable; running one ordinary fallback cycle: %s", exc)
+                    state.finish_render_timing("failed", reason="home_bulletin_unavailable")
+                    continue
+
+                assert home_bulletin_fact is not None
+                segment = Segment(
+                    type=SegmentType.HOME_BULLETIN,
+                    path=audio_path,
+                    metadata={
+                        "type": "home_bulletin",
+                        "host": host.name,
+                        "title": "Il Bollettino di Casa",
+                        "lines": [{"host": host.name, "text": text, "type": "home_bulletin"}],
+                        "listener_session_epoch": home_bulletin_epoch,
+                        "listener_session_cue": "casa",
+                        **home_bulletin_fact.segment_metadata(),
+                    },
+                )
+
+                def _home_bulletin_callback() -> None:
+                    state.after_home_bulletin()
+
+                success_callback = _home_bulletin_callback
 
             elif seg_type == SegmentType.BANTER:
                 logger.info("Producing BANTER")
@@ -6710,6 +6935,25 @@ async def _run_producer_inner(
                     segment = replace(segment, path=merged_path, ephemeral=True)
                 except Exception as exc:
                     logger.warning("Transition sting generation failed, using clean cut: %s", exc)
+            if segment.type is SegmentType.HOME_BULLETIN and not os.environ.get("MAMMAMIRADIO_SKIP_QUALITY_GATE"):
+                # Casa's duration promise applies to the exact file that will
+                # enter egress: dedicated motif, talk bed, and any ordinary
+                # music-to-speech transition sting are already present here.
+                try:
+                    with _timed_render_stage(state, "quality"):
+                        await asyncio.to_thread(
+                            validate_segment_audio,
+                            segment.path,
+                            SegmentType.HOME_BULLETIN,
+                        )
+                except (AudioQualityError, AudioToolError) as exc:
+                    segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
+                    logger.info("Final Casa quality gate rejected %s: %s", segment.path.name, exc)
+                    state.record_discard(segment, reason=GenerationWasteReason.QUALITY_GATE_REJECT)
+                    _unlink_if_tmp_render(segment, config.tmp_dir)
+                    _home_bulletin_fallback_pending = True
+                    state.finish_render_timing("discarded", reason=GenerationWasteReason.QUALITY_GATE_REJECT)
+                    continue
             segment.duration_sec = await asyncio.to_thread(_probe_segment_duration, segment.path)
             # A source switch is checked unconditionally: gating it behind a
             # playlist_revision bump let a switch that somehow did not bump the
@@ -6732,6 +6976,8 @@ async def _run_producer_inner(
                 stale_reason = GenerationWasteReason.STALE_PLAYLIST
             if stale_reason is not None:
                 state.record_discard(segment, reason=stale_reason)
+                if segment.type is SegmentType.HOME_BULLETIN:
+                    _home_bulletin_fallback_pending = True
                 _drop_segment_moment_receipts(state, segment, str(stale_reason), "stale-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
@@ -6743,6 +6989,8 @@ async def _run_producer_inner(
             if generation_chaos_epoch != state.chaos_cutover_epoch:
                 logger.info("Discarding stale %s segment after chaos cutover", seg_type.value)
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CHAOS)
+                if segment.type is SegmentType.HOME_BULLETIN:
+                    _home_bulletin_fallback_pending = True
                 _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_CHAOS, "chaos-discard")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
@@ -6759,6 +7007,8 @@ async def _run_producer_inner(
                     state.continuity_epoch,
                 )
                 state.record_discard(segment, reason=GenerationWasteReason.STALE_CONTINUITY)
+                if segment.type is SegmentType.HOME_BULLETIN:
+                    _home_bulletin_fallback_pending = True
                 _drop_segment_moment_receipts(
                     state, segment, GenerationWasteReason.STALE_CONTINUITY, "continuity-discard"
                 )
@@ -6772,6 +7022,8 @@ async def _run_producer_inner(
             if not _home_fact_policy_is_current(segment):
                 logger.info("Discarding stale %s after Home Context policy change", segment.type.value)
                 state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+                if segment.type is SegmentType.HOME_BULLETIN:
+                    _home_bulletin_fallback_pending = True
                 _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-policy")
                 _abandon_release_beat_commit(state, banter_commit)
                 _unlink_if_tmp_render(segment, config.tmp_dir)
@@ -6806,7 +7058,10 @@ async def _run_producer_inner(
                     return GenerationWasteReason.STALE_CONTINUITY
                 if not _home_context_generation_is_current(state, config, captured_segment):
                     return GenerationWasteReason.OPERATOR_PURGE
-                return _companionship_admission_stale_reason(state, captured_segment)
+                return _companionship_admission_stale_reason(
+                    state,
+                    captured_segment,
+                ) or _home_bulletin_admission_stale_reason(state, captured_segment)
 
             # Stable per-segment id: the shared queue publication helper stamps
             # this on both the audio and its Scaletta row before admission.
@@ -6820,13 +7075,21 @@ async def _run_producer_inner(
             _home_fact_id = str(_seg_metadata.get("home_fact_id") or "")
             _home_fact_director = state.home_context_director
             _home_fact_queue_id = str(_seg_metadata.get("queue_id") or "")
-            if (
-                _home_fact_id
-                and _home_fact_director is not None
-                and not _home_fact_director.reserve_by_id(_home_fact_queue_id, _home_fact_id)
-            ):
-                logger.info("Discarding banter: home fact reservation rejected (topic already queued or resting)")
+            _home_fact_reserved = not bool(_home_fact_id)
+            if _home_fact_id and _home_fact_director is not None:
+                try:
+                    _home_fact_reserved = _home_fact_director.reserve_by_id(
+                        _home_fact_queue_id,
+                        _home_fact_id,
+                    )
+                except Exception:
+                    _home_fact_reserved = False
+                    logger.debug("Home fact reservation failed", exc_info=True)
+            if _home_fact_id and not _home_fact_reserved:
+                logger.info("Discarding speech: Home fact reservation rejected (topic already queued or resting)")
                 state.record_discard(segment, reason=GenerationWasteReason.OPERATOR_PURGE)
+                if segment.type is SegmentType.HOME_BULLETIN:
+                    _home_bulletin_fallback_pending = True
                 _drop_segment_moment_receipts(
                     state, segment, GenerationWasteReason.OPERATOR_PURGE, "home-fact-reserve-rejected"
                 )
@@ -6844,15 +7107,24 @@ async def _run_producer_inner(
                         return True
                     return not _home_fact_policy_is_current(_segment)
 
-                if not await _enqueue_with_egress(
-                    queue,
-                    state,
-                    config,
-                    segment,
-                    front_insert=True,
-                    shadow_entry=shadow_entry,
-                    stale_check=_front_insert_stale_check,
-                ):
+                try:
+                    admitted = await _enqueue_with_egress(
+                        queue,
+                        state,
+                        config,
+                        segment,
+                        front_insert=True,
+                        shadow_entry=shadow_entry,
+                        stale_check=_front_insert_stale_check,
+                    )
+                except BaseException:
+                    if _home_fact_id and _home_fact_director is not None:
+                        with contextlib.suppress(Exception):
+                            _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id)
+                    raise
+                if not admitted:
+                    if segment.type is SegmentType.HOME_BULLETIN:
+                        _home_bulletin_fallback_pending = True
                     if _home_fact_id and _home_fact_director is not None:
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "front-insert-failed")
@@ -6868,16 +7140,29 @@ async def _run_producer_inner(
                 # Queue-tail adjacency lives in _remember_enqueued; this head-order value drives stings.
                 prev_seg_type = _adjacency_type_for(segment)
             else:
-                if not await _queue_segment(
-                    segment,
-                    shadow_entry=shadow_entry,
-                    stale_check=_enqueue_stale_reason,
-                    admission_callback=(
-                        partial(_mark_companionship_segment_queued, state)
-                        if segment.metadata.get("listener_session_cue") == "companionship"
-                        else None
-                    ),
-                ):
+                try:
+                    admitted = await _queue_segment(
+                        segment,
+                        shadow_entry=shadow_entry,
+                        stale_check=_enqueue_stale_reason,
+                        admission_callback=(
+                            partial(_mark_companionship_segment_queued, state)
+                            if segment.metadata.get("listener_session_cue") == "companionship"
+                            else (
+                                partial(_mark_home_bulletin_segment_queued, state)
+                                if segment.metadata.get("listener_session_cue") == "casa"
+                                else None
+                            )
+                        ),
+                    )
+                except BaseException:
+                    if _home_fact_id and _home_fact_director is not None:
+                        with contextlib.suppress(Exception):
+                            _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id)
+                    raise
+                if not admitted:
+                    if segment.type is SegmentType.HOME_BULLETIN:
+                        _home_bulletin_fallback_pending = True
                     if _home_fact_id and _home_fact_director is not None:
                         _home_fact_director.release(_home_fact_queue_id, fact_id=_home_fact_id or None)
                     _drop_segment_moment_receipts(state, segment, "generation_failed", "enqueue-failed")

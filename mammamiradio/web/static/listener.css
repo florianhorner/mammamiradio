@@ -350,6 +350,7 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-schedule .pill.pill-next { border-color: rgba(245,237,216,0.16); background: rgba(245,237,216,0.05); color: var(--cream-dk); }
 .mmr-schedule .pill.pill-music { --pill-type: var(--seg-music-text); }
 .mmr-schedule .pill.pill-banter { --pill-type: var(--seg-banter); }
+.mmr-schedule .pill.pill-casa { --pill-type: var(--seg-casa); }
 .mmr-schedule .pill.pill-ad { --pill-type: var(--seg-ad); }
 .mmr-schedule .pill.pill-news { --pill-type: var(--news); }
 .mmr-schedule .pill.pill-idle { --pill-type: var(--muted); }

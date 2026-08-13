@@ -19,6 +19,8 @@ from mammamiradio.core.models import SegmentType
 
 logger = logging.getLogger(__name__)
 
+HOME_BULLETIN_STING_DURATION_SEC = 2.0
+
 
 class ImagingLibrary:
     """Resolve branded stingers and talk beds, falling back to synthetic audio."""
@@ -73,6 +75,36 @@ class ImagingLibrary:
             output_path,
             params,
             lambda path: generate_station_id_bed(path, 2.0, self.motif_notes),
+        )
+
+    def pick_home_bulletin_sting(
+        self,
+        output_path: Path,
+        duration_sec: float = HOME_BULLETIN_STING_DURATION_SEC,
+    ) -> Path:
+        """Pick the short branded motif that opens ``Il Bollettino di Casa``.
+
+        A deliberately named asset may override the synthesized motif.  The
+        generated fallback has its own cache identity so future Casa imaging
+        changes cannot silently alter sweepers or station IDs.
+        """
+        asset = self.assets_dir / "stingers" / "home_bulletin.mp3"
+        if asset.exists():
+            shutil.copy2(asset, output_path)
+            return output_path
+
+        duration = max(float(duration_sec), 0.5)
+        bucket = duration_bucket_sec(duration)
+        params = {
+            "duration_sec": bucket,
+            "motif_notes": self.motif_notes,
+        }
+        return materialize_synth_mp3(
+            self.cache_dir,
+            "home_bulletin_sting",
+            output_path,
+            params,
+            lambda path: generate_station_id_bed(path, float(bucket), self.motif_notes),
         )
 
     def pick_talk_bed(

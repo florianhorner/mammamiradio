@@ -15,6 +15,7 @@ from enum import StrEnum
 
 LISTENER_SESSION_GAP_SECONDS = 600.0
 COMPANIONSHIP_MIN_ACTIVE_SECONDS = 1800.0
+CASA_QUALIFYING_MUSIC_SEGMENTS = 3
 
 
 class ListenerSessionTransitionKind(StrEnum):
@@ -35,6 +36,16 @@ class ListenerSessionCueState(StrEnum):
     QUEUED = "queued"
     CONSUMED = "consumed"
     ABANDONED = "abandoned"
+
+
+class CasaBulletinState(StrEnum):
+    """One-shot Casa bulletin lifecycle for the current listener epoch."""
+
+    UNEARNED = "unearned"
+    EARNED = "earned"
+    BUILDING = "building"
+    QUEUED = "queued"
+    AIRED = "aired"
 
 
 class CompanionshipDurationBucket(StrEnum):
@@ -215,6 +226,7 @@ class ListenerSession:
     """In-memory station session state driven by active hub membership."""
 
     COMPANIONSHIP_MIN_ACTIVE_SECONDS = COMPANIONSHIP_MIN_ACTIVE_SECONDS
+    CASA_QUALIFYING_MUSIC_SEGMENTS = CASA_QUALIFYING_MUSIC_SEGMENTS
 
     def __init__(
         self,
@@ -231,6 +243,8 @@ class ListenerSession:
         self._accumulated_active_seconds = 0.0
         self._pending_persona_epochs: set[int] = set()
         self._companionship_cue_state = ListenerSessionCueState.UNAVAILABLE
+        self._casa_music_count = 0
+        self._casa_state = CasaBulletinState.UNEARNED
 
     @property
     def epoch(self) -> int:
@@ -249,6 +263,24 @@ class ListenerSession:
         """Stored lifecycle state for the current epoch."""
 
         return self._companionship_cue_state
+
+    @property
+    def casa_music_count(self) -> int:
+        """Listener-audible qualifying music accumulated in this epoch."""
+
+        return self._casa_music_count
+
+    @property
+    def casa_state(self) -> CasaBulletinState:
+        """Current epoch's Casa bulletin lifecycle state."""
+
+        return self._casa_state
+
+    @property
+    def casa_eligible(self) -> bool:
+        """Whether the current active epoch has earned an unclaimed bulletin."""
+
+        return self._epoch > 0 and self._active_count > 0 and self._casa_state is CasaBulletinState.EARNED
 
     @property
     def pending_persona_epochs(self) -> tuple[int, ...]:
@@ -296,6 +328,8 @@ class ListenerSession:
                 self._epoch += 1
                 self._accumulated_active_seconds = 0.0
                 self._companionship_cue_state = ListenerSessionCueState.UNAVAILABLE
+                self._casa_music_count = 0
+                self._casa_state = CasaBulletinState.UNEARNED
                 transition_kind = ListenerSessionTransitionKind.STARTED
                 self._pending_persona_epochs.add(self._epoch)
             else:
@@ -320,6 +354,64 @@ class ListenerSession:
             monotonic_at=current_time,
             accumulated_active_seconds=self._accumulated_active_seconds,
         )
+
+    def record_casa_music_audible(self) -> bool:
+        """Count one qualifying music segment delivered in the active epoch.
+
+        Returns ``True`` only when this observation crosses the three-track
+        threshold and earns the epoch's bulletin.
+        """
+
+        if self._epoch <= 0 or self._active_count <= 0:
+            return False
+        if self._casa_state is not CasaBulletinState.UNEARNED:
+            return False
+        self._casa_music_count = min(
+            self._casa_music_count + 1,
+            self.CASA_QUALIFYING_MUSIC_SEGMENTS,
+        )
+        if self._casa_music_count < self.CASA_QUALIFYING_MUSIC_SEGMENTS:
+            return False
+        self._casa_state = CasaBulletinState.EARNED
+        return True
+
+    def claim_casa(self) -> int | None:
+        """Atomically reserve the earned Casa slot for generation."""
+
+        if not self.casa_eligible:
+            return None
+        self._casa_state = CasaBulletinState.BUILDING
+        return self._epoch
+
+    def mark_casa_queued(self, epoch: int) -> bool:
+        """Transfer the current epoch's generation claim to a queued segment."""
+
+        if not self._matches_epoch(epoch) or self._active_count <= 0:
+            return False
+        if self._casa_state is not CasaBulletinState.BUILDING:
+            return False
+        self._casa_state = CasaBulletinState.QUEUED
+        return True
+
+    def mark_casa_aired(self, epoch: int) -> bool:
+        """Settle the one-shot only after a matching listener accepts audio."""
+
+        if not self._matches_epoch(epoch) or self._active_count <= 0:
+            return False
+        if self._casa_state is not CasaBulletinState.QUEUED:
+            return False
+        self._casa_state = CasaBulletinState.AIRED
+        return True
+
+    def release_casa(self, epoch: int) -> bool:
+        """Release failed in-flight work back to earned within the same epoch."""
+
+        if not self._matches_epoch(epoch):
+            return False
+        if self._casa_state not in {CasaBulletinState.BUILDING, CasaBulletinState.QUEUED}:
+            return False
+        self._casa_state = CasaBulletinState.EARNED
+        return True
 
     def refresh_companionship_availability(self, *, now: float | None = None) -> ListenerSessionCueState:
         """Refresh the reversible pre-claim availability state."""

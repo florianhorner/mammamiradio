@@ -133,6 +133,7 @@
     switch ((type || '').toLowerCase()) {
       case 'music': return _t('seg_music', 'Music');
       case 'banter': return _t('seg_banter', 'Banter');
+      case 'home_bulletin': return _t('seg_home_bulletin', 'Il Bollettino di Casa');
       case 'ad': return _t('seg_ad', 'Sponsored');
       case 'news':
       case 'news_flash': return _t('seg_news', 'News');
@@ -147,6 +148,7 @@
     switch ((type || '').toLowerCase()) {
       case 'music': return 'pill-music';
       case 'banter': return 'pill-banter';
+      case 'home_bulletin': return 'pill-casa';
       case 'ad': return 'pill-ad';
       case 'news':
       case 'news_flash': return 'pill-news';
@@ -347,6 +349,9 @@
     } else if (np.type === 'banter') {
       artist = label || 'Marco & Giulia';
       title = _t('np_live', 'Live') + ' \u2014 ' + _t('seg_banter', 'Banter');
+    } else if (np.type === 'home_bulletin') {
+      artist = stationName;
+      title = label || _t('seg_home_bulletin', 'Il Bollettino di Casa');
     } else if (np.type === 'ad') {
       artist = (np.metadata && np.metadata.brand) ? np.metadata.brand : 'Sponsored';
       title = 'A word from our sponsors';
@@ -408,6 +413,9 @@
     } else if (np.type === 'banter') {
       trackEl.textContent = label ? label + ' ' + _t('np_banter_strip', 'in conversation') : _t('np_banter_idle', 'The hosts are on air');
       artistEl.textContent = _t('seg_banter', 'Banter');
+    } else if (np.type === 'home_bulletin') {
+      trackEl.textContent = label || _t('seg_home_bulletin', 'Il Bollettino di Casa');
+      artistEl.textContent = currentStationName();
     } else if (np.type === 'ad') {
       trackEl.textContent = _t('np_ad_message', 'Sponsored message');
       artistEl.textContent = (np.metadata && np.metadata.brand) ? np.metadata.brand : _t('seg_ad', 'Sponsored');

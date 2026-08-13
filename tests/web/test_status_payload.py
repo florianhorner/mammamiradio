@@ -137,6 +137,28 @@ def test_status_now_playback_redacts_internal_metadata_and_reports_progress():
     assert payload["now_streaming"]["metadata"] is not now_streaming["metadata"]
 
 
+def test_status_now_playback_preserves_home_bulletin_type_but_hides_delivery_fences():
+    now_streaming = {
+        "type": "home_bulletin",
+        "label": "Il Bollettino di Casa",
+        "started": 10.0,
+        "metadata": {
+            "duration_ms": 36_000,
+            "host": "Giulia",
+            "listener_session_epoch": 7,
+            "listener_session_cue": "casa",
+            "home_fact_id": "private-reservation",
+            "home_context_generation": 4,
+        },
+    }
+
+    payload = status_payload._status_now_playback(now_streaming, 12.0)
+
+    assert payload["now_streaming"]["type"] == "home_bulletin"
+    assert payload["now_streaming"]["label"] == "Il Bollettino di Casa"
+    assert payload["now_streaming"]["metadata"] == {"duration_ms": 36_000, "host": "Giulia"}
+
+
 def test_serialize_stream_log_entry_uses_metadata_duration_fallback():
     entry = SegmentLogEntry(
         type="music",

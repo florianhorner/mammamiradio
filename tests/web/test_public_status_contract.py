@@ -268,6 +268,38 @@ async def test_admin_listener_facts_agree():
 
 
 @pytest.mark.asyncio
+async def test_home_bulletin_type_is_raw_on_both_status_surfaces_and_fences_stay_private():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.HOME_BULLETIN,
+            path=Path("/tmp/home-bulletin.mp3"),
+            duration_sec=36,
+            metadata={
+                "title": "Il Bollettino di Casa",
+                "host": "Giulia",
+                "listener_session_epoch": 7,
+                "listener_session_cue": "casa",
+                "home_context_generation": 4,
+                "home_fact_id": "private-reservation",
+            },
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    expected_metadata = {"title": "Il Bollettino di Casa", "host": "Giulia"}
+    assert public["now_streaming"]["type"] == "home_bulletin"
+    assert admin["now_streaming"]["type"] == "home_bulletin"
+    assert public["now_streaming"]["metadata"] == expected_metadata
+    assert admin["now_streaming"]["metadata"] == expected_metadata
+
+
+@pytest.mark.asyncio
 async def test_public_status_exposes_truthful_current_duration_and_progress():
     app = _make_test_app()
     state = app.state.station_state
@@ -554,53 +586,50 @@ async def test_public_listener_requests_filters_sensitive_fields():
 
 
 # ---------------------------------------------------------------------------
-# Music Assistant integration contract
+# Public-status listener compatibility
 #
-# The mammamiradio Music Assistant provider (music-assistant/server:
-# providers/mammamiradio/) polls /public-status every ~12s and maps
-# now_streaming onto a StreamMetadata for MA's now-playing card. That makes
-# /public-status a SECOND-CONSUMER contract beyond listener.js — renaming or
-# dropping any field below silently degrades the merged MA provider with no
-# other test catching it. These tests are the drift detector: keep the
-# MA_CONSUMED_* tuples in sync with the MA provider's
-# _segment_to_stream_metadata helper.
+# These keys are consumed by listener.js and remain a public compatibility
+# surface. Music Assistant now consumes /api/integrations/v1/now-playing, whose
+# separate frozen contract suite lives under tests/integrations/. The
+# MA_CONSUMED_* constant names below are retained to avoid unrelated frozen-test
+# commentary churn; they no longer claim that MA polls /public-status.
 # ---------------------------------------------------------------------------
 
-# Top-level keys the MA provider reads from /public-status.
+# Top-level public-status keys locked for the listener surface.
 MA_CONSUMED_TOP_LEVEL = ("now_streaming", "upcoming", "ha_moments", "brand")
-# now_streaming keys the MA provider reads for every segment.
+# now_streaming keys locked for every public segment.
 MA_CONSUMED_SEGMENT = ("type", "label", "started", "metadata")
-# now_streaming.metadata sub-keys read for a music segment.
+# Public music metadata keys.
 MA_CONSUMED_MUSIC_META = ("title", "title_only", "artist", "album_art")
-# now_streaming.metadata sub-keys read for a news_flash segment.
+# Public news metadata keys.
 MA_CONSUMED_NEWS_META = ("host",)
 
 
 def _assert_ma_segment_contract(now: dict, metadata_keys: tuple[str, ...], *, prefix: str = "now_streaming") -> None:
     assert now is not None
     for key in MA_CONSUMED_SEGMENT:
-        assert key in now, f"{prefix} missing MA-consumed key: {key}"
+        assert key in now, f"{prefix} missing public compatibility key: {key}"
     for key in metadata_keys:
-        assert key in now["metadata"], f"{prefix} metadata missing MA-consumed key: {key}"
+        assert key in now["metadata"], f"{prefix} metadata missing public compatibility key: {key}"
 
 
 @pytest.mark.asyncio
 async def test_public_status_ma_top_level_keys_present():
-    """The four top-level keys the MA provider polls must always be present."""
+    """The listener-facing top-level compatibility keys must always be present."""
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         body = (await client.get("/public-status")).json()
     for key in MA_CONSUMED_TOP_LEVEL:
-        assert key in body, f"/public-status missing MA-consumed key: {key}"
-    # brand sub-fields the provider reads for banter artist / station name.
-    assert "station_name" in body["brand"], "brand missing MA-consumed key: station_name"
-    assert "hosts" in body["brand"], "brand missing MA-consumed key: hosts"
+        assert key in body, f"/public-status missing listener compatibility key: {key}"
+    # Brand sub-fields the listener uses for station and host presentation.
+    assert "station_name" in body["brand"], "brand missing listener compatibility key: station_name"
+    assert "hosts" in body["brand"], "brand missing listener compatibility key: hosts"
 
 
 @pytest.mark.asyncio
 async def test_public_status_ma_music_segment_contract():
-    """A music now_streaming exposes every field the MA provider's music branch reads."""
+    """A public music segment exposes every field the listener presentation reads."""
     app = _make_test_app()
     app.state.station_state.on_stream_segment(
         Segment(
@@ -626,7 +655,7 @@ async def test_public_status_ma_music_segment_contract():
 
 @pytest.mark.asyncio
 async def test_public_status_ma_news_flash_segment_contract():
-    """A news_flash now_streaming exposes metadata.host — the MA provider's artist source."""
+    """A public news segment exposes metadata.host for its presenter label."""
     app = _make_test_app()
     app.state.station_state.on_stream_segment(
         Segment(

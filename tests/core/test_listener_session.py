@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 
 from mammamiradio.core.listener_session import (
+    CASA_QUALIFYING_MUSIC_SEGMENTS,
     COMPANIONSHIP_MIN_ACTIVE_SECONDS,
     LISTENER_SESSION_GAP_SECONDS,
+    CasaBulletinState,
     CompanionshipDurationBucket,
     CompanionshipPromptContext,
     ListenerSession,
@@ -84,6 +86,70 @@ def test_process_reset_starts_a_fresh_epoch():
     started = second_process.observe_active_count(1, now=0.0)
     assert started is not None
     assert started.epoch == 1
+
+
+def test_casa_is_earned_by_exactly_three_listener_audible_music_segments():
+    session = ListenerSession()
+    assert session.record_casa_music_audible() is False
+    session.observe_active_count(1, now=0.0)
+
+    assert session.record_casa_music_audible() is False
+    assert session.record_casa_music_audible() is False
+    assert session.casa_music_count == CASA_QUALIFYING_MUSIC_SEGMENTS - 1
+    assert session.casa_state is CasaBulletinState.UNEARNED
+
+    assert session.record_casa_music_audible() is True
+    assert session.casa_music_count == CASA_QUALIFYING_MUSIC_SEGMENTS
+    assert session.casa_state is CasaBulletinState.EARNED
+    assert session.casa_eligible is True
+    assert session.record_casa_music_audible() is False
+    assert session.casa_music_count == CASA_QUALIFYING_MUSIC_SEGMENTS
+
+
+def test_casa_claim_release_queue_and_air_are_epoch_scoped():
+    session = ListenerSession()
+    session.observe_active_count(1, now=0.0)
+    for _ in range(CASA_QUALIFYING_MUSIC_SEGMENTS):
+        session.record_casa_music_audible()
+
+    assert session.claim_casa() == 1
+    assert session.casa_state is CasaBulletinState.BUILDING
+    assert session.claim_casa() is None
+    assert session.release_casa(1) is True
+    assert session.casa_state is CasaBulletinState.EARNED
+
+    assert session.claim_casa() == 1
+    assert session.mark_casa_queued(1) is True
+    assert session.casa_state is CasaBulletinState.QUEUED
+    assert session.mark_casa_aired(1) is True
+    assert session.casa_state is CasaBulletinState.AIRED
+    assert session.release_casa(1) is False
+    assert session.claim_casa() is None
+
+
+def test_casa_no_listener_release_is_retryable_within_grace_then_new_epoch_resets():
+    session = ListenerSession()
+    session.observe_active_count(1, now=0.0)
+    for _ in range(CASA_QUALIFYING_MUSIC_SEGMENTS):
+        session.record_casa_music_audible()
+    assert session.claim_casa() == 1
+    assert session.mark_casa_queued(1) is True
+
+    session.observe_active_count(0, now=10.0)
+    assert session.casa_eligible is False
+    assert session.release_casa(1) is True
+    assert session.casa_state is CasaBulletinState.EARNED
+
+    session.observe_active_count(1, now=10.0 + LISTENER_SESSION_GAP_SECONDS - 0.001)
+    assert session.epoch == 1
+    assert session.casa_eligible is True
+
+    session.observe_active_count(0, now=20.0)
+    session.observe_active_count(1, now=20.0 + LISTENER_SESSION_GAP_SECONDS)
+    assert session.epoch == 2
+    assert session.casa_music_count == 0
+    assert session.casa_state is CasaBulletinState.UNEARNED
+    assert session.release_casa(1) is False
 
 
 def test_exact_600_second_gap_starts_new_epoch_but_shorter_gap_resumes():

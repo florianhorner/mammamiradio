@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from mammamiradio.core.listener_session import CasaBulletinState
 from mammamiradio.core.models import (
     HEADING_MAX_LIFT,
     HEADING_MIN_LIFT,
@@ -254,6 +255,28 @@ def test_after_banter_resets_counter():
 
     assert state.songs_since_banter == 0
     assert state.segments_produced == 4
+
+
+def test_after_home_bulletin_preserves_following_pacing_counters():
+    state = StationState(
+        songs_since_banter=3,
+        songs_since_ad=4,
+        songs_since_news=6,
+        segments_since_station_id=5,
+        segments_since_time_check=8,
+        segments_produced=9,
+    )
+
+    state.after_home_bulletin()
+
+    assert state.segments_produced == 10
+    assert state.songs_since_banter == 3
+    assert state.songs_since_ad == 4
+    assert state.songs_since_news == 6
+    assert state.segments_since_station_id == 5
+    assert state.segments_since_time_check == 8
+    assert state.segment_log[-1].type == "home_bulletin"
+    assert state.segment_log[-1].label == "Il Bollettino di Casa"
 
 
 def test_after_ad_resets_counter_and_tracks_history():
@@ -534,6 +557,111 @@ def test_audible_segment_commit_is_exactly_once():
     assert state.audible_playback_epoch == state.playback_epoch == 1
     assert len(state.played_track_log) == 1
     assert state.runtime_provider_state["audio_source"]["current_provider"] == "charts"
+
+
+def test_home_bulletin_is_a_first_class_voice_segment():
+    assert SegmentType.HOME_BULLETIN.value == "home_bulletin"
+    assert SegmentType.HOME_BULLETIN.segment_class == "voice"
+
+
+def test_only_first_listener_audible_music_commit_counts_toward_casa():
+    state = StationState(playlist_source=PlaylistSource(kind="charts", label="Charts"))
+    state.listener_session.observe_active_count(1, now=0.0)
+    primary = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/primary.mp3"),
+        duration_sec=180.0,
+        metadata={
+            "title": "Artist – Primary",
+            "title_only": "Primary",
+            "artist": "Artist",
+            "duration_ms": 180_000,
+            "audio_source": "download",
+        },
+    )
+    fallback = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/fallback.mp3"),
+        duration_sec=180.0,
+        metadata={"title": "Recovery", "audio_source": "fallback_norm_cache"},
+    )
+    emergency_tone = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/emergency-tone.mp3"),
+        duration_sec=2.0,
+        metadata={"title": "Emergency tone", "audio_source": "emergency_tone", "rescue": True},
+    )
+
+    state.on_stream_segment_selected(primary)
+    assert state.on_stream_segment_audible(primary) is True
+    assert state.on_stream_segment_audible(primary) is False
+    assert state.listener_session.casa_music_count == 1
+
+    state.on_stream_segment_selected(emergency_tone)
+    assert state.on_stream_segment_audible(emergency_tone) is True
+    assert state.listener_session.casa_music_count == 1
+
+    state.on_stream_segment_selected(fallback)
+    assert state.on_stream_segment_audible(fallback) is True
+    assert state.listener_session.casa_music_count == 2
+
+    state.on_stream_segment_selected(primary)
+    assert state.on_stream_segment_audible(primary) is True
+    assert state.listener_session.casa_state is CasaBulletinState.EARNED
+
+
+def test_home_bulletin_audible_and_discard_lifecycle_requires_matching_epoch(tmp_path):
+    state = StationState()
+    state.listener_session.observe_active_count(1, now=0.0)
+    for _ in range(3):
+        state.listener_session.record_casa_music_audible()
+
+    epoch = state.listener_session.claim_casa()
+    assert epoch == 1
+    segment = Segment(
+        type=SegmentType.HOME_BULLETIN,
+        path=tmp_path / "casa.mp3",
+        metadata={"listener_session_epoch": epoch, "listener_session_cue": "casa"},
+    )
+    assert state.listener_session.mark_casa_queued(epoch) is True
+    state.record_discard(segment, "no_listeners")
+    assert state.listener_session.casa_state is CasaBulletinState.EARNED
+
+    assert state.listener_session.claim_casa() == epoch
+    assert state.listener_session.mark_casa_queued(epoch) is True
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment) is True
+    assert state.listener_session.casa_state is CasaBulletinState.AIRED
+
+
+def test_stale_home_bulletin_cannot_commit_listener_facing_state(tmp_path):
+    state = StationState()
+    state.home_context_director = MagicMock()
+    state.listener_session.observe_active_count(1, now=0.0)
+    for _ in range(3):
+        state.listener_session.record_casa_music_audible()
+    assert state.listener_session.claim_casa() == 1
+    assert state.listener_session.mark_casa_queued(1) is True
+    stale = Segment(
+        type=SegmentType.HOME_BULLETIN,
+        path=tmp_path / "stale-casa.mp3",
+        metadata={
+            "listener_session_epoch": 1,
+            "listener_session_cue": "casa",
+            "home_fact_id": "fact-1",
+            "queue_id": "queue-1",
+        },
+    )
+
+    state.listener_session.observe_active_count(0, now=10.0)
+    state.listener_session.observe_active_count(1, now=610.0)
+    state.on_stream_segment_selected(stale)
+
+    assert state.on_stream_segment_audible(stale) is False
+    assert state.current_stream_audible is False
+    assert state.audible_playback_epoch == 0
+    assert state.listener_session.casa_state is CasaBulletinState.UNEARNED
+    state.home_context_director.activate.assert_not_called()
 
 
 def test_audible_music_keeps_render_bound_source_after_source_swap():

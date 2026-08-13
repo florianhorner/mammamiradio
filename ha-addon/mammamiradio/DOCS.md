@@ -95,6 +95,23 @@ reactive triggers, generated labels, and running-gag inputs; current audio
 finishes normally, while an unstarted queued host break carrying that entity's
 selected director fact is removed.
 
+**Il Bollettino di Casa** is a distinct 30–45 second Home-aware voice programme,
+reported as `home_bulletin`. A listener earns at most one per listener-session
+epoch after accepting the first audio chunk from each of three music segments;
+a new epoch begins only after at least ten listener-free minutes. It is produced
+only when a prompt-safe Home fact and a live AI script provider are both ready.
+If those prerequisites disappear, rendering fails, the session changes, or
+nobody accepts the bulletin's first audio chunk, the reservation is released
+and ordinary programming continues; there is no stock or generic Casa
+substitute and no
+immediate retry loop.
+
+`home_bulletin` changes the raw segment type exposed by the status APIs, the HA
+sensor, and the frozen v1 integration feed. It must not be merged, enabled, or
+released until the `CONTRACT.md` contract window and provider-first fixture
+sequence are complete; this feature implementation does not modify that frozen
+integration surface itself.
+
 Premium voice keys are optional and separate from the first AI-host unlock.
 
 The Home Assistant controls are separate too. **Enable Home Assistant Integration** is the master connection for entity publishing, optional host context, and timer interrupts. **Host home context** controls the filtered state and timer polling used for host programming; keep it off to retain the integration and entity publishing while suspending Home-state reads, timer interrupts, and Home-derived host work. The integration defaults on. On a fresh add-on install, Home context has no declared default and stays off until first audio is confirmed and the explicit First Listen choice is recorded; the prompt-context refresh interval defaults to 300 seconds once enabled.
@@ -417,7 +434,7 @@ flowing either way.
 | Entity ID | Type | State values | Key attributes |
 |---|---|---|---|
 | `media_player.mammamiradio` | media_player | `playing` / `idle` | `icon: mdi:radio`; pushed by the add-on by default; turn `ha_media_player_push` off when the HACS integration owns it |
-| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `ad` / `news_flash` / `station_id` / `sweeper` / `time_check` / `off` | dynamic `icon` matching the current segment type |
+| `sensor.mammamiradio_segment_type` | sensor | `music` / `banter` / `home_bulletin` / `ad` / `news_flash` / `station_id` / `sweeper` / `time_check` / `off` | dynamic `icon` matching the current segment type; `home_bulletin` uses `mdi:home` |
 | `sensor.mammamiradio_listeners` | sensor | integer | `icon: mdi:account-group`; `unit_of_measurement: listeners` |
 | `binary_sensor.mammamiradio_on_air` | binary_sensor | `on` / `off` | `icon: mdi:broadcast` |
 

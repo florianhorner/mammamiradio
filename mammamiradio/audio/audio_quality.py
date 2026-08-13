@@ -33,6 +33,7 @@ class QualityThresholds:
     max_silence_span_sec: float
     min_mean_volume_db: float
     min_peak_volume_db: float
+    max_duration_sec: float | None = None
 
 
 _DEFAULT_THRESHOLDS = QualityThresholds(
@@ -41,6 +42,15 @@ _DEFAULT_THRESHOLDS = QualityThresholds(
     max_silence_span_sec=6.0,
     min_mean_volume_db=-42.0,
     min_peak_volume_db=-24.0,
+)
+
+HOME_BULLETIN_THRESHOLDS = QualityThresholds(
+    min_duration_sec=30.0,
+    max_duration_sec=45.0,
+    max_silence_ratio=0.35,
+    max_silence_span_sec=3.0,
+    min_mean_volume_db=-38.0,
+    min_peak_volume_db=-20.0,
 )
 
 _THRESHOLDS_BY_TYPE: dict[SegmentType, QualityThresholds] = {
@@ -67,6 +77,7 @@ _THRESHOLDS_BY_TYPE: dict[SegmentType, QualityThresholds] = {
         min_mean_volume_db=-60.0,
         min_peak_volume_db=-50.0,
     ),
+    SegmentType.HOME_BULLETIN: HOME_BULLETIN_THRESHOLDS,
 }
 
 
@@ -88,9 +99,10 @@ def validate_segment_audio(
     *,
     expected_min_duration_sec: float | None = None,
     expected_line_count: int | None = None,
+    thresholds: QualityThresholds | None = None,
 ) -> None:
     """Validate audio for any segment type and raise on quality failure."""
-    th = _THRESHOLDS_BY_TYPE.get(seg_type, _DEFAULT_THRESHOLDS)
+    th = thresholds or _THRESHOLDS_BY_TYPE.get(seg_type, _DEFAULT_THRESHOLDS)
 
     if not path.exists():
         raise AudioQualityError(f"{seg_type.value} audio missing: {path}")
@@ -100,6 +112,8 @@ def validate_segment_audio(
     duration = _probe_duration_sec(path)
     if duration < th.min_duration_sec:
         raise AudioQualityError(f"{seg_type.value} audio too short ({duration:.2f}s < {th.min_duration_sec:.2f}s)")
+    if th.max_duration_sec is not None and duration > th.max_duration_sec:
+        raise AudioQualityError(f"{seg_type.value} audio too long ({duration:.2f}s > {th.max_duration_sec:.2f}s)")
     if seg_type == SegmentType.BANTER:
         expected_floor = _expected_banter_floor(
             expected_min_duration_sec=expected_min_duration_sec,

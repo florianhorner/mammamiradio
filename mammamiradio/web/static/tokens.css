@@ -100,6 +100,11 @@
    * stay decoupled. */
   --seg-banter:      #F4D048;
 
+  /* ── Segment-type color: Il Bollettino di Casa ──
+   * Casa is a first-class voice programme, not ordinary banter. Its violet
+   * remains visually distinct from status, accent, ad, news, and music hues. */
+  --seg-casa:        #C084FC;
+
   /* ── Typography ── */
   --font-display:    'Playfair Display', georgia, serif;
   --font-body:       'Outfit', system-ui, -apple-system, sans-serif;

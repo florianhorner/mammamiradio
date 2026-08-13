@@ -489,6 +489,7 @@ def test_listener_schedule_type_pills_do_not_override_timing_state() -> None:
     for selector in (
         ".mmr-schedule .pill.pill-music",
         ".mmr-schedule .pill.pill-banter",
+        ".mmr-schedule .pill.pill-casa",
         ".mmr-schedule .pill.pill-ad",
         ".mmr-schedule .pill.pill-news",
         ".mmr-schedule .pill.pill-idle",

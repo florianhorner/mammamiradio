@@ -39,6 +39,41 @@ def test_ad_triggers_after_threshold():
     assert next_segment_type(state, pacing) == SegmentType.AD
 
 
+def test_casa_runs_after_due_ads_and_before_news_or_banter():
+    from mammamiradio.scheduling.scheduler import next_segment_type
+
+    pacing = PacingSection(songs_between_ads=4, songs_between_banter=2)
+    due_ad = _make_state(
+        segments_produced=8,
+        songs_since_ad=4,
+        songs_since_banter=8,
+        songs_since_news=8,
+    )
+    assert next_segment_type(due_ad, pacing, casa_ready=True) is SegmentType.AD
+
+    talk_due = _make_state(
+        segments_produced=8,
+        songs_since_ad=1,
+        songs_since_banter=8,
+        songs_since_news=8,
+    )
+    assert next_segment_type(talk_due, pacing, casa_ready=True) is SegmentType.HOME_BULLETIN
+    assert next_segment_type(talk_due, pacing, casa_ready=False) is SegmentType.NEWS_FLASH
+
+
+def test_casa_readiness_hook_does_not_mutate_listener_session():
+    from mammamiradio.core.listener_session import CasaBulletinState
+    from mammamiradio.scheduling.scheduler import next_segment_type
+
+    state = _make_state(segments_produced=8, songs_since_ad=0, songs_since_banter=8)
+    state.listener_session.observe_active_count(1, now=0.0)
+    for _ in range(3):
+        state.listener_session.record_casa_music_audible()
+
+    assert next_segment_type(state, PacingSection(), casa_ready=True) is SegmentType.HOME_BULLETIN
+    assert state.listener_session.casa_state is CasaBulletinState.EARNED
+
+
 def test_banter_triggers_with_jitter():
     """BANTER should trigger when songs_since_banter >= threshold (with jitter)."""
     from mammamiradio.scheduling.scheduler import next_segment_type
@@ -428,6 +463,26 @@ def test_preview_upcoming_includes_news_flash():
     preview = preview_upcoming(state, pacing, tracks, count=12)
     types = [p["type"] for p in preview]
     assert "news_flash" in types
+
+
+def test_preview_upcoming_renders_one_earned_casa_slot():
+    from mammamiradio.scheduling.scheduler import preview_upcoming
+
+    pacing = PacingSection(songs_between_banter=99, songs_between_ads=99)
+    tracks = [Track(title="T", artist="A", duration_ms=200000, spotify_id="t1")]
+    state = _make_state(segments_produced=5, songs_since_banter=0, songs_since_ad=0)
+
+    preview = preview_upcoming(state, pacing, tracks, count=4, casa_ready=True)
+
+    casa_items = [item for item in preview if item["type"] == "home_bulletin"]
+    assert casa_items == [
+        {
+            "type": "home_bulletin",
+            "label": "Il Bollettino di Casa",
+            "reason": "Listener session earned Il Bollettino di Casa.",
+            "predicted": True,
+        }
+    ]
 
 
 def test_preview_upcoming_force_next_fires_first():

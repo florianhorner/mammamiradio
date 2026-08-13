@@ -11,6 +11,7 @@ import pytest
 from mammamiradio.audio.audio_quality import (
     AudioQualityError,
     AudioToolError,
+    QualityThresholds,
     _probe_duration_sec,
     _probe_silence,
     _probe_volume,
@@ -120,6 +121,54 @@ def test_validate_segment_audio_without_context_preserves_banter_threshold(tmp_p
 
     with patch("mammamiradio.audio.audio_quality.subprocess.run", side_effect=_run):
         validate_segment_audio(audio, SegmentType.BANTER)
+
+
+@pytest.mark.parametrize(
+    ("duration", "error"),
+    [(29.99, "too short"), (30.0, None), (45.0, None), (45.01, "too long")],
+)
+def test_home_bulletin_thresholds_enforce_final_mixed_duration(tmp_path, duration, error):
+    audio = _mk_audio(tmp_path / "casa.mp3")
+
+    with (
+        patch("mammamiradio.audio.audio_quality._probe_duration_sec", return_value=duration),
+        patch("mammamiradio.audio.audio_quality._probe_silence", return_value=(0.0, 0.0)),
+        patch("mammamiradio.audio.audio_quality._probe_volume", return_value=(-20.0, -3.0)),
+    ):
+        if error is None:
+            validate_segment_audio(audio, SegmentType.HOME_BULLETIN)
+        else:
+            with pytest.raises(AudioQualityError, match=error):
+                validate_segment_audio(audio, SegmentType.HOME_BULLETIN)
+
+
+def test_default_thresholds_have_no_maximum_duration(tmp_path):
+    audio = _mk_audio(tmp_path / "long-banter.mp3")
+
+    with (
+        patch("mammamiradio.audio.audio_quality._probe_duration_sec", return_value=90.0),
+        patch("mammamiradio.audio.audio_quality._probe_silence", return_value=(0.0, 0.0)),
+        patch("mammamiradio.audio.audio_quality._probe_volume", return_value=(-20.0, -3.0)),
+    ):
+        validate_segment_audio(audio, SegmentType.BANTER)
+
+
+def test_threshold_override_applies_generic_maximum_duration(tmp_path):
+    audio = _mk_audio(tmp_path / "bounded-voice.mp3")
+    thresholds = QualityThresholds(
+        min_duration_sec=1.0,
+        max_duration_sec=10.0,
+        max_silence_ratio=1.0,
+        max_silence_span_sec=20.0,
+        min_mean_volume_db=-100.0,
+        min_peak_volume_db=-100.0,
+    )
+
+    with (
+        patch("mammamiradio.audio.audio_quality._probe_duration_sec", return_value=10.01),
+        pytest.raises(AudioQualityError, match="too long"),
+    ):
+        validate_segment_audio(audio, SegmentType.TIME_CHECK, thresholds=thresholds)
 
 
 def test_validate_segment_audio_ignores_expected_context_for_non_banter(tmp_path):

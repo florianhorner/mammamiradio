@@ -4877,6 +4877,7 @@ async def test_push_state_to_ha_pushed_entities_have_icons(reset_ha_push_debounc
     [
         ("music", "mdi:music-note", False),
         ("banter", "mdi:microphone", False),
+        ("home_bulletin", "mdi:home", False),
         ("ad", "mdi:bullhorn", False),
         ("news_flash", "mdi:newspaper", False),
         ("station_id", "mdi:radio-tower", False),

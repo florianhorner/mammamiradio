@@ -349,6 +349,41 @@ def test_quiet_presence_can_be_consented_but_is_not_selected_until_it_is_active(
     assert director.select() is None
 
 
+def test_eligible_casa_probe_is_side_effect_free(director):
+    director.observe([weather(), vacuum()], policy_revision=0)
+
+    before = director.admin_status()
+    assert director.has_eligible_casual_fact() is True
+    assert director.admin_status() == before
+
+    fact = director.select()
+    assert fact is not None
+    assert director.reserve("queue-weather", fact)
+    assert director.has_eligible_casual_fact() is True
+
+    next_fact = director.select()
+    assert next_fact is not None
+    assert director.reserve("queue-vacuum", next_fact)
+    assert director.has_eligible_casual_fact() is False
+
+
+def test_eligible_casa_probe_does_not_prune_expired_cooldown():
+    clock = Clock()
+    ids = fact_ids()
+    director = HomeContextDirector(clock=clock, id_factory=lambda: next(ids))
+    director.observe([weather()], policy_revision=0)
+    fact = director.select()
+    assert fact is not None
+    assert director.reserve("queue-weather", fact)
+    assert director.activate("queue-weather", fact_id=fact.fact_id)
+
+    clock.now += COOLDOWN_SECONDS
+    cooldown_before = dict(director._cooldowns)
+
+    assert director.has_eligible_casual_fact() is True
+    assert director._cooldowns == cooldown_before
+
+
 def test_temperature_family_is_consolidated_and_queue_reservation_rotates_to_another_topic(director):
     director.observe([weather(), climate(), vacuum(), sun()], policy_revision=0)
     first = director.select()

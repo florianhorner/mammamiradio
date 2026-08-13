@@ -372,6 +372,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .le-type { font-weight: 700; width: 56px; text-transform: uppercase; font-size: 10px; }
 .le-type[data-t="music"] { color: var(--seg-music-text); }
 .le-type[data-t="banter"] { color: var(--seg-banter); }
+.le-type[data-t="home_bulletin"] { color: var(--seg-casa); }
 .le-type[data-t="ad"] { color: var(--seg-ad); }
 .le-type[data-t="news_flash"] { color: var(--news); }
 .le-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(245,237,216,0.7); }
@@ -809,6 +810,7 @@ input[type="range"]:focus-visible {
 .a-now-compact .progress-track { flex: 1; height: 2px; background: var(--surface-strong); border-radius: 1px; overflow: hidden; }
 .a-now-compact .progress-fill { height: 100%; border-radius: 1px; transition: width 1s linear; width: 0; background: var(--seg-music); }
 .a-now-compact .progress-fill[data-t="banter"] { background: var(--seg-banter); }
+.a-now-compact .progress-fill[data-t="home_bulletin"] { background: var(--seg-casa); }
 .a-now-compact .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .a-now-compact .progress-fill[data-t="news_flash"] { background: var(--news); }
 .a-now-compact .progress-time { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
@@ -1053,6 +1055,7 @@ input[type="range"]:focus-visible {
 .segment-inline { color: var(--muted); }
 .segment-inline.segment-music { color: var(--seg-music-text); }
 .segment-inline.segment-banter { color: var(--seg-banter); }
+.segment-inline.segment-home_bulletin { color: var(--seg-casa); }
 .segment-inline.segment-ad { color: var(--seg-ad); } /* dedicated ad token — distinct from --warning (degraded) */
 .segment-inline.segment-news_flash { color: var(--news); }
 .segment-inline.segment-station_id,
@@ -1555,6 +1558,7 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   background: var(--seg-music);
 }
 .on-air-progress-track .progress-fill[data-t="banter"] { background: var(--seg-banter); }
+.on-air-progress-track .progress-fill[data-t="home_bulletin"] { background: var(--seg-casa); }
 .on-air-progress-track .progress-fill[data-t="ad"] { background: var(--seg-ad); }
 .on-air-progress-track .progress-fill[data-t="news_flash"] { background: var(--news); }
 .producer-sticky-strip {
@@ -2649,7 +2653,7 @@ let _programmeFilter='all', _lastProgrammeHash='', _lastRunwayHash='';
 const _pendingRemovals=new Set();
 let _pendingPurge=false;
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
-const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
+const SEGMENT_GLYPH={music:'♪',banter:'🎙',home_bulletin:'⌂',ad:'[Ad]',news_flash:'[!]'};
 const CHARTS_SENTINEL_URL='https://rss.applemarketingtools.com/api/v2/it/music/most-played/100/songs.json';
 const JAMENDO_SENTINEL_URL='jamendo://default';
 const _SOURCE_DISPATCH={
@@ -2775,7 +2779,7 @@ function fmtRuntimeTs(ts){
 }
 function flash(el){if(!el)return;el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}
 function segmentTypeKey(type){const raw=String(type||'music');return raw==='welcome'?'banter':raw}
-function segmentText(type){return ({music:'music',banter:'banter',ad:'ad',news_flash:'news'}[segmentTypeKey(type)]||segmentTypeKey(type).replace('_',' '))}
+function segmentText(type){return ({music:'music',banter:'banter',home_bulletin:'Il Bollettino di Casa',ad:'ad',news_flash:'news'}[segmentTypeKey(type)]||segmentTypeKey(type).replace('_',' '))}
 function segmentGlyph(type){return SEGMENT_GLYPH[segmentTypeKey(type)]||'•'}
 function segmentBadge(type){return `${segmentGlyph(type)} ${segmentText(type)}`}
 function segmentClass(type){return String(type||'music').replace(/[^a-z0-9_-]/gi,'_').toLowerCase()}

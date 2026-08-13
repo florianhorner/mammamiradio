@@ -54,6 +54,15 @@ def test_super_italian_on_returns_italian():
     assert get_copy(True, "form_network_error").startswith("Abbiamo perso la connessione")
 
 
+def test_home_bulletin_keeps_its_italian_programme_name_in_both_modes():
+    assert get_copy(False, "seg_home_bulletin") == "Il Bollettino di Casa"
+    assert get_copy(True, "seg_home_bulletin") == "Il Bollettino di Casa"
+
+    listener = _LISTENER_JS.read_text(encoding="utf-8")
+    assert "case 'home_bulletin': return _t('seg_home_bulletin', 'Il Bollettino di Casa');" in listener
+    assert "case 'home_bulletin': return 'pill-casa';" in listener
+
+
 def test_request_outcome_copy_is_complete_in_both_modes():
     outcome_keys = (
         "form_success_song",

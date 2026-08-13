@@ -92,6 +92,7 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
   --seg-music:     #2563EB;   /* music segment type — blue, a DEDICATED token (never an alias of --ok) so the OK/connected status blue and a music badge stay decoupled */
   --seg-music-text:#60A5FA;   /* music segment labels on dark surfaces */
   --seg-banter:    #F4D048;   /* banter segment type — one gold, a DEDICATED token (never --sun/--sun2) so accent gold and a banter badge stay decoupled */
+  --seg-casa:      #C084FC;   /* Il Bollettino di Casa — dedicated violet, distinct from ordinary banter and every status/accent token */
 
   /* Structural */
   --line:          rgba(245,237,216,0.10);  /* admin dividers, panel borders — kept subtle */
@@ -104,11 +105,12 @@ Restrained — golden accent + warm neutrals. Color is rare and meaningful. The 
 ```
 
 **Segment-type colours are a dedicated, decoupled palette.** Every segment type
-(`music`, `banter`, `ad`, `news_flash`) colours from its own `--seg-*` / `--news`
+(`music`, `banter`, `home_bulletin`, `ad`, `news_flash`) colours from its own `--seg-*` / `--news`
 token, never from a semantic (`--ok`, `--warning`, `--error`) or accent (`--sun`,
 `--sun2`) token. This keeps one colour from meaning two things: `--ok` blue stays
 "OK / connected / playing" while `--seg-music` blue means "music segment"; accent
-gold stays an active/border accent while `--seg-banter` gold means "banter". Colour
+gold stays an active/border accent while `--seg-banter` gold means "banter";
+`--seg-casa` violet distinguishes the Casa programme from ordinary host talk. Colour
 is never the only channel — each segment also carries its type label text
 (colorblind safety). Guarded by `tests/web/test_design_tokens.py`.
 

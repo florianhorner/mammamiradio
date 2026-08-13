@@ -727,6 +727,7 @@ def test_runway_governed_types_are_exactly_natural_non_music_renders():
 
     assert {
         SegmentType.BANTER,
+        SegmentType.HOME_BULLETIN,
         SegmentType.AD,
         SegmentType.NEWS_FLASH,
         SegmentType.STATION_ID,
