@@ -6303,6 +6303,7 @@ async def test_force_resume_without_assets_arms_recovery_after_marker_commit(tmp
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "metadata": {}}
     marker = tmp_path / "session_stopped.flag"
     marker.touch()
+    revision_before = state.force_next_revision
 
     with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"):
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -6314,6 +6315,9 @@ async def test_force_resume_without_assets_arms_recovery_after_marker_commit(tmp
             assert state.session_stopped is False
             assert state.now_streaming == {}
             assert state.force_next is SegmentType.BANTER
+            # The forced banter is an owned directive: the revision must advance
+            # so a deferred clear from an older writer cannot revoke it.
+            assert state.force_next_revision == revision_before + 1
             assert state.force_recovery_active is True
             assert state.resume_event.is_set()
             state.on_stream_segment(

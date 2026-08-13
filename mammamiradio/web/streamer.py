@@ -7421,7 +7421,7 @@ async def resume_session(
                 },
             )
 
-        state.force_next = SegmentType.BANTER
+        state.set_force_next(SegmentType.BANTER)
         state.force_recovery_active = True
         _clear_session_stopped(state)
         state.resume_event.set()
