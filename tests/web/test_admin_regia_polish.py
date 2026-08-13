@@ -248,25 +248,32 @@ def test_setup_strip_treats_not_configured_home_context_as_done_not_a_todo() -> 
     assert "not_configured" not in strip_chip_warn_rule
 
 
-def test_setup_keys_prioritize_one_ai_host_key_and_collapse_premium_voices() -> None:
+def test_setup_keys_are_deliberate_and_collapse_voice_providers() -> None:
     html = _html()
-    assert "One key is enough" in html
-    assert "AI hosts" in html
+    assert "Saved keys stay hidden." in html
+    assert "Leave a field empty to keep its current value." in html
+    assert "Change AI services" in html
     assert 'id="setupPremiumVoices"' in html
-    assert "Premium voices" in html
+    assert "Voice providers" in html
     assert html.index('id="setupOpenaiKey"') < html.index('id="setupPremiumVoices"')
     assert html.index('id="setupAzureSpeechKey"') > html.index('id="setupPremiumVoices"')
+    assert 'id="setupSaveBtn" data-stopped-exempt disabled' in html
+    save_state = html[
+        html.index("function updateFirstListenKeySaveState") : html.index("function openFirstListenKeyEditor")
+    ]
+    assert "save.disabled=!firstListenKeyValues().some(Boolean)" in save_state
 
 
-def test_home_context_preview_is_mute_only_and_uses_sanitized_endpoint() -> None:
+def test_home_context_preview_uses_plain_privacy_actions_and_sanitized_endpoint() -> None:
     html = _html()
     assert 'id="haContextPreview"' in html
     assert "/api/homeassistant/context-candidates" in html
     assert "/api/homeassistant/entity-policy" in html
     block = html[html.index("function renderHomeContextPreview") : html.index("async function loadHomeContextPreview")]
-    assert "Mute for future host use" in block
+    assert "Keep this detail private" in block
+    assert "Allow this detail" in block
     assert "aria-label" in block
-    assert "Unmute" in block
+    assert "if(targetId!=='haContextPreview')" in block
     for forbidden in ("Approve", "Prefer", "Whitelist", "ranking", "score"):
         assert forbidden not in block
 
@@ -503,7 +510,13 @@ def test_admin_host_controls_are_english_first() -> None:
 
 def test_setup_controls_are_english() -> None:
     html = _html()
-    for s in ("Save AI key", "Re-check", "Replace", "Runtime Status", "Home Assistant secrets.env Snippet"):
+    for s in (
+        "Save changes",
+        "Check music and connections again",
+        "Change AI services",
+        "Runtime Status",
+        "Home Assistant secrets.env snippet",
+    ):
         assert s in html
 
 
