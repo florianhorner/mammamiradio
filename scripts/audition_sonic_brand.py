@@ -2,15 +2,16 @@
 """Build a local A/B and scene-recipe listening pack for recorded Mamma Mi Radio imaging.
 
 The script never calls TTS providers, starts the station, or touches its queue. It
-renders the current procedural baseline into a timestamped directory, copies the
-packaged Night Drive assets beside it, and writes a standalone ``index.html`` plus
-``manifest.json`` for a human listening review.
+can either render the current procedural-versus-packaged review, or run the
+stage-one Modern Night Drive motif gate from three hash-pinned, audition-only
+Freesound HQ derivatives. Both modes write a standalone local listening page.
 """
 
 from __future__ import annotations
 
 import argparse
 import html
+import importlib
 import json
 import re
 import shutil
@@ -31,11 +32,18 @@ from mammamiradio.audio.normalizer import (
     mix_oneshot_layers,
 )
 
+try:
+    pack_builder = importlib.import_module("scripts.build_public_imaging_pack")
+except ModuleNotFoundError:  # Direct ``python scripts/audition_sonic_brand.py`` invocation.
+    pack_builder = importlib.import_module("build_public_imaging_pack")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGED_ASSETS_DIR = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions"
 TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
-MOTIF_NOTES = [523, 659, 784, 1047]
+# Historical comparison only. New motif candidates are rendered from recorded
+# electric-piano material and never use this retired C-E-G-C sequence.
+LEGACY_MOTIF_NOTES = [523, 659, 784, 1047]
 TALK_BED_DURATION_SEC = 8.0
 RECIPE_PREVIEW_DURATION_SEC = 8.0
 
@@ -136,22 +144,26 @@ def render_baseline_sample(sample: SonicSample, output_path: Path) -> Path:
     """Render the live procedural equivalent of one audition surface locally."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if sample.key == "station_id":
-        return generate_station_id_bed(output_path, 3.0, MOTIF_NOTES)
+        return generate_station_id_bed(output_path, 3.0, LEGACY_MOTIF_NOTES)
     if sample.key == "sweeper":
-        return generate_station_id_bed(output_path, 2.0, MOTIF_NOTES)
+        return generate_station_id_bed(output_path, 2.0, LEGACY_MOTIF_NOTES)
     if sample.key == "time_check":
         return generate_tone(output_path, 1047, 0.3)
     if sample.key == "music_to_speech":
-        return generate_transition_sting("music", "banter", output_path, MOTIF_NOTES)
+        return generate_transition_sting("music", "banter", output_path, LEGACY_MOTIF_NOTES)
     if sample.key == "speech_to_music":
-        return generate_transition_sting("banter", "music", output_path, MOTIF_NOTES)
+        return generate_transition_sting("banter", "music", output_path, LEGACY_MOTIF_NOTES)
     if sample.key == "ad_bumper":
         return generate_bumper_jingle(output_path)
     if sample.key == "talk_bed":
         # A deliberately-empty assets root forces the same synthetic-drone branch
         # used by a cold station when no packaged bed or adjacent track is available.
         baseline_assets_dir = output_path.parent / ".no-packaged-beds"
-        return ImagingLibrary(MOTIF_NOTES, output_path.parent, assets_dir=baseline_assets_dir).pick_talk_bed(
+        return ImagingLibrary(
+            LEGACY_MOTIF_NOTES,
+            output_path.parent,
+            assets_dir=baseline_assets_dir,
+        ).pick_talk_bed(
             TALK_BED_DURATION_SEC,
             output_path,
         )
@@ -212,7 +224,7 @@ def render_recipe_previews(run_dir: Path, *, assets_dir: Path | None = None) -> 
     if not isinstance(raw_recipes, list):
         raise ValueError("Night Drive pack manifest has no recipe inventory")
 
-    library = ImagingLibrary(MOTIF_NOTES, run_dir / ".recipe-tmp", assets_dir=assets_dir)
+    library = ImagingLibrary(LEGACY_MOTIF_NOTES, run_dir / ".recipe-tmp", assets_dir=assets_dir)
     previews_dir = run_dir / "scene-recipes"
     previews_dir.mkdir(parents=True, exist_ok=True)
     results: list[RecipeAuditionResult] = []
@@ -356,6 +368,154 @@ def write_index_html(
     return index_path
 
 
+MOTIF_LISTENING_PROMPT = (
+    "Keep volume fixed. On the Mac, play A, B, and C once, then use Repeat x3 on each. "
+    "Choose the signature that still feels restrained, contemporary, and recognisable on the third play. "
+    "Replay only that candidate on the Wohnzimmer Sonos Arc. Reply exactly: "
+    "Motif: <candidate_id>; Mac: pass|fail; Sonos Arc: pass|fail; Notes: <short reason>."
+)
+
+
+def write_motif_gate_index(manifest: dict[str, object], run_dir: Path, *, timestamp: str) -> Path:
+    """Write the stage-one listening gate without presenting previews as shippable masters."""
+    raw_candidates = manifest.get("candidates")
+    if not isinstance(raw_candidates, list) or len(raw_candidates) != 3:
+        raise ValueError("Motif gate requires exactly three candidates")
+
+    cards: list[str] = []
+    for index, raw_candidate in enumerate(raw_candidates):
+        if not isinstance(raw_candidate, dict):
+            raise ValueError("Motif gate contains an invalid candidate")
+        candidate_id = str(raw_candidate["id"])
+        label = str(raw_candidate["label"])
+        brief = str(raw_candidate["brief"])
+        path = str(raw_candidate["path"])
+        letter = chr(ord("A") + index)
+        cards.append(
+            f"""        <section class=\"candidate\">
+          <p class=\"letter\">{letter}</p>
+          <h2>{html.escape(label)}</h2>
+          <p>{html.escape(brief)}</p>
+          <p><code>{html.escape(candidate_id)}</code></p>
+          <audio id=\"audio-{html.escape(candidate_id, quote=True)}\" controls preload=\"metadata\">
+            <source src=\"{html.escape(path, quote=True)}\" type=\"audio/mpeg\">
+            Your browser cannot play this file.
+          </audio>
+          <button type=\"button\" onclick=\"repeatThree('audio-{html.escape(candidate_id, quote=True)}')\">
+            Repeat x3
+          </button>
+        </section>"""
+        )
+
+    document = f"""<!doctype html>
+<html lang=\"en\">
+  <head>
+    <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    <title>Mamma Mi Radio — Modern Night Drive motif gate</title>
+    <style>
+      :root {{ color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif;
+        background: #14110f; color: #f5edd8; }}
+      body {{ max-width: 64rem; margin: 0 auto; padding: 2rem 1rem 4rem; }}
+      h1 {{ margin-bottom: .4rem; }}
+      .warning {{ border: 1px solid #b82c20; background: #251e19; border-radius: .75rem; padding: 1rem; }}
+      .prompt {{ border-left: .3rem solid #f4d048; padding: .3rem 1rem; color: #f5edd8; }}
+      .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }}
+      .candidate {{ background: #251e19; border: 1px solid #59463a; border-radius: .8rem; padding: 1rem; }}
+      .candidate h2 {{ margin: 0; }}
+      .letter {{ color: #f4d048; font-size: 1.5rem; font-weight: 800; margin: 0; }}
+      code {{ color: #d8c9af; }}
+      audio {{ width: 100%; margin: .5rem 0; }}
+      button {{ border: 0; border-radius: 999px; padding: .65rem 1rem; font-weight: 750;
+        background: #f4d048; color: #14110f; cursor: pointer; }}
+    </style>
+  </head>
+  <body>
+    <h1>Modern Night Drive motif gate</h1>
+    <p>Generated locally at {html.escape(timestamp)}. Pick one signature before any final station assets
+      are rebuilt.</p>
+    <p class=\"warning\"><strong>Prototype only.</strong> These files use hash-pinned Freesound HQ preview
+      derivatives. They are not original masters and must not ship in the public imaging pack.</p>
+    <p class=\"prompt\">{html.escape(MOTIF_LISTENING_PROMPT)}</p>
+    <div class=\"grid\">
+{chr(10).join(cards)}
+    </div>
+    <script>
+      function repeatThree(id) {{
+        const audio = document.getElementById(id);
+        let remaining = 3;
+        const playAgain = () => {{
+          if (remaining <= 0) {{ audio.removeEventListener('ended', playAgain); return; }}
+          remaining -= 1;
+          audio.currentTime = 0;
+          audio.play();
+        }};
+        audio.pause();
+        audio.addEventListener('ended', playAgain);
+        playAgain();
+      }}
+    </script>
+  </body>
+</html>
+"""
+    index_path = run_dir / "index.html"
+    index_path.write_text(document, encoding="utf-8")
+    return index_path
+
+
+def write_motif_gate_handoff(manifest: dict[str, object], run_dir: Path) -> Path:
+    """Create the durable Conductor handoff with relative audio and evidence links."""
+    raw_candidates = manifest.get("candidates")
+    raw_sources = manifest.get("sources")
+    if not isinstance(raw_candidates, list) or not isinstance(raw_sources, list):
+        raise ValueError("Motif prototype manifest is incomplete")
+
+    candidate_lines = []
+    for index, raw_candidate in enumerate(raw_candidates):
+        if not isinstance(raw_candidate, dict):
+            raise ValueError("Motif prototype manifest has an invalid candidate")
+        candidate_lines.append(
+            f"- {chr(ord('A') + index)} — [{raw_candidate['label']}](./{raw_candidate['path']}) "
+            f"(`{raw_candidate['id']}`, SHA-256 `{raw_candidate['sha256']}`)"
+        )
+    source_lines = []
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            raise ValueError("Motif prototype manifest has an invalid source")
+        source_lines.append(
+            f"- [{raw_source['title']}]({raw_source['source_url']}) by {raw_source['creator']} — "
+            f"CC0 1.0; HQ derivative SHA-256 `{raw_source['source_sha256']}`"
+        )
+
+    document = f"""# Modern Night Drive motif selection
+
+Status: **listening approval pending**. These are audition-only Freesound HQ preview derivatives,
+not original masters. Do not copy them into the public imaging pack.
+
+- [Open the listening board](./index.html)
+- [Inspect the complete provenance manifest](./manifest.json)
+
+## Candidates
+
+{chr(10).join(candidate_lines)}
+
+## Exact listening prompt
+
+> {MOTIF_LISTENING_PROMPT}
+
+## Source and hash evidence
+
+{chr(10).join(source_lines)}
+
+The source-page metadata identifies each recording as CC0 1.0. The generator verifies the
+downloaded HQ derivative hashes before rendering. Final production remains blocked until one
+candidate is selected and original source masters pass a separate provenance review.
+"""
+    handoff_path = run_dir / "README.md"
+    handoff_path.write_text(document, encoding="utf-8")
+    return handoff_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Base directory for audition runs")
@@ -368,10 +528,30 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip the local scene-recipe board (useful for a fast core-identity comparison)",
     )
+    parser.add_argument(
+        "--motif-source-dir",
+        type=Path,
+        help="Run only the three-candidate motif gate from hash-pinned HQ preview derivatives",
+    )
     args = parser.parse_args(argv)
 
     try:
         timestamp = _timestamp(args.timestamp)
+        if args.motif_source_dir is not None:
+            run_dir = args.output_dir / f"motif-gate-{timestamp}"
+            manifest = pack_builder.render_motif_prototypes(
+                args.motif_source_dir,
+                run_dir,
+                generated_at=timestamp,
+            )
+            manifest_path = run_dir / "manifest.json"
+            index_path = write_motif_gate_index(manifest, run_dir, timestamp=timestamp)
+            handoff_path = write_motif_gate_handoff(manifest, run_dir)
+            print(f"Motif gate: {run_dir}")
+            print(f"Manifest: {manifest_path}")
+            print(f"Listening page: {index_path}")
+            print(f"Handoff: {handoff_path}")
+            return 0
         # Validate first so an incomplete package cannot leave a partial audition
         # directory that looks reviewable.
         require_pack_assets(PACKAGED_ASSETS_DIR)

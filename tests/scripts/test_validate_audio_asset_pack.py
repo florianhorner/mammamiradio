@@ -89,6 +89,61 @@ def _write_manifest(pack_dir: Path, payload: dict[str, object]) -> None:
     (pack_dir / "manifest.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _declared_pack_digest(payload: dict[str, object]) -> str:
+    digest = hashlib.sha256()
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    for asset in sorted(assets, key=lambda item: (str(item["path"]), str(item["id"]))):
+        assert isinstance(asset, dict)
+        digest.update(str(asset["path"]).encode())
+        digest.update(b"\0")
+        digest.update(str(asset["sha256"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _enable_quality_contract(payload: dict[str, object]) -> None:
+    sources = payload["sources"]
+    assets = payload["assets"]
+    assert isinstance(sources, list)
+    assert isinstance(assets, list)
+    source_map: dict[str, dict[str, object]] = {}
+    for source in sources:
+        assert isinstance(source, dict)
+        source.setdefault("tags", ["ambience"])
+        source_map[str(source["id"])] = source
+    for asset in assets:
+        assert isinstance(asset, dict)
+        duration = float(asset.get("duration_target_sec", 1.0))
+        source_ids = asset["source_ids"]
+        assert isinstance(source_ids, list)
+        asset["layers"] = [
+            {
+                "source_id": source_id,
+                "source_sha256": source_map[str(source_id)]["source_sha256"],
+                "source_start_sec": 0.0,
+                "duration_sec": duration,
+                "output_offset_sec": 0.0,
+                "gain_db": -6.0,
+                "dsp": [],
+                "license": source_map[str(source_id)]["license"],
+                "role": "texture" if asset["kind"] == "bed" else "foreground",
+            }
+            for source_id in source_ids
+        ]
+    payload["quality_guard_allowlist"] = {"perceptual_overlaps": [], "source_core_roles": []}
+    payload["pack_digest"] = _declared_pack_digest(payload)
+    payload["release_ready"] = False
+    payload["listening_receipt"] = {
+        "status": "pending",
+        "pack_digest": None,
+        "approved_candidate_id": None,
+        "surfaces": [],
+        "device_classes": [],
+        "reviewed_at": None,
+    }
+
+
 @pytest.fixture
 def fake_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep test packs independent of FFmpeg and of checked-in audio assets."""
@@ -313,3 +368,163 @@ def test_cli_reports_stale_attribution_without_rewriting_it(
 
     assert "attribution file is stale" in capsys.readouterr().err
     assert attribution.read_text(encoding="utf-8") == "stale\n"
+
+
+def test_exact_duplicate_outputs_are_rejected_even_with_distinct_asset_ids(tmp_path: Path, fake_probe: None) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    first, second = assets
+    assert isinstance(first, dict)
+    assert isinstance(second, dict)
+    first_bytes = (pack_dir / str(first["path"])).read_bytes()
+    (pack_dir / str(second["path"])).write_bytes(first_bytes)
+    second["sha256"] = first["sha256"]
+    _write_manifest(pack_dir, payload)
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match="exact duplicate output SHA-256"):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_pending_receipt_is_auditionable_but_release_gate_requires_complete_approval(
+    tmp_path: Path, fake_probe: None
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    _enable_quality_contract(payload)
+    _write_manifest(pack_dir, payload)
+
+    validator.validate_audio_asset_pack(pack_dir)
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir, require_listening_approval=True)
+    assert "release_ready must be true" in str(caught.value)
+    assert "must be 'approved'" in str(caught.value)
+
+    payload["release_ready"] = True
+    payload["listening_receipt"] = {
+        "status": "approved",
+        "pack_digest": payload["pack_digest"],
+        "approved_candidate_id": "midnight-signal",
+        "surfaces": ["station-id", "sweeper", "ad-in", "ad-out", "full-cadence"],
+        "device_classes": ["mac", "target-speaker"],
+        "reviewed_at": "2026-08-13T18:30:00+02:00",
+    }
+    _write_manifest(pack_dir, payload)
+
+    validator.validate_audio_asset_pack(pack_dir, require_listening_approval=True)
+
+
+def test_foreground_source_cannot_own_more_than_two_core_roles_without_reasoned_allowlist(
+    tmp_path: Path, fake_probe: None
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    core_ids = ["identity.one", "identity.two", "transition.three"]
+    for index, asset_id in enumerate(core_ids):
+        assets.append(
+            _asset(
+                pack_dir,
+                asset_id,
+                f"core/{index}.mp3",
+                ["applause_master"],
+                kind="identity" if index < 2 else "transition",
+            )
+        )
+    _enable_quality_contract(payload)
+    guard = payload["quality_guard_allowlist"]
+    assert isinstance(guard, dict)
+    guard["perceptual_overlaps"] = [
+        {"asset_ids": [first, second], "reason": "Fixture isolates the source-concentration invariant."}
+        for first, second in ((core_ids[0], core_ids[1]), (core_ids[0], core_ids[2]), (core_ids[1], core_ids[2]))
+    ]
+    _write_manifest(pack_dir, payload)
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match="appears in 3 core roles"):
+        validator.validate_audio_asset_pack(pack_dir)
+
+    guard["source_core_roles"] = [
+        {"source_id": "applause_master", "reason": "Three fixture roles are intentionally identical in provenance."}
+    ]
+    _write_manifest(pack_dir, payload)
+    validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_source_aligned_decoded_correlation_requires_documented_pair(
+    tmp_path: Path, fake_probe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    assets.extend(
+        [
+            _asset(pack_dir, "identity.one", "core/one.mp3", ["applause_master"], kind="identity"),
+            _asset(pack_dir, "identity.two", "core/two.mp3", ["applause_master"], kind="identity"),
+        ]
+    )
+    _enable_quality_contract(payload)
+    _write_manifest(pack_dir, payload)
+    samples = [((index * 7919) % 60_000) - 30_000 for index in range(8_000)]
+    monkeypatch.setattr(validator, "_decode_audio", lambda _path: samples)
+
+    with pytest.raises(
+        validator.AudioAssetPackValidationError,
+        match=r"undocumented decoded-audio correlation 1\.000",
+    ):
+        validator.validate_audio_asset_pack(pack_dir)
+
+    guard = payload["quality_guard_allowlist"]
+    assert isinstance(guard, dict)
+    guard["perceptual_overlaps"] = [
+        {
+            "asset_ids": ["identity.one", "identity.two"],
+            "reason": "The paired fixture intentionally verifies the documented-overlap branch.",
+        }
+    ]
+    _write_manifest(pack_dir, payload)
+    validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_startup_synth_rejects_brass_source_and_requires_synth_semantics(tmp_path: Path, fake_probe: None) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    sources = payload["sources"]
+    assets = payload["assets"]
+    assert isinstance(sources, list)
+    assert isinstance(assets, list)
+    sources.append(_source("trumpet_master", title="Trumpet fanfare", tags=["trumpet", "brass"]))
+    assets.append(
+        _asset(
+            pack_dir,
+            "compat.startup-synth",
+            "sfx/startup_synth.mp3",
+            ["trumpet_master"],
+            kind="compatibility",
+            tags=["legacy", "trumpet"],
+        )
+    )
+    _enable_quality_contract(payload)
+    _write_manifest(pack_dir, payload)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir)
+    message = str(caught.value)
+    assert "must include a semantic synth tag" in message
+    assert "cannot use brass/trumpet source 'trumpet_master'" in message
+
+    trumpet = sources[-1]
+    startup = assets[-1]
+    assert isinstance(trumpet, dict)
+    assert isinstance(startup, dict)
+    trumpet["tags"] = ["electric-piano", "rhodes"]
+    startup["tags"] = ["legacy", "synth"]
+    _write_manifest(pack_dir, payload)
+    validator.validate_audio_asset_pack(pack_dir)

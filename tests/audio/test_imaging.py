@@ -122,7 +122,7 @@ def test_pack_copy_failure_falls_back_to_the_existing_generator(tmp_path):
 
 def test_short_ad_bumper_is_a_faded_cut_of_the_recorded_master(tmp_path):
     assets = tmp_path / "assets"
-    bumper = assets / "bumpers" / "ad_break.mp3"
+    bumper = assets / "bumpers" / "ad_mid.mp3"
     bumper.parent.mkdir(parents=True)
     bumper.write_bytes(b"recorded-bumper")
     output = tmp_path / "mid.mp3"
@@ -138,11 +138,67 @@ def test_short_ad_bumper_is_a_faded_cut_of_the_recorded_master(tmp_path):
         patch("mammamiradio.audio.imaging.loop_audio_bed", side_effect=_render) as render,
         patch("mammamiradio.audio.imaging.generate_bumper_jingle") as synthetic,
     ):
-        assert lib.pick_ad_bumper(output, 0.8) == output
+        assert lib.pick_ad_bumper(output, 0.8, role="mid") == output
 
     assert output.read_bytes() == b"short-recorded-bumper"
     assert render.call_args.kwargs["fade_out_sec"] == pytest.approx(0.08)
     synthetic.assert_not_called()
+
+
+def test_ad_bumper_roles_select_distinct_packaged_foreground_assets(tmp_path):
+    assets = tmp_path / "assets"
+    bumpers = assets / "bumpers"
+    bumpers.mkdir(parents=True)
+    for role in ("in", "mid", "out"):
+        (bumpers / f"ad_{role}.mp3").write_bytes(role.encode())
+    # A compatibility master must never win over a role-specific asset.
+    (bumpers / "ad_break.mp3").write_bytes(b"legacy")
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    outputs = {}
+    for role in ("in", "mid", "out"):
+        output = tmp_path / f"{role}.mp3"
+        outputs[role] = lib.pick_ad_bumper(output, role=role).read_bytes()
+
+    assert outputs == {"in": b"in", "mid": b"mid", "out": b"out"}
+    assert len(set(outputs.values())) == 3
+
+
+def test_missing_ad_bumper_roles_use_distinct_safe_fallbacks(tmp_path):
+    assets = tmp_path / "assets"
+    bumpers = assets / "bumpers"
+    bumpers.mkdir(parents=True)
+    (bumpers / "ad_break.mp3").write_bytes(b"legacy-entry")
+    lib = ImagingLibrary([523], tmp_path, assets_dir=assets)
+
+    def _write_tone(path, **_kwargs):
+        path.write_bytes(b"synthetic-mid")
+        return path
+
+    def _write_sweep(path, **_kwargs):
+        path.write_bytes(b"synthetic-out")
+        return path
+
+    with (
+        patch("mammamiradio.audio.imaging.generate_tone", side_effect=_write_tone) as mid_fallback,
+        patch("mammamiradio.audio.imaging.generate_sweep", side_effect=_write_sweep) as out_fallback,
+    ):
+        entry = lib.pick_ad_bumper(tmp_path / "entry.mp3", role="in")
+        middle = lib.pick_ad_bumper(tmp_path / "middle.mp3", 0.8, role="mid")
+        exit_bumper = lib.pick_ad_bumper(tmp_path / "exit.mp3", role="out")
+
+    assert entry.read_bytes() == b"legacy-entry"
+    assert middle.read_bytes() == b"synthetic-mid"
+    assert exit_bumper.read_bytes() == b"synthetic-out"
+    mid_fallback.assert_called_once_with(middle, freq_hz=784, duration_sec=0.8)
+    out_fallback.assert_called_once_with(exit_bumper, start_hz=760, end_hz=240, duration_sec=1.5)
+
+
+def test_ad_bumper_rejects_unknown_role(tmp_path):
+    lib = ImagingLibrary([523], tmp_path, assets_dir=tmp_path / "assets")
+
+    with pytest.raises(ValueError, match="unsupported ad bumper role"):
+        lib.pick_ad_bumper(tmp_path / "bad.mp3", role="side")  # type: ignore[arg-type]
 
 
 def test_ad_sfx_dir_prefers_existing_custom_directory_then_pack(tmp_path):

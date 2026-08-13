@@ -9,6 +9,7 @@ import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from mammamiradio.audio.imaging_schema import (
     RECIPE_MANIFEST_SCHEMA_VERSION,
@@ -21,6 +22,7 @@ from mammamiradio.audio.normalizer import (
     _run_ffmpeg,
     generate_bumper_jingle,
     generate_station_id_bed,
+    generate_sweep,
     generate_tone,
     generate_transition_sting,
     loop_audio_bed,
@@ -395,31 +397,72 @@ class ImagingLibrary:
             return output_path
         return generate_tone(output_path, freq_hz=1047, duration_sec=0.3)
 
-    def pick_ad_bumper(self, output_path: Path, duration_sec: float = 1.5) -> Path:
-        """Pick the recorded ad bumper, making an intentional short cut when asked."""
+    def pick_ad_bumper(
+        self,
+        output_path: Path,
+        duration_sec: float = 1.5,
+        *,
+        role: Literal["in", "mid", "out"] = "in",
+    ) -> Path:
+        """Pick one role-specific ad bumper without repeating the break's foreground cue.
+
+        ``role`` is keyword-only so existing callers retain the historical
+        entry-bumper behavior.  The legacy ``ad_break.mp3`` is accepted only
+        for that entry role: reusing it for the middle and exit positions was
+        the runtime seam that let one foreground recording recur throughout a
+        normal break.
+        """
+        if role not in {"in", "mid", "out"}:
+            raise ValueError(f"unsupported ad bumper role: {role}")
         duration = max(float(duration_sec), 0.5)
-        packaged_bumper = self.assets_dir / "bumpers" / "ad_break.mp3"
-        # Mid-break punctuation is deliberately shorter than the entry/exit
-        # bumper. Trim and fade the same reviewed recording rather than
-        # silently inserting the 1.488s master or generating a synthetic sound.
-        if duration < 1.2 and packaged_bumper.is_file():
+
+        def _render_short_recording(source_path: Path) -> bool:
+            if duration >= 1.2 or not source_path.is_file():
+                return False
             try:
                 loop_audio_bed(
-                    packaged_bumper,
+                    source_path,
                     output_path,
                     duration,
                     target_lufs=-16.0,
                     fade_out_sec=min(0.08, duration / 4),
                 )
-                return output_path
+                return True
             except Exception as exc:
                 try:
                     output_path.unlink(missing_ok=True)
                 except OSError:
                     pass
                 logger.warning("Could not render short recorded ad bumper: %s", exc)
-        if self._copy_pack_asset(output_path, "bumpers/ad_break.mp3"):
+                return False
+
+        relative_path = f"bumpers/ad_{role}.mp3"
+        packaged_bumper = self.assets_dir / relative_path
+        # Mid-break punctuation is deliberately shorter than the entry/exit
+        # bumper. Trim and fade its own reviewed recording rather than silently
+        # inserting a longer master.
+        if _render_short_recording(packaged_bumper):
             return output_path
+        if self._copy_pack_asset(output_path, relative_path):
+            return output_path
+
+        # Compatibility for operator packs and releases that predate
+        # role-aware bumpers.  Limit it to the entry so one legacy master can
+        # never become the in, mid, and out foreground in the same break.
+        if role == "in":
+            legacy_bumper = self.assets_dir / "bumpers" / "ad_break.mp3"
+            if _render_short_recording(legacy_bumper):
+                return output_path
+            if self._copy_pack_asset(output_path, "bumpers/ad_break.mp3"):
+                return output_path
+
+        # Keep incomplete custom packs audible with distinct, bounded
+        # synthetic punctuation for each role.  These are fallbacks, not the
+        # station identity, so they deliberately avoid sharing one motif.
+        if role == "mid":
+            return generate_tone(output_path, freq_hz=784, duration_sec=min(duration, 0.8))
+        if role == "out":
+            return generate_sweep(output_path, start_hz=760, end_hz=240, duration_sec=duration)
         return generate_bumper_jingle(output_path, duration)
 
     def pick_talk_bed(

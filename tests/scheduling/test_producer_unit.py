@@ -1067,6 +1067,65 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
 
 
 @pytest.mark.asyncio
+async def test_ad_break_requests_each_foreground_bumper_role_once():
+    """A normal multi-spot break must not reuse one foreground bumper source."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 3
+    host = config.hosts[0]
+    script = AdScript(
+        brand=config.ads.brands[0].name,
+        parts=[AdPart(type="voice", text="Compra subito.", role="hammer")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=["hammer"],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    requested_roles: list[str] = []
+
+    def _record_bumper(
+        output_path: Path,
+        _duration_sec: float = 1.5,
+        *,
+        role: str = "in",
+    ) -> Path:
+        requested_roles.append(role)
+        return output_path
+
+    imaging.pick_ad_bumper.side_effect = _record_bumper
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+
+    async def _same_intro_path(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=0.0),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.AD
+    assert requested_roles == ["in", "mid", "out"]
+    assert len(set(requested_roles)) == len(requested_roles)
+
+
+@pytest.mark.asyncio
 async def test_ad_recipe_resolves_once_and_reaches_tts_renderer():
     """Official brand recipes cross the producer boundary without LLM SFX state."""
     from mammamiradio.audio.imaging import ResolvedAdRecipe

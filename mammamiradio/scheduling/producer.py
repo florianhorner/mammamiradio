@@ -6364,15 +6364,29 @@ async def _run_producer_inner(
                     synthetic SFX overwhelming the ad break.
                     """
                     bumper_in = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
-                    mid_bumpers = [
-                        config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
-                        for _ in range(max(0, _num_spots - 1))
-                        if random.random() < 0.25
-                    ]
+                    # One neutral mid cue is enough even in the longest break.
+                    # Repeating the same mid asset between several spots would
+                    # recreate the foreground-source repetition this role split
+                    # is designed to remove.
+                    mid_bumpers = (
+                        [config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"]
+                        if _num_spots > 1 and random.random() < 0.25
+                        else []
+                    )
                     _scratch.update({bumper_in, *mid_bumpers})
-                    tasks = [_loop.run_in_executor(None, _imaging_lib.pick_ad_bumper, bumper_in)]
+                    tasks = [
+                        _loop.run_in_executor(
+                            None,
+                            partial(_imaging_lib.pick_ad_bumper, bumper_in, role="in"),
+                        )
+                    ]
                     for mb in mid_bumpers:
-                        tasks.append(_loop.run_in_executor(None, _imaging_lib.pick_ad_bumper, mb, 0.8))
+                        tasks.append(
+                            _loop.run_in_executor(
+                                None,
+                                partial(_imaging_lib.pick_ad_bumper, mb, 0.8, role="mid"),
+                            )
+                        )
                     with _timed_render_stage(state, "mix"):
                         bumper_results = await _gather_all_settled(*tasks)
                         _raise_first_settled_error(bumper_results)
@@ -6521,7 +6535,10 @@ async def _run_producer_inner(
                     _imaging_lib=imaging_lib,
                 ) -> None:
                     with _timed_render_stage(state, "mix"):
-                        await _loop.run_in_executor(None, _imaging_lib.pick_ad_bumper, _path)
+                        await _loop.run_in_executor(
+                            None,
+                            partial(_imaging_lib.pick_ad_bumper, _path, role="out"),
+                        )
 
                 async def _build_outro_voice(
                     _text=outro_text,

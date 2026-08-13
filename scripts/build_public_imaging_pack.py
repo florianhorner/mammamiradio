@@ -11,6 +11,11 @@ Usage:
     python scripts/build_public_imaging_pack.py --source-dir /path/to/masters
     python scripts/build_public_imaging_pack.py --source-dir /path/to/masters --output-root /tmp/imaging
     python scripts/build_public_imaging_pack.py --source-dir /path/to/masters --verify-sources
+    python scripts/build_public_imaging_pack.py --prototype-motifs --source-dir /path/to/hq-derivatives
+
+``--prototype-motifs`` is a deliberately separate, non-release path. It accepts
+three known Freesound HQ preview derivatives only to create the human selection
+board. Those derivatives can never satisfy the final public-pack build.
 """
 
 from __future__ import annotations
@@ -22,10 +27,13 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
+DEFAULT_PROTOTYPE_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions" / "motif-prototypes"
 FORMAT = {"codec": "mp3", "sample_rate_hz": 48_000, "channels": 2, "bitrate_kbps": 192}
 
 
@@ -65,6 +73,56 @@ class AssetSpec:
     duration_sec: float
     layers: tuple[Layer, ...]
     target_lufs: float = -16.0
+
+
+@dataclass(frozen=True)
+class MotifPrototypeSource:
+    """One hash-pinned, audition-only source artifact for the motif gate.
+
+    Freesound exposes these files as public HQ preview derivatives.  They are
+    useful for choosing a direction, but are deliberately not accepted by the
+    final-pack builder as replacements for the separately archived masters.
+    """
+
+    id: str
+    filename: str
+    creator: str
+    title: str
+    source_url: str
+    artifact_url: str
+    source_sha256: str
+    provenance: str
+    tags: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MotifPrototypeLayer:
+    """One precisely reproducible layer in a motif candidate."""
+
+    source_id: str
+    source_start_sec: float
+    duration_sec: float
+    output_offset_sec: float
+    gain_db: float
+    role: str
+    dsp: tuple[str, ...]
+    pitch_semitones: float = 0.0
+    highpass_hz: int | None = None
+    lowpass_hz: int | None = None
+    fade_in_sec: float = 0.018
+    fade_out_sec: float = 0.09
+
+
+@dataclass(frozen=True)
+class MotifPrototypeSpec:
+    """A short, unselected Modern Night Drive signature candidate."""
+
+    id: str
+    label: str
+    brief: str
+    path: str
+    duration_sec: float
+    layers: tuple[MotifPrototypeLayer, ...]
 
 
 SOURCES: tuple[SourceSpec, ...] = (
@@ -155,6 +213,145 @@ SOURCES: tuple[SourceSpec, ...] = (
         "Car Passing on Highway.mp3",
         "https://freesound.org/people/Yin_Yang_Jake007/sounds/435358/",
         "d71af8f24599c64f9ae20aea1662384e4cbdc7f63666ebe6066104d4b9f81f92",
+    ),
+)
+
+
+MOTIF_PROTOTYPE_SOURCES: tuple[MotifPrototypeSource, ...] = (
+    MotifPrototypeSource(
+        id="epiano-kevinklang-hq-preview",
+        filename="epiano.mp3",
+        creator="kevinklang",
+        title="Yamaha epiano multiple C tones non-broken",
+        source_url="https://freesound.org/people/kevinklang/sounds/841862/",
+        artifact_url="https://cdn.freesound.org/previews/841/841862_14469752-hq.mp3",
+        source_sha256="c3967d013586edec507d7611ea359b08fa3ebaa0a22196aa1e21e1f01082f4ab",
+        provenance="Uploader-described Yamaha electric-piano C tones; 48 kHz mono original.",
+        tags=("electric-piano", "synth", "pitched-instrument", "prototype"),
+    ),
+    MotifPrototypeSource(
+        id="tape-trp-hq-preview",
+        filename="tape.mp3",
+        creator="TRP",
+        title="Cassette tape hiss.flac",
+        source_url="https://freesound.org/people/TRP/sounds/572531/",
+        artifact_url="https://cdn.freesound.org/previews/572/572531_97550-hq.mp3",
+        source_sha256="3543cf2fd8c016e5ed05f8b694d62237d259368946a8348e3abbd16f5aa38ecc",
+        provenance="Direct transfer from a late-1980s cassette on a Tascam four-track; 48 kHz stereo original.",
+        tags=("cassette", "tape", "hiss", "texture", "prototype"),
+    ),
+    MotifPrototypeSource(
+        id="radio-quantumriver-hq-preview",
+        filename="radio.mp3",
+        creator="quantumriver",
+        title="Radio tuning-static-interference",
+        source_url="https://freesound.org/people/quantumriver/sounds/552160/",
+        artifact_url="https://cdn.freesound.org/previews/552/552160_716433-hq.mp3",
+        source_sha256="7df9903c38273be84b4bf01b01cb5a99a1964c7b13fd3938c9cf5a6698db2370",
+        provenance="Direct Edirol R-09 recording of radio tuning and static; 48 kHz, 24-bit stereo original.",
+        tags=("radio", "static", "tuning", "texture", "prototype"),
+    ),
+)
+
+
+def _motif_note(
+    semitones: float,
+    offset_sec: float,
+    duration_sec: float,
+    gain_db: float,
+) -> MotifPrototypeLayer:
+    sign = "+" if semitones >= 0 else ""
+    semitone_label = f"{semitones:g}"
+    return MotifPrototypeLayer(
+        source_id="epiano-kevinklang-hq-preview",
+        source_start_sec=0.88,
+        duration_sec=duration_sec,
+        output_offset_sec=offset_sec,
+        gain_db=gain_db,
+        role="foreground",
+        dsp=(f"pitch-shift:{sign}{semitone_label}st", "fade:18ms-in/90ms-out"),
+        pitch_semitones=semitones,
+        highpass_hz=90,
+        lowpass_hz=8_500,
+    )
+
+
+MOTIF_PROTOTYPES: tuple[MotifPrototypeSpec, ...] = (
+    MotifPrototypeSpec(
+        id="midnight_signal",
+        label="Midnight Signal",
+        brief="A sparse three-note descent with a soft tape tail.",
+        path="midnight_signal.mp3",
+        duration_sec=1.08,
+        layers=(
+            _motif_note(7, 0.00, 0.46, -5.0),
+            _motif_note(3, 0.27, 0.46, -6.0),
+            _motif_note(0, 0.58, 0.50, -5.5),
+            MotifPrototypeLayer(
+                source_id="tape-trp-hq-preview",
+                source_start_sec=2.20,
+                duration_sec=1.08,
+                output_offset_sec=0.0,
+                gain_db=-31.0,
+                role="texture",
+                dsp=("highpass:280Hz", "lowpass:7200Hz", "fade:80ms-in/180ms-out"),
+                highpass_hz=280,
+                lowpass_hz=7_200,
+                fade_in_sec=0.08,
+                fade_out_sec=0.18,
+            ),
+        ),
+    ),
+    MotifPrototypeSpec(
+        id="city_pulse",
+        label="City Pulse",
+        brief="A syncopated two-note call with a delayed answer and tiny radio flick.",
+        path="city_pulse.mp3",
+        duration_sec=0.98,
+        layers=(
+            _motif_note(0, 0.00, 0.30, -5.0),
+            _motif_note(5, 0.18, 0.30, -6.0),
+            _motif_note(0, 0.61, 0.37, -5.0),
+            MotifPrototypeLayer(
+                source_id="radio-quantumriver-hq-preview",
+                source_start_sec=15.46,
+                duration_sec=0.09,
+                output_offset_sec=0.49,
+                gain_db=-24.0,
+                role="texture",
+                dsp=("highpass:2400Hz", "lowpass:9200Hz", "fade:8ms-in/28ms-out"),
+                highpass_hz=2_400,
+                lowpass_hz=9_200,
+                fade_in_sec=0.008,
+                fade_out_sec=0.028,
+            ),
+        ),
+    ),
+    MotifPrototypeSpec(
+        id="warm_resolve",
+        label="Warm Resolve",
+        brief="A restrained three-step rise resolving downward rather than repeating the old motif.",
+        path="warm_resolve.mp3",
+        duration_sec=1.12,
+        layers=(
+            _motif_note(0, 0.00, 0.38, -7.0),
+            _motif_note(5, 0.21, 0.38, -6.5),
+            _motif_note(9, 0.42, 0.38, -6.0),
+            _motif_note(4, 0.72, 0.40, -5.0),
+            MotifPrototypeLayer(
+                source_id="tape-trp-hq-preview",
+                source_start_sec=8.40,
+                duration_sec=1.12,
+                output_offset_sec=0.0,
+                gain_db=-33.0,
+                role="texture",
+                dsp=("highpass:360Hz", "lowpass:6500Hz", "fade:90ms-in/220ms-out"),
+                highpass_hz=360,
+                lowpass_hz=6_500,
+                fade_in_sec=0.09,
+                fade_out_sec=0.22,
+            ),
+        ),
     ),
 )
 
@@ -862,8 +1059,213 @@ def verify_sources(source_root: Path) -> None:
         raise ValueError("Reviewed source masters are not intact:\n- " + "\n- ".join(failures))
 
 
+def _motif_prototype_source_map() -> dict[str, MotifPrototypeSource]:
+    return {source.id: source for source in MOTIF_PROTOTYPE_SOURCES}
+
+
+def verify_motif_prototype_sources(source_root: Path) -> None:
+    """Fail closed unless all three known HQ preview derivatives are intact."""
+    failures: list[str] = []
+    for source in MOTIF_PROTOTYPE_SOURCES:
+        path = source_root / source.filename
+        if not path.is_file():
+            failures.append(f"missing {source.filename}")
+            continue
+        actual = _sha256(path)
+        if actual != source.source_sha256:
+            failures.append(f"SHA-256 mismatch for {source.filename}: {actual}")
+    if failures:
+        raise ValueError("Motif prototype sources are not intact:\n- " + "\n- ".join(failures))
+
+
 def _number(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+def _render_motif_prototype(
+    spec: MotifPrototypeSpec,
+    source_root: Path,
+    output_root: Path,
+) -> Path:
+    output_path = output_root / spec.path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f".{output_path.stem}.tmp.mp3")
+    temporary_path.unlink(missing_ok=True)
+
+    sources = _motif_prototype_source_map()
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    for layer in spec.layers:
+        command.extend(["-i", str(source_root / sources[layer.source_id].filename)])
+
+    filters: list[str] = []
+    labels: list[str] = []
+    for index, layer in enumerate(spec.layers):
+        clip = (
+            f"[{index}:a]atrim=start={_number(layer.source_start_sec)}:duration={_number(layer.duration_sec)},"
+            "asetpts=N/SR/TB"
+        )
+        if layer.pitch_semitones:
+            ratio = 2 ** (layer.pitch_semitones / 12)
+            clip += f",asetrate={_number(48_000 * ratio)},aresample=48000,atempo={_number(1 / ratio)}"
+        else:
+            clip += ",aresample=48000"
+        clip += ",aformat=channel_layouts=stereo"
+        if layer.highpass_hz is not None:
+            clip += f",highpass=f={layer.highpass_hz}"
+        if layer.lowpass_hz is not None:
+            clip += f",lowpass=f={layer.lowpass_hz}"
+        clip += f",volume={_number(layer.gain_db)}dB"
+        fade_out_start = max(layer.duration_sec - layer.fade_out_sec, 0.0)
+        clip += (
+            f",afade=t=in:st=0:d={_number(layer.fade_in_sec)}"
+            f",afade=t=out:st={_number(fade_out_start)}:d={_number(layer.fade_out_sec)}"
+        )
+        if layer.output_offset_sec:
+            delay_ms = round(layer.output_offset_sec * 1_000)
+            clip += f",adelay={delay_ms}|{delay_ms}"
+        label = f"clip{index}"
+        filters.append(f"{clip}[{label}]")
+        labels.append(f"[{label}]")
+
+    filters.append(
+        f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:dropout_transition=0:normalize=0,"
+        f"apad=whole_dur={_number(spec.duration_sec)},atrim=duration={_number(spec.duration_sec)},"
+        "highpass=f=45,lowpass=f=15000,loudnorm=I=-16:LRA=5:TP=-1.5,"
+        "aformat=sample_rates=48000:channel_layouts=stereo[out]"
+    )
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[out]",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-b:a",
+            "192k",
+            "-write_xing",
+            "0",
+            str(temporary_path),
+        ]
+    )
+    try:
+        subprocess.run(command, check=True)
+        os.replace(temporary_path, output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return output_path
+
+
+def _prototype_pack_digest(candidates: list[dict[str, object]]) -> str:
+    digest = hashlib.sha256()
+    for candidate in sorted(candidates, key=lambda item: str(item["path"])):
+        digest.update(str(candidate["path"]).encode())
+        digest.update(b"\0")
+        digest.update(str(candidate["sha256"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _motif_prototype_manifest(output_root: Path, *, generated_at: str) -> dict[str, Any]:
+    sources = _motif_prototype_source_map()
+    source_records = [
+        {
+            "id": source.id,
+            "license": "CC0-1.0",
+            "source_url": source.source_url,
+            "artifact_url": source.artifact_url,
+            "source_sha256": source.source_sha256,
+            "creator": source.creator,
+            "title": source.title,
+            "provenance": source.provenance,
+            "artifact_kind": "Freesound HQ preview derivative; not the original source master",
+            "tags": list(source.tags),
+        }
+        for source in MOTIF_PROTOTYPE_SOURCES
+    ]
+    candidates: list[dict[str, object]] = []
+    for spec in MOTIF_PROTOTYPES:
+        candidates.append(
+            {
+                "id": spec.id,
+                "label": spec.label,
+                "brief": spec.brief,
+                "path": spec.path,
+                "sha256": _sha256(output_root / spec.path),
+                "duration_target_sec": spec.duration_sec,
+                "format": FORMAT,
+                "tags": ["modern-night-drive", "electric-piano", "motif-candidate"],
+                "layers": [
+                    {
+                        "source_id": layer.source_id,
+                        "source_sha256": sources[layer.source_id].source_sha256,
+                        "source_start_sec": layer.source_start_sec,
+                        "duration_sec": layer.duration_sec,
+                        "output_offset_sec": layer.output_offset_sec,
+                        "gain_db": layer.gain_db,
+                        "dsp": list(layer.dsp),
+                        "license": "CC0-1.0",
+                        "role": layer.role,
+                    }
+                    for layer in spec.layers
+                ],
+                "mastering_dsp": [
+                    "highpass:45Hz",
+                    "lowpass:15000Hz",
+                    "loudnorm:I=-16,LRA=5,TP=-1.5",
+                    "encode:MP3-48kHz-stereo-192kbps",
+                ],
+            }
+        )
+    pack_digest = _prototype_pack_digest(candidates)
+    return {
+        "schema_version": 1,
+        "pack": "Modern Night Drive motif prototypes",
+        "stage": "motif-selection",
+        "generated_at": generated_at,
+        "sources": source_records,
+        "candidates": candidates,
+        "quality_guard_allowlist": {"perceptual_overlaps": [], "source_core_roles": []},
+        "pack_digest": pack_digest,
+        "release_ready": False,
+        "listening_receipt": {
+            "status": "pending",
+            "pack_digest": None,
+            "approved_candidate_id": None,
+            "surfaces": [],
+            "device_classes": [],
+            "reviewed_at": None,
+        },
+        "limitations": [
+            "These audition files use hash-pinned Freesound HQ preview derivatives, not original masters.",
+            "They cannot be copied into the shipped imaging pack.",
+            "The final pack remains blocked until one motif is approved and original masters pass provenance review.",
+        ],
+    }
+
+
+def render_motif_prototypes(
+    source_root: Path,
+    output_root: Path,
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Render the three audition-only motif candidates and their provenance ledger."""
+    verify_motif_prototype_sources(source_root)
+    if output_root.exists() and any(output_root.iterdir()):
+        raise FileExistsError(f"Refusing to overwrite non-empty prototype directory: {output_root}")
+    output_root.mkdir(parents=True, exist_ok=True)
+    for spec in MOTIF_PROTOTYPES:
+        _render_motif_prototype(spec, source_root, output_root)
+    stamp = generated_at or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    manifest = _motif_prototype_manifest(output_root, generated_at=stamp)
+    (output_root / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def _render_asset(spec: AssetSpec, source_root: Path, output_root: Path) -> None:
@@ -989,23 +1391,42 @@ def build(source_root: Path, output_root: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--source-dir", type=Path, required=True, help="Directory holding the verified, non-shipped masters"
+        "--source-dir",
+        type=Path,
+        required=True,
+        help="Directory holding final masters, or hash-pinned HQ derivatives in prototype mode",
     )
-    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Rendered pack directory")
+    parser.add_argument("--output-root", type=Path, help="Rendered pack or motif-prototype directory")
     parser.add_argument(
         "--verify-sources", action="store_true", help="Check the curated masters without writing assets"
     )
+    parser.add_argument(
+        "--prototype-motifs",
+        action="store_true",
+        help="Render only the three audition candidates; these HQ derivatives can never become the public pack",
+    )
     args = parser.parse_args(argv)
+    output_root = args.output_root or (DEFAULT_PROTOTYPE_OUTPUT_ROOT if args.prototype_motifs else DEFAULT_OUTPUT_ROOT)
     try:
+        if args.prototype_motifs:
+            verify_motif_prototype_sources(args.source_dir)
+            if args.verify_sources:
+                print(f"Motif prototype sources OK: {len(MOTIF_PROTOTYPE_SOURCES)}")
+                return 0
+            manifest = render_motif_prototypes(args.source_dir, output_root)
+            print(
+                f"Built Modern Night Drive motif prototypes: {output_root} ({len(manifest['candidates'])} candidates)"
+            )
+            return 0
         verify_sources(args.source_dir)
         if args.verify_sources:
             print(f"Reviewed CC0 masters OK: {len(SOURCES)}")
             return 0
-        build(args.source_dir, args.output_root)
+        build(args.source_dir, output_root)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    print(f"Built public recorded imaging pack: {args.output_root} ({len(ASSETS)} assets)")
+    print(f"Built public recorded imaging pack: {output_root} ({len(ASSETS)} assets)")
     return 0
 
 

@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import array
 import hashlib
 import json
 import math
@@ -35,6 +36,8 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
+from itertools import combinations
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
@@ -57,6 +60,17 @@ LICENSE_URLS = {
 }
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+QUALITY_GUARD_KEY = "quality_guard_allowlist"
+CORRELATION_THRESHOLD = 0.98
+CORRELATION_WINDOW_SEC = 0.5
+CORRELATION_SAMPLE_RATE_HZ = 8_000
+CORE_ASSET_KINDS = frozenset({"identity", "transition"})
+CORRELATION_ASSET_KINDS = CORE_ASSET_KINDS | {"compatibility"}
+LAYER_ROLES = frozenset({"foreground", "texture"})
+STARTUP_SYNTH_TAGS = frozenset({"synth", "synthesizer", "electric-piano", "rhodes"})
+STARTUP_SYNTH_FORBIDDEN_SOURCE_TAGS = frozenset({"brass", "trumpet"})
+REQUIRED_LISTENING_SURFACES = frozenset({"station-id", "sweeper", "ad-in", "ad-out", "full-cadence"})
+REQUIRED_LISTENING_DEVICE_CLASSES = frozenset({"mac", "target-speaker"})
 
 
 class AudioAssetPackValidationError(ValueError):
@@ -80,6 +94,7 @@ class SourceRecord:
     modification: str
     attribution: str | None
     original_path: str | None
+    tags: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -104,15 +119,33 @@ class AudioProbe:
 
 
 @dataclass(frozen=True)
+class LayerRecord:
+    """One reproducible source excerpt in a delivered asset."""
+
+    source_id: str
+    source_sha256: str
+    source_start_sec: float
+    duration_sec: float
+    output_offset_sec: float
+    gain_db: float
+    dsp: tuple[str, ...]
+    license: str
+    role: str
+
+
+@dataclass(frozen=True)
 class AssetRecord:
     """One shipped audio file and the public recordings that informed it."""
 
     id: str
     path: str
+    kind: str
+    tags: tuple[str, ...]
     source_ids: tuple[str, ...]
     sha256: str
     format: AudioFormat
     duration_target_sec: float | None
+    layers: tuple[LayerRecord, ...]
 
 
 @dataclass(frozen=True)
@@ -125,6 +158,14 @@ class ValidationReport:
     sources: tuple[SourceRecord, ...]
     assets: tuple[AssetRecord, ...]
     recipes: int
+
+
+@dataclass(frozen=True)
+class QualityGuardAllowlist:
+    """Narrow, reviewable exceptions to the sonic quality invariants."""
+
+    perceptual_overlaps: frozenset[tuple[str, str]]
+    source_core_roles: frozenset[str]
 
 
 def _nonempty_text(value: Any, label: str, errors: list[str]) -> str | None:
@@ -156,7 +197,7 @@ def _sha256(value: Any, label: str, errors: list[str]) -> str | None:
 
 
 def _finite_number(value: Any, label: str, errors: list[str], *, minimum: float | None = None) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(float(value)):
         errors.append(f"{label} must be a finite number")
         return None
     number = float(value)
@@ -165,6 +206,36 @@ def _finite_number(value: Any, label: str, errors: list[str], *, minimum: float 
         errors.append(f"{label} must be {comparator} {minimum:g}")
         return None
     return number
+
+
+def _text_list(
+    value: Any,
+    label: str,
+    errors: list[str],
+    *,
+    required: bool,
+) -> tuple[str, ...] | None:
+    if value is None and not required:
+        return ()
+    if not isinstance(value, list) or (required and not value):
+        qualifier = "a non-empty list" if required else "a list"
+        errors.append(f"{label} must be {qualifier}")
+        return None
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        text = _nonempty_text(item, f"{label}[{index}]", errors)
+        if text is None:
+            continue
+        normalized = text.casefold()
+        if normalized in seen:
+            errors.append(f"{label}[{index}] duplicates value {text!r}")
+            continue
+        seen.add(normalized)
+        resolved.append(text)
+    if required and not resolved:
+        return None
+    return tuple(resolved)
 
 
 def _read_manifest(path: Path, errors: list[str]) -> dict[str, Any] | None:
@@ -211,7 +282,12 @@ def _validate_format(value: Any, label: str, errors: list[str]) -> AudioFormat |
     return AudioFormat(codec=codec.lower(), sample_rate_hz=sample_rate, channels=channels, bitrate_kbps=bitrate)
 
 
-def _validate_source_records(value: Any, errors: list[str]) -> tuple[SourceRecord, ...]:
+def _validate_source_records(
+    value: Any,
+    errors: list[str],
+    *,
+    require_quality_metadata: bool,
+) -> tuple[SourceRecord, ...]:
     if not isinstance(value, list) or not value:
         errors.append("sources must be a non-empty list")
         return ()
@@ -254,6 +330,8 @@ def _validate_source_records(value: Any, errors: list[str]) -> tuple[SourceRecor
         if raw_original_path is not None:
             original_path = _nonempty_text(raw_original_path, f"{label}.original_path", errors)
 
+        tags = _text_list(raw.get("tags"), f"{label}.tags", errors, required=require_quality_metadata)
+
         if identifier is not None:
             if identifier in seen_ids:
                 errors.append(f"{label}.id duplicates source {identifier!r}")
@@ -269,6 +347,7 @@ def _validate_source_records(value: Any, errors: list[str]) -> tuple[SourceRecor
             or creator is None
             or title is None
             or modification is None
+            or tags is None
         ):
             continue
         records.append(
@@ -282,6 +361,7 @@ def _validate_source_records(value: Any, errors: list[str]) -> tuple[SourceRecor
                 modification=modification,
                 attribution=attribution,
                 original_path=original_path,
+                tags=tags,
             )
         )
     return tuple(records)
@@ -316,7 +396,75 @@ def _source_ids(raw: dict[str, Any], label: str, errors: list[str]) -> tuple[str
     return tuple(resolved) if resolved else None
 
 
-def _validate_asset_records(value: Any, errors: list[str]) -> tuple[AssetRecord, ...]:
+def _validate_layers(value: Any, label: str, errors: list[str], *, required: bool) -> tuple[LayerRecord, ...] | None:
+    if value is None and not required:
+        return ()
+    if not isinstance(value, list) or not value:
+        errors.append(f"{label} must be a non-empty list")
+        return None
+
+    layers: list[LayerRecord] = []
+    for index, raw in enumerate(value):
+        layer_label = f"{label}[{index}]"
+        if not isinstance(raw, dict):
+            errors.append(f"{layer_label} must be an object")
+            continue
+        source_id = _identifier(raw.get("source_id"), f"{layer_label}.source_id", errors)
+        source_sha256 = _sha256(raw.get("source_sha256"), f"{layer_label}.source_sha256", errors)
+        source_start_sec = _finite_number(
+            raw.get("source_start_sec"), f"{layer_label}.source_start_sec", errors, minimum=0
+        )
+        duration_sec = _finite_number(raw.get("duration_sec"), f"{layer_label}.duration_sec", errors, minimum=0)
+        if duration_sec == 0:
+            errors.append(f"{layer_label}.duration_sec must be > 0")
+            duration_sec = None
+        output_offset_sec = _finite_number(
+            raw.get("output_offset_sec"), f"{layer_label}.output_offset_sec", errors, minimum=0
+        )
+        gain_db = _finite_number(raw.get("gain_db"), f"{layer_label}.gain_db", errors)
+        dsp = _text_list(raw.get("dsp"), f"{layer_label}.dsp", errors, required=False)
+        license_name = _nonempty_text(raw.get("license"), f"{layer_label}.license", errors)
+        if license_name is not None and license_name not in ALLOWED_LICENSES:
+            errors.append(f"{layer_label}.license must be one of: {', '.join(sorted(ALLOWED_LICENSES))}")
+            license_name = None
+        role = _nonempty_text(raw.get("role"), f"{layer_label}.role", errors)
+        if role is not None and role not in LAYER_ROLES:
+            errors.append(f"{layer_label}.role must be one of: {', '.join(sorted(LAYER_ROLES))}")
+            role = None
+        if (
+            source_id is None
+            or source_sha256 is None
+            or source_start_sec is None
+            or duration_sec is None
+            or output_offset_sec is None
+            or gain_db is None
+            or dsp is None
+            or license_name is None
+            or role is None
+        ):
+            continue
+        layers.append(
+            LayerRecord(
+                source_id=source_id,
+                source_sha256=source_sha256,
+                source_start_sec=source_start_sec,
+                duration_sec=duration_sec,
+                output_offset_sec=output_offset_sec,
+                gain_db=gain_db,
+                dsp=dsp,
+                license=license_name,
+                role=role,
+            )
+        )
+    return tuple(layers) if layers else None
+
+
+def _validate_asset_records(
+    value: Any,
+    errors: list[str],
+    *,
+    require_quality_metadata: bool,
+) -> tuple[AssetRecord, ...]:
     if not isinstance(value, list) or not value:
         errors.append("assets must be a non-empty list")
         return ()
@@ -332,13 +480,11 @@ def _validate_asset_records(value: Any, errors: list[str]) -> tuple[AssetRecord,
         identifier = _identifier(raw.get("id"), f"{label}.id", errors)
         path = _nonempty_text(raw.get("path"), f"{label}.path", errors)
         kind = _nonempty_text(raw.get("kind"), f"{label}.kind", errors)
-        raw_tags = raw.get("tags")
-        tags = raw_tags if isinstance(raw_tags, list) else None
-        if tags is None:
+        if "tags" not in raw:
             errors.append(f"{label}.tags must be a list")
+            tags = None
         else:
-            for tag_index, tag in enumerate(tags):
-                _nonempty_text(tag, f"{label}.tags[{tag_index}]", errors)
+            tags = _text_list(raw.get("tags"), f"{label}.tags", errors, required=False)
         if path is not None:
             relative = PurePosixPath(path)
             if "\\" in path or relative.is_absolute() or any(part in {".", ".."} for part in relative.parts):
@@ -348,6 +494,7 @@ def _validate_asset_records(value: Any, errors: list[str]) -> tuple[AssetRecord,
         source_ids = _source_ids(raw, label, errors)
         asset_sha256 = _sha256(raw.get("sha256"), f"{label}.sha256", errors)
         audio_format = _validate_format(raw.get("format"), f"{label}.format", errors)
+        layers = _validate_layers(raw.get("layers"), f"{label}.layers", errors, required=require_quality_metadata)
         duration_target_sec: float | None = None
         if "duration_target_sec" in raw:
             duration_target_sec = _finite_number(
@@ -372,16 +519,20 @@ def _validate_asset_records(value: Any, errors: list[str]) -> tuple[AssetRecord,
             or source_ids is None
             or asset_sha256 is None
             or audio_format is None
+            or layers is None
         ):
             continue
         records.append(
             AssetRecord(
                 id=identifier,
                 path=path,
+                kind=kind,
+                tags=tags,
                 source_ids=source_ids,
                 sha256=asset_sha256,
                 format=audio_format,
                 duration_target_sec=duration_target_sec,
+                layers=layers,
             )
         )
     return tuple(records)
@@ -545,6 +696,386 @@ def _validate_assets(
     return durations
 
 
+def _validate_exact_duplicate_outputs(assets: tuple[AssetRecord, ...], errors: list[str]) -> None:
+    by_digest: dict[str, list[str]] = {}
+    by_path: dict[str, list[str]] = {}
+    for asset in assets:
+        by_digest.setdefault(asset.sha256, []).append(asset.id)
+        by_path.setdefault(asset.path, []).append(asset.id)
+    for digest, asset_ids in sorted(by_digest.items()):
+        if len(asset_ids) > 1:
+            errors.append(
+                "exact duplicate output SHA-256 "
+                f"{digest} is declared by distinct assets: {', '.join(sorted(asset_ids))}"
+            )
+    for path, asset_ids in sorted(by_path.items()):
+        if len(asset_ids) > 1:
+            errors.append(f"output path {path!r} is declared by distinct assets: {', '.join(sorted(asset_ids))}")
+
+
+def _pack_digest(assets: Iterable[AssetRecord]) -> str:
+    """Bind a listening receipt to paths and delivered bytes, not manifest ordering."""
+    digest = hashlib.sha256()
+    for asset in sorted(assets, key=lambda item: (item.path, item.id)):
+        digest.update(asset.path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(asset.sha256.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _validate_quality_allowlist(
+    value: Any,
+    sources: tuple[SourceRecord, ...],
+    assets: tuple[AssetRecord, ...],
+    errors: list[str],
+) -> QualityGuardAllowlist:
+    if not isinstance(value, dict):
+        errors.append(f"{QUALITY_GUARD_KEY} must be an object")
+        return QualityGuardAllowlist(frozenset(), frozenset())
+    supported = {"perceptual_overlaps", "source_core_roles"}
+    for key in sorted(set(value) - supported):
+        errors.append(f"{QUALITY_GUARD_KEY} contains unsupported field {key!r}")
+
+    asset_ids = {asset.id for asset in assets}
+    source_ids = {source.id for source in sources}
+    overlap_pairs: set[tuple[str, str]] = set()
+    raw_overlaps = value.get("perceptual_overlaps")
+    if not isinstance(raw_overlaps, list):
+        errors.append(f"{QUALITY_GUARD_KEY}.perceptual_overlaps must be a list")
+    else:
+        for index, raw in enumerate(raw_overlaps):
+            label = f"{QUALITY_GUARD_KEY}.perceptual_overlaps[{index}]"
+            if not isinstance(raw, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            raw_ids = raw.get("asset_ids")
+            if not isinstance(raw_ids, list) or len(raw_ids) != 2:
+                errors.append(f"{label}.asset_ids must contain exactly 2 asset ids")
+                continue
+            resolved = [
+                _identifier(item, f"{label}.asset_ids[{position}]", errors) for position, item in enumerate(raw_ids)
+            ]
+            reason = _nonempty_text(raw.get("reason"), f"{label}.reason", errors)
+            if any(asset_id is None for asset_id in resolved) or reason is None:
+                continue
+            first, second = resolved
+            assert first is not None and second is not None
+            if first == second:
+                errors.append(f"{label}.asset_ids must name distinct assets")
+                continue
+            for asset_id in (first, second):
+                if asset_id not in asset_ids:
+                    errors.append(f"{label}.asset_ids references undeclared asset {asset_id!r}")
+            pair = (first, second) if first < second else (second, first)
+            if pair in overlap_pairs:
+                errors.append(f"{label}.asset_ids duplicates allowlisted pair {pair!r}")
+            overlap_pairs.add(pair)
+
+    allowed_sources: set[str] = set()
+    raw_source_roles = value.get("source_core_roles")
+    if not isinstance(raw_source_roles, list):
+        errors.append(f"{QUALITY_GUARD_KEY}.source_core_roles must be a list")
+    else:
+        for index, raw in enumerate(raw_source_roles):
+            label = f"{QUALITY_GUARD_KEY}.source_core_roles[{index}]"
+            if not isinstance(raw, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            source_id = _identifier(raw.get("source_id"), f"{label}.source_id", errors)
+            reason = _nonempty_text(raw.get("reason"), f"{label}.reason", errors)
+            if source_id is None or reason is None:
+                continue
+            if source_id not in source_ids:
+                errors.append(f"{label}.source_id references undeclared source {source_id!r}")
+            if source_id in allowed_sources:
+                errors.append(f"{label}.source_id duplicates allowlisted source {source_id!r}")
+            allowed_sources.add(source_id)
+    return QualityGuardAllowlist(frozenset(overlap_pairs), frozenset(allowed_sources))
+
+
+def _validate_layer_provenance(
+    sources: tuple[SourceRecord, ...],
+    assets: tuple[AssetRecord, ...],
+    errors: list[str],
+) -> None:
+    source_map = {source.id: source for source in sources}
+    for asset in assets:
+        layer_source_ids: list[str] = []
+        for index, layer in enumerate(asset.layers):
+            label = f"asset {asset.id!r} layer[{index}]"
+            source = source_map.get(layer.source_id)
+            if source is None:
+                errors.append(f"{label} references undeclared source {layer.source_id!r}")
+                continue
+            layer_source_ids.append(layer.source_id)
+            if layer.source_sha256 != source.source_sha256:
+                errors.append(f"{label} source_sha256 does not match source {source.id!r}")
+            if layer.license != source.license:
+                errors.append(f"{label} license does not match source {source.id!r}")
+            if asset.duration_target_sec is not None:
+                layer_end = layer.output_offset_sec + layer.duration_sec
+                if layer_end > asset.duration_target_sec + 0.001:
+                    errors.append(
+                        f"{label} ends at {layer_end:.3f}s, beyond asset duration {asset.duration_target_sec:.3f}s"
+                    )
+        if set(layer_source_ids) != set(asset.source_ids):
+            errors.append(
+                f"asset {asset.id!r} source_ids must exactly match its layer source ids "
+                f"({sorted(asset.source_ids)!r} != {sorted(set(layer_source_ids))!r})"
+            )
+
+
+def _validate_source_concentration(
+    assets: tuple[AssetRecord, ...],
+    allowlist: QualityGuardAllowlist,
+    errors: list[str],
+) -> None:
+    roles_by_source: dict[str, set[str]] = {}
+    for asset in assets:
+        if asset.kind not in CORE_ASSET_KINDS:
+            continue
+        for layer in asset.layers:
+            if layer.role == "foreground":
+                roles_by_source.setdefault(layer.source_id, set()).add(asset.id)
+    for source_id, asset_ids in sorted(roles_by_source.items()):
+        if len(asset_ids) > 2 and source_id not in allowlist.source_core_roles:
+            errors.append(
+                f"foreground source {source_id!r} appears in {len(asset_ids)} core roles "
+                f"({', '.join(sorted(asset_ids))}); maximum is 2 unless explicitly allowlisted"
+            )
+
+
+def _validate_startup_synth_semantics(
+    sources: tuple[SourceRecord, ...],
+    assets: tuple[AssetRecord, ...],
+    errors: list[str],
+) -> None:
+    source_map = {source.id: source for source in sources}
+    startup = next((asset for asset in assets if asset.id == "compat.startup-synth"), None)
+    if startup is None:
+        return
+    asset_tags = {tag.casefold() for tag in startup.tags}
+    if not asset_tags & STARTUP_SYNTH_TAGS:
+        errors.append(
+            f"asset 'compat.startup-synth' must include a semantic synth tag: {', '.join(sorted(STARTUP_SYNTH_TAGS))}"
+        )
+    for layer in startup.layers:
+        source = source_map.get(layer.source_id)
+        if source is None:
+            continue
+        forbidden = {tag.casefold() for tag in source.tags} & STARTUP_SYNTH_FORBIDDEN_SOURCE_TAGS
+        if forbidden:
+            errors.append(
+                "asset 'compat.startup-synth' cannot use brass/trumpet source "
+                f"{source.id!r} (forbidden tags: {', '.join(sorted(forbidden))})"
+            )
+
+
+def _decode_audio(path: Path) -> array.array[int]:
+    """Decode a small review asset deterministically to 8 kHz mono PCM."""
+    try:
+        completed = subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-map",
+                "0:a:0",
+                "-ac",
+                "1",
+                "-ar",
+                str(CORRELATION_SAMPLE_RATE_HZ),
+                "-f",
+                "s16le",
+                "pipe:1",
+            ],
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg is required for perceptual-overlap validation") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ffmpeg timed out while decoding {path}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or f"ffmpeg exited {completed.returncode}")
+    samples = array.array("h")
+    samples.frombytes(completed.stdout)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples
+
+
+def _normalized_correlation(first: Iterable[int], second: Iterable[int]) -> float:
+    left = tuple(first)
+    right = tuple(second)
+    if len(left) != len(right) or not left:
+        return 0.0
+    count = len(left)
+    sum_left = sum(left)
+    sum_right = sum(right)
+    sum_left_sq = sum(value * value for value in left)
+    sum_right_sq = sum(value * value for value in right)
+    sum_product = sum(left_value * right_value for left_value, right_value in zip(left, right, strict=True))
+    numerator = count * sum_product - sum_left * sum_right
+    left_energy = count * sum_left_sq - sum_left * sum_left
+    right_energy = count * sum_right_sq - sum_right * sum_right
+    if left_energy <= 0 or right_energy <= 0:
+        return 0.0
+    return abs(numerator / math.sqrt(left_energy * right_energy))
+
+
+def _shared_source_windows(first: AssetRecord, second: AssetRecord) -> tuple[tuple[float, float], ...]:
+    windows: set[tuple[float, float]] = set()
+    for first_layer in first.layers:
+        for second_layer in second.layers:
+            if first_layer.source_id != second_layer.source_id:
+                continue
+            overlap_start = max(first_layer.source_start_sec, second_layer.source_start_sec)
+            overlap_end = min(
+                first_layer.source_start_sec + first_layer.duration_sec,
+                second_layer.source_start_sec + second_layer.duration_sec,
+            )
+            if overlap_end - overlap_start + 1e-9 < CORRELATION_WINDOW_SEC:
+                continue
+            source_starts = [overlap_start]
+            final_start = overlap_end - CORRELATION_WINDOW_SEC
+            cursor = overlap_start + CORRELATION_WINDOW_SEC / 2
+            while cursor < final_start - 1e-9:
+                source_starts.append(cursor)
+                cursor += CORRELATION_WINDOW_SEC / 2
+            source_starts.append(final_start)
+            for source_start in source_starts:
+                first_output = first_layer.output_offset_sec + (source_start - first_layer.source_start_sec)
+                second_output = second_layer.output_offset_sec + (source_start - second_layer.source_start_sec)
+                windows.add((round(first_output, 6), round(second_output, 6)))
+    return tuple(sorted(windows))
+
+
+def _validate_perceptual_overlaps(
+    pack_dir: Path,
+    assets: tuple[AssetRecord, ...],
+    allowlist: QualityGuardAllowlist,
+    errors: list[str],
+) -> None:
+    review_assets = tuple(asset for asset in assets if asset.kind in CORRELATION_ASSET_KINDS)
+    decoded: dict[str, array.array[int]] = {}
+    window_samples = round(CORRELATION_WINDOW_SEC * CORRELATION_SAMPLE_RATE_HZ)
+    for first, second in combinations(review_assets, 2):
+        pair = (first.id, second.id) if first.id < second.id else (second.id, first.id)
+        if pair in allowlist.perceptual_overlaps:
+            continue
+        windows = _shared_source_windows(first, second)
+        if not windows:
+            continue
+        failed_decode = False
+        for asset in (first, second):
+            if asset.id in decoded:
+                continue
+            try:
+                decoded[asset.id] = _decode_audio(_resolve_asset_path(pack_dir, asset.path))
+            except (OSError, RuntimeError, ValueError) as exc:
+                errors.append(f"asset {asset.id!r} cannot be decoded for perceptual-overlap validation: {exc}")
+                failed_decode = True
+        if failed_decode:
+            continue
+        maximum = 0.0
+        for first_start_sec, second_start_sec in windows:
+            first_start = round(first_start_sec * CORRELATION_SAMPLE_RATE_HZ)
+            second_start = round(second_start_sec * CORRELATION_SAMPLE_RATE_HZ)
+            first_window = decoded[first.id][first_start : first_start + window_samples]
+            second_window = decoded[second.id][second_start : second_start + window_samples]
+            if len(first_window) != window_samples or len(second_window) != window_samples:
+                errors.append(
+                    f"assets {first.id!r} and {second.id!r} have layer timing outside decoded audio "
+                    "during perceptual-overlap validation"
+                )
+                break
+            maximum = max(maximum, _normalized_correlation(first_window, second_window))
+        if maximum >= CORRELATION_THRESHOLD:
+            errors.append(
+                f"assets {first.id!r} and {second.id!r} have undocumented decoded-audio correlation "
+                f"{maximum:.3f} >= {CORRELATION_THRESHOLD:.2f} over {CORRELATION_WINDOW_SEC:.3f}s"
+            )
+
+
+def _validate_listening_receipt(
+    manifest: dict[str, Any],
+    assets: tuple[AssetRecord, ...],
+    errors: list[str],
+    *,
+    require_listening_approval: bool,
+) -> None:
+    expected_digest = _pack_digest(assets)
+    declared_digest = _sha256(manifest.get("pack_digest"), "pack_digest", errors)
+    if declared_digest is not None and declared_digest != expected_digest:
+        errors.append(f"pack_digest differs from delivered asset ledger ({declared_digest} != {expected_digest})")
+
+    release_ready = manifest.get("release_ready")
+    if not isinstance(release_ready, bool):
+        errors.append("release_ready must be a boolean")
+        release_ready = False
+    receipt = manifest.get("listening_receipt")
+    if not isinstance(receipt, dict):
+        errors.append("listening_receipt must be an object")
+        return
+    status = _nonempty_text(receipt.get("status"), "listening_receipt.status", errors)
+    if status is not None and status not in {"pending", "approved"}:
+        errors.append("listening_receipt.status must be 'pending' or 'approved'")
+        status = None
+    receipt_digest: str | None = None
+    if receipt.get("pack_digest") is not None:
+        receipt_digest = _sha256(receipt.get("pack_digest"), "listening_receipt.pack_digest", errors)
+    candidate_id: str | None = None
+    if receipt.get("approved_candidate_id") is not None:
+        candidate_id = _identifier(
+            receipt.get("approved_candidate_id"), "listening_receipt.approved_candidate_id", errors
+        )
+    surfaces = _text_list(receipt.get("surfaces"), "listening_receipt.surfaces", errors, required=False)
+    device_classes = _text_list(
+        receipt.get("device_classes"), "listening_receipt.device_classes", errors, required=False
+    )
+    reviewed_at: str | None = None
+    if receipt.get("reviewed_at") is not None:
+        reviewed_at = _nonempty_text(receipt.get("reviewed_at"), "listening_receipt.reviewed_at", errors)
+        if reviewed_at is not None:
+            try:
+                parsed = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
+            except ValueError:
+                errors.append("listening_receipt.reviewed_at must be an ISO-8601 timestamp")
+                reviewed_at = None
+            else:
+                if parsed.tzinfo is None:
+                    errors.append("listening_receipt.reviewed_at must include a timezone")
+                    reviewed_at = None
+
+    approval_required = require_listening_approval or release_ready
+    if require_listening_approval and not release_ready:
+        errors.append("release_ready must be true when listening approval is required")
+    if not approval_required and status == "pending":
+        return
+    if status != "approved":
+        errors.append("listening_receipt.status must be 'approved' for a release-ready pack")
+    if receipt_digest != expected_digest:
+        errors.append("listening_receipt.pack_digest must match the delivered pack_digest")
+    if candidate_id is None:
+        errors.append("listening_receipt.approved_candidate_id is required for a release-ready pack")
+    surface_set = {item.casefold() for item in surfaces or ()}
+    missing_surfaces = sorted(REQUIRED_LISTENING_SURFACES - surface_set)
+    if missing_surfaces:
+        errors.append(f"listening_receipt.surfaces is missing: {', '.join(missing_surfaces)}")
+    device_set = {item.casefold() for item in device_classes or ()}
+    missing_devices = sorted(REQUIRED_LISTENING_DEVICE_CLASSES - device_set)
+    if missing_devices:
+        errors.append(f"listening_receipt.device_classes is missing: {', '.join(missing_devices)}")
+    if reviewed_at is None:
+        errors.append("listening_receipt.reviewed_at is required for a release-ready pack")
+
+
 def _validate_recipe_duration_bound(
     value: Any,
     label: str,
@@ -670,11 +1201,15 @@ def validate_audio_asset_pack(
     *,
     manifest_path: Path | None = None,
     attribution_path: Path | None = None,
+    require_listening_approval: bool = False,
 ) -> ValidationReport:
     """Validate schema-v2 provenance, output integrity, format, and mix refs.
 
     This function never writes. Call :func:`write_attribution` after it returns
     successfully, or use the command-line ``--write-attribution`` switch.
+    Legacy packs remain auditionable without the opt-in quality metadata. A
+    release gate passes ``require_listening_approval=True`` and therefore
+    requires that metadata plus a receipt bound to the delivered pack digest.
     """
     pack_dir = pack_dir.resolve()
     manifest_path = (manifest_path or pack_dir / MANIFEST_NAME).resolve()
@@ -686,10 +1221,31 @@ def validate_audio_asset_pack(
 
     if manifest.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
-    sources = _validate_source_records(manifest.get("sources"), errors)
-    assets = _validate_asset_records(manifest.get("assets"), errors)
+    quality_enabled = QUALITY_GUARD_KEY in manifest
+    companion_fields = {"pack_digest", "release_ready", "listening_receipt"}
+    if not quality_enabled and companion_fields & manifest.keys():
+        errors.append(
+            f"{QUALITY_GUARD_KEY} is required when pack_digest, release_ready, or listening_receipt is declared"
+        )
+    if require_listening_approval and not quality_enabled:
+        errors.append(f"{QUALITY_GUARD_KEY} is required when listening approval is required")
+    sources = _validate_source_records(manifest.get("sources"), errors, require_quality_metadata=quality_enabled)
+    assets = _validate_asset_records(manifest.get("assets"), errors, require_quality_metadata=quality_enabled)
     _validate_source_originals(pack_dir, sources, errors)
     measured_durations = _validate_assets(pack_dir, sources, assets, errors)
+    _validate_exact_duplicate_outputs(assets, errors)
+    if quality_enabled:
+        allowlist = _validate_quality_allowlist(manifest.get(QUALITY_GUARD_KEY), sources, assets, errors)
+        _validate_layer_provenance(sources, assets, errors)
+        _validate_source_concentration(assets, allowlist, errors)
+        _validate_startup_synth_semantics(sources, assets, errors)
+        _validate_perceptual_overlaps(pack_dir, assets, allowlist, errors)
+        _validate_listening_receipt(
+            manifest,
+            assets,
+            errors,
+            require_listening_approval=require_listening_approval,
+        )
     recipe_count = _validate_recipes(manifest.get("recipes"), assets, measured_durations, errors)
     if errors:
         raise AudioAssetPackValidationError(errors)
@@ -718,6 +1274,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Write ATTRIBUTION.md from validated manifest records instead of checking it",
     )
+    parser.add_argument(
+        "--require-listening-approval",
+        action="store_true",
+        help="Require a release-ready listening receipt bound to the delivered pack digest",
+    )
     return parser.parse_args(argv)
 
 
@@ -734,6 +1295,7 @@ def main(argv: list[str] | None = None) -> int:
             pack_dir,
             manifest_path=args.manifest,
             attribution_path=args.attribution,
+            require_listening_approval=args.require_listening_approval,
         )
         if args.write_attribution:
             write_attribution(report)
