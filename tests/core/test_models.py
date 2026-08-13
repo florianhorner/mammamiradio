@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +12,8 @@ from mammamiradio.core.models import (
     HEADING_MAX_LIFT,
     HEADING_MIN_LIFT,
     HEADING_TARGET_SHARE,
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     ChaosSubtype,
     DialogueLine,
@@ -19,6 +21,7 @@ from mammamiradio.core.models import (
     Heading,
     HostPersonality,
     ListenerProfile,
+    ListenerRequestHandoff,
     PlaylistSource,
     Segment,
     SegmentType,
@@ -2181,3 +2184,248 @@ def test_shared_song_identity_key_match_handles_compact_artist_and_punctuation()
         ("Toto Cutugno Tribute", "L'Italiano"),
         ("Toto Cutugno", "LItaliano"),
     )
+
+
+def _handoff(track: Track, **overrides) -> ListenerRequestHandoff:
+    base = ListenerRequestHandoff(token="handoff-token", request_id="listener-request", track=track)
+    return replace(base, **overrides) if overrides else base
+
+
+def test_clear_force_next_type_mismatch_leaves_the_directive_alone():
+    state = StationState()
+    revision = state.set_force_next(SegmentType.BANTER)
+
+    assert not state.clear_force_next(expected_type=SegmentType.MUSIC)
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == revision
+
+
+def test_clear_pinned_track_without_a_pin_reports_nothing_cleared():
+    state = StationState()
+    revision_before = state.pinned_track_revision
+
+    assert not state.clear_pinned_track()
+    assert state.pinned_track_revision == revision_before
+
+
+def test_restore_before_first_byte_ignores_a_segment_with_no_reservation():
+    state = StationState()
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/promised.mp3"),
+        metadata={
+            LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True,
+            LISTENER_REQUEST_HANDOFF_TOKEN_KEY: "ghost-token",
+        },
+    )
+
+    assert not state.restore_listener_request_handoff_before_first_byte(segment)
+    assert state.listener_request_handoff is None
+    assert not state.listener_request_retry_handoffs
+
+
+def test_source_switch_restore_refuses_a_busy_active_slot():
+    state = StationState()
+    state.listener_request_handoff = _handoff(_track(1))
+
+    with pytest.raises(RuntimeError):
+        state.restore_listener_request_handoff_after_source_switch(_handoff(_track(2), token="other"))
+
+
+def test_arm_handoff_with_busy_slot_only_confirms_the_same_promise():
+    track = _track(1)
+    state = StationState()
+    assert state.arm_listener_request_handoff({"request_id": "r1"}, track)
+
+    assert state.arm_listener_request_handoff({"request_id": "r1"}, track)
+    assert not state.arm_listener_request_handoff({"request_id": "r2"}, track)
+    assert state.listener_request_handoff is not None
+    assert state.listener_request_handoff.request_id == "r1"
+
+
+def test_force_handoff_music_defers_to_an_existing_directive():
+    state = StationState()
+    state.force_listener_request_handoff_music()  # no handoff: nothing to own
+    assert state.force_next is None
+
+    state.listener_request_handoff = _handoff(_track(1))
+    revision = state.set_force_next(SegmentType.BANTER)
+    state.force_listener_request_handoff_music()
+
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == revision
+    assert state.listener_request_handoff.force_next_revision is None
+
+
+def test_revoke_discarded_dedication_restores_a_borrowed_pin_without_a_borrowed_force():
+    track = _track(1)
+    state = StationState()
+    handoff = _handoff(
+        track,
+        dedication_queue_id="q1",
+        borrowed_pin_clear_revision=state.pinned_track_revision,
+        borrowed_force_clear_revision=None,
+    )
+    state.listener_request_handoff = handoff
+    epoch_before = state.continuity_epoch
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/cache/dedication.mp3"),
+        metadata={"queue_id": "q1"},
+    )
+
+    assert state.revoke_listener_request_handoff_for_discarded_dedication(dedication)
+    assert state.listener_request_handoff is None
+    assert state.pinned_track is track
+    assert state.force_next is None
+    assert state.continuity_epoch == epoch_before + 1
+
+
+def test_admit_handoff_raises_when_ownership_changed_before_admission():
+    state = StationState()
+    state.listener_request_handoff = _handoff(_track(1))
+    unmarked = Segment(type=SegmentType.MUSIC, path=Path("/cache/other.mp3"), metadata={})
+
+    with pytest.raises(RuntimeError):
+        state.admit_listener_request_handoff(unmarked)
+
+
+def test_clear_handoff_is_a_noop_without_a_handoff_or_for_another_track():
+    state = StationState()
+    state.clear_listener_request_handoff()  # empty slot: nothing to do
+
+    handoff = _handoff(_track(1))
+    state.listener_request_handoff = handoff
+    state.clear_listener_request_handoff(_track(2))
+
+    assert state.listener_request_handoff is handoff
+
+
+def test_heading_renarrates_as_a_crate_beat_after_the_quiet_window():
+    import time as _time
+
+    now = _time.time()
+    heading = Heading(
+        id="h1",
+        seed="vasco",
+        label="Vasco night",
+        set_at=now - 7200,
+        set_by="operator",
+        announced=True,
+        phase="steering",
+        first_found_at=now - 7200,
+        last_narrated_at=now - 3600,
+        narration_count=1,
+    )
+    state = StationState(heading=heading)
+    track = Track(title="Albachiara", artist="Vasco Rossi", duration_ms=240_000, heading_id="h1")
+
+    state._arm_heading_announcement_if_needed(track)
+
+    assert state.heading_pending_announcement == "Vasco night"
+    assert state.heading_pending_narration_kind == "crate_beat"
+
+
+def test_record_llm_usage_rejects_an_unknown_category():
+    state = StationState()
+
+    with pytest.raises(ValueError):
+        state.record_llm_usage("script_horoscope", "model", 1, 1)  # type: ignore[arg-type]
+    assert state.api_calls == 0
+
+
+def test_record_tts_usage_ignores_empty_and_malformed_counts():
+    state = StationState()
+
+    state.record_tts_usage(0)
+    state.record_tts_usage(-40)
+    state.record_tts_usage("not-a-number")  # type: ignore[arg-type]
+
+    assert state.tts_characters == 0
+    assert state.tts_characters_by_category == {}
+
+
+def test_record_discard_skips_companionship_settlement_for_a_non_int_epoch(tmp_path, monkeypatch):
+    state = StationState()
+    abandoned: list[int] = []
+    monkeypatch.setattr(state.listener_session, "abandon_companionship", abandoned.append)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "b.mp3",
+        duration_sec=10.0,
+        metadata={"listener_session_cue": "companionship", "listener_session_epoch": True},
+    )
+
+    state.record_discard(segment, reason="stale_source", timestamp=100.0)
+
+    assert abandoned == []
+    assert state.discarded_segments_total == 1
+
+
+def test_record_discard_does_not_save_a_campaign_that_recorded_nothing(tmp_path):
+    class _QuietCampaign:
+        def __init__(self):
+            self.saved = False
+
+        def record_queue_discard(self, metadata):
+            return False
+
+        def save_if_dirty(self):
+            self.saved = True
+
+    campaign = _QuietCampaign()
+    state = StationState(release_campaign=campaign)
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=10.0)
+
+    state.record_discard(segment, reason="stale_source", timestamp=100.0)
+
+    assert not campaign.saved
+    assert state.discarded_segments_total == 1
+
+
+def test_record_discard_swallows_a_broken_accounting_surface(tmp_path):
+    state = StationState()
+    state.discard_events = None  # type: ignore[assignment]
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=10.0)
+
+    state.record_discard(segment, reason="stale_source", timestamp=100.0)
+
+
+def test_observe_runtime_provider_resets_a_malformed_observation_revision():
+    state = StationState()
+    state.runtime_provider_state["llm"] = {"observation_revision": "garbage"}
+
+    state.observe_runtime_provider(
+        "llm",
+        current_provider="anthropic",
+        primary_provider="anthropic",
+        fallback_active=False,
+        reason="boot",
+    )
+
+    assert state.runtime_provider_state["llm"]["observation_revision"] == 1
+
+
+def test_runtime_provider_observation_scopes_require_a_real_token():
+    state = StationState()
+
+    with pytest.raises(ValueError):
+        state.bind_runtime_provider_observation_scope("   ")
+    assert state.snapshot_runtime_provider_observations("") == {}
+    assert state.take_runtime_provider_observations("   ") == {}
+
+
+def test_audible_music_splits_a_combined_artist_dash_title_label():
+    state = StationState()
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/mina.mp3"),
+        duration_sec=180.0,
+        metadata={"title": "Mina – Città vuota"},
+    )
+    state.on_stream_segment_selected(segment)
+
+    assert state.on_stream_segment_audible(segment)
+    entry = state.played_track_log[-1]
+    assert entry.track.artist == "Mina"
+    assert entry.track.title == "Città vuota"
