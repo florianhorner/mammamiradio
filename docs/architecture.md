@@ -620,13 +620,16 @@ Important design choice: there is one shared timeline. Listeners tune into the c
 The playback loop does not offer each source packet to listener fanout exactly
 at its real-time deadline. Source packets are capped at **125 ms** (3,000 bytes
 at 192 kbps), so a private, persistent `StreamPacer` (in `streamer.py`, owned by
-`run_playback_loop`) keeps a **500 ms send-ahead target** on one monotonic source
-media timeline. At 192 kbps that is roughly the first four packets; after that,
-the source-to-fanout schedule stays no more than one packet (625 ms) ahead. This
-helps absorb a short event-loop or CPU scheduling pause — including one caused
-by rendering a newly created station ID, ad, banter, or a Home Assistant
-projection — before it reaches a direct listener (e.g. a Sonos player consuming
-`/stream`).
+`run_playback_loop`) keeps a **4-second send-ahead target** on one monotonic
+source media timeline. At 192 kbps that is roughly the first 32 packets; after
+that, the schedule stays ahead by the target plus at most one further packet —
+4.125 s in total. This absorbs an event-loop or CPU scheduling pause — including
+one caused by rendering a newly created station ID, ad, banter, or a Home
+Assistant projection — before it reaches a direct listener (for example, a Sonos
+player consuming `/stream`). The worst such pause measured on HA Green was
+1.781 s. At 192 kbps the cushion occupies 32 of every listener queue's 128
+packet slots, so a slow listener has roughly 12 s of stall budget before it is
+dropped rather than the ~16 s the queue holds.
 
 The timeline is deliberately **continuous across natural segment boundaries**:
 music → station ID → ad → banter → music share one origin, so the lead is not
@@ -638,14 +641,14 @@ an explicit skip — via a named `reset_timeline(reason)` call.
 If a pause is longer than the whole lead, the pacer uses **at most a three-packet
 recovery phase**, then rebases the pacing origin once and records the deficit as
 an `overrun_rebased` event. At the default packet cap, that phase restores 375
-ms; ordinary bounded packets may follow immediately until the 500 ms target is
+ms; ordinary bounded packets may follow immediately until the 4-second target is
 rebuilt. It never sleeps a negative interval and never turns the missed
 wall-clock history into an unbounded backlog of overdue chunks — the unavoidable
 long stall stays audible, but it cannot compound into a second catch-up phase or
 many seconds of stale playback. The packet cap changes source-read granularity
 while leaving bitrate, ICY metadata, queue ordering, and overflow protection
 intact. Because listener queues remain bounded by packets, their shorter packets
-give a slow listener a tighter time budget before drop. The 500/625 ms bound
+give a slow listener a tighter time budget before drop. The 4 s / 4.125 s bound
 applies only to source-to-fanout pacing: after `LiveStreamHub` enqueues a chunk,
 ASGI, socket, and client buffers can still delay physical playback. A skip or
 status cutover therefore has no physical-audio latency guarantee; slow listeners

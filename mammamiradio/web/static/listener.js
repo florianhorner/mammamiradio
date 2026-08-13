@@ -484,10 +484,8 @@
     }
     const stat2 = $('stat-tracks');
     if (stat2) {
-      const played = status && typeof status.tracks_played === 'number' ? status.tracks_played : null;
-      const queued = status && status.upcoming ? status.upcoming.length : 0;
-      const value = played !== null ? played : queued;
-      stat2.textContent = value > 0 ? value : '—';
+      const rotationCount = status ? status.rotation_track_count : null;
+      stat2.textContent = Number.isInteger(rotationCount) && rotationCount >= 0 ? String(rotationCount) : '—';
     }
     const stat3 = $('stat-hosts');
     if (stat3 && caps && caps.hosts && caps.hosts.length) {
