@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Shared editorial pattern source for changelog and PR-body lints.
+# Shared editorial pattern source for changelog, PR-body, and public-doc lints.
 #
 # Sourced by:
 #   - scripts/check-changelog-lint.sh   (CHANGELOG.md, ha-addon/.../CHANGELOG.md)
 #   - scripts/check-pr-body-lint.sh     (PR body, via local hook + CI)
+#   - scripts/check-issue-body-lint.sh  (issue body, via local hook + CI)
+#   - scripts/check-docs-safety.sh      (public install and operator guides)
 #
 # Each pattern is a POSIX extended regex (grep -E). Patterns are word-anchored or
 # specific multi-word phrases to minimize false positives on legitimate text.
 
-# shellcheck disable=SC2034  # consumed by sourcing scripts (check-changelog-lint.sh, check-pr-body-lint.sh)
+# shellcheck disable=SC2034  # consumed by sourcing scripts (check-changelog-lint.sh, check-pr-body-lint.sh, check-issue-body-lint.sh)
 LINT_PATTERNS=(
   # Internal sprint / workstream labels
   'PR-[A-Z][0-9/]*[A-Z0-9]*'      # PR-A, PR-B/5, PR-C, PR-D/5, PR-F
@@ -27,7 +29,7 @@ LINT_PATTERNS=(
   '\bPhase [A-Z][0-9]?\b'         # Phase A, Phase B1
   '\bPhase [0-9]+\b'              # Phase 1, Phase 2
   '\bTrack [A-Z]\b'               # Track A, Track B
-  '\bleadership principle\b'
+  '\bleadership principles?\b'
 
   # Agent / tool provenance
   '/autoplan'
@@ -62,4 +64,30 @@ LINT_PATTERNS=(
   '\bsoak verification\b'         # "soak verification on edge addon after merge"
   '\bdual-voice review\b'
   '🤖 Generated with'             # Claude Code / Conductor / Codex footers
+
+  # Workspace / process archaeology (observed leaking to the public issue
+  # tracker: post-mortem material about local machine state and review runs)
+  'stash@\{'                      # git stash refs (stash@{0})
+  '\blocal-only\b'
+  "\\bFlorian['’]?s( local)? machine\\b"
+  '\babandoned (attempt|stash|design|branch)'
+  '\badversarial(ly)? verif'      # review-squad lingo (adversarially verified)
+  '\bfindings (raised|confirmed|refuted)\b'
+  '\buntracked (code|files)\b'
+)
+
+# Home Assistant renamed the user-facing add-on store surface to Apps. Keep
+# developer/API "add-on" language where it remains accurate; ban only retired UI paths.
+# shellcheck disable=SC2034  # consumed by scripts/check-docs-safety.sh
+DOCS_RETIRED_INSTALL_PATTERNS=(
+  'Settings[[:space:]]*(→|>|&gt;)[[:space:]]*Add-ons'
+  '[Aa]dd-on [Ss]tore'
+)
+
+# Edge is a deliberate, manually cut channel. A merge to main may build an
+# image, but Home Assistant sees no update until `make edge-release` advances
+# the metadata pin. Keep this exact overclaim out of public channel copy.
+# shellcheck disable=SC2016,SC2034  # literal backticks; consumed by scripts/check-docs-safety.sh
+DOCS_RELEASE_TRUTH_PATTERNS=(
+  '[Uu]pdates on every change merged to[[:space:]]+`?main`?'
 )

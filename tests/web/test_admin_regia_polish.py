@@ -130,22 +130,23 @@ def test_queue_removal_defers_by_stable_id_not_index() -> None:
 
 
 def test_rotation_removal_commits_immediately() -> None:
-    """Rotation removal is index-based (/api/playlist/remove) with no id variant,
-    so the DELETE must NOT be deferred — a deferred index goes stale once an
-    earlier commit shifts the list (Codex P2). The ban commits immediately; an
-    optional undo toast lifts it by (artist,title) KEY via /api/track/unban, which
-    is index-shift-safe and therefore allowed."""
+    """Rotation removal commits its revision/index/id target immediately.
+
+    Deferring even a guarded snapshot would guarantee a stale conflict after an
+    earlier mutation. The optional undo instead lifts the committed ban by the
+    canonical artist/title key, which remains safe after the playlist shifts.
+    """
     html = _html()
     block = html[html.index("async function removeTr") : html.index("// --- Bulk select")]
     assert "/api/playlist/remove" in block
     remove_at = block.index("/api/playlist/remove")
     toast_at = block.find("undoableToast")
     if toast_at != -1:
-        # the index delete commits BEFORE the undo toast — not deferred into it
-        assert remove_at < toast_at, "the index delete must commit before any undo toast"
-        # undo reverses by key, never by re-posting a (now-stale) index delete
+        # The guarded delete commits BEFORE the undo toast — not deferred into it.
+        assert remove_at < toast_at, "the guarded delete must commit before any undo toast"
+        # Undo reverses by key, never by re-posting a now-stale row snapshot.
         undo_region = block[toast_at:]
-        assert "/api/playlist/remove" not in undo_region, "undo must not defer an index delete"
+        assert "/api/playlist/remove" not in undo_region, "undo must not defer a row-target delete"
         assert "/api/track/unban" in undo_region
 
 
@@ -161,7 +162,7 @@ def test_archivio_filters_restored_after_deferred_helpers_load() -> None:
     assert "DOMContentLoaded" in html[init_at - 400 : init_at + 400]
 
 
-# ── Motore three-group split + Setup auto-collapse (T5) ─────────────
+# ── Motore diagnostics + reusable First Listen setup group ──────────
 
 
 def test_motore_three_groups_present() -> None:
@@ -187,7 +188,17 @@ def test_golden_path_setup_strip_sits_between_console_and_tabs() -> None:
     assert 'id="on-air"' in html and 'id="adminTabs"' in html
     assert html.index('id="on-air"') < html.index('id="setupStrip"') < html.index('id="adminTabs"')
     assert 'data-tab="motore">Motore' in html
-    assert 'data-tab="setup"' not in html
+    assert 'data-tab="setup">First Listen' in html
+    assert 'id="first-listen-panel" data-panel="setup"' in html
+    assert 'aria-controls="first-listen-panel"' in html
+
+
+def test_seven_admin_tabs_keep_a_bounded_mobile_grid() -> None:
+    html = _html()
+    assert "grid-template-columns:repeat(4,minmax(0,1fr))" in html
+    assert ".mmr-tab:last-child:nth-child(4n+3){grid-column:span 2" in html
+    assert "grid-template-columns:repeat(2,minmax(0,1fr))" in html
+    assert ".mmr-tab:last-child:nth-child(2n+1){grid-column:span 2" in html
 
 
 def test_setup_strip_renders_api_primary_action_not_static_dual_buttons() -> None:
@@ -262,7 +273,13 @@ def test_home_context_preview_is_mute_only_and_uses_sanitized_endpoint() -> None
 
 def test_setup_auto_collapse_wired_into_render() -> None:
     html = _html()
-    assert "motoreSetupAutoCollapse(!needsAction)" in html
+    block = html[html.index("function renderSetup") : html.index("async function setupRecheck")]
+    assert "const needsAction=setup.onboarding_required===true" in block
+    assert "motoreSetupAutoCollapse(!needsAction&&_activeTab!=='setup')" in block
+    assert "onboarding_steps" not in block[block.index("const needsAction") :]
+    assert "alertDot.style.display=needsAction?'inline-block':'none'" in block
+    assert "tabAlert.style.display=needsAction?'inline-block':'none'" in block
+    assert "getElementById('firstListenTabAlert')" in block
     js = _js()
     assert "details.dataset.userPinned" in js, "manual pin must override auto-collapse"
 
@@ -306,6 +323,15 @@ def test_session_cost_reframe_template_invariants() -> None:
     assert ".toFixed(4)" not in html
     assert "'<$1'" in html
     assert "'~$'+Math.round(_rawCost)" in html
+
+
+def test_tts_only_session_keeps_a_single_session_estimate_row() -> None:
+    """Paid TTS must not disappear just because the LLM call count is zero."""
+    html = _html()
+
+    assert "const hasPaidUsage=apiCalls>0||ttsCh>0;" in html
+    assert 'Session estimate: <strong id="apiCostEl">' in html
+    assert html.count('id="apiCostEl"') == 1
 
 
 def test_generated_waste_cost_zero_state_renders_dollar_zero() -> None:
@@ -488,7 +514,7 @@ def test_structural_italian_flair_preserved() -> None:
         assert flair in html
 
 
-def test_motore_runtime_groups_precede_setup() -> None:
+def test_motore_runtime_groups_precede_first_listen_source_markup() -> None:
     html = _html()
     header = html[html.index("<h2>Motore</h2>") : html.index('id="pipelineStatus"')]
     assert "pipeline · runtime · costi" in header
@@ -498,7 +524,7 @@ def test_motore_runtime_groups_precede_setup() -> None:
     costs = html.index('id="eg-costs-h"')
     setup = html.index('id="setupGroup"')
     assert pipeline < status < costs < setup, (
-        "Motore must show Pipeline, Status, and Costi before the collapsible Setup group."
+        "The reusable setup markup must follow Pipeline, Status, and Costi in source order."
     )
     config = html.index('id="eg-config-h"')
     quality = html.index('id="qualityProfile"')
@@ -507,6 +533,33 @@ def test_motore_runtime_groups_precede_setup() -> None:
         "Motore configuration controls must keep AI Quality and On-Air Sound grouped "
         "after runtime Costi and before Setup."
     )
+
+
+def test_home_moment_drop_reasons_explain_changed_show_state() -> None:
+    """The admin-only receipt trail explains why a matched moment was held back.
+
+    These are operator explanations, never raw discard codes or the generic
+    fallback label: a full directive slot and a changing playlist/source/Chaos
+    mode each need an actionable, human-readable account.
+    """
+    html = _html()
+    block = html[html.index("function momentStatusLabel") : html.index("function updateMoments")]
+
+    for reason, label in (
+        ("directive_slot_busy", "stepped aside — another moment was already lined up"),
+        ("interrupt_slot_busy", "stepped aside — another moment was already lined up"),
+        ("stale_playlist", "set aside because that song left the rotation while it was being prepared"),
+        ("stale_source", "set aside when the music source changed — the hosts are following the new source"),
+        ("source_switch", "set aside when the music source changed — the hosts are following the new source"),
+        ("stale_chaos", "set aside when Chaos Mode changed — the hosts are following the new direction"),
+    ):
+        assert reason in block
+        assert label in block
+    assert (
+        "if(r==='stale_source'||r==='source_switch')"
+        "return{text:'set aside when the music source changed — "
+        "the hosts are following the new source',color:'var(--muted)'};"
+    ) in block
 
 
 def test_format_request_age_guards_invalid_values() -> None:

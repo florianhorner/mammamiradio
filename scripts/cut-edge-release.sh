@@ -9,13 +9,14 @@
 # a version-string compare — so changing it surfaces an in-place Update on the Pi.
 #
 # Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` only
-# builds an image when a commit touches ha-addon/**, mammamiradio/**, pyproject.toml,
-# or radio.toml. When the tip commits are tests/docs/CI-only, no :<sha> image exists
-# for them, so pinning HEAD would make the Supervisor pull a missing tag. This script
-# picks the newest main commit with a successful build run (that success is the proof
-# both per-arch images were pushed) and HARD-FAILS rather than advertise an unverified
-# tag. It also refuses if any add-on image file changed between that built commit and
-# HEAD — the pinned image would not implement the newer edge metadata.
+# builds an image when a commit touches the IMAGE_PATHS below: add-on or application
+# source, the canonical project/model config, image validation/smoke scripts, or the
+# build workflow itself. When the tip commits are outside that trigger set, no :<sha>
+# image exists for them, so pinning HEAD would make the Supervisor pull a missing tag.
+# This script picks the newest main commit with a successful build run (that success is
+# the proof both per-arch images were pushed and smoked) and HARD-FAILS rather than
+# advertise an unverified tag. It also refuses if any trigger path changed between that
+# built commit and HEAD — the pinned image would not implement the newer edge metadata.
 #
 # Selection uses `gh run list` (needs only actions:read). The old GHCR packages-API
 # check is gone: it needed the read:packages scope the maintainer token lacks and
@@ -31,8 +32,38 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 
+# --target-sha <sha> pins edge to one EXACT commit instead of "newest built".
+#
+# Needed by the release cut in docs/release-process.md: to soak the exact commit
+# you are about to tag, edge must point at that commit and no other. The default
+# selection walks origin/main newest-first, so a merge landing mid-cut would
+# silently pin past the commit under test and the soak would prove nothing.
+REQUESTED_SHA=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --target-sha)
+      REQUESTED_SHA="${2:-}"
+      if [ -z "$REQUESTED_SHA" ]; then
+        echo "ERROR: --target-sha needs a commit-ish" >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--target-sha <commit>]"
+      echo "  (no args)          pin edge to the newest origin/main commit with a green build"
+      echo "  --target-sha <sha> pin edge to that exact commit, refusing any other"
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # Paths that trigger Build HA Addon — must mirror addon-build.yml `on.push.paths`.
-IMAGE_PATHS="ha-addon mammamiradio pyproject.toml radio.toml"
+IMAGE_PATHS="ha-addon mammamiradio pyproject.toml radio.toml model_registry.toml scripts/validate-addon.sh scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py .github/workflows/addon-build.yml"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: working tree not clean — commit or stash first, then cut the edge release." >&2
@@ -68,13 +99,47 @@ OK_SHAS="$(gh run list --workflow=addon-build.yml --branch main --limit 40 \
 # an ancestor of main and topology-correct (children before parents) even when a merged
 # branch carries stale commit dates or an older commit was re-run after a newer one.
 TARGET_FULL=""
-while IFS= read -r _commit; do
-  [ -n "$_commit" ] || continue
-  if printf '%s\n' "$OK_SHAS" | grep -qxF "$_commit"; then
-    TARGET_FULL="$_commit"
-    break
+if [ -n "$REQUESTED_SHA" ]; then
+  # Exact-commit mode: resolve, then refuse anything that is not that commit.
+  if ! TARGET_FULL="$(git rev-parse --verify "${REQUESTED_SHA}^{commit}" 2>/dev/null)"; then
+    echo "ERROR: --target-sha '$REQUESTED_SHA' is not a commit in this repository." >&2
+    exit 1
   fi
-done < <(git rev-list --topo-order origin/main)
+  if ! git merge-base --is-ancestor "$TARGET_FULL" origin/main; then
+    echo "ERROR: --target-sha $REQUESTED_SHA is not an ancestor of origin/main." >&2
+    echo "       Edge may only point at a commit that is actually on main." >&2
+    exit 1
+  fi
+  # Query the runs for THIS commit rather than reusing OK_SHAS. OK_SHAS is the 40
+  # most recent runs on main, so a target older than that window would be rejected
+  # as "no green build" even though its image exists.
+  #
+  # `--status success` filters server-side, so `--limit 1` is enough: we only need
+  # to know whether ANY successful run exists. Filtering client-side over a capped
+  # page would reintroduce the same class of bug one level down — enough newer
+  # failed reruns on the same commit would push the successful one out of the page.
+  # Hard-fail (never soft-pass) if the query itself fails.
+  if ! TARGET_RUNS="$(gh run list --workflow=addon-build.yml --commit "$TARGET_FULL" \
+      --status success --limit 1 --json conclusion -q 'length' 2>/dev/null)"; then
+    echo "ERROR: could not query 'Build HA Addon' runs for $REQUESTED_SHA." >&2
+    echo "       Refusing to pin an unverified commit." >&2
+    exit 1
+  fi
+  if [ "${TARGET_RUNS:-0}" -lt 1 ]; then
+    echo "ERROR: --target-sha $REQUESTED_SHA has no successful 'Build HA Addon' run." >&2
+    echo "       No :<short-sha> image exists for it, so the Supervisor would pull a" >&2
+    echo "       missing tag. Wait for its build to go green, then re-run." >&2
+    exit 1
+  fi
+else
+  while IFS= read -r _commit; do
+    [ -n "$_commit" ] || continue
+    if printf '%s\n' "$OK_SHAS" | grep -qxF "$_commit"; then
+      TARGET_FULL="$_commit"
+      break
+    fi
+  done < <(git rev-list --topo-order origin/main)
+fi
 
 if [ -z "$TARGET_FULL" ]; then
   echo "ERROR: no successful 'Build HA Addon' run found for any commit on origin/main." >&2
@@ -101,11 +166,24 @@ if ! CHANGED="$(git diff --name-only "$TARGET_FULL" origin/main -- $IMAGE_PATHS 
   exit 1
 fi
 if [ -n "$CHANGED" ]; then
-  echo "ERROR: add-on image files changed since the latest built commit ($SHA):" >&2
+  echo "ERROR: add-on image files changed between $SHA and origin/main:" >&2
   printf '%s\n' "$CHANGED" | sed 's/^/         /' >&2
-  echo "       The newest add-on-affecting commit has no green 'Build HA Addon' image yet" >&2
-  echo "       (still building, or its build failed). Pinning now would ship edge metadata" >&2
-  echo "       the pinned image does not implement. Wait for that build (or fix it), then re-run." >&2
+  echo "       The edge branch takes its metadata (options/schema, run.sh) from" >&2
+  echo "       origin/main, so pinning $SHA would advertise metadata that image does" >&2
+  echo "       not implement." >&2
+  if [ -n "$REQUESTED_SHA" ]; then
+    # Mode-aware: with an explicit target the problem is never "wait for a build".
+    # A newer image-affecting commit has landed, so this commit can no longer be
+    # soaked as edge — the metadata has moved on without it.
+    echo "       You asked for --target-sha $REQUESTED_SHA, but a newer image-affecting" >&2
+    echo "       commit has landed on main since, so that commit can no longer be soaked" >&2
+    echo "       as edge. Either revert the newer commit if it was not meant to be in" >&2
+    echo "       this release, or accept it and cut from current main instead." >&2
+  else
+    echo "       The newest add-on-affecting commit has no green 'Build HA Addon' image yet" >&2
+    echo "       (still building, or its build failed). Wait for that build (or fix it)," >&2
+    echo "       then re-run." >&2
+  fi
   exit 1
 fi
 

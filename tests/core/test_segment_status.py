@@ -57,11 +57,43 @@ def test_classify_stream_outcome_skipped():
 
 
 def test_classify_stream_outcome_no_listeners():
-    assert ss.classify_stream_outcome(was_skipped=False, bytes_sent=1000, listeners=0) == ss.NO_LISTENERS
+    assert (
+        ss.classify_stream_outcome(
+            was_skipped=False,
+            bytes_sent=1000,
+            listeners=0,
+            accepted_listeners=0,
+        )
+        == ss.NO_LISTENERS
+    )
 
 
 def test_classify_stream_outcome_not_streamed_on_zero_bytes():
     assert ss.classify_stream_outcome(was_skipped=False, bytes_sent=0, listeners=3) == ss.NOT_STREAMED
+
+
+def test_classify_stream_outcome_not_streamed_when_connected_room_rejects_delivery():
+    assert (
+        ss.classify_stream_outcome(
+            was_skipped=False,
+            bytes_sent=1000,
+            listeners=3,
+            accepted_listeners=0,
+        )
+        == ss.NOT_STREAMED
+    )
+
+
+def test_classify_stream_outcome_counts_listener_that_joins_after_start_sample():
+    assert (
+        ss.classify_stream_outcome(
+            was_skipped=False,
+            bytes_sent=1000,
+            listeners=0,
+            accepted_listeners=1,
+        )
+        == ss.AIRED
+    )
 
 
 def test_classify_stream_outcome_fallback_rescue_when_fallback_active():

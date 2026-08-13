@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import RadioEventRule, load_config
+from mammamiradio.core.listener_session import ListenerSession, ListenerSessionCueState
 from mammamiradio.core.models import (
+    ChaosSubtype,
+    DialogueLine,
+    GenerationWasteReason,
     HostPersonality,
     InterruptSpec,
     PlaylistSource,
@@ -22,17 +30,26 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
 from mammamiradio.hosts.ad_creative import AdBrand, AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
-from mammamiradio.hosts.scriptwriter import BanterCommit, ListenerRequestCommit
+from mammamiradio.hosts.scriptwriter import (
+    BanterCommit,
+    CompanionshipBanterCommit,
+    ListenerRequestCommit,
+)
 from mammamiradio.scheduling.producer import (
     SHAREWARE_CANNED_LIMIT,
     _apply_radio_event_matches,
     _apply_ritual_recipe_matches,
+    _attach_runtime_provider_observations,
+    _enqueue_with_egress,
+    _home_context_generation_is_current,
+    _listener_truth_guard,
     _pick_canned_clip,
     run_producer,
 )
@@ -75,20 +92,261 @@ def _make_state() -> StationState:
             Track(title="Canzone Due", artist="Artista", duration_ms=180_000, spotify_id="demo2"),
         ],
         listeners_active=1,  # simulate a live listener so the producer gate passes
+        home_authorization=HomeAuthorization.legacy(),
     )
 
 
 def _make_config():
     config = load_config(TOML_PATH)
+    # Producer unit tests exercise Normal Mode unless a test opts into a
+    # special mode explicitly.  Keep them deterministic when another test or
+    # the invoking environment leaves the persisted festival flag enabled.
+    config.party_mode = None
     config.pacing.lookahead_segments = 1
     config.homeassistant.enabled = False
     config.tmp_dir = Path("/tmp/mammamiradio_test")
     return config
 
 
+def test_segment_carries_only_provider_observations_created_during_its_render():
+    state = _make_state()
+    state.observe_runtime_provider(
+        "script_provider",
+        current_provider="anthropic",
+        primary_provider="anthropic",
+        fallback_active=False,
+        reason="Anthropic active",
+    )
+    scope = state.bind_runtime_provider_observation_scope("banter-render")
+    try:
+        state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+        state.observe_runtime_provider(
+            "tts:openai",
+            current_provider="edge",
+            primary_provider="openai",
+            fallback_active=True,
+            reason="missing_credentials",
+        )
+        state.observe_runtime_provider(
+            "tts_provider",
+            current_provider="edge",
+            primary_provider="mixed_tts",
+            fallback_active=True,
+            reason="Cloud TTS unavailable",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/provider-carry.mp3"),
+        metadata={"title": "Rendered banter"},
+    )
+
+    _attach_runtime_provider_observations(segment, state, "banter-render")
+
+    assert set(segment.runtime_provider_observations) == {
+        "script_provider",
+        "tts:openai",
+        "tts_provider",
+    }
+    assert segment.runtime_provider_observations["script_provider"].current_provider == "openai"
+    assert segment.runtime_provider_observations["tts_provider"].current_provider == "edge"
+    assert segment.runtime_provider_observations["tts:openai"].current_provider == "edge"
+
+    state.on_stream_segment_selected(segment)
+    assert state.on_stream_segment_audible(segment) is True
+    assert state.runtime_provider_state["tts_provider"]["last_audible_provider"] == "edge"
+    assert state.runtime_provider_state["tts:openai"]["last_audible_provider"] == "edge"
+    assert {event.provider_class for event in state.runtime_events} == {
+        "script_provider",
+        "tts:openai",
+        "tts_provider",
+    }
+
+
+@pytest.mark.asyncio
+async def test_background_provider_observation_during_music_render_is_not_attached(tmp_path):
+    state = _make_state()
+    state.playlist[0].youtube_id = "yt_demo1"
+    state.playlist[1].youtube_id = "yt_demo2"
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    music_render_started = asyncio.Event()
+    background_observed = asyncio.Event()
+    source_audio = tmp_path / "source.mp3"
+    source_audio.write_bytes(b"\x00" * 2048)
+
+    async def _background_memory_observation() -> None:
+        await music_render_started.wait()
+        state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="background_memory_extract",
+        )
+        background_observed.set()
+
+    async def _download_during_background_observation(*_args, **_kwargs) -> Path:
+        music_render_started.set()
+        await background_observed.wait()
+        return source_audio
+
+    def _normalize_source(_src: Path, dst: Path, *_args, **_kwargs) -> None:
+        dst.write_bytes(source_audio.read_bytes())
+
+    # The task is born outside the render scope, as memory extraction and other
+    # unrelated observers are in production. Context ownership must therefore
+    # stay blank even when it completes while a music render is active.
+    background = asyncio.create_task(_background_memory_observation())
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(
+            f"{PRODUCER_MODULE}.download_track",
+            new_callable=AsyncMock,
+            side_effect=_download_during_background_observation,
+        ),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize_source),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+    ):
+        await _run_until_queued(queue, state, config)
+        await background
+
+    segment = queue.get_nowait()
+
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "background_memory_extract"
+    assert segment.runtime_provider_observations == {}
+
+
+def test_recovery_segment_does_not_inherit_failed_render_provider_observations():
+    state = _make_state()
+    scope = state.bind_runtime_provider_observation_scope("failed-render")
+    try:
+        state.observe_runtime_provider(
+            "script_provider",
+            current_provider="openai",
+            primary_provider="anthropic",
+            fallback_active=True,
+            reason="anthropic_exception",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/provider-recovery.mp3"),
+        metadata={"title": "Recovery", "rescue": True},
+    )
+
+    _attach_runtime_provider_observations(segment, state, "failed-render")
+
+    assert segment.runtime_provider_observations == {}
+    assert state.take_runtime_provider_observations("failed-render") == {}
+
+
+def test_canned_fallback_does_not_claim_a_failed_tts_observation():
+    state = _make_state()
+    scope = state.bind_runtime_provider_observation_scope("failed-canned-render")
+    try:
+        state.observe_runtime_provider(
+            "tts_provider",
+            current_provider="edge",
+            primary_provider="openai",
+            fallback_active=True,
+            reason="provider_error",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/tmp/canned-fallback.mp3"),
+        metadata={"title": "Canned fallback", "canned": True},
+    )
+
+    _attach_runtime_provider_observations(segment, state, "failed-canned-render")
+
+    assert segment.runtime_provider_observations == {}
+    assert state.take_runtime_provider_observations("failed-canned-render") == {}
+
+
+def _manifest_recovery_clip(root: Path, name: str, payload: bytes, *, kind: str = "speech") -> Path:
+    """Create one content-addressed speech or tone recovery fixture."""
+
+    recovery = root / "recovery"
+    recovery.mkdir(parents=True, exist_ok=True)
+    clip = recovery / name
+    clip.write_bytes(payload)
+    manifest_path = root / "spoken_assets.json"
+    assets: list[dict[str, str]] = []
+    if manifest_path.is_file():
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(existing.get("assets"), list):
+            assets = [entry for entry in existing["assets"] if entry.get("path") != f"recovery/{name}"]
+    assets.append(
+        {
+            "path": f"recovery/{name}",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "kind": kind,
+            "language": "none" if kind == "tone" else "en",
+            "transcript": "" if kind == "tone" else "The station stays on air.",
+        }
+    )
+    manifest_path.write_text(json.dumps({"schema_version": 1, "assets": assets}), encoding="utf-8")
+    return clip
+
+
 def _fake_path(*_args, **_kwargs) -> Path:
     """Return a dummy Path that satisfies type checks."""
     return Path("/tmp/mammamiradio_test/fake.mp3")
+
+
+@pytest.mark.asyncio
+async def test_home_context_generation_gate_rechecks_after_egress_await(tmp_path):
+    """A privacy cutover during egress retracts the stale host segment."""
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.homeassistant.context_enabled = True
+    segment = Segment(
+        type=SegmentType.NEWS_FLASH,
+        path=tmp_path / "pre-cutover.mp3",
+        metadata={"home_context_generation": state.home_context_policy_generation},
+        ephemeral=False,
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=1)
+
+    async def _egress_with_privacy_cutover(rendered: Segment, _config) -> Segment:
+        await asyncio.sleep(0)
+        _config.homeassistant.context_enabled = False
+        state.home_context_policy_generation += 1
+        return rendered
+
+    def _stale_reason() -> str | None:
+        if _home_context_generation_is_current(state, config, segment):
+            return None
+        return GenerationWasteReason.OPERATOR_PURGE
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", side_effect=_egress_with_privacy_cutover):
+        accepted = await _enqueue_with_egress(
+            queue,
+            state,
+            config,
+            segment,
+            stale_check=_stale_reason,
+        )
+
+    assert not accepted
+    assert queue.empty()
+    assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 1
 
 
 async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, timeout: float = 5.0):
@@ -225,7 +483,9 @@ async def test_runway_governor_boundary_allows_due_banter(tmp_path):
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -295,7 +555,9 @@ async def test_runway_governor_allows_optional_when_observable_queue_is_full(tmp
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -360,7 +622,9 @@ async def test_runway_governor_exempts_operator_force(tmp_path):
         patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 240),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -388,7 +652,9 @@ async def test_runway_governor_empty_playlist_falls_back_to_banter(tmp_path):
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -488,7 +754,9 @@ async def test_banter_segment_queued():
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -529,7 +797,9 @@ async def test_banter_segment_carries_memory_extraction_with_final_script():
             new_callable=AsyncMock,
             return_value=([(host, "Dedicato a te!")], commit),
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -573,6 +843,9 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == host.engine
     assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
+    assert kwargs["elevenlabs_model"] == host.elevenlabs_model
+    assert kwargs["delivery_profile"] == host.delivery_profile
+    assert "delivery_cue" not in kwargs
 
 
 @pytest.mark.asyncio
@@ -715,6 +988,9 @@ async def test_time_check_uses_host_engine_for_tts():
     kwargs = mock_synthesize.call_args.kwargs
     assert kwargs["engine"] == host.engine
     assert kwargs["edge_fallback_voice"] == host.edge_fallback_voice
+    assert kwargs["elevenlabs_model"] == host.elevenlabs_model
+    assert kwargs["delivery_profile"] == host.delivery_profile
+    assert "delivery_cue" not in kwargs
 
 
 @pytest.mark.asyncio
@@ -755,7 +1031,9 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Pubblicita.")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Pubblicita.", None)
+        ),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
         patch(
             f"{PRODUCER_MODULE}._select_ad_creative",
@@ -776,7 +1054,11 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
 
     seg = queue.get_nowait()
     assert seg.type == SegmentType.AD
-    promo_call = next(call for call in mock_synthesize.await_args_list if call.args[0] == "Messaggio promozionale.")
+    # Normal Mode is English-led even though this station's identity language
+    # is Italian.  The promo tag is selected through the shared fallback seam.
+    promo_call = next(
+        call for call in mock_synthesize.await_args_list if call.args[0] == "A word from our sponsors, amici."
+    )
     assert promo_call.args[1] == "elevenlabs-voice-id"
     assert promo_call.kwargs["engine"] == "elevenlabs"
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
@@ -928,6 +1210,48 @@ async def test_error_recovery_queues_recovery_sweeper():
 
 
 @pytest.mark.asyncio
+async def test_unavailable_marker_exhaustion_queues_recovery_sweeper(tmp_path):
+    """A tiny unavailable marker must enter recovery once it denies the final track."""
+    from mammamiradio.playlist import downloader
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, is_rejected_cache_key
+
+    state = _make_state()
+    state.playlist = state.playlist[:1]
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    marker = tmp_path / f"_failed_{state.playlist[0].cache_key}.mp3"
+    marker.write_text("yt-dlp unavailable")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=_fake_path(),
+        metadata={"type": "sweeper", "rescue": True, "error_recovery": True, "title": "Recovery sweeper"},
+    )
+
+    clear_rejected_cache_keys()
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=marker),
+            patch(f"{PRODUCER_MODULE}.validate_download", wraps=downloader.validate_download),
+            patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._get_last_music_file", return_value=None),
+            patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, return_value=recovery),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            await _run_until_queued(queue, state, config)
+
+        assert is_rejected_cache_key(state.playlist[0].cache_key)
+        segment = queue.get_nowait()
+        assert segment is recovery
+        assert segment.metadata["rescue"] is True
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_source_switch_discards_stale_music_segment(tmp_path):
     """A source switch should invalidate any in-flight music from the previous playlist."""
     old_track = Track(title="Old Song", artist="Old Artist", duration_ms=200_000, spotify_id="old1")
@@ -977,6 +1301,8 @@ async def test_source_switch_discards_stale_music_segment(tmp_path):
             await asyncio.wait_for(second_download_started.wait(), timeout=1.0)
             assert queue.empty()
             assert len(state.played_tracks) == 0
+            assert state.source_readiness.entries["charts"].playable == 0
+            assert state.source_readiness.entries["charts"].failure == ""
         finally:
             task.cancel()
             try:
@@ -1108,20 +1434,117 @@ async def test_chart_refresh_waits_full_interval_after_startup():
     mock_refresh.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_chart_refresh_discards_results_after_source_switch():
+    """A slow charts refresh cannot repopulate a newly selected source."""
+    state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config()
+    config.pacing.lookahead_segments = 1
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    await queue.put(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/mammamiradio_test/seed.mp3"),
+            duration_sec=300.0,
+            metadata={"type": "music"},
+        )
+    )
+    refresh_started = threading.Event()
+    allow_refresh = threading.Event()
+    stale_chart_track = Track(
+        title="Late Chart Song",
+        artist="Late Artist",
+        duration_ms=200_000,
+        spotify_id="late-chart",
+    )
+
+    def slow_refresh(_existing_ids):
+        refresh_started.set()
+        assert allow_refresh.wait(timeout=1.0)
+        return [stale_chart_track]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.PLAYLIST_REFRESH_INTERVAL_SECONDS", 0),
+        patch(f"{PRODUCER_MODULE}.fetch_chart_refresh", side_effect=slow_refresh),
+        patch(f"{PRODUCER_MODULE}.evict_cache_lru"),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            assert await asyncio.to_thread(refresh_started.wait, 1.0)
+            replacement = Track(
+                title="Local Song",
+                artist="Local Artist",
+                duration_ms=200_000,
+                spotify_id="local-song",
+                source="local",
+            )
+            state.switch_playlist(
+                [replacement],
+                PlaylistSource(kind="local", source_id="local", label="Local music"),
+            )
+            allow_refresh.set()
+            await asyncio.sleep(0.05)
+
+            assert state.playlist == [replacement]
+            assert state.source_readiness.entries["charts"].candidates == 0
+            assert state.source_readiness.entries["local"].candidates == 1
+        finally:
+            allow_refresh.set()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+def test_cache_eviction_protects_capacity_exempt_continuity_slot(tmp_path):
+    """The eviction protection set includes the out-of-band continuity slot.
+
+    Verifies the protection contract directly through the pure helper the
+    producer loop uses, rather than racing a wall clock against `run_producer`
+    reaching its eviction branch — that integration race was a CI-only flake
+    (evict "not called" / timeout). The loop's call site stays covered by the
+    full-loop producer tests.
+    """
+    from mammamiradio.scheduling.producer import _cache_eviction_protected_paths
+
+    state = _make_state()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    queued_path = tmp_path / "norm_queued_192k.mp3"
+    queued_path.write_bytes(b"queued")
+    slot_path = tmp_path / "norm_slot_192k.mp3"
+    slot_path.write_bytes(b"slot")
+    queue.put_nowait(
+        Segment(type=SegmentType.MUSIC, path=queued_path, duration_sec=300.0, metadata={"title": "Queued"})
+    )
+    state.continuity_slot = Segment(
+        type=SegmentType.MUSIC,
+        path=slot_path,
+        duration_sec=180.0,
+        metadata={"continuity_reservation": True},
+        ephemeral=False,
+    )
+
+    protected = _cache_eviction_protected_paths(queue, state)
+
+    assert queued_path in protected
+    assert slot_path in protected
+    # No slot reserved -> only the real queue is protected.
+    state.continuity_slot = None
+    assert _cache_eviction_protected_paths(queue, state) == {queued_path}
+
+
 # ---------------------------------------------------------------------------
 # Shareware trial: canned clip limit
 # ---------------------------------------------------------------------------
 
 
-def test_pick_canned_clip_respects_shareware_limit(tmp_path):
-    """After SHAREWARE_CANNED_LIMIT clips streamed, _pick_canned_clip returns None for banter."""
+def test_pick_canned_clip_requires_each_kind_to_be_manifested(tmp_path):
+    """A recovery manifest never implicitly revives banter or welcome assets."""
     from mammamiradio.scheduling import producer
 
-    # Create fake banter clips
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    for i in range(5):
-        (banter_dir / f"clip_{i}.mp3").write_bytes(b"\x00" * 2048)
+    recovery = _manifest_recovery_clip(tmp_path, "continuity.mp3", b"reviewed" * 300)
 
     # Temporarily override demo assets dir and clear caches
     orig = producer._DEMO_ASSETS_DIR
@@ -1132,22 +1555,61 @@ def test_pick_canned_clip_respects_shareware_limit(tmp_path):
     try:
         state = StationState()
 
-        # Under limit: should return a clip
-        assert _pick_canned_clip("banter", state=state) is not None
+        assert _pick_canned_clip("recovery", state=state) == recovery
+        assert _pick_canned_clip("banter", state=state) is None
+        assert _pick_canned_clip("welcome", state=state) is None
 
-        # At limit: should return None
+        # The approved recovery rung is a safety asset, not shareware banter.
         state.canned_clips_streamed = SHAREWARE_CANNED_LIMIT
         assert _pick_canned_clip("banter", state=state) is None
-
-        # Welcome clips are NOT subject to the limit
-        welcome_dir = tmp_path / "welcome"
-        welcome_dir.mkdir()
-        (welcome_dir / "welcome_1.mp3").write_bytes(b"\x00" * 2048)
-        assert _pick_canned_clip("welcome", state=state) is not None
+        assert _pick_canned_clip("welcome", state=state) is None
     finally:
         producer._DEMO_ASSETS_DIR = orig
         producer._recently_played_clips.clear()
         producer._canned_clip_cache.clear()
+
+
+def test_pick_canned_clip_allows_only_manifested_truth_safe_banter(tmp_path):
+    """Neutral canned banter is eligible only through the reviewed manifest."""
+    from mammamiradio.scheduling import producer
+
+    banter_dir = tmp_path / "banter"
+    banter_dir.mkdir()
+    payload = b"reviewed neutral banter" * 200
+    clip = banter_dir / "neutral.mp3"
+    clip.write_bytes(payload)
+    (tmp_path / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "banter/neutral.mp3",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "kind": "speech",
+                        "language": "en",
+                        "transcript": "The music keeps the room warm.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    original_root = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
+    try:
+        state = StationState()
+        assert _pick_canned_clip("banter", state=state) == clip
+        state.canned_clips_streamed = SHAREWARE_CANNED_LIMIT
+        assert _pick_canned_clip("banter", state=state) is None
+        assert _pick_canned_clip("welcome", state=StationState()) is None
+    finally:
+        producer._DEMO_ASSETS_DIR = original_root
+        producer._canned_clip_cache.clear()
+        producer._recently_played_clips.clear()
 
 
 def test_pick_canned_clip_returns_none_when_dir_missing(tmp_path):
@@ -1182,7 +1644,7 @@ def test_pick_canned_clip_returns_none_when_dir_empty(tmp_path):
     try:
         result = _pick_canned_clip("banter", state=StationState())
         assert result is None
-        assert producer._canned_clip_cache.get("banter") == []
+        assert producer._canned_clip_cache["banter"] == []
     finally:
         producer._DEMO_ASSETS_DIR = orig
         producer._canned_clip_cache.clear()
@@ -1276,7 +1738,7 @@ async def test_error_recovery_inserts_recovery_sweeper_when_no_canned_clips(tmp_
 
 @pytest.mark.asyncio
 async def test_error_recovery_logs_missing_recovery_assets_and_uses_recovery_sweeper(caplog):
-    """When recovery/banter/welcome clips are unavailable, producer logs and inserts a sweeper."""
+    """When approved recovery clips are unavailable, producer logs and inserts a sweeper."""
     from mammamiradio.scheduling import producer
 
     state = _make_state()
@@ -1318,7 +1780,7 @@ async def test_error_recovery_logs_missing_recovery_assets_and_uses_recovery_swe
     finally:
         producer._last_music_file = orig_last_music
 
-    assert picked_subdirs[:3] == ["recovery", "banter", "welcome"]
+    assert picked_subdirs == ["recovery"]
     assert any(
         "No packaged recovery clips, norm cache, or last-known-good music available" in record.message
         for record in caplog.records
@@ -1355,11 +1817,11 @@ async def test_record_motif_persists_to_persona(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_increments_count(tmp_path):
-    """_maybe_start_session bumps session_count on a fresh PersonaStore."""
+async def test_listener_session_receipt_increments_count(tmp_path):
+    """The producer drains one pending station epoch into PersonaStore."""
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
-    from mammamiradio.scheduling.producer import _maybe_start_session
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     db_path = tmp_path / "persona.db"
     init_db(db_path)
@@ -1369,8 +1831,10 @@ async def test_maybe_start_session_increments_count(tmp_path):
 
     state = StationState()
     state.persona_store = store
+    state.listener_session.observe_active_count(1, now=0.0)
 
-    await _maybe_start_session(state)
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
 
     persona = await store.get_persona()
     assert persona.session_count == 1
@@ -1499,32 +1963,289 @@ async def test_prewarm_skips_invalid_download_before_normalize():
 
 
 @pytest.mark.asyncio
-async def test_prewarm_quality_gate_rejection():
-    """prewarm returns False when quality gate rejects the track."""
-    from mammamiradio.audio.audio_quality import AudioQualityError
+async def test_failed_download_marker_skips_normalize_and_denylists_track(tmp_path):
+    """A yt-dlp failure marker is rejected before FFprobe or normalization."""
+    from mammamiradio.playlist import downloader
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, is_rejected_cache_key
+    from mammamiradio.scheduling.producer import _render_music_track
+
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    track = Track(
+        title="403 Probe",
+        artist="Test Artist",
+        duration_ms=180_000,
+        youtube_id="dQw4w9WgXcQ",
+        source="youtube",
+    )
+    marker = tmp_path / f"_failed_{track.cache_key}.mp3"
+    marker.write_text("yt-dlp failed: HTTP Error 403: Forbidden")
+
+    clear_rejected_cache_keys()
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=marker),
+            patch(f"{PRODUCER_MODULE}.validate_download", wraps=downloader.validate_download),
+            patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
+            patch("mammamiradio.playlist.downloader.subprocess.run") as mock_ffprobe,
+        ):
+            rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+
+        assert rendered is None
+        assert is_rejected_cache_key(track.cache_key)
+        mock_normalize.assert_not_called()
+        mock_ffprobe.assert_not_called()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_skips_denylisted_track_for_playable_alternative(tmp_path):
+    """Prewarm must not spend its bounded startup slots on a failed acquisition."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
     from mammamiradio.scheduling.producer import prewarm_first_segment
 
     state = _make_state()
+    rejected, playable = state.playlist
     config = _make_config()
-    config.tmp_dir.mkdir(parents=True, exist_ok=True)
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "operator-music"
     queue: asyncio.Queue = asyncio.Queue()
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"downloaded audio")
+
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"normalized audio")
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, rejected.cache_key, "yt-dlp failed: HTTP Error 403: Forbidden")
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source) as mock_download,
+            patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
+            patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=180.0),
+        ):
+            result = await prewarm_first_segment(queue, state, config)
+
+        assert result is True
+        assert mock_download.await_args.args[0] is playable
+        assert mock_download.await_args.kwargs["music_dir"] == config.music_dir
+        segment = queue.get_nowait()
+        assert segment.metadata["title"] == playable.display
+        assert segment.metadata["source_kind"] == "youtube"
+        assert state.source_readiness.entries["charts"].playable == 1
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_source_exhaustion_requires_every_candidate_in_that_source(tmp_path):
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    state = _make_state()
+    rejected, eligible = state.playlist
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, rejected.cache_key, "candidate unavailable")
+
+        selected = _select_accepted_music_track(state, config)
+
+        assert selected is eligible
+        assert state.source_readiness.entries["charts"].exhausted is False
+    finally:
+        clear_rejected_cache_keys()
+
+
+def test_source_exhaustion_is_isolated_across_mixed_sources(tmp_path):
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    chart = Track(title="Chart", artist="Artist", duration_ms=180_000, spotify_id="chart", source="youtube")
+    jamendo = Track(title="CC", artist="Artist", duration_ms=180_000, spotify_id="cc", source="jamendo")
+    state = StationState(playlist=[chart, jamendo])
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, chart.cache_key, "candidate unavailable")
+
+        selected = _select_accepted_music_track(state, config)
+
+        assert selected is jamendo
+        assert state.source_readiness.entries["charts"].exhausted is True
+        assert state.source_readiness.entries["jamendo"].exhausted is False
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_valid_local_recovery_reopens_a_session_denied_track(tmp_path):
+    """A newly synced local file heals a denied source only after it validates."""
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+    from mammamiradio.scheduling.producer import _render_music_track, _select_accepted_music_track
+
+    state = _make_state()
+    state.playlist = state.playlist[:1]
+    track = state.playlist[0]
+    track.source = "local"
+    local_file = tmp_path / "recovered.mp3"
+    track.local_path = local_file
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
+    state.source_readiness.mark_candidates("local", 1)
+    marker = tmp_path / f"_failed_{track.cache_key}.mp3"
+    marker.write_text("yt-dlp unavailable")
+
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"normalized recovered audio")
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp unavailable")
+        assert _select_accepted_music_track(state, config) is None
+        assert state.source_readiness.entries["local"].exhausted is True
+
+        local_file.write_bytes(b"recovered audio")
+        assert _select_accepted_music_track(state, config) is track
+        assert state.source_readiness.entries["local"].exhausted is False
+        assert is_rejected_cache_key(track.cache_key)
+
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=local_file),
+            patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
+        ):
+            rendered = await _render_music_track(track, config, temp_prefix="music", context="music")
+
+        assert rendered is not None
+        assert not is_rejected_cache_key(track.cache_key)
+        assert not marker.exists()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_returns_false_when_every_track_is_denylisted(tmp_path):
+    """No eligible prewarm track must not trigger another acquisition attempt."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import prewarm_first_segment
+    from mammamiradio.web.status_payload import _source_readiness_status
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "music"
+    queue: asyncio.Queue = asyncio.Queue()
+
+    clear_rejected_cache_keys()
+    try:
+        for track in state.playlist:
+            reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp failed: HTTP Error 403: Forbidden")
+        with (
+            patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_download,
+            patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
+        ):
+            result = await prewarm_first_segment(queue, state, config)
+
+        assert result is False
+        assert queue.empty()
+        assert state.source_readiness.entries["charts"].exhausted is True
+        charts = _source_readiness_status(config, state)["sources"]["charts"]
+        assert charts["status"] == "unavailable"
+        assert charts["detail"] == "No found track could be prepared as playable audio."
+        mock_download.assert_not_awaited()
+        mock_normalize.assert_not_called()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_quality_gate_rejection_purges_normalized_cache(tmp_path):
+    """A rejected prewarm render cannot remain available to recovery playback."""
+    from mammamiradio.audio.audio_quality import AudioQualityError
+    from mammamiradio.scheduling.producer import _normalized_cache_path, prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+    track = state.playlist[0]
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"downloaded audio")
+    norm_cached = _normalized_cache_path(track, config)
 
     def _reject(*_a, **_kw):
         raise AudioQualityError("silent track")
 
+    def _normalize(_source, destination, *_args, **_kwargs):
+        Path(destination).write_bytes(b"silent normalized audio")
+
     with (
-        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=Path("/tmp/fake.mp3")),
-        patch(f"{PRODUCER_MODULE}.normalize"),
-        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch.object(state, "select_next_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_normalize),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject),
     ):
         result = await prewarm_first_segment(queue, state, config)
 
     assert result is False
     assert queue.empty()
+    assert not norm_cached.exists()
+    assert not list(tmp_path.glob("music_*.mp3"))
     # The rejected prewarm render is recorded as generation waste (#397).
     assert state.discard_by_reason.get("quality_gate_reject") == 1
     assert state.discard_by_type.get("music") == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_cached_quality_gate_rejection_purges_normalized_cache(tmp_path):
+    """A rejected cache-hit prewarm cannot remain a recovery candidate."""
+    from mammamiradio.audio.audio_quality import AudioQualityError
+    from mammamiradio.scheduling.producer import _normalized_cache_path, prewarm_first_segment
+
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue = asyncio.Queue()
+    track = state.playlist[0]
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"downloaded audio")
+    norm_cached = _normalized_cache_path(track, config)
+    norm_cached.write_bytes(b"stale silent normalized audio")
+
+    def _reject(*_a, **_kw):
+        raise AudioQualityError("silent track")
+
+    with (
+        patch.object(state, "select_next_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=source),
+        patch(f"{PRODUCER_MODULE}.reconcile_cached_music") as mock_reconcile,
+        patch(f"{PRODUCER_MODULE}.normalize") as mock_normalize,
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    assert not norm_cached.exists()
+    mock_reconcile.assert_called_once_with(norm_cached, background=False)
+    mock_normalize.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1623,7 +2344,9 @@ async def test_banter_with_listener_request_commit_applies_on_queue():
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, commit)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -1667,6 +2390,7 @@ async def test_banter_canned_path_does_not_apply_listener_request_commit():
 def _ha_ctx_mock():
     """A HomeContext-shaped mock with the fields the producer HA block reads."""
     ctx = MagicMock()
+    ctx.authorization_mode = HomeAuthorizationMode.LEGACY.value
     ctx.summary = ""
     ctx.events_summary = ""
     ctx.events = []
@@ -2265,7 +2989,9 @@ async def test_generated_running_gag_carries_receipt_until_stream_marks_airing(t
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=([(host, "Il frigo.")], None)
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -2348,7 +3074,9 @@ async def test_stock_copy_fallback_banter_never_wears_a_receipt(tmp_path):
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(stock_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -2408,7 +3136,9 @@ async def test_quality_gate_canned_fallback_demotes_consumed_directive_receipt(t
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -2453,8 +3183,12 @@ async def test_stale_discard_demotes_carried_moment_receipt(tmp_path):
         return [(host, "La macchina del caffe si e svegliata.")], None
 
     def _staling_probe(_path):
-        # A same-source playlist edit lands mid-build — the shared epilogue
-        # gate discards this segment before it ever reaches the queue.
+        # A source switch lands mid-build — the shared epilogue gate discards
+        # this segment before it ever reaches the queue. (A same-source playlist
+        # edit no longer does: speech is not bound to a rotation row, so a pool
+        # that merely grew must not bin a finished render. This test is about
+        # receipt demotion on discard, not about which axis triggered it.)
+        state.source_revision += 1
         state.playlist_revision += 1
         return 1.0
 
@@ -2462,7 +3196,9 @@ async def test_stale_discard_demotes_carried_moment_receipt(tmp_path):
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -2487,7 +3223,7 @@ async def test_stale_discard_demotes_carried_moment_receipt(tmp_path):
     assert queue.empty()  # discarded, never queued
     (row,) = state.moment_store.rows
     assert row.status == "dropped"
-    assert row.drop_reason == "stale_playlist"
+    assert row.drop_reason == "stale_source"
 
 
 @pytest.mark.asyncio
@@ -2517,11 +3253,14 @@ async def test_enqueue_failure_demotes_carried_moment_receipt(tmp_path):
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -2567,7 +3306,9 @@ async def test_stale_handoff_id_never_leaks_onto_unrelated_banter(tmp_path):
             new_callable=AsyncMock,
             return_value=([(host, "Nessuna direttiva qui.")], None),
         ),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
@@ -2748,7 +3489,9 @@ async def test_running_gag_marked_spoken_only_when_generated_banter_airs():
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -2824,7 +3567,9 @@ async def test_running_gag_not_marked_on_llm_stock_copy_fallback():
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_fallback_releases_gag_key),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -2922,18 +3667,15 @@ def test_pick_canned_clip_returns_none_for_empty_dir(tmp_path):
     assert result is None
 
 
-def test_pick_canned_clip_returns_file(tmp_path):
-    """_pick_canned_clip returns a path when clips exist."""
+def test_pick_canned_clip_returns_manifested_recovery_file(tmp_path):
+    """_pick_canned_clip returns a reviewed, hash-valid recovery path."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    clip1 = banter_dir / "clip1.mp3"
-    clip1.write_bytes(b"\x00" * 2048)
+    clip1 = _manifest_recovery_clip(tmp_path, "clip1.mp3", b"reviewed" * 300)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        result = _pick_canned_clip("banter")
+        result = _pick_canned_clip("recovery")
     assert result == clip1
     assert list(_recently_played_clips) == ["clip1.mp3"]
 
@@ -2942,16 +3684,14 @@ def test_pick_canned_clip_rejects_deleted_cached_path(tmp_path):
     """A cached Path that vanished is skipped instead of returned."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    clip = tmp_path / "banter" / "gone.mp3"
-    clip.parent.mkdir()
-    clip.write_bytes(b"\x00" * 2048)
+    clip = _manifest_recovery_clip(tmp_path, "gone.mp3", b"reviewed" * 300)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        assert _pick_canned_clip("banter") == clip
+        assert _pick_canned_clip("recovery") == clip
         clip.unlink()
         _recently_played_clips.clear()
-        assert _pick_canned_clip("banter") is None
+        assert _pick_canned_clip("recovery") is None
     assert list(_recently_played_clips) == []
 
 
@@ -2959,14 +3699,11 @@ def test_pick_canned_clip_rejects_tiny_cached_path(tmp_path):
     """A truncated cached clip is skipped without ffprobe work."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    tiny = banter_dir / "tiny.mp3"
-    tiny.write_bytes(b"\x00" * 1024)
+    _manifest_recovery_clip(tmp_path, "tiny.mp3", b"x" * 1024)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        assert _pick_canned_clip("banter") is None
+        assert _pick_canned_clip("recovery") is None
     assert list(_recently_played_clips) == []
 
 
@@ -2974,15 +3711,12 @@ def test_pick_canned_clip_clears_recently_played_when_exhausted(tmp_path):
     """When all clips are recently played, the cache resets and re-picks."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
-    banter_dir = tmp_path / "banter"
-    banter_dir.mkdir()
-    clip1 = banter_dir / "clip1.mp3"
-    clip1.write_bytes(b"\x00" * 2048)
+    clip1 = _manifest_recovery_clip(tmp_path, "clip1.mp3", b"reviewed" * 300)
     _canned_clip_cache.clear()
     _recently_played_clips.clear()
     _recently_played_clips.append("clip1.mp3")  # Mark the only clip as recently played
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
-        result = _pick_canned_clip("banter")
+        result = _pick_canned_clip("recovery")
     assert result == clip1
     # recently_played should have been cleared and then clip1 re-added
     assert "clip1.mp3" in _recently_played_clips
@@ -3089,52 +3823,763 @@ async def test_record_motif_skips_when_no_persona_store():
 
 
 # ---------------------------------------------------------------------------
-# _maybe_start_session unit tests
+# _sync_listener_session_persona unit tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_no_persona_store():
-    """_maybe_start_session returns early when no persona_store."""
-    from mammamiradio.scheduling.producer import _maybe_start_session
+async def test_listener_session_receipt_no_persona_store():
+    """The receipt scheduler returns early when no persona_store exists."""
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     state = _make_state()
     state.persona_store = None
-    await _maybe_start_session(state)
+    _sync_listener_session_persona(state)
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_new_session():
-    """_maybe_start_session increments session when new."""
-    from mammamiradio.scheduling.producer import _maybe_start_session
+async def test_listener_session_receipt_schedules_one_pending_epoch():
+    """Only the station epoch receipt, not a timer, schedules persistence."""
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     state = _make_state()
     mock_persona = MagicMock()
-    mock_persona.maybe_new_session.return_value = True
-    mock_persona.increment_session = AsyncMock()
-    mock_persona_data = MagicMock()
-    mock_persona_data.session_count = 5
-    mock_persona.get_persona = AsyncMock(return_value=mock_persona_data)
+    mock_persona.start_session = AsyncMock(return_value=True)
     state.persona_store = mock_persona
+    state.listener_session.observe_active_count(1, now=0.0)
 
-    await _maybe_start_session(state)
-    mock_persona.increment_session.assert_awaited_once()
-    mock_persona.get_persona.assert_awaited_once()
+    _sync_listener_session_persona(state)
+    tasks = list(state.listener_session_tasks)
+    assert len(tasks) == 1
+    await asyncio.gather(*tasks)
+    mock_persona.start_session.assert_awaited_once_with("listener-epoch-1")
+    assert state.listener_session.pending_persona_epochs == ()
 
 
 @pytest.mark.asyncio
-async def test_maybe_start_session_not_new():
-    """_maybe_start_session does nothing when not a new session."""
-    from mammamiradio.scheduling.producer import _maybe_start_session
+async def test_listener_session_receipt_does_nothing_without_pending_epoch():
+    """No active epoch means there is no persona receipt to schedule."""
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
 
     state = _make_state()
     mock_persona = MagicMock()
-    mock_persona.maybe_new_session.return_value = False
-    mock_persona.increment_session = AsyncMock()
+    mock_persona.start_session = AsyncMock()
     state.persona_store = mock_persona
 
-    await _maybe_start_session(state)
-    mock_persona.increment_session.assert_not_awaited()
+    _sync_listener_session_persona(state)
+    mock_persona.start_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_listener_session_receipt_failure_uses_capped_monotonic_backoff():
+    """A failed commit stays pending without hot-looping the database."""
+    from mammamiradio.core.listener_session import ListenerSession
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
+
+    clock = [0.0]
+    state = _make_state()
+    state.listener_session = ListenerSession(monotonic=lambda: clock[0])
+    state.listener_session.observe_active_count(1)
+    mock_persona = MagicMock()
+    mock_persona.start_session = AsyncMock(side_effect=[False, True])
+    state.persona_store = mock_persona
+
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
+    assert state.listener_session.pending_persona_epochs == (1,)
+    assert state.listener_session_persona_retry_at == pytest.approx(1.0)
+
+    _sync_listener_session_persona(state)
+    assert mock_persona.start_session.await_count == 1
+    clock[0] = 0.999
+    _sync_listener_session_persona(state)
+    assert mock_persona.start_session.await_count == 1
+
+    clock[0] = 1.0
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
+    assert mock_persona.start_session.await_count == 2
+    assert state.listener_session.pending_persona_epochs == ()
+    assert state.listener_session_persona_retry_at == 0.0
+    assert state.listener_session_persona_retry_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_listener_session_receipt_exception_keeps_epoch_pending():
+    from mammamiradio.core.listener_session import ListenerSession
+    from mammamiradio.scheduling.producer import _sync_listener_session_persona
+
+    state = _make_state()
+    state.listener_session = ListenerSession(monotonic=lambda: 10.0)
+    state.listener_session.observe_active_count(1)
+    mock_persona = MagicMock()
+    mock_persona.start_session = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    state.persona_store = mock_persona
+
+    _sync_listener_session_persona(state)
+    await asyncio.gather(*list(state.listener_session_tasks))
+    assert state.listener_session.pending_persona_epochs == (1,)
+    assert state.listener_session_persona_retry_at == pytest.approx(11.0)
+
+
+def _claimed_companionship_state():
+    from mammamiradio.core.listener_session import ListenerSession
+
+    state = _make_state()
+    state.listener_session = ListenerSession(monotonic=lambda: 1_800.0)
+    state.listener_session.observe_active_count(1, now=0.0)
+    claim = state.listener_session.claim_companionship(now=1_800.0)
+    assert claim is not None
+    return state, claim
+
+
+@pytest.mark.parametrize(
+    "blocked_field",
+    [
+        "not_natural",
+        "chaos",
+        "operator",
+        "no_llm",
+        "prompt_fact",
+        "directive",
+        "request",
+        "heading",
+        "ritual_gag",
+        "special_mode",
+        "release_campaign",
+    ],
+)
+def test_companionship_claim_eligibility_excludes_priority_lanes(blocked_field):
+    from mammamiradio.home.context_director import PromptFact
+    from mammamiradio.scheduling.producer import _companionship_banter_eligible
+
+    state = _make_state()
+    kwargs = {
+        "natural_banter": True,
+        "chaos_subtype": None,
+        "is_operator_forced": False,
+        "prompt_fact": None,
+        "script_llm_available": True,
+        "special_mode_active": False,
+    }
+    if blocked_field == "not_natural":
+        kwargs["natural_banter"] = False
+    elif blocked_field == "chaos":
+        kwargs["chaos_subtype"] = ChaosSubtype.FOURTH_WALL
+    elif blocked_field == "operator":
+        kwargs["is_operator_forced"] = True
+    elif blocked_field == "no_llm":
+        kwargs["script_llm_available"] = False
+    elif blocked_field == "prompt_fact":
+        kwargs["prompt_fact"] = PromptFact("f", "weather.home", "weather", "x", "Rain", 1)
+    elif blocked_field == "directive":
+        state.ha_pending_directive = "React now"
+    elif blocked_field == "request":
+        state.pending_requests.append({"type": "message"})
+    elif blocked_field == "heading":
+        state.heading_pending_announcement = "New direction"
+    elif blocked_field == "ritual_gag":
+        state.ha_running_gag = "A ritual callback"
+    elif blocked_field == "special_mode":
+        kwargs["special_mode_active"] = True
+    elif blocked_field == "release_campaign":
+        state.release_campaign = SimpleNamespace(enabled=True, is_due=lambda: True)
+
+    assert _companionship_banter_eligible(state, **kwargs) is False
+
+
+def test_companionship_generated_proof_stamps_segment_and_admission_marks_queued():
+    from mammamiradio.scheduling.producer import (
+        _companionship_metadata_for_generated_banter,
+        _mark_companionship_segment_queued,
+    )
+
+    state, claim = _claimed_companionship_state()
+    commit = SimpleNamespace(
+        companionship=SimpleNamespace(duration_bucket=claim.prompt_context.duration_bucket),
+    )
+    metadata = _companionship_metadata_for_generated_banter(state, claim, commit)
+    segment = Segment(type=SegmentType.BANTER, path=Path("cue.mp3"), metadata=metadata)
+
+    assert metadata == {"listener_session_epoch": 1, "listener_session_cue": "companionship"}
+    _mark_companionship_segment_queued(state, segment)
+    assert state.listener_session.companionship_cue_state.value == "queued"
+
+
+@pytest.mark.asyncio
+async def test_natural_banter_claims_generates_and_queues_companionship_once(tmp_path):
+    """The full producer lane transfers one claim through proof to queue admission."""
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    consume_milestone = AsyncMock()
+    state.persona_store = SimpleNamespace(consume_milestone=consume_milestone)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+    seen_contexts = []
+
+    async def _write_banter(*_args, **kwargs):
+        context = kwargs.get("companionship_context")
+        seen_contexts.append(context)
+        assert context is not None
+        return (
+            [(host, "Siamo ancora qui, insieme alla musica.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+                persona_milestone=5,
+                pending_joke={"text": "the queued studio umbrella", "punch": 4.0},
+            ),
+        )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Continuiamo.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert len(seen_contexts) == 1
+    assert segment.metadata["listener_session_epoch"] == 1
+    assert segment.metadata["listener_session_cue"] == "companionship"
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.QUEUED
+    assert state.listener_session.claim_companionship() is None
+    assert "the queued studio umbrella" in state.running_jokes
+    consume_milestone.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_companionship_stale_after_egress_records_listener_session_reason(tmp_path):
+    """The main queue funnel must preserve the cue's concrete stale reason."""
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+
+    async def _write_banter(*_args, **kwargs):
+        context = kwargs["companionship_context"]
+        return (
+            [(host, "We've had company for roughly half an hour.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+            ),
+        )
+
+    async def _disconnect_during_egress(segment, _config):
+        state.listener_session.observe_active_count(0, now=1801.0)
+        state.listeners_active = 0
+        return segment
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=_disconnect_during_egress),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not state.discard_by_reason.get(GenerationWasteReason.LISTENER_SESSION_STALE):
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("listener-session stale admission was not recorded")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert queue.empty()
+    assert state.discard_by_reason[GenerationWasteReason.LISTENER_SESSION_STALE] == 1
+    assert not state.discard_by_reason.get(GenerationWasteReason.EGRESS_STALE)
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+
+
+def test_companionship_fallback_without_generated_proof_abandons_and_is_not_stamped():
+    from mammamiradio.scheduling.producer import _companionship_metadata_for_generated_banter
+
+    state, claim = _claimed_companionship_state()
+    assert _companionship_metadata_for_generated_banter(state, claim, None) == {}
+    assert state.listener_session.companionship_cue_state.value == "abandoned"
+
+
+def test_unowned_companionship_attempt_is_settled_once_and_never_reopened():
+    from mammamiradio.scheduling.producer import _abandon_unowned_companionship_attempt
+
+    state, _claim = _claimed_companionship_state()
+    assert _abandon_unowned_companionship_attempt(state) is True
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+    assert _abandon_unowned_companionship_attempt(state) is False
+    assert state.listener_session.claim_companionship() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_stage", ["generation", "tts", "quality"])
+async def test_companionship_generation_pipeline_failures_abandon_without_retry(tmp_path, failed_stage):
+    from mammamiradio.audio.audio_quality import AudioQualityError
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    consume_milestone = AsyncMock()
+    state.persona_store = SimpleNamespace(consume_milestone=consume_milestone)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+
+    async def _write_banter(*_args, **kwargs):
+        if failed_stage == "generation":
+            raise RuntimeError("writer failed")
+        context = kwargs["companionship_context"]
+        return (
+            [(host, "We have had company for a while, piano piano.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+                persona_milestone=5,
+                pending_joke={"text": "the unheard studio umbrella", "punch": 4.0},
+            ),
+        )
+
+    async def _synthesize(*_args, **_kwargs):
+        if failed_stage == "tts":
+            raise RuntimeError("voice failed")
+        return generated_audio
+
+    def _quality(*_args, **_kwargs):
+        if failed_stage == "quality":
+            raise AudioQualityError("generated break is not airable")
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_synthesize),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, side_effect=_synthesize),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_quality),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while state.listener_session.companionship_cue_state is not ListenerSessionCueState.ABANDONED:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError(f"{failed_stage} failure did not settle the companionship cue")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert queue.empty()
+    assert state.listener_session.claim_companionship() is None
+    assert "the unheard studio umbrella" not in state.running_jokes
+    assert state.pending_verbal_gag is None
+    consume_milestone.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_companionship_quality_fallback_is_ordinary_and_does_not_reuse_failed_cue(tmp_path):
+    from mammamiradio.audio.audio_quality import AudioQualityError
+
+    state = _make_state()
+    now = [0.0]
+    state.listener_session = ListenerSession(monotonic=lambda: now[0])
+    state.listener_session.observe_active_count(1)
+    now[0] = 1800.0
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    generated_audio = tmp_path / "generated.mp3"
+    generated_audio.write_bytes(b"generated audio" * 200)
+    canned_audio = tmp_path / "canned.mp3"
+    canned_audio.write_bytes(b"canned audio" * 200)
+
+    async def _write_banter(*_args, **kwargs):
+        context = kwargs["companionship_context"]
+        return (
+            [(host, "We have had company for a while, piano piano.")],
+            BanterCommit(
+                companionship=CompanionshipBanterCommit(duration_bucket=context.duration_bucket),
+            ),
+        )
+
+    quality_calls = 0
+
+    def _quality(*_args, **_kwargs):
+        nonlocal quality_calls
+        quality_calls += 1
+        if quality_calls == 1:
+            raise AudioQualityError("generated break is not airable")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_write_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=generated_audio),
+        patch(f"{PRODUCER_MODULE}.concat_files"),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_quality),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_audio),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.path == canned_audio
+    assert segment.metadata["canned"] is True
+    assert "listener_session_epoch" not in segment.metadata
+    assert "listener_session_cue" not in segment.metadata
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+    assert state.listener_session.claim_companionship() is None
+
+
+def test_companionship_admission_fence_rejects_disconnect_before_queue():
+    from mammamiradio.scheduling.producer import _companionship_admission_stale_reason
+
+    state, claim = _claimed_companionship_state()
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("cue.mp3"),
+        metadata={"listener_session_epoch": claim.epoch, "listener_session_cue": "companionship"},
+    )
+    state.listener_session.observe_active_count(0, now=1_801.0)
+
+    assert _companionship_admission_stale_reason(state, segment) == GenerationWasteReason.LISTENER_SESSION_STALE
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        GenerationWasteReason.QUALITY_GATE_REJECT,
+        GenerationWasteReason.SESSION_STOPPED,
+        GenerationWasteReason.STALE_SOURCE,
+        GenerationWasteReason.STALE_PLAYLIST,
+        GenerationWasteReason.STALE_CHAOS,
+        GenerationWasteReason.STALE_CONTINUITY,
+        GenerationWasteReason.AIR_NEXT_OVERFLOW,
+        GenerationWasteReason.EGRESS_STALE,
+        GenerationWasteReason.OPERATOR_PURGE,
+        GenerationWasteReason.OPERATOR_STOP,
+        GenerationWasteReason.OPERATOR_PANIC,
+        GenerationWasteReason.OPERATOR_QUEUE_REMOVE,
+        GenerationWasteReason.LISTENER_SESSION_STALE,
+    ],
+)
+def test_record_discard_centrally_abandons_companionship_for_every_queue_path(reason):
+    state, claim = _claimed_companionship_state()
+    assert state.listener_session.mark_companionship_queued(claim.epoch) is True
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=Path("cue.mp3"),
+        metadata={"listener_session_epoch": claim.epoch, "listener_session_cue": "companionship"},
+    )
+
+    state.record_discard(segment, reason=reason)
+    assert state.listener_session.companionship_cue_state.value == "abandoned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "Someone just tuned in, apparently.",
+        "Looks like we have a new friend with us.",
+        "Rieccoti con noi!",
+    ],
+)
+async def test_listener_truth_guard_repairs_final_assembled_copy(unsafe_text):
+    config = _make_config()
+    state = _make_state()
+    safe_lines = [(config.hosts[0], "Abbiamo compagnia da un po', ma la musica decide tutto.")]
+    unsafe_lines = [(config.hosts[0], unsafe_text)]
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ) as repair:
+        lines, transition, changed, transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            unsafe_lines,
+            transition_text="And back to the music.",
+        )
+
+    assert changed is True
+    assert transition_replaced is False
+    assert transition == "And back to the music."
+    assert [(line.host, line.text) for line in lines] == safe_lines
+    assert all(line.delivery == "neutral" for line in lines)
+    repair.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_clears_delivery_from_repaired_copy():
+    """A safety replacement must reach TTS as clean, neutral dialogue metadata."""
+    config = _make_config()
+    state = _make_state()
+    host = config.hosts[0]
+    unsafe_lines = [DialogueLine(host, "Someone just tuned in, apparently.", "energetic")]
+    repaired_lines = [DialogueLine(host, "The studio keeps moving, amici.", "playful")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=repaired_lines),
+    ):
+        lines, _transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            unsafe_lines,
+        )
+
+    assert changed is True
+    assert lines == [DialogueLine(host, "The studio keeps moving, amici.")]
+    assert lines[0].text == "The studio keeps moving, amici."
+    assert lines[0].delivery == "neutral"
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return():
+    from mammamiradio.core.listener_truth import home_return_authority_for_directive
+
+    config = _make_config()
+    state = _make_state()
+    state.last_banter_return_authority = home_return_authority_for_directive(
+        "ha:person.florian_horner",
+        "Florian è appena tornato a casa. Un caloroso bentornato.",
+    )
+    lines = [(config.hosts[0], "Bentornato Florian.")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(),
+    ) as repair:
+        guarded, transition, changed, transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            lines,
+        )
+
+    assert [(line.host, line.text) for line in guarded] == lines
+    assert guarded[0].delivery == "neutral"
+    assert transition is None
+    assert changed is False
+    assert transition_replaced is False
+    assert state.last_banter_return_authority is not None
+    repair.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_rejects_return_line_that_names_another_resident():
+    from mammamiradio.core.listener_truth import home_return_authority_for_directive
+
+    config = _make_config()
+    state = _make_state()
+    state.last_banter_return_authority = home_return_authority_for_directive(
+        "ha:person.florian_horner",
+        "Florian è appena tornato a casa. Un caloroso bentornato.",
+    )
+    safe_lines = [(config.hosts[0], "The studio keeps moving, amici.")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ) as repair:
+        guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            [(config.hosts[0], "Florian is back with Sabrina.")],
+        )
+
+    assert [(line.host, line.text) for line in guarded] == safe_lines
+    assert all(line.delivery == "neutral" for line in guarded)
+    assert changed is True
+    assert state.last_banter_return_authority is None
+    repair.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_rejects_unbound_named_return():
+    config = _make_config()
+    state = _make_state()
+    safe_lines = [(config.hosts[0], "The music continues, amici.")]
+
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ) as repair:
+        guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            [(config.hosts[0], "Bentornato Florian.")],
+        )
+
+    assert [(line.host, line.text) for line in guarded] == safe_lines
+    assert all(line.delivery == "neutral" for line in guarded)
+    assert changed is True
+    repair.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_abandons_second_unsafe_generation():
+    config = _make_config()
+    state = _make_state()
+    unsafe_lines = [(config.hosts[0], "Qualcuno si è appena sintonizzato.")]
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=unsafe_lines),
+    ):
+        lines, transition, changed, _transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            unsafe_lines,
+        )
+
+    from mammamiradio.core.listener_truth import contains_unsafe_listener_claims
+
+    assert changed is True
+    assert transition is None
+    assert not contains_unsafe_listener_claims(text for _host, text in lines)
+
+
+@pytest.mark.asyncio
+async def test_listener_truth_guard_replaces_unsafe_transition():
+    config = _make_config()
+    state = _make_state()
+    safe_lines = [(config.hosts[0], "La musica continua, e noi pure.")]
+    with patch(
+        f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
+        new=AsyncMock(return_value=safe_lines),
+    ):
+        lines, transition, changed, transition_replaced = await _listener_truth_guard(
+            state,
+            config,
+            safe_lines,
+            transition_text="Welcome back, amici.",
+        )
+
+    assert changed is True
+    assert transition_replaced is True
+    assert transition is not None
+    assert "Welcome back" not in transition
+    assert [(line.host, line.text) for line in lines] == safe_lines
+    assert all(line.delivery == "neutral" for line in lines)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("generated_text", "expected_accepted"),
+    [
+        ("The studio keeps moving, piano piano.", True),
+        ("Someone just tuned in, apparently.", False),
+    ],
+)
+async def test_producer_applies_banter_mutations_only_after_final_truth_acceptance(
+    tmp_path,
+    generated_text,
+    expected_accepted,
+):
+    state = _make_state()
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+    safe_repair = [(host, "The music continues without guessing who is listening.")]
+    commit = BanterCommit(pending_joke={"text": "the studio umbrella", "punch": 4.0})
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, generated_text)], commit),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "The studio keeps moving.", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.repair_banter_without_listener_context",
+            new_callable=AsyncMock,
+            return_value=safe_repair,
+        ) as repair,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    assert ("the studio umbrella" in state.running_jokes) is expected_accepted
+    if expected_accepted:
+        repair.assert_not_awaited()
+    else:
+        repair.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -3322,6 +4767,41 @@ def test_adjacent_music_source_returns_song_when_prev_is_music(tmp_path):
         assert _adjacent_music_source(state) == song
     finally:
         producer._last_music_file = None
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "expected"),
+    [
+        (("Ordinary", "Alex Warren"), None),
+        (None, None),
+        (("Safe Song", "Safe Artist"), "song"),
+        # A sidecar missing the artist yields no durable identity (load_track_metadata
+        # requires both fields), so the bed fails closed while a ban is active —
+        # whether or not the title collides with a ban. This is a deliberate, safe
+        # conservatism; loosening it would mean bypassing the identity contract.
+        (("Ordinary", ""), None),
+        (("Safe Song", ""), None),
+    ],
+    ids=["blocked", "unidentified", "identified-safe", "artist-missing-title-banned", "artist-missing-title-safe"],
+)
+def test_adjacent_music_source_enforces_active_blocklist_identity(tmp_path, sidecar, expected):
+    """Adjacent speech beds fail closed when their durable song identity is unsafe."""
+    from mammamiradio.scheduling.producer import _adjacent_music_source
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"music")
+    if sidecar is not None:
+        title, artist = sidecar
+        save_track_metadata(song, title=title, artist=artist)
+
+    state = StationState()
+    state.last_music_file = song
+    state.last_enqueued_type = SegmentType.MUSIC
+    state.blocklist = {("alex warren", "ordinary"): {"display": "Alex Warren - Ordinary"}}
+
+    result = _adjacent_music_source(state)
+
+    assert result == (song if expected == "song" else None)
 
 
 @pytest.mark.parametrize(
@@ -3641,7 +5121,9 @@ async def test_force_next_bypasses_full_queue(tmp_path):
 
     with (
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
@@ -3679,12 +5161,24 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
     cannot silently drop these fields from the dashboard state.
     """
     state = _make_state()
+
+    class _Ledger:
+        enabled = True
+
+        def __init__(self):
+            self.rows = []
+
+        def record(self, row):
+            self.rows.append(row)
+
+    state.ledger = _Ledger()
     config = _make_config()
     config.pacing.ad_spots_per_break = 1
     queue: asyncio.Queue = asyncio.Queue()
 
     fake_script = AdScript(
         brand="Prezzoforte",
+        parts=[AdPart(type="voice", text="Try Prezzoforte today.", role="hammer")],
         summary="Great deals at Prezzoforte",
         format="classic_pitch",
         sonic=SonicWorld(music_bed="cinematic", environment="piazza", transition_motif="fanfare"),
@@ -3716,6 +5210,18 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
     assert "roles_used" in seg.metadata, "roles_used missing from segment.metadata"
     assert seg.metadata["sonic_worlds"] == ["cinematic"]
     assert seg.metadata["roles_used"] == [["hammer", "disclaimer_goblin"]]
+
+    prepared = [row for row in state.ledger.rows if row.get("record") == "segment_prepared"]
+    assert len(prepared) == 1
+    final_script = prepared[0]["final_script"]
+    # Tier-2 describes the complete spoken ad break, while last_ad_script/texts
+    # above remains spot-only for the dashboard contract.
+    assert final_script[0] == final_script[0].strip()
+    assert final_script[1] == "A word from our sponsors, amici."
+    assert "Great deals at Prezzoforte" not in final_script  # summary is not spoken copy
+    assert final_script[-1] == final_script[-1].strip()
+    assert len(final_script) == 4  # intro, promo, one spot, outro
+    assert "language_assessment" in prepared[0]
 
 
 # ---------------------------------------------------------------------------
@@ -3880,8 +5386,13 @@ async def test_idle_bridge_does_not_run_before_idle_poll_wakes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_idle_bridge_queues_canned_clip_then_norm_cache_runway_when_available(tmp_path):
-    """Idle wake-up gets a branded clip plus cached music runway."""
+async def test_idle_bridge_queues_cache_music_without_a_canned_preamble(tmp_path):
+    """A warm cache means the idle wake-up goes straight into a real song.
+
+    The packaged clip is the rung BELOW cached music, not a preamble to it: a
+    listener reconnecting should hear the station, not a canned line announcing
+    that the station is about to happen.
+    """
     state = _make_state()
     state.listeners_active = 0  # start idle
     config = _make_config()
@@ -3909,9 +5420,9 @@ async def test_idle_bridge_queues_canned_clip_then_norm_cache_runway_when_availa
             # Simulate a listener connecting
             state.listeners_active = 1
             deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.qsize() < 2:
+            while queue.qsize() < 1:
                 if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Idle bridge did not queue clip plus cached music")
+                    raise TimeoutError("Idle bridge did not queue cached music")
                 await asyncio.sleep(0.05)
         finally:
             task.cancel()
@@ -3920,33 +5431,21 @@ async def test_idle_bridge_queues_canned_clip_then_norm_cache_runway_when_availa
             except asyncio.CancelledError:
                 pass
 
-    clip = queue.get_nowait()
     runway = queue.get_nowait()
-    assert clip.type == SegmentType.BANTER
-    assert clip.metadata.get("warmup") is True
-    # #547: idle_bridge marks the warm-up clip as rescue audio so the fallback
-    # classifier does not report it as the primary station; warmup stays for the
-    # display contract.
-    assert clip.metadata.get("idle_bridge") is True
-    assert clip.path == canned_clip
-    assert clip.ephemeral is False
-    assert clip.duration_sec == 7.5
-    assert clip.metadata["duration_ms"] == 7500
+    assert queue.empty(), "the packaged clip must not ride in front of cached music"
     assert runway.type == SegmentType.MUSIC
     assert runway.path == norm_file
     assert runway.metadata.get("idle_bridge") is True
     assert runway.metadata.get("audio_source") == "norm_cache"
     assert runway.metadata.get("title") == "Idle Runway"
     assert runway.metadata.get("artist") == "Runway Artist"
-    from mammamiradio.scheduling import producer
-
-    with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", demo_root):
-        producer._unlink_if_tmp_render(clip, config.tmp_dir)
-        assert canned_clip.exists()
-    # The bridge itself is recorded once; the cached song is runway behind it.
+    # (packaged assets surviving cleanup is owned by
+    # test_unlink_if_tmp_render_keeps_packaged_assets — this bridge no longer
+    # queues the packaged clip when the cache is warm.)
+    # The bridge is recorded once, and honestly reports what actually aired.
     assert state.bridge_fires_total >= 1
     last = state.bridge_events[-1]
-    assert (last["bridge_type"], last["source"]) == ("idle", "canned")
+    assert (last["bridge_type"], last["source"]) == ("idle", "norm_cache")
 
 
 @pytest.mark.asyncio
@@ -3962,7 +5461,7 @@ async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invarian
     canned_clip.write_bytes(b"fake audio" * 256)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -4003,8 +5502,127 @@ async def test_continuity_bridge_canned_metadata_cannot_override_rescue_invarian
 
 
 @pytest.mark.asyncio
-async def test_drain_bridge_keeps_single_canned_clip_even_with_warm_cache(tmp_path):
-    """The mid-playback drain guard still inserts only the immediate clip."""
+async def test_continuity_bridge_probe_spanning_stop_resume_rearms_lower_rung(tmp_path, caplog):
+    """A stale canned rung falls through to a lower rung armed after Resume."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    norm_file = tmp_path / "norm_fresh_runway.mp3"
+    norm_file.write_bytes(b"pre-normalized fresh runway")
+    save_track_metadata(norm_file, title="Fresh Runway", artist="Cache Artist")
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+    queued: list[Segment] = []
+
+    def _blocked_probe(*_args, **_kwargs) -> float:
+        probe_started.set()
+        if not release_probe.wait(timeout=5):
+            raise TimeoutError("test did not release the recovery probe")
+        return 6.2
+
+    async def _capture(segment: Segment, *, stale_check=None, **_kwargs) -> bool:
+        verdict = stale_check() if stale_check is not None else None
+        if verdict:
+            state.record_discard(segment, reason=str(verdict))
+            return False
+        queued.append(segment)
+        return True
+
+    caplog.set_level(logging.WARNING, logger=PRODUCER_MODULE)
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_blocked_probe),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_file),
+    ):
+        bridge_task = asyncio.create_task(
+            producer._queue_continuity_bridge(
+                _capture,
+                state,
+                config,
+                bridge_type="resume",
+                bridge_flag="resume_bridge",
+                canned_title="Resume bridge",
+            )
+        )
+        assert await asyncio.to_thread(probe_started.wait, 2)
+
+        # Model a fast Stop→Resume cycle while the old bridge still appears busy.
+        state.session_stopped = True
+        state.continuity_epoch += 1
+        state.session_stopped = False
+        release_probe.set()
+        ok = await asyncio.wait_for(bridge_task, timeout=2)
+
+    assert ok is True
+    assert [segment.path for segment in queued] == [norm_file]
+    assert queued[0].metadata.get("audio_source") == "norm_cache"
+    assert state.discard_by_reason[GenerationWasteReason.STALE_CONTINUITY] == 1
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("resume", "norm_cache")]
+    assert any(
+        "bridge discarded after continuity epoch changed captured_epoch=0 current_epoch=1" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_emergency_tone_rung_still_fires_after_a_mid_bridge_epoch_bump(tmp_path):
+    """The tone is the floor between the listener and dead air.
+
+    Every rung above it is unavailable here, so the bridge reaches the packaged
+    emergency tone. If the tone were still armed against the epoch captured at
+    the top of the bridge, one control action landing mid-ladder would reject the
+    last rung too and the bridge would return False having queued nothing.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment, *, stale_check=None, **_kwargs) -> bool:
+        verdict = stale_check() if stale_check is not None else None
+        if verdict:
+            state.record_discard(segment, reason=str(verdict))
+            return False
+        queued.append(segment)
+        return True
+
+    def _bump_then_miss(*_args, **_kwargs):
+        # Model a control landing while the ladder is walking its rungs.
+        state.continuity_epoch += 1
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", side_effect=_bump_then_miss),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.is_approved_packaged_audio_asset", return_value=True),
+    ):
+        ok = await producer._queue_continuity_bridge(
+            _capture,
+            state,
+            config,
+            bridge_type="resume",
+            bridge_flag="resume_bridge",
+            canned_title="Resume bridge",
+            music_runway=True,
+        )
+
+    assert state.continuity_epoch > 0, "the test must actually move the epoch mid-bridge"
+    assert ok is True, "one epoch bump must not disarm the last rung before dead air"
+    assert [segment.metadata.get("audio_source") for segment in queued] == ["emergency_tone"]
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("resume", "emergency_tone")]
+
+
+@pytest.mark.asyncio
+async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
+    """A warm cache means a mid-playback drain airs a real song, with no clip in front."""
     from mammamiradio.scheduling import producer
 
     state = _make_state()
@@ -4015,9 +5633,10 @@ async def test_drain_bridge_keeps_single_canned_clip_even_with_warm_cache(tmp_pa
     canned_clip.write_bytes(b"fake audio" * 256)
     norm_file = tmp_path / "norm_drain_runway.mp3"
     norm_file.write_bytes(b"pre-normalized drain runway")
+    save_track_metadata(norm_file, title="Runway Song", artist="Cache Artist", duration_ms=180_000)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -4028,9 +5647,135 @@ async def test_drain_bridge_keeps_single_canned_clip_even_with_warm_cache(tmp_pa
         ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
 
     assert ok is True
+    assert [seg.path for seg in queued] == [norm_file]
+    assert [seg.type for seg in queued] == [SegmentType.MUSIC]
+    assert queued[0].metadata.get("queue_drain_recovery") is True
+    assert queued[0].metadata.get("audio_source") == "norm_cache"
+    assert queued[0].metadata.get("title") == "Runway Song"
+    assert queued[0].metadata.get("artist") == "Cache Artist"
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "norm_cache")]
+
+
+@pytest.mark.asyncio
+async def test_bridge_never_repeats_the_on_air_song_back_to_back(tmp_path):
+    """A one-song warm cache must not queue the song that is playing right now.
+
+    Music-first ordering made this reachable: the bridge asks the norm cache
+    first, and the cache's near-last-rung fallback will happily re-serve the only
+    file it has — which is the song on air. That would air the same track
+    back-to-back with NOTHING in between, a worse repeat than the incident this
+    whole change exists to fix. The bridge has the packaged clip and the tone
+    below it, so it asks strictly and falls through instead.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    on_air = tmp_path / "norm_on_air_192k.mp3"
+    on_air.write_bytes(b"the song currently playing")
+    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    state.now_streaming = {
+        "type": "music",
+        "label": "Fleece – Dont Lose Your Way",
+        "metadata": {"title_only": "Dont Lose Your Way", "artist": "Fleece"},
+    }
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment, **_kwargs) -> bool:
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=4.4),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
+
+    assert ok is True
+    assert on_air not in {seg.path for seg in queued}, "the on-air song must not be re-queued behind itself"
+    assert [seg.path for seg in queued] == [canned_clip]
+
+
+@pytest.mark.asyncio
+async def test_bridge_repeats_the_on_air_song_rather_than_airing_the_tone(tmp_path):
+    """The mirror of the test above: with NO packaged clip, the repeat wins.
+
+    Same one-song warm cache, same song on air — but the packaged recovery clip
+    is missing, so the only rung left below this one is two seconds of emergency
+    tone. There the calculus inverts: a song the listener heard recently is
+    genuinely better radio than a tone, so the last cache attempt asks
+    PERMISSIVELY (``allow_recent_repeat=True``).
+
+    This is the rung the fix revived. Gating it on ``not music_runway`` made it
+    dead code and dropped a warm-cache station straight to the tone. Flipping
+    that flag back to ``False`` must fail HERE — the sibling test above pins the
+    strict rung, and only the pair together prove the ladder asks differently at
+    different depths.
+    """
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    on_air = tmp_path / "norm_on_air_192k.mp3"
+    on_air.write_bytes(b"the song currently playing")
+    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    state.now_streaming = {
+        "type": "music",
+        "label": "Fleece – Dont Lose Your Way",
+        "metadata": {"title_only": "Dont Lose Your Way", "artist": "Fleece"},
+    }
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment, **_kwargs) -> bool:
+        queued.append(segment)
+        return True
+
+    # No packaged clip: this is the empty-container / Scenario-2 shape, where the
+    # real add-on image ships only README stubs under assets/demo/banter/.
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
+        ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
+
+    assert ok is True
+    assert [seg.path for seg in queued] == [on_air], "a recent song beats the emergency tone at this depth"
+    assert queued[0].metadata.get("audio_source") != "emergency_tone"
+    last = state.bridge_events[-1]
+    assert (last["bridge_type"], last["source"]) == ("drain", "norm_cache")
+
+
+@pytest.mark.asyncio
+async def test_drain_bridge_queues_only_canned_clip_when_cache_is_cold(tmp_path):
+    """A cold cache preserves the single-clip drain bridge fallback."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment, **_kwargs) -> bool:
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
+
+    assert ok is True
     assert [seg.path for seg in queued] == [canned_clip]
     assert queued[0].metadata.get("queue_drain_recovery") is True
-    assert all(event["source"] != "norm_cache" for event in state.bridge_events)
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "canned")]
 
 
 @pytest.mark.asyncio
@@ -4046,7 +5791,7 @@ async def test_resume_bridge_music_runway_queues_only_canned_clip_when_cache_col
     canned_clip.write_bytes(b"fake audio" * 256)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -4084,7 +5829,7 @@ async def test_idle_bridge_music_runway_queues_only_canned_clip_when_cache_cold(
     canned_clip.write_bytes(b"fake audio" * 256)
     queued: list[Segment] = []
 
-    async def _capture(segment: Segment) -> bool:
+    async def _capture(segment: Segment, **_kwargs) -> bool:
         queued.append(segment)
         return True
 
@@ -4111,12 +5856,12 @@ async def test_idle_bridge_music_runway_queues_only_canned_clip_when_cache_cold(
 
 
 @pytest.mark.asyncio
-async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_path, caplog):
-    """A rejected runway enqueue (e.g. a full queue) is logged, not silently dropped.
+async def test_continuity_bridge_falls_back_to_clip_when_cache_music_cannot_enqueue(tmp_path, caplog):
+    """A rejected music enqueue (e.g. a full queue) drops to the packaged clip.
 
-    The canned clip's own success is still the only thing that counts as a bridge
-    fire — the runway segment is a bonus behind it, so a failed runway enqueue must
-    not raise, must not double-fire telemetry, and must not fail the bridge.
+    Music is tried first now, so a rejection there must not fail the bridge and
+    must not leave the listener with nothing — the clip is the rung below it, and
+    exactly one bridge fire is recorded, naming what actually aired.
     """
     from mammamiradio.scheduling import producer
 
@@ -4129,9 +5874,11 @@ async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_p
     norm_file = tmp_path / "norm_resume_runway.mp3"
     norm_file.write_bytes(b"pre-normalized resume runway")
     queued: list[Segment] = []
+    rejected: list[Segment] = []
 
-    async def _reject_second(segment: Segment) -> bool:
-        if queued:
+    async def _reject_music(segment: Segment, **_kwargs) -> bool:
+        if segment.type is SegmentType.MUSIC:
+            rejected.append(segment)
             return False
         queued.append(segment)
         return True
@@ -4143,7 +5890,7 @@ async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_p
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_file),
     ):
         ok = await producer._queue_continuity_bridge(
-            _reject_second,
+            _reject_music,
             state,
             config,
             bridge_type="resume",
@@ -4153,11 +5900,15 @@ async def test_continuity_bridge_logs_when_runway_segment_fails_to_enqueue(tmp_p
         )
 
     assert ok is True
+    assert [seg.path for seg in rejected] == [norm_file]
     assert [seg.path for seg in queued] == [canned_clip]
     assert state.bridge_fires_total == 1
     assert state.bridge_events[-1]["bridge_type"] == "resume"
     assert state.bridge_events[-1]["source"] == "canned"
-    assert any("no runway music segment queued behind the canned clip" in record.message for record in caplog.records)
+    # The log must NOT claim "nothing eligible": this test found an eligible
+    # candidate and had it refused at enqueue. Cause-neutral wording only.
+    assert any("no cache music queued behind the canned clip" in record.message for record in caplog.records)
+    assert not any("found nothing eligible" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -4212,8 +5963,8 @@ def test_write_banter_resolves_via_module_after_reload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_bridge_queues_canned_clip_then_norm_cache_runway_when_available(tmp_path):
-    """Resume gets a branded clip plus cached music runway."""
+async def test_resume_bridge_queues_cache_music_without_a_canned_preamble(tmp_path):
+    """Resuming a stopped session goes straight into cached music when one is warm."""
     state = _make_state()
     state.session_stopped = True
     config = _make_config()
@@ -4236,9 +5987,9 @@ async def test_resume_bridge_queues_canned_clip_then_norm_cache_runway_when_avai
             await asyncio.sleep(0.05)
             state.session_stopped = False
             deadline = asyncio.get_event_loop().time() + 3.0
-            while queue.qsize() < 2:
+            while queue.qsize() < 1:
                 if asyncio.get_event_loop().time() > deadline:
-                    raise TimeoutError("Resume bridge did not queue clip plus cached music")
+                    raise TimeoutError("Resume bridge did not queue cached music")
                 await asyncio.sleep(0.05)
         finally:
             task.cancel()
@@ -4247,22 +5998,20 @@ async def test_resume_bridge_queues_canned_clip_then_norm_cache_runway_when_avai
             except asyncio.CancelledError:
                 pass
 
-    clip = queue.get_nowait()
     runway = queue.get_nowait()
-    assert clip.type == SegmentType.BANTER
-    assert clip.metadata.get("resume_bridge") is True
-    assert clip.duration_sec == 8.0
-    assert clip.metadata["duration_ms"] == 8000
+    assert queue.empty(), "the packaged clip must not ride in front of cached music"
     assert runway.type == SegmentType.MUSIC
     assert runway.path == norm_file
     assert runway.metadata.get("resume_bridge") is True
     assert runway.metadata.get("audio_source") == "norm_cache"
     assert runway.metadata.get("title") == "Resume Runway"
     assert runway.metadata.get("artist") == "Runway Artist"
+    assert [row["id"] for row in state.queued_segments] == [runway.metadata["queue_id"]]
+    assert [row["label"] for row in state.queued_segments] == ["Resume Runway"]
     # #547: the bridge itself is recorded once for observability.
     assert state.bridge_fires_total >= 1
     last = state.bridge_events[-1]
-    assert (last["bridge_type"], last["source"]) == ("resume", "canned")
+    assert (last["bridge_type"], last["source"]) == ("resume", "norm_cache")
 
 
 @pytest.mark.asyncio
@@ -4361,14 +6110,7 @@ async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
-    with (
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
-    ):
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.05)
@@ -4385,13 +6127,13 @@ async def test_resume_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_
             except asyncio.CancelledError:
                 pass
 
-    mock_tone.assert_called_once()
-    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert seg.metadata.get("resume_bridge") is True
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.ephemeral is False
+    assert seg.path.name == "emergency_tone.mp3"
     assert seg.duration_sec == 2.0
     assert seg.metadata["duration_ms"] == 2000
     assert state.bridge_fires_total >= 1
@@ -4565,14 +6307,7 @@ async def test_idle_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_no
     config.tmp_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
-    with (
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
-    ):
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
             await asyncio.sleep(0.15)
@@ -4589,13 +6324,13 @@ async def test_idle_bridge_uses_emergency_tone_when_no_canned_clips_and_empty_no
             except asyncio.CancelledError:
                 pass
 
-    mock_tone.assert_called_once()
-    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
     assert seg.metadata.get("idle_bridge") is True
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
     assert seg.duration_sec == 2.0
     assert seg.metadata["duration_ms"] == 2000
     assert state.bridge_fires_total >= 1
@@ -4968,16 +6703,78 @@ async def test_fire_interrupt_clears_music_adjacency(tmp_path):
     state.queued_segments = [{"id": "buffered", "type": "music"}]
 
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
-    with patch(f"{PRODUCER_MODULE}.generate_tone") as mock_tone:
+    # Isolate the emergency-tone branch: with no alert.mp3 available, the bridge
+    # must fall to the packaged emergency tone regardless of a real _SFX_DIR asset.
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    with patch(f"{PRODUCER_MODULE}._SFX_DIR", empty_sfx):
         assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert queue.empty()  # buffered tail purged
     assert state.last_enqueued_type is None
     # The song file still exists, but nothing bleeds under the urgent banter.
     assert _adjacent_music_source(state) is None
-    # The interrupt bridge tone is emergency audio — it must take the rescue
-    # admission lane so it never queues behind routine ffmpeg work (#685-687).
-    assert mock_tone.call_args.kwargs.get("rescue") is True
+    # The interrupt bridge is immediately playable packaged audio, so it cannot
+    # queue behind routine FFmpeg work.
+    assert state.interrupt_slot is not None
+    assert state.interrupt_slot.name == "emergency_tone.mp3"
+    assert state.interrupt_slot_ephemeral is False
+
+
+@pytest.mark.asyncio
+async def test_fire_interrupt_abandons_all_queued_cues_when_one_unlink_fails(tmp_path):
+    """Cleanup failure cannot strand later cue work or corrupt queue accounting."""
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state, claim = _claimed_companionship_state()
+    assert state.listener_session.mark_companionship_queued(claim.epoch) is True
+    bad_path = tmp_path / "locked.mp3"
+    bad_path.write_bytes(b"locked")
+    cue_path = tmp_path / "cue.mp3"
+    cue_path.write_bytes(b"cue")
+    bad = Segment(type=SegmentType.MUSIC, path=bad_path, ephemeral=True, metadata={"queue_id": "bad"})
+    cue = Segment(
+        type=SegmentType.BANTER,
+        path=cue_path,
+        ephemeral=False,
+        metadata={
+            "queue_id": "cue",
+            "listener_session_epoch": claim.epoch,
+            "listener_session_cue": "companionship",
+        },
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(bad)
+    queue.put_nowait(cue)
+    state.queued_segments = [{"id": "bad"}, {"id": "cue"}]
+
+    demo_root = tmp_path / "demo"
+    _manifest_recovery_clip(demo_root, "emergency_tone.mp3", b"tone", kind="tone")
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    original_unlink = Path.unlink
+
+    def _unlink_with_one_failure(path: Path, *args, **kwargs):
+        if path == bad_path:
+            raise PermissionError("locked test render")
+        return original_unlink(path, *args, **kwargs)
+
+    spec = InterruptSpec(directive="Urgent update", urgency="urgent", cooldown=60)
+    with (
+        patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+        patch.object(Path, "unlink", new=_unlink_with_one_failure),
+    ):
+        fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
+
+    assert fired is True
+    assert queue.empty()
+    assert queue._unfinished_tasks == 0
+    assert state.queued_segments == []
+    assert state.listener_session.companionship_cue_state is ListenerSessionCueState.ABANDONED
+    assert state.discard_by_reason[GenerationWasteReason.INTERRUPT] == 2
+    assert bad_path.exists()
 
 
 @pytest.mark.asyncio
@@ -4988,21 +6785,190 @@ async def test_fire_interrupt_keeps_packaged_asset_even_if_ephemeral(tmp_path):
     from mammamiradio.scheduling.producer import _fire_interrupt
 
     demo_root = tmp_path / "assets" / "demo"
-    packaged = demo_root / "recovery" / "continuity_1.mp3"
-    packaged.parent.mkdir(parents=True)
-    packaged.write_bytes(b"\x00" * 2048)
+    packaged = _manifest_recovery_clip(demo_root, "continuity_1.mp3", b"\x00" * 2048)
+    emergency_tone = _manifest_recovery_clip(
+        demo_root,
+        "emergency_tone.mp3",
+        b"\x00" * 2048,
+        kind="tone",
+    )
     state = _make_state()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     queue.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
     state.queued_segments = [{"id": "asset", "type": "banter"}]
     spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
 
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
     with (
         patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
-        patch(f"{PRODUCER_MODULE}.generate_tone") as mock_tone,
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+        patch("mammamiradio.scheduling.queue_mutations._DEMO_ASSETS_DIR", demo_root),
     ):
         assert await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path) is True
 
     assert packaged.exists()
     assert queue.empty()
-    assert mock_tone.call_args.kwargs.get("rescue") is True
+    assert state.interrupt_slot == emergency_tone
+
+
+async def test_fire_interrupt_rejects_tampered_manifested_emergency_tone(tmp_path):
+    """A modified packaged tone cannot justify draining the live queue."""
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    demo_root = tmp_path / "assets" / "demo"
+    emergency_tone = _manifest_recovery_clip(demo_root, "emergency_tone.mp3", b"reviewed", kind="tone")
+    emergency_tone.write_bytes(b"tampered")
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    state = _make_state()
+    buffered = Segment(type=SegmentType.MUSIC, path=tmp_path / "song.mp3", metadata={"title": "Buffered"})
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(buffered)
+    state.queued_segments = [{"id": "buffered", "type": "music"}]
+    spec = InterruptSpec(directive="Urgent update", urgency="urgent", cooldown=60)
+
+    with (
+        patch.object(producer, "_DEMO_ASSETS_DIR", demo_root),
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+    ):
+        fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
+
+    assert fired is False
+    assert list(queue._queue) == [buffered]
+    assert state.interrupt_slot is None
+
+
+async def test_fire_interrupt_aborts_when_no_bridge_asset_available(tmp_path):
+    """Both bridge assets missing must abort the interrupt, not cut to dead air.
+
+    With neither alert.mp3 nor the packaged emergency tone available, hard-cutting
+    would drain the queue and fire skip_event with nothing to air. The interrupt
+    aborts instead, preserving whatever is already queued (INSTANT AUDIO).
+    """
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling import producer
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    empty_sfx = tmp_path / "empty_sfx"
+    empty_sfx.mkdir()
+    empty_demo = tmp_path / "empty_demo"
+    empty_demo.mkdir()
+    state = _make_state()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    buffered = Segment(
+        type=SegmentType.MUSIC, path=tmp_path / "song.mp3", metadata={"title": "Buffered"}, ephemeral=False
+    )
+    queue.put_nowait(buffered)
+    state.queued_segments = [{"id": "buffered", "type": "music"}]
+    spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+
+    with (
+        patch.object(producer, "_SFX_DIR", empty_sfx),
+        patch.object(producer, "_DEMO_ASSETS_DIR", empty_demo),
+    ):
+        result = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path)
+
+    assert result is False
+    assert list(queue._queue) == [buffered]  # queue preserved — no dead-air cut
+    assert state.interrupt_slot is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("directive_source", "expect_tagged"),
+    [
+        ("ha", True),
+        ("timer", True),
+        ("ha:binary_sensor.kitchen_presence", True),
+        # Blank and unknown provenance fail closed as Home-owned so the
+        # playback gate can drop the bridge after a Home privacy cutover.
+        ("", True),
+        ("legacy_unknown", True),
+        # Studio-owned sources cross a cutover untagged.
+        ("operator", False),
+        ("skip_bit", False),
+    ],
+)
+async def test_fire_interrupt_tags_home_context_generation_fail_closed(tmp_path, directive_source, expect_tagged):
+    from mammamiradio.core.models import InterruptSpec
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    state = _make_state()
+    state.home_context_policy_generation = 7
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    spec = InterruptSpec(directive="La pasta scotta!", urgency="pissed", cooldown=60)
+
+    fired = await _fire_interrupt(state, spec, queue, None, bridge_tmp_dir=tmp_path, directive_source=directive_source)
+
+    assert fired is True
+    assert state.interrupt_slot_source == directive_source
+    if expect_tagged:
+        assert state.interrupt_slot_home_context_generation == 7
+    else:
+        assert state.interrupt_slot_home_context_generation is None
+
+
+def test_remember_rendered_music_populates_immediate_audio_index(tmp_path):
+    """The live data source feeding the instant-audio continuity reservation must populate.
+
+    Every continuity test injects ``immediate_audio_index`` directly, so a
+    regression in the sole production writer for normally-rendered music would
+    silently degrade the reservation to clip/emergency-tone only with nothing
+    failing. Pin the writer, not just the consumer.
+    """
+    from mammamiradio.scheduling.producer import RenderedMusicTrack, _remember_rendered_music
+
+    state = StationState(playlist=[])
+    cache_path = tmp_path / "norm_rendered_128k.mp3"
+    cache_path.write_bytes(b"cached")
+    track = Track(title="Rendered Song", artist="Rendered Artist", duration_ms=200_000, spotify_id="r1")
+    rendered = RenderedMusicTrack(track=track, path=cache_path, cache_path=cache_path, cache_hit=True)
+
+    _remember_rendered_music(rendered, state)
+
+    assert state.immediate_audio_index[cache_path] == pytest.approx(200.0)
+
+
+def test_remember_enqueued_indexes_rescue_music_and_skips_breaks(tmp_path):
+    """Rescue/recycled music tails populate the index; tones, errors, missing paths do not."""
+    from mammamiradio.scheduling.producer import _remember_enqueued
+
+    state = StationState(playlist=[])
+    music_path = tmp_path / "norm_rescue_128k.mp3"
+    music_path.write_bytes(b"cached")
+    music = Segment(
+        type=SegmentType.MUSIC,
+        path=music_path,
+        duration_sec=180.0,
+        metadata={"rescue": True, "artist": "A", "title": "T"},
+    )
+    _remember_enqueued(state, music, music_path)
+    assert state.immediate_audio_index[music_path] == pytest.approx(180.0)
+
+    # An emergency-tone continuity break is not indexable music (audio_source guard).
+    tone_path = tmp_path / "emergency_tone.mp3"
+    tone_path.write_bytes(b"tone")
+    tone = Segment(
+        type=SegmentType.MUSIC,
+        path=tone_path,
+        duration_sec=2.0,
+        metadata={"audio_source": "emergency_tone", "rescue": True},
+    )
+    _remember_enqueued(state, tone, tone_path)
+    assert tone_path not in state.immediate_audio_index
+
+    # A missing source path cannot be reserved later, so it is never indexed.
+    missing = tmp_path / "norm_missing_128k.mp3"
+    missing_music = Segment(type=SegmentType.MUSIC, path=missing, duration_sec=180.0, metadata={"rescue": True})
+    _remember_enqueued(state, missing_music, missing)
+    assert missing not in state.immediate_audio_index
+
+    # A non-music tail never enters the music-only index.
+    banter_path = tmp_path / "norm_banter_128k.mp3"
+    banter_path.write_bytes(b"cached")
+    banter = Segment(type=SegmentType.BANTER, path=banter_path, duration_sec=12.0, metadata={})
+    _remember_enqueued(state, banter, banter_path)
+    assert banter_path not in state.immediate_audio_index

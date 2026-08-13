@@ -57,6 +57,73 @@ def test_empty_collector_yields_empty_refs():
     assert led.rows[0]["llm_call_refs"] == []
 
 
+def test_language_assessment_is_recorded_when_available():
+    """Optional policy telemetry stays nested and does not change the join keys."""
+    led = _FakeLedger()
+    state = SimpleNamespace(ledger=led)
+    assessment = {
+        "english_tokens": 8,
+        "italian_tokens": 2,
+        "accepted": True,
+    }
+    _emit_segment_prepared(
+        state,
+        segment_id="seg-language",
+        role="ad_break",
+        final_script=["A word from our sponsors.", "Back to the music."],
+        collector=_collector(["llm-1"]),
+        language_assessment=assessment,
+    )
+    row = led.rows[0]
+    assert row["final_script"] == ["A word from our sponsors.", "Back to the music."]
+    assert row["language_assessment"] == assessment
+
+
+def test_line_accounting_is_recorded_when_lines_were_lost():
+    """Without this field a short break and a full one look identical on the row.
+
+    ``final_script`` carries the survivors, never the authored count, so the
+    accounting is the only thing that makes the loss legible to a debrief.
+    """
+    led = _FakeLedger()
+    state = SimpleNamespace(ledger=led)
+    accounting = {
+        "authored": 4,
+        "aired": 3,
+        "dropped_empty": 1,
+        "dropped_malformed": 0,
+        "dropped_guest_host": 0,
+        "dropped_duplicate": 0,
+    }
+    _emit_segment_prepared(
+        state,
+        segment_id="seg-line-loss",
+        role="banter",
+        final_script=["One.", "Two.", "Three."],
+        collector=_collector(["llm-1"]),
+        line_accounting=accounting,
+    )
+    row = led.rows[0]
+    assert row["line_accounting"] == accounting
+    assert len(row["final_script"]) == accounting["aired"]
+
+
+def test_line_accounting_is_absent_for_a_full_exchange():
+    """Absence means no loss, so a full break stays byte-identical to today's row."""
+    led = _FakeLedger()
+    state = SimpleNamespace(ledger=led)
+    _emit_segment_prepared(
+        state,
+        segment_id="seg-full",
+        role="banter",
+        final_script=["One.", "Two."],
+        collector=_collector(["llm-1"]),
+        line_accounting=None,
+    )
+
+    assert "line_accounting" not in led.rows[0]
+
+
 def test_none_collector_is_safe():
     led = _FakeLedger()
     state = SimpleNamespace(ledger=led)

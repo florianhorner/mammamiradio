@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from mammamiradio.core.models import Segment, SegmentType, StationState
+from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.moment_receipts import STORE_FILENAME, MomentStore
 from mammamiradio.web.streamer import _finalize_moment_receipts
 from tests.web.test_streamer_routes import _make_test_app
@@ -49,6 +50,7 @@ def _banter_segment(**metadata: object) -> Segment:
 def _enable_ha(app) -> None:
     app.state.config.homeassistant.enabled = True
     app.state.config.ha_token = "ha-token"
+    app.state.station_state.home_authorization = HomeAuthorization.legacy()
 
 
 # --- payload surfaces -------------------------------------------------------------
@@ -61,8 +63,11 @@ async def test_public_status_recent_moments_generic_labels_only():
     store, _ = _store_with_aired_row()
     app.state.station_state.moment_store = store
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        body = (await client.get("/public-status")).json()
+    # The endpoint continues to expose the coarse raw minute count; listener.js
+    # owns human wording such as "yesterday" and must not change this contract.
+    with patch("mammamiradio.web.streamer.time.time", return_value=NOW + 30 + 25 * 60):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            body = (await client.get("/public-status")).json()
 
     recent = body["ha_moments"]["recent"]
     assert len(recent) == 1
@@ -70,6 +75,7 @@ async def test_public_status_recent_moments_generic_labels_only():
     # no raw ids may ever cross the unauthenticated boundary.
     assert set(recent[0]) == {"label", "ago_min", "status"}
     assert recent[0]["label"] == "Morning launch"
+    assert recent[0]["ago_min"] == 25
     assert recent[0]["status"] == "aired"
 
 
@@ -165,8 +171,50 @@ async def test_public_status_hides_persisted_receipts_when_ha_is_disabled():
 
 
 @pytest.mark.asyncio
+async def test_public_status_hides_persisted_receipts_when_home_context_is_off():
+    app = _make_test_app()
+    _enable_ha(app)
+    app.state.config.homeassistant.context_enabled = False
+    store, _ = _store_with_aired_row()
+    app.state.station_state.moment_store = store
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    assert body["ha_moments"] is None
+
+
+@pytest.mark.asyncio
+async def test_narrow_authorization_hides_persisted_receipts_from_public_and_admin_status():
+    app = _make_test_app()
+    app.state.config.homeassistant.enabled = True
+    app.state.config.ha_token = "ha-token"
+    # StationState defaults fail-closed; make the mode explicit for this
+    # persisted-data regression contract.
+    app.state.station_state.home_authorization = HomeAuthorization.narrow()
+    store, _ = _store_with_aired_row()
+    app.state.station_state.moment_store = store
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with (
+        patch.object(MomentStore, "to_public_rows", wraps=store.to_public_rows) as public_rows,
+        patch.object(MomentStore, "to_admin_rows", wraps=store.to_admin_rows) as admin_rows,
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            public = (await client.get("/public-status")).json()
+            admin = (await client.get("/status")).json()
+
+    assert not (public.get("ha_moments") or {}).get("recent")
+    assert not (admin.get("ha_moments") or {}).get("recent")
+    assert admin["moments_admin"] is None
+    public_rows.assert_not_called()
+    admin_rows.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_admin_status_survives_moment_projection_failure():
     app = _make_test_app()
+    app.state.station_state.home_authorization = HomeAuthorization.legacy()
     store, _ = _store_with_aired_row()
     app.state.station_state.moment_store = store
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -228,6 +276,23 @@ def test_finalize_records_aired_on_clean_send():
     segment = _banter_segment(ritual_moment_id=moment_id)
     _finalize_moment_receipts(state, segment, bytes_sent=4096, was_skipped=False, listeners=2)
     assert state.moment_store.rows[0].status == "aired"
+
+
+def test_finalize_rejects_bytes_that_no_listener_accepted():
+    state = StationState()
+    state.moment_store, moment_id = _airing_store()
+    segment = _banter_segment(ritual_moment_id=moment_id)
+
+    _finalize_moment_receipts(
+        state,
+        segment,
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=1,
+        accepted_listeners=0,
+    )
+
+    assert state.moment_store.rows[0].status == "not_streamed"
 
 
 @pytest.mark.parametrize(

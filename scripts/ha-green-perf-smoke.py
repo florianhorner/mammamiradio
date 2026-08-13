@@ -5,11 +5,14 @@ This script expects a mammamiradio process to already be running and checks the
 listener-visible promises that have regressed on constrained hardware: health
 does not enter silence failure, readiness does not report extended queue
 starvation, and the stream returns audio bytes inside a bounded window.
+An explicit persisted operator stop is a valid non-streaming state only when
+``/readyz`` and ``/public-status`` agree; that one state skips the byte probe.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -77,27 +80,59 @@ def _wait_for_health() -> None:
     _fail(f"/healthz did not become ok within {STARTUP_TIMEOUT_S:.0f}s; last={last_payload}")
 
 
-def _check_readiness() -> None:
+def _check_readiness() -> str:
     status, payload = _fetch_json("/readyz")
     _assert_not_silence_failure("/readyz", status, payload, allow_starting=True)
     if status == 200:
+        if payload.get("status") != "ready" or payload.get("ready") is not True:
+            _fail(f"/readyz returned HTTP 200 without ready=true: {payload}")
         _pass("/readyz ready")
-        return
-    if payload.get("status") == "starting":
+        return "ready"
+    if status == 503 and payload.get("status") == "starting":
         _pass("/readyz still starting without silence failure")
-        return
+        return "starting"
+    if status == 503 and payload.get("status") == "stopped" and payload.get("session_stopped") is True:
+        _pass("/readyz confirms the station is intentionally stopped")
+        return "stopped"
     _fail(f"/readyz returned unexpected state HTTP {status}: {payload}")
 
 
-def _check_public_status() -> None:
+def _check_public_status(*, expect_stopped: bool) -> None:
     status, payload = _fetch_json("/public-status")
     if status != 200:
         _fail(f"/public-status returned HTTP {status}: {payload}")
-    runtime_health = payload.get("runtime_health") or {}
-    queue_empty = float(runtime_health.get("queue_empty_elapsed_s") or 0)
+
+    session_stopped = payload.get("session_stopped")
+    if not isinstance(session_stopped, bool):
+        _fail(f"/public-status must include boolean session_stopped, got {session_stopped!r}")
+    if session_stopped != expect_stopped:
+        _fail(
+            "/public-status disagrees with /readyz about the intentional stop: "
+            f"expected session_stopped={expect_stopped}, got {session_stopped!r}"
+        )
+
+    runtime_health = payload.get("runtime_health")
+    if not isinstance(runtime_health, dict):
+        _fail(f"/public-status must include object runtime_health, got {runtime_health!r}")
+
+    queue_empty = runtime_health.get("queue_empty_elapsed_s")
+    if (
+        isinstance(queue_empty, bool)
+        or not isinstance(queue_empty, int | float)
+        or not math.isfinite(float(queue_empty))
+    ):
+        _fail(f"/public-status runtime_health must include numeric queue_empty_elapsed_s, got {queue_empty!r}")
+
+    silence_with_listeners = runtime_health.get("silence_with_listeners")
+    if not isinstance(silence_with_listeners, bool):
+        _fail(
+            f"/public-status runtime_health must include boolean silence_with_listeners, got {silence_with_listeners!r}"
+        )
+
+    queue_empty = float(queue_empty)
     if queue_empty > MAX_QUEUE_EMPTY_S:
         _fail(f"/public-status runtime queue_empty_elapsed_s={queue_empty:.1f} exceeds {MAX_QUEUE_EMPTY_S:.1f}")
-    if runtime_health.get("silence_with_listeners") is True:
+    if silence_with_listeners:
         _fail(f"/public-status runtime reports silence_with_listeners=true: {runtime_health}")
     _pass("/public-status runtime health within queue-empty budget")
 
@@ -121,9 +156,13 @@ def _check_first_stream_byte() -> None:
 def main() -> int:
     print(f"HA Green perf smoke against {BASE_URL}")
     _wait_for_health()
-    _check_readiness()
-    _check_public_status()
-    _check_first_stream_byte()
+    readiness = _check_readiness()
+    intentional_stop = readiness == "stopped"
+    _check_public_status(expect_stopped=intentional_stop)
+    if intentional_stop:
+        _pass("/stream first-byte check skipped because the station is intentionally stopped")
+    else:
+        _check_first_stream_byte()
     print("HA Green perf smoke passed.")
     return 0
 

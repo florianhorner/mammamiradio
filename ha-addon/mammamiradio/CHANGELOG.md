@@ -2,60 +2,72 @@
 
 ## Unreleased
 
+- **First Listen never traps an install it cannot serve.** A station running without Home Assistant access keeps the guided path optional instead of mandatory and can always reach the AI-key step, and a proven prior install upgrading into this release keeps its classification and its home behavior — only a bare or unreadable leftover database file still fails closed to the cautious path.
+- **First Listen now takes a fresh add-on install from setup to real radio before asking for anything optional.** The opening control-room flow explains source readiness in plain language, finds one compatible-looking `media_player`, starts `media-source://mammamiradio/live`, and asks whether the station was heard. It works with stock hosts and no AI key, repairs an accepted-but-unsaved listening check without replaying audio, and keeps filtered Home context behind an explicit privacy preview; all origin and receipt work remains outside the instant-audio startup path.
+
 ### Added
 
 - **The add-on now has a recorded, public Night Drive sound.** Station IDs, time checks, music handoffs, and ad breaks now draw from a bundled CC0 library of real crowd laughter and applause, trumpet, mandolin, café/espresso, till, telephone, cassette, cocktail ice, and road recordings — not unrelated generated tones. Every fictional brand selects one reviewed scene with one quiet bed and at most two timed details around its dialogue, so ads stay vivid without the old layered drone. The pack carries its own source URLs, creator credits, source/output checksums, and a local listening board for all nine scenes; the fast recovery audio path stays separate and untouched.
 
-### Fixed
+## 2.18.0 - 2026-08-07
 
-- **Resume no longer gets trapped in a repeating continuity clip.** If the queue runs thin after Resume or idle wake-up, the add-on now plays the short branded recovery clip once and then moves to cached music runway when any normalized song is available, instead of looping the same host line while a fresh track renders. The recovery clip also starts on time even while the add-on's audio workers are busy, and its length is remembered so replays never wait on a re-measure.
-- **Health checks no longer flag an add-on that is audibly bridging as silent.** The silence alarm behind `/healthz` and `/readyz` now requires that nothing is airing at all, not just that the queue is empty — so a fresh install covering its first track render with the packaged continuity clip stays healthy instead of inviting a watchdog restart mid-recovery. Genuinely dead air still trips the alarm after 30 seconds.
-- **Home Assistant Quick Search now opens from the add-on control room.** Pressing Cmd+K or Ctrl+K while focus is inside the add-on's ingress admin panel now hands that shortcut back to Home Assistant's command bar instead of leaving the browser focused in the embedded app.
-- **Packaged recovery audio is harder to lose during cleanup.** The add-on now treats bundled continuity clips as durable package assets, even if a cleanup path sees a bad ephemeral flag, so producer and playback purges cannot remove the recovery audio needed to cover a thin queue.
-- **Optional speech now waits for enough real music runway.** Natural banter, ads, news flashes, station IDs, and time checks yield to music while the ready-audio buffer is below the runway floor and the queue can still build, keeping Home Assistant Green-class installs from spending a scarce buffer on optional speech.
-- **Time checks and sweepers now get the same branded transition as every other host segment — both when the music hands off to them and when they hand back.** They previously used a bare synthesized whoosh with no musical motif in either direction — they were the moments on air that sounded noticeably different from the rest of the add-on's imaging. Already-cached synthesized stings are invalidated automatically, so the fix applies without an operator needing to clear anything.
+The station stops going quiet. v2.18 closes every path we could find where a control, a failure, or a busy moment became silence or a repeated song — and starts new Home Assistant installations with a deliberately small home context.
 
-## 2.17.0 - 2026-07-07
+### The show keeps playing
 
-### Added
+- Every control that rebuilds the queue — source switches, purges, Panic, Chaos, Festival, everyday edits — keeps the last safe audio playing and reserves only audio that is proven playable.
+- The song on the air can no longer be picked as the song that plays next, and cached rescues rotate instead of repeating one track during a stall.
+- A curly apostrophe or an unusual letter in a station name no longer silences the stream. Typing a name on a phone or Mac substitutes a smart quote, which the stream headers could not carry, and every listener got an error while the station reported healthy.
+- If every voice provider fails, speech falls through to canned copy or music — never a silent segment. One mismatched cloud voice no longer sidelines every other voice on that provider.
+- Blocked or rejected music sources are marked unavailable before they can become silent songs, and adding songs no longer throws away the track being prepared.
+- The backup writer steps in sooner when the main AI writer is briefly busy, and delivery is cushioned so one busy moment is less likely to reach listeners.
 
-- **A clearer setup guide shows exactly what's next.** The admin panel tracks three plain steps — hear the stream, add an AI host key, and (optionally) review Home Assistant context — and shows which one needs attention. Add-ons that never connect Home Assistant aren't nagged about it; it's an optional upgrade, not a requirement.
-- **You can mute specific Home Assistant entities from the AI hosts.** A new "Home context preview" in Motore shows exactly which entities the hosts may reference, with a one-tap mute for anything you'd rather keep private. Muting applies to future host prompts, Casa moments, generated device labels, and running-gag callbacks, and holds through a Home Assistant hiccup or an add-on restart.
+### A smaller, more honest home layer
 
-### Changed
+- Fresh installations start with coarse daylight and one unambiguous weather source only; existing stations keep their current home behavior through a continuity bridge.
+- Home references rotate like radio, not a dashboard: one ambient cue per casual break, and a topic rests after airing.
+- Temperatures are read in the unit they were measured in — 68 °F is no longer announced as "sixty-eight degrees" Celsius.
+- Home Assistant context work moved off the path that keeps audio moving, and hot backups no longer omit the app when generated audio changes mid-copy.
 
-- **Station Name now drives the whole public identity without renaming Home Assistant IDs.** The add-on option feeds listener titles, stream metadata, admin setup previews, Home Assistant friendly labels, host prompts, and the default generated station IDs and sweepers. Existing custom `radio.toml` imaging copy is preserved and called out in setup when it may still mention the old name, while `mammamiradio` entity IDs and media-source paths stay stable for automations.
-- **"Connected Home" now means the hosts can actually see something, not just that a token is saved.** A saved token with nothing usable yet shows as Full AI Radio with a nudge to review Home Assistant context.
+### A control room you can trust
 
-## 2.16.1 - 2026-07-06
+- Rotazione leads with Record Hunt: type where the station should go next and it highlights what it will favor.
+- Rotation edits carry the song's own identity, so a shifted list can never make a Ban or Next hit the wrong track.
+- Admin controls and pacing survive restarts, Stop/Resume is restart-safe, and the AI spend estimate counts a paid voice the moment the provider confirms it.
+- The control room works with a screen reader, on a phone, and in dim light; the listener page's badges, name field, and footer links are legible and comfortable to tap.
 
-### Changed
+### Also in this release
 
-- **Super Italian Mode is easier to find live.** Its admin toggle now sits in Diretta with Chaos and Festival, so the station personality controls are together while Motore stays focused on runtime, costs, quality, and sound.
-- **Long-form YouTube results stay out of automatic rotation.** Direction searches, external adds, listener requests, and restart handoff now hold sets, full albums, podcasts, unknown-duration picks, and oversized candidates before they can become the next song; single-track music still passes when it fits the station's current pacing.
+- The add-on's music cache grows to 1500 MB by default with a new **Music cache size (MB)** setting, sized so a full rotation stays ready to play.
+- Normal Mode holds its English-led balance across the whole break, and a host can no longer end up answering themselves when a line is dropped.
+- A long listening stretch can earn one honest companionship beat; the time counter can no longer run past the end of what is playing.
+- The v1 integration contract is frozen and machine-checked on every pull request.
+- Installing and updating the add-on works again: the repository now names only published versions, with a daily check if that ever slips.
 
-### Fixed
+## 2.17.0 - 2026-07-12
 
-- **Recovery now uses real packaged audio instead of generated silence.** If the producer hits a broad failure or the queue drains after an operator clears the pool, the add-on now reaches for a committed recovery clip, then normalized cached music, then a branded recovery sweeper, then an emergency tone. The release checks fail if the recovery clip is missing or if producer recovery calls `generate_silence` again.
-- **Recovery audio now gets in before the add-on slows down retries.** If segment generation fails repeatedly, the station queues its backup audio first and only then backs off the retry loop, so listeners still get cover audio during a rough provider or download stretch. Resume and idle bridges also share the same final emergency-tone fallback when no canned clip or cached song is ready.
-- **Resume now clears the stopped status right away.** After tapping Resume, the add-on's public and admin status panels no longer keep showing the old stopped-state copy while the station waits for the next segment.
-- **Listener dediche no longer disappear when you switch playlists.** If a request is waiting and the operator loads a different playlist, the request moves into the recently handled feed as "Playlist changed" instead of vanishing after the listener already saw the request accepted.
-- **Backup audio now sounds like the station instead of bare silence.** When a segment fails and no recorded recovery clip is available, the add-on now plays a short branded recovery sweeper before using the emergency-tone fallback, so provider or download trouble feels intentional instead of like dead air.
-- **The public "Up Next" schedule no longer shows songs that were never actually queued.** When the render queue was empty, `/public-status`, the listener page, and the admin producer desk used to see a guessed lineup pulled from the rotation pool, shown as if it were real. Those public schedule surfaces now list only segments that are truly ready to air; when nothing is ready yet, the listener page and the admin producer desk each show one honest status line — distinguishing "still getting the next thing ready" from "no music source configured" and "station paused" — instead of padding out four fake placeholder rows. The v1 integration endpoint still exposes scheduler guesses as `up_next` rows with `predicted: true`, so integrations that need the same rendered-only queue should filter to `predicted === false`.
-- **Restart handoff follows the same music admission rules after an update.** Music restored from an older restart-handoff manifest is rechecked before startup playback, so a long YouTube set saved before this update cannot sneak into the cold-open queue. When a bad candidate is rejected for the session, the producer also chooses from the remaining eligible tracks directly instead of repeatedly sampling the rejected one.
-- **Normal Mode, handovers, and section stings now match the live controls.** Default-mode host copy that comes back all-Italian is retried once with a stronger English-led repair instruction, then falls back to stock English-led copy if the model still ignores the mode. Song-to-host talkovers start almost immediately instead of replaying a 1.5-second music tail, and synthetic section stings rotate among three distinct variants while prerecorded stinger assets still take priority.
-- **Norm-cache rescue tracks now carry a real duration estimate.** Fresh normalized cache entries save track duration, cache hits refresh stale duration sidecars without losing loudness markers, older entries fall back to a bitrate-size estimate, and rejected long-form cache artifacts are purged so rescue bridges cannot replay them.
-- **Listener song requests now say why they were refused.** The admin panel distinguishes no result, banned songs, long-form items, and download failures instead of flattening every terminal song request into "not found."
+First listen, then home context. v2.17 makes first audio sturdier and gives Home Assistant users a clearer view of the context their hosts may use.
 
-## 2.16.0 - 2026-07-06
+### Hear it first
 
-### Added
+- Cold starts, resumes, and thin queues stay covered with station recovery audio while music becomes ready.
+- Listen and Pause controls, paused or reconnecting status, and Scaletta now reflect the live station on desktop and mobile.
+- Setup shows the next useful step: start audio, add an AI host key, then optionally review Home Assistant context.
+- Automatic rotation keeps long-form material out and gives music priority while the queue refills.
 
-- **Thumb songs up or down without banning them.** The admin panel now lets operators nudge future rotation without interrupting what is playing. Thumbs stay local to the control room and never turn into bans.
+### Choose the home layer
 
-### Changed
+- Home Context Preview lists the entities available to the hosts and lets you mute an entity from future host use.
+- Connected Home now requires usable context. You can turn off Host home context or adjust its refresh interval while keeping the add-on’s Home Assistant integration.
+- Station Name now carries across the listener, Home Assistant, and the on-air identity without disrupting existing automations.
 
-- **Home Assistant context polling is easier on the add-on host.** The add-on now separates the live media-player push from the larger Home Assistant context snapshot, adds a configurable context poll interval, and lets operators turn context polling off entirely while the station keeps its core playback status updates.
+### Also in this release
+
+- Record Hunt gives a chosen mood or era a stronger pull in rotation.
+- The Quality control now has distinct Premium, Balanced, and Economy settings.
+- Moment Receipts show which home moments reached listeners.
+- The listener and control room have calmer motion that respects Reduce Motion, and time checks and sweepers now share the station’s on-air sound.
+- Super Italian Mode is easier to reach alongside the other live station controls.
 
 ## 2.15.0 - 2026-07-06
 

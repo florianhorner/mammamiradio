@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
-import os
+import math
 import time
 from pathlib import Path
 from typing import Any
 
-from mammamiradio.core.models import Heading, PlaylistSource, StationState, Track
+from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    SOURCE_READINESS_KINDS,
+    Heading,
+    PlaylistSource,
+    SourceReadinessEntry,
+    SourceReadinessEvidence,
+    StationState,
+    Track,
+)
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
-from mammamiradio.web.assets import _ASSETS_DIR
 
 
 def _page_bounds(offset: int, limit: int, *, default_limit: int, max_limit: int) -> tuple[int, int]:
@@ -43,6 +52,155 @@ _cache_size_mb_val: float = 0.0
 _cache_size_mb_ts: float = 0.0
 _CACHE_SIZE_TTL = 30.0  # seconds — stat()-ing every MP3 is expensive on Pi
 
+_SOURCE_LABELS = {
+    "charts": "Live charts",
+    "jamendo": "Jamendo",
+    "local": "Local music",
+    "demo": "Bundled demo music",
+    "recovery": "Recovery cover",
+}
+
+
+def _readiness_status(kind: str, entry: SourceReadinessEntry) -> str:
+    if entry.on_air:
+        return "on_air"
+    if kind == "recovery":
+        return "cover_only" if entry.bundled or entry.configured else "not_bundled"
+    if kind == "demo" and entry.bundled is False:
+        return "not_bundled"
+    if entry.playable:
+        return "playable"
+    if entry.exhausted:
+        return "unavailable"
+    if entry.candidates:
+        return "candidates_only"
+    if not entry.configured:
+        return "not_configured"
+    if not entry.attempted:
+        return "configured_unchecked"
+    return "unavailable"
+
+
+def _readiness_detail(kind: str, status: str, entry: SourceReadinessEntry) -> str:
+    details = {
+        "on_air": "On air now.",
+        "playable": "A track has passed the audio checks and is ready.",
+        "candidates_only": "Tracks were found, but none has passed the audio checks yet.",
+        "configured_unchecked": "Configured, but not checked because another source was selected.",
+        "unavailable": "This source was checked but did not produce playable audio.",
+        "not_configured": "This source is not configured for this run.",
+        "not_bundled": "No bundled song library is included in this build.",
+        "cover_only": "Available only to keep the stream audible while music recovers.",
+    }
+    detail = details[status]
+    if kind == "recovery" and status == "on_air":
+        return "Recovery cover is on air; this proves transport, not a healthy music source."
+    if status == "unavailable" and entry.failure:
+        return entry.failure
+    return detail
+
+
+def _source_readiness_status(config, state: StationState) -> dict:
+    """Pure, scan-free projection of the event evidence owned by StationState."""
+    raw_evidence = getattr(state, "source_readiness", None)
+    if isinstance(raw_evidence, SourceReadinessEvidence):
+        evidence = raw_evidence
+    else:
+        evidence = SourceReadinessEvidence(source_revision=max(0, int(getattr(state, "source_revision", 0) or 0)))
+        playlist = getattr(state, "playlist", None)
+        tracks = [track for track in playlist if isinstance(track, Track)] if isinstance(playlist, list | tuple) else []
+        evidence.observe_tracks(tracks)
+        source = getattr(state, "playlist_source", None)
+        if isinstance(source, PlaylistSource):
+            evidence.set_current_rotation(source.kind, source.label)
+            evidence.mark_candidates(source.kind, source.track_count or len(tracks))
+    entries = {
+        kind: evidence.entries.get(kind, SourceReadinessEntry(kind=kind)).clone() for kind in SOURCE_READINESS_KINDS
+    }
+    # Configuration flags can be projected without touching the filesystem.
+    # Load-time evidence remains the authority for local/bundled availability.
+    entries["charts"].configured = entries["charts"].configured or bool(getattr(config, "allow_ytdlp", False))
+    playlist_config = getattr(config, "playlist", None)
+    jamendo_client_id = getattr(playlist_config, "jamendo_client_id", "")
+    entries["jamendo"].configured = entries["jamendo"].configured or bool(
+        jamendo_client_id.strip() if isinstance(jamendo_client_id, str) else ""
+    )
+
+    sources: dict[str, dict] = {}
+    for kind in SOURCE_READINESS_KINDS:
+        entry = entries[kind]
+        status = _readiness_status(kind, entry)
+        sources[kind] = {
+            "kind": kind,
+            "label": _SOURCE_LABELS[kind],
+            "status": status,
+            "detail": _readiness_detail(kind, status, entry),
+            "configured": entry.configured,
+            "attempted": entry.attempted,
+            "candidates": entry.candidates,
+            "playable": entry.playable,
+            "on_air": entry.on_air,
+            "exhausted": entry.exhausted,
+            "failure": entry.failure,
+            "bundled": entry.bundled,
+        }
+
+    advanced = None
+    if evidence.advanced is not None:
+        advanced_status = _readiness_status("advanced", evidence.advanced)
+        advanced = {
+            "kind": evidence.advanced.kind,
+            "label": evidence.advanced.label,
+            "status": advanced_status,
+            "detail": _readiness_detail("advanced", advanced_status, evidence.advanced),
+            "candidates": evidence.advanced.candidates,
+            "playable": evidence.advanced.playable,
+            "on_air": evidence.advanced.on_air,
+            "exhausted": evidence.advanced.exhausted,
+            "failure": evidence.advanced.failure,
+        }
+
+    current_rotation = {
+        "kind": evidence.current_rotation_kind,
+        "label": evidence.current_rotation_label,
+    }
+    heading = getattr(state, "heading", None)
+    if isinstance(heading, Heading) and heading.label:
+        now_metadata = (getattr(state, "now_streaming", {}) or {}).get("metadata") or {}
+        heading_on_air = bool(getattr(state, "current_stream_audible", False)) and str(
+            now_metadata.get("heading_id") or ""
+        ) == str(heading.id)
+        current_rotation = {
+            "kind": "record_hunt",
+            "label": heading.label,
+            "base_kind": evidence.current_rotation_kind,
+        }
+        advanced = {
+            "kind": "record_hunt",
+            "label": heading.label,
+            "status": "on_air" if heading_on_air else "candidates_only",
+            "detail": "Record Hunt is steering the current rotation.",
+            "candidates": sum(1 for track in (state.playlist or []) if getattr(track, "heading_id", "") == heading.id),
+            "playable": 0,
+            "on_air": heading_on_air,
+            "failure": "",
+        }
+
+    programming_ready = any(
+        item["status"] in {"on_air", "playable"} for kind, item in sources.items() if kind != "recovery"
+    ) or bool(advanced and advanced["status"] in {"on_air", "playable"})
+    recovery_on_air = sources["recovery"]["on_air"]
+    return {
+        "source_revision": evidence.source_revision,
+        "sources": sources,
+        "current_rotation": current_rotation,
+        "advanced": advanced,
+        "programming_ready": programming_ready,
+        "recovery_cover_available": sources["recovery"]["status"] in {"on_air", "cover_only"},
+        "recovery_on_air": recovery_on_air,
+        "transport_only": recovery_on_air and not programming_ready,
+    }
+
 
 def _cached_cache_size_mb(cache_dir: Path) -> float:
     """Return total MP3 cache size in MB, recomputed at most every 30s."""
@@ -59,15 +217,30 @@ def _cached_cache_size_mb(cache_dir: Path) -> float:
 
 
 def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
-    """Build a single, explicit music onboarding status for UI surfaces."""
+    """Compatibility view derived from canonical, event-driven source truth."""
     global _golden_path_cache, _golden_path_cache_key, _golden_path_cache_ts
     now = time.time()
-    env_allow_ytdlp = os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")
-    allow_ytdlp = bool(getattr(config, "allow_ytdlp", env_allow_ytdlp))
+    readiness = _source_readiness_status(config, state)
+    evidence_fingerprint = tuple(
+        (
+            kind,
+            item["configured"],
+            item["attempted"],
+            item["candidates"],
+            item["playable"],
+            item["on_air"],
+            item["exhausted"],
+            item["failure"],
+            item["bundled"],
+        )
+        for kind, item in readiness["sources"].items()
+    )
     cache_key = (
-        allow_ytdlp,
-        getattr(state, "playlist_revision", 0),
-        getattr(state, "source_revision", 0),
+        readiness["source_revision"],
+        evidence_fingerprint,
+        readiness["current_rotation"].get("kind", ""),
+        readiness["current_rotation"].get("label", ""),
+        tuple(sorted((readiness["advanced"] or {}).items())),
         bool(getattr(state, "session_stopped", False)),
     )
     if (
@@ -78,29 +251,28 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     ):
         return _golden_path_cache
 
-    has_demo_assets = _has_any_mp3(_ASSETS_DIR / "demo" / "music")
-    has_local_music = _has_any_mp3(Path("music"))
-
-    sources: list[str] = []
-    if has_demo_assets:
-        sources.append("bundled demo tracks")
-    if has_local_music:
-        sources.append("local music/*.mp3 files")
-    playlist = getattr(state, "playlist", None)
-    if isinstance(playlist, list | tuple) and playlist:
-        source = getattr(state, "playlist_source", None)
-        sources.append(getattr(source, "label", "") or "loaded playlist")
-    if allow_ytdlp:
-        sources.append("yt-dlp downloads")
+    ready_sources = [
+        item["label"]
+        for kind, item in readiness["sources"].items()
+        if kind != "recovery" and item["status"] in {"on_air", "playable"}
+    ]
+    if readiness["advanced"] and readiness["advanced"]["status"] in {"on_air", "playable"}:
+        ready_sources.append(readiness["advanced"]["label"])
+    candidate_sources = [
+        item["label"]
+        for kind, item in readiness["sources"].items()
+        if kind != "recovery" and item["status"] == "candidates_only"
+    ]
 
     shared = {
-        "fallback_sources": sources,
-        "silent_music_fallback": not sources,
+        "fallback_sources": ready_sources,
+        "silent_music_fallback": not readiness["programming_ready"],
+        "source_readiness": readiness,
     }
 
-    if sources:
-        source_label = ", ".join(sources)
-        has_llm = bool(config.anthropic_api_key or config.openai_api_key)
+    if readiness["programming_ready"]:
+        source_label = ", ".join(ready_sources) or "the current rotation"
+        has_llm = bool(getattr(config, "anthropic_api_key", "") or getattr(config, "openai_api_key", ""))
         result = {
             "stage": "music_available",
             "blocking": False,
@@ -117,14 +289,33 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         _golden_path_cache_ts = now
         return result
 
+    if candidate_sources:
+        result = {
+            "stage": "music_preparing",
+            "blocking": True,
+            "headline": "Music found; preparing the first playable track.",
+            "detail": f"Candidates are ready from: {', '.join(candidate_sources)}.",
+            "steps": ["Give the tape decks a moment, then recheck."],
+            **shared,
+        }
+        _golden_path_cache = result
+        _golden_path_cache_key = cache_key
+        _golden_path_cache_ts = now
+        return result
+
+    any_configured = any(item["configured"] for kind, item in readiness["sources"].items() if kind != "recovery")
     result = {
         "stage": "needs_music_source",
         "blocking": True,
-        "headline": "No music source configured.",
-        "detail": "Set MAMMAMIRADIO_ALLOW_YTDLP=true or add MP3 files to music/.",
+        "headline": "No playable music source yet." if any_configured else "No music source configured.",
+        "detail": (
+            "Recovery cover can keep the route audible, but a music source still needs attention."
+            if readiness["recovery_on_air"]
+            else "Enable live charts, configure Jamendo, or add local MP3 files."
+        ),
         "steps": [
-            "Set MAMMAMIRADIO_ALLOW_YTDLP=true for chart music, or",
-            "Place MP3 files in the music/ directory.",
+            "Enable live charts or configure Jamendo, or",
+            "Place MP3 files in the configured local music directory.",
         ],
         **shared,
     }
@@ -134,7 +325,137 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
     return result
 
 
+_HA_REFRESH_RESULTS = frozenset({"success", "failed", "background_timeout", "stale"})
+
+
+def _finite_timestamp(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
+def _nonnegative_milliseconds(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
+        return None
+    return round(value)
+
+
+def _positive_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
+def _ha_mailbox_state(state: StationState) -> tuple[bool, bool, str | None, int | None, bool | None]:
+    """Read producer mailbox status without letting serialization mutate it."""
+    mailbox = getattr(state, "ha_context_refresh_mailbox", None)
+    reader = getattr(mailbox, "read_refresh_mailbox_status", None)
+    if callable(reader):
+        try:
+            mailbox_status = reader()
+        except Exception:  # pragma: no cover - diagnostics must stay fail-soft
+            mailbox_status = None
+        if isinstance(mailbox_status, dict):
+            in_flight = bool(mailbox_status.get("in_flight", False))
+            adoption_pending = bool(mailbox_status.get("adoption_pending", False))
+            result = mailbox_status.get("last_result")
+            duration_ms = mailbox_status.get("last_result_duration_ms")
+            used_background = mailbox_status.get("last_result_used_background")
+            return (
+                in_flight,
+                adoption_pending,
+                result if isinstance(result, str) else None,
+                _nonnegative_milliseconds(duration_ms),
+                bool(used_background) if used_background is not None else None,
+            )
+
+    task = getattr(mailbox, "in_flight_task", None)
+    if task is None:
+        return bool(getattr(state, "ha_context_refresh_in_flight", False)), False, None, None, None
+    try:
+        done = bool(task.done())
+    except Exception:  # pragma: no cover - diagnostics must stay fail-soft
+        return bool(getattr(state, "ha_context_refresh_in_flight", False)), False, None, None, None
+    if not done:
+        return True, False, None, None, None
+    # Compatibility fallback for an embedding that exposes only a Task rather
+    # than the coordinator's richer reader. A task that failed must never be
+    # presented as an update ready for adoption.
+    try:
+        outcome = task.result()
+    except TimeoutError:
+        return False, False, "background_timeout", None, None
+    except (asyncio.CancelledError, Exception):
+        return False, False, "failed", None, None
+    kind = getattr(outcome, "kind", None)
+    duration_seconds = getattr(outcome, "duration_seconds", None)
+    duration = (
+        _nonnegative_milliseconds(duration_seconds * 1000)
+        if isinstance(duration_seconds, int | float) and not isinstance(duration_seconds, bool)
+        else None
+    )
+    if kind == "fresh":
+        return False, True, "success", duration, None
+    return False, False, "failed", duration, None
+
+
+def _ha_refresh_payload(state: StationState) -> dict[str, object]:
+    """Serialize coarse HA refresh telemetry for the authenticated admin surface."""
+    last_success_at = _finite_timestamp(state.ha_context_last_updated)
+    last_attempt_at = _finite_timestamp(getattr(state, "ha_context_refresh_last_attempt_at", 0.0))
+    age = max(0.0, time.time() - last_success_at) if last_success_at is not None else None
+    age_seconds = int(age) if age is not None else None
+    stale_after_seconds = _positive_seconds(getattr(state, "ha_context_refresh_stale_after_seconds", 0.0))
+    stale_by_age = bool(age is not None and stale_after_seconds is not None and age > stale_after_seconds)
+    in_flight, adoption_pending, mailbox_result, mailbox_duration_ms, mailbox_used_background = _ha_mailbox_state(state)
+    raw_result = getattr(state, "ha_context_refresh_last_result", "")
+    state_last_result = raw_result if isinstance(raw_result, str) and raw_result in _HA_REFRESH_RESULTS else None
+    mailbox_last_result = mailbox_result if mailbox_result in _HA_REFRESH_RESULTS else None
+    last_result = mailbox_last_result or state_last_result
+    last_result_duration_ms = (
+        mailbox_duration_ms
+        if mailbox_last_result is not None
+        else _nonnegative_milliseconds(getattr(state, "ha_context_refresh_last_result_duration_ms", None))
+    )
+    last_result_used_background = (
+        mailbox_used_background
+        if mailbox_last_result is not None and mailbox_used_background is not None
+        else bool(getattr(state, "ha_context_refresh_last_result_used_background", False))
+    )
+
+    if last_success_at is None:
+        freshness = "unavailable"
+    elif stale_by_age or bool(getattr(state, "ha_context_refresh_stale", False)):
+        freshness = "stale"
+    else:
+        freshness = "fresh"
+
+    return {
+        "freshness": freshness,
+        "in_flight": in_flight,
+        "adoption_pending": adoption_pending,
+        "last_success_at": last_success_at,
+        "age_seconds": age_seconds,
+        "last_attempt_at": last_attempt_at,
+        "active_foreground_timed_out": bool(
+            in_flight and getattr(state, "ha_context_refresh_active_foreground_timed_out", False)
+        ),
+        "last_result": last_result,
+        "last_result_duration_ms": last_result_duration_ms,
+        "last_result_used_background": last_result_used_background,
+    }
+
+
 def _ha_details_payload(state: StationState) -> dict | None:
+    refresh = _ha_refresh_payload(state)
+    director_status: dict | None = None
+    director = getattr(state, "home_context_director", None)
+    if director is not None:
+        try:
+            candidate = director.admin_status()
+            director_status = candidate if isinstance(candidate, dict) else None
+        except Exception:
+            director_status = None
     has_ha_observability = bool(
         state.ha_context
         or state.ha_scored_entities
@@ -142,6 +463,12 @@ def _ha_details_payload(state: StationState) -> dict | None:
         or state.ha_ritual_public_families
         or state.ha_ritual_matches
         or state.ha_ritual_recipe_audit
+        or refresh["in_flight"]
+        or refresh["last_success_at"]
+        or refresh["last_attempt_at"]
+        or refresh["last_result"]
+        or bool(getattr(state, "ha_context_refresh_configured", False))
+        or director_status
     )
     if not has_ha_observability:
         return None
@@ -163,7 +490,10 @@ def _ha_details_payload(state: StationState) -> dict | None:
         "registry_source": state.ha_registry_source or None,
         "context_char_count": state.ha_context_char_count,
         "context_entity_count": state.ha_context_entity_count,
-        "context_last_updated": state.ha_context_last_updated or None,
+        # Legacy source-snapshot timestamp. `refresh.last_success_at` carries
+        # the same value for the new admin contract.
+        "context_last_updated": refresh["last_success_at"],
+        "refresh": refresh,
         "first_home_context_moment_fired": state.ha_first_home_context_moment_fired,
     }
     if state.ha_ritual_public_families or state.ha_ritual_matches or state.ha_ritual_recipe_audit:
@@ -172,6 +502,8 @@ def _ha_details_payload(state: StationState) -> dict | None:
             "matches": copy.deepcopy(state.ha_ritual_matches[:8]),
             "audit": copy.deepcopy(state.ha_ritual_recipe_audit[:16]),
         }
+    if director_status is not None:
+        payload["home_context_director"] = director_status
     return payload
 
 
@@ -275,8 +607,14 @@ def _track_preference_score(track: Track, preferences: object) -> int:
     return preference_score(preferences, normalized_track_key(track))
 
 
+def _admin_track_id(track: Track) -> str:
+    """Return the opaque row token used by Admin playlist mutations."""
+    return str(track.spotify_id or "").strip() or track.cache_key
+
+
 def _serialize_track(track: Track, *, preferences: object | None = None) -> dict:
     payload = {
+        "id": _admin_track_id(track),
         "title": track.title,
         "artist": track.artist,
         "display": track.display,
@@ -335,6 +673,19 @@ def _duration_sec_from_payload(payload: dict | None) -> float | None:
 
 _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
     {
+        # Home Context Director bookkeeping is intentionally internal.  The
+        # selected fact is an opaque prompt contract, not listener-facing data.
+        "home_fact_id",
+        "home_fact_topic",
+        "home_fact_topic_key",
+        "home_fact_fingerprint",
+        "home_fact_entity_id",
+        "home_fact_policy_revision",
+        "home_return_fact_id",
+        # Listener-session lifecycle metadata is an internal delivery fence.
+        # Public status keeps its pre-feature segment schema unchanged.
+        "listener_session_epoch",
+        "listener_session_cue",
         "memory_extraction",
         "ritual_recipe_match",
         "ritual_recipe_matches",
@@ -342,6 +693,11 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_directive",
         "ritual_moment_id",
         "gag_moment_id",
+        "transition_track_ref",
+        # Render-scoped playlist identity keeps provider truth stable across a
+        # metadata-only source swap. It is operational bookkeeping, not part of
+        # the public or frozen now-playing contract.
+        SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     }
 )
 
@@ -350,7 +706,22 @@ def _public_segment_metadata(metadata: object) -> dict:
     """Copy segment metadata for public/shared status payloads."""
     if not isinstance(metadata, dict):
         return {}
-    return {key: copy.deepcopy(value) for key, value in metadata.items() if key not in _INTERNAL_SEGMENT_METADATA_KEYS}
+
+    def _without_internal(value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                key: _without_internal(child)
+                for key, child in value.items()
+                if key not in _INTERNAL_SEGMENT_METADATA_KEYS
+            }
+        if isinstance(value, list):
+            return [_without_internal(child) for child in value]
+        if isinstance(value, tuple):
+            return tuple(_without_internal(child) for child in value)
+        return copy.deepcopy(value)
+
+    public = _without_internal(metadata)
+    return public if isinstance(public, dict) else {}
 
 
 def _public_now_streaming_payload(now_streaming: dict | None) -> dict:

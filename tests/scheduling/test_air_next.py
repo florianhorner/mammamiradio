@@ -4,7 +4,9 @@ Covers the three mandatory audio-delivery scenarios for the queue mutation:
   1. Normal — front-insert past a buffered queue, segment airs next.
   2. Empty fallback — front-insert into an empty queue (no crash, airs next).
   3. Post-restart/stopped — a stop mid-build drops the segment, never airs it.
-Plus the bounded-queue tail-drop (the dead-air landmine) and shadow consistency.
+Plus the bounded-queue tail-drop (the dead-air landmine), the stale transition-claim
+head-drop (a queued "just finished playing X" claim broken by the insert), and
+shadow consistency.
 """
 
 from __future__ import annotations
@@ -124,6 +126,83 @@ def test_front_insert_drops_furthest_future_tail_on_full_queue():
     assert state.queued_segments[0]["id"] == "banter"
 
 
+def test_front_insert_keeps_protected_tail_before_dropping_ordinary_audio():
+    q: asyncio.Queue = asyncio.Queue(maxsize=3)
+    state = StationState()
+    ordinary_a, ordinary_b = _seg("ordinary-a"), _seg("ordinary-b")
+    protected = _seg("continuity", seg_type=SegmentType.BANTER)
+    protected.metadata["continuity_reservation"] = True
+    for item in (ordinary_a, ordinary_b, protected):
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("ordinary-a", "music"), _shadow("ordinary-b", "music"), _shadow("continuity")]
+
+    forced = _seg("forced", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, forced, _shadow("forced")) is True
+
+    assert list(q._queue) == [forced, ordinary_a, protected]
+    assert protected.metadata["continuity_reservation"] is True
+
+
+def test_front_insert_evicts_ordinary_audio_before_an_existing_air_next():
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    state = StationState()
+    ordinary = _seg("ordinary")
+    existing_air_next = _seg("existing-air-next", seg_type=SegmentType.BANTER)
+    existing_air_next.metadata["air_next"] = True
+    for item in (ordinary, existing_air_next):
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("ordinary", "music"), _shadow("existing-air-next")]
+
+    newer = _seg("newer-air-next", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is True
+
+    assert list(q._queue) == [newer, existing_air_next]
+    assert existing_air_next.metadata["air_next"] is True
+    assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
+
+
+def test_front_insert_moves_protected_audio_to_slot_before_evicting_existing_air_next():
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    state = StationState()
+    existing_air_next = _seg("existing-air-next", seg_type=SegmentType.BANTER)
+    existing_air_next.metadata["air_next"] = True
+    protected = _seg("continuity", seg_type=SegmentType.BANTER)
+    protected.metadata["continuity_reservation"] = True
+    for item in (existing_air_next, protected):
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("existing-air-next"), _shadow("continuity")]
+
+    newer = _seg("newer-air-next", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is True
+
+    assert list(q._queue) == [newer, existing_air_next]
+    # Pin the atomic real-queue/shadow invariant: the moved continuity row must
+    # leave the shadow too, in the same order as the real queue.
+    assert [row["label"] for row in state.queued_segments] == [
+        "newer-air-next",
+        "existing-air-next",
+    ]
+    assert state.continuity_slot is protected
+    assert state.discarded_segments_total == 0
+
+
+def test_front_insert_rejects_newcomer_when_every_slot_is_already_air_next():
+    q: asyncio.Queue = asyncio.Queue(maxsize=1)
+    state = StationState(operator_force_pending=SegmentType.BANTER)
+    existing_air_next = _seg("existing-air-next", seg_type=SegmentType.BANTER)
+    existing_air_next.metadata["air_next"] = True
+    q.put_nowait(existing_air_next)
+    state.queued_segments = [_shadow("existing-air-next")]
+
+    newer = _seg("newer-air-next", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, newer, _shadow("newer-air-next")) is False
+
+    assert list(q._queue) == [existing_air_next]
+    assert state.queued_segments == [_shadow("existing-air-next")]
+    assert state.operator_force_pending is None
+    assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
+
+
 def test_front_insert_unlinks_dropped_ephemeral_tail(tmp_path):
     """A dropped tail render that is ephemeral is unlinked (no temp leak); a
     non-ephemeral one is left on disk to be re-queued later."""
@@ -165,3 +244,76 @@ def test_front_insert_overflow_keeps_packaged_asset_even_if_ephemeral(tmp_path):
         assert _front_insert_queue_and_shadow(q, state, front, _shadow("front")) is True
 
     assert packaged.exists()
+
+
+def test_front_insert_drops_stale_transition_claim_head(tmp_path):
+    """A queue-head banter/ad segment carrying a "just finished playing X" claim
+    (``transition_track_ref``) has that claim broken the instant anything gets
+    wedged ahead of it — X is no longer what airs right before it. It must be
+    dropped, not aired with a now-false claim; the next queued item becomes the
+    real neighbor of the front-inserted segment."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=5)
+    state = StationState()
+    stale_head = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "banter1.mp3",
+        metadata={"transition_track_ref": "yt|abc123"},
+        ephemeral=False,
+    )
+    song2 = _seg("song2")
+    q.put_nowait(stale_head)
+    q.put_nowait(song2)
+    state.queued_segments = [_shadow("banter1"), _shadow("song2", "music")]
+
+    front = _seg("front", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, front, _shadow("front")) is True
+
+    assert q.qsize() == 2  # stale_head dropped, front + song2 remain
+    got = [q.get_nowait() for _ in range(2)]
+    assert got == [front, song2]  # front immediately followed by the real next item
+    assert len(state.queued_segments) == 2
+    assert state.queued_segments[0]["id"] == "front"
+    assert state.queued_segments[1]["id"] == "song2"
+    assert state.discarded_segments_total == 1
+    assert state.discard_by_reason == {GenerationWasteReason.STALE_PLAYED_TRACK_REF: 1}
+
+
+def test_front_insert_unlinks_stale_transition_claim_ephemeral(tmp_path):
+    """An ephemeral stale-head render is unlinked (no temp leak)."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=5)
+    state = StationState()
+    f = tmp_path / "banter1.mp3"
+    f.write_bytes(b"x")
+    stale_head = Segment(
+        type=SegmentType.BANTER,
+        path=f,
+        metadata={"transition_track_ref": "yt|abc123"},
+        ephemeral=True,
+    )
+    q.put_nowait(stale_head)
+    state.queued_segments = [_shadow("banter1")]
+
+    front = _seg("front", seg_type=SegmentType.BANTER)
+    _front_insert_queue_and_shadow(q, state, front, _shadow("front"))
+
+    assert not f.exists()
+
+
+def test_front_insert_keeps_non_transition_head_segment():
+    """Regression guard: a head segment with no ``transition_track_ref`` (plain
+    music, a chaos banter that never calls write_transition, or a fallback line
+    that named no specific track) is left alone — only a segment that actually
+    carries a played-track claim is at risk."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=5)
+    state = StationState()
+    song1 = _seg("song1")  # metadata={"title": "song1"}, no transition_track_ref
+    q.put_nowait(song1)
+    state.queued_segments = [_shadow("song1", "music")]
+
+    banter = _seg("banter", seg_type=SegmentType.BANTER)
+    assert _front_insert_queue_and_shadow(q, state, banter, _shadow("banter")) is True
+
+    assert q.qsize() == 2
+    assert q.get_nowait() is banter
+    assert q.get_nowait() is song1  # untouched — no stale-claim drop
+    assert state.discarded_segments_total == 0

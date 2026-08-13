@@ -10,9 +10,13 @@ Turn it on for music-competition watch parties, Sanremo screenings, or any gathe
 
 1. Open `/admin` and scroll to the **Speciali** section.
 2. Click the **★ Festival Mode** toggle.
-3. The station immediately purges its lookahead queue and generates a festival-flavored banter segment as the first thing listeners hear.
+3. When fresh replacement audio is ready, the station replaces the upcoming
+   normal segments and schedules the next festival-flavored banter. Otherwise,
+   current audio and the existing upcoming segments continue without a gap.
 
-No restart required. The toggle persists across server restarts.
+No restart required. In standalone mode the `.env` value survives a restart; in
+Home Assistant add-on mode the admin save commits to Supervisor before the live
+Festival state changes.
 
 ### Via environment variable
 
@@ -88,7 +92,10 @@ Content-Type: application/json
 
 ## What happens when you enable Festival Mode
 
-1. The segment queue is purged (pre-produced segments from normal mode are discarded).
+1. The control reserves protected continuity audio and discards pre-produced
+   normal-mode segments when safe replacement audio is available. If the
+   fallback has no fresh runway, the existing playable head/slot is preserved so
+   current audio is not cut into a gap.
 2. `state.force_next` is set to `BANTER` so the first new segment is festival-flavored commentary.
 3. The LLM prompt for all subsequent banter segments receives the `FESTIVAL_MODE_BLOCK` injection (defined in `mammamiradio/hosts/prompt_world.py`, injected by `write_banter` in `scriptwriter.py`), which instructs hosts to:
    - Announce each song as a fictional Italian-regional delegation
@@ -118,9 +125,14 @@ The config flag clears and the env var is updated. Unlike enabling, **the queue 
 | Deployment | Storage |
 |---|---|
 | Standalone / Docker | `MAMMAMIRADIO_FESTIVAL_MODE` key in `.env` |
-| Home Assistant add-on | `festival_mode` field in `/data/options.json` |
+| Home Assistant add-on | Supervisor's stored `festival_mode` app option |
 
-The state survives server restarts. On boot, `config.py` reads the env var and sets `config.party_mode = "festival"` if it is truthy.
+Supervisor is the durable authority in add-on mode. At boot it materializes
+`/data/options.json` as a generated, read-only startup projection, and `run.sh`
+exports the selected value before `config.py` sets
+`config.party_mode = "festival"`. Runtime code never writes that projection
+directly. A Festival selection that existed only in a pre-fix process cannot be
+reconstructed after an update rematerializes an older Supervisor value.
 
 ## Verification
 

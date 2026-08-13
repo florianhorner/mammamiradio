@@ -39,14 +39,28 @@
     try { return (el && JSON.parse(el.textContent)) || {}; } catch { return {}; }
   })();
   function _t(key, fallback) { return COPY[key] || fallback || ''; }
+  function stationNameFromStatus(status) {
+    return (
+      (status && status.identity && status.identity.station_name) ||
+      (status && status.brand && status.brand.station_name) ||
+      ''
+    );
+  }
   function currentStationName() {
     return (
-      (state.status && state.status.identity && state.status.identity.station_name) ||
-      (state.status && state.status.brand && state.status.brand.station_name) ||
+      stationNameFromStatus(state.status) ||
       localStorage.getItem('stationName') ||
       document.title ||
       'Mamma Mi Radio'
     );
+  }
+  function syncStationName(status) {
+    const serverName = stationNameFromStatus(status);
+    if (!serverName) return;
+    // The server payload is authoritative. localStorage is only a boot-time
+    // fallback for dynamic browser surfaces (Media Session / clip sharing),
+    // so every successful status poll repairs stale admin-written cache data.
+    try { localStorage.setItem('stationName', serverName); } catch (_) {}
   }
 
   /* ── State ── */
@@ -56,6 +70,8 @@
     requests: [],
     isPlaying: false,
     wantsPlay: false,
+    playPending: false,
+    retryTimer: null,
     firstDataReceived: false,
     wasStopped: false,
     sessionStart: Date.now(),
@@ -67,7 +83,7 @@
   };
 
   /* ── DOM refs (cached after DOMContentLoaded) ── */
-  let audio, playBtn, playBtnSmall, playIcon, pauseIcon;
+  let audio, playBtn, playBtnSmall, heroPlay;
 
   /* ── Helpers ── */
   function $(id) { return document.getElementById(id); }
@@ -93,6 +109,25 @@
     if (diff < 1) return _t('now', 'now');
     if (diff < 60) return Math.round(diff) + ' ' + _t('minutes_ago', 'min ago');
     return Math.round(diff / 60) + ' ' + _t('hours_ago', 'hr ago');
+  }
+  function casaMomentAgeMinutes(agoMin) {
+    const minutes = Number(agoMin);
+    return Number.isFinite(minutes) && minutes >= 0 ? Math.floor(minutes) : null;
+  }
+  function formatCasaMomentAge(agoMin) {
+    // Public receipts carry only a coarse minute count. Keep the raw field in
+    // the API, but give listeners a natural, localized description.
+    const minutes = Math.max(1, casaMomentAgeMinutes(agoMin) || 0);
+    if (minutes < 60) {
+      return _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
+    }
+    if (minutes < 24 * 60) {
+      return _t('casa_moment_hours_ago', '{h} hr ago').replace('{h}', String(Math.floor(minutes / 60)));
+    }
+    if (minutes < 48 * 60) {
+      return _t('casa_moment_yesterday', 'yesterday');
+    }
+    return _t('casa_moment_days_ago', '{d} days ago').replace('{d}', String(Math.floor(minutes / (24 * 60))));
   }
   function segmentKindLabel(type) {
     switch ((type || '').toLowerCase()) {
@@ -132,21 +167,87 @@
   function _setLiveChip(el, stopped) {
     if (!el) return;
     const suffix = _liveChipSuffix(el);
-    const label = stopped ? _t('np_paused', 'Fermo') : _t('np_live', 'In Onda');
     el.classList.toggle('is-stopped', stopped);
     el.replaceChildren();
     const dot = document.createElement('span');
     dot.className = 'dot';
     el.appendChild(dot);
-    el.appendChild(document.createTextNode(' ' + label + suffix));
-    const stoppedLabel =
-      el.id === 'nav-cta'
-        ? _t('listen_resume_aria', 'Resume station')
-        : _t('listen_paused_aria', 'Station paused');
-    el.setAttribute(
-      'aria-label',
-      stopped ? stoppedLabel : _t('listen_now_aria', 'Listen now'),
-    );
+    if (stopped) {
+      el.appendChild(document.createTextNode(' ' + _t('np_paused', 'Fermo') + suffix));
+    } else {
+      el.appendChild(document.createTextNode(' '));
+      const label = document.createElement('span');
+      label.lang = 'it';
+      label.textContent = 'In Onda';
+      el.appendChild(label);
+      el.appendChild(document.createTextNode(suffix));
+    }
+    el.removeAttribute('aria-label');
+  }
+
+  function _setPlayControl(el, stopped, variant) {
+    if (!el) return;
+    // wantsPlay is the single intent source: startStream() sets it,
+    // setPlayingUi(true) restores it, and external pauses clear it.
+    const hasIntent = !stopped && state.wantsPlay;
+    const label = stopped
+      ? _t('listen_stopped', 'Station paused')
+      : hasIntent
+        ? _t('listen_pause', 'Pause')
+        : _t('listen_now', 'Listen Now');
+    const ariaLabel = stopped
+      ? _t('listen_paused_aria', 'Station paused')
+      : hasIntent
+        ? _t('listen_pause_aria', 'Pause station')
+        : _t('listen_now_aria', 'Listen now');
+
+    el.disabled = stopped;
+    el.setAttribute('aria-label', ariaLabel);
+    el.setAttribute('aria-pressed', hasIntent ? 'true' : 'false');
+
+    if (variant === 'nav') {
+      const suffix = _liveChipSuffix(el);
+      el.classList.toggle('is-stopped', stopped);
+      el.classList.toggle('playing', !stopped && state.isPlaying);
+      el.replaceChildren();
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      el.appendChild(dot);
+      const actionIcon = document.createElement('span');
+      actionIcon.setAttribute('aria-hidden', 'true');
+      actionIcon.textContent = stopped || hasIntent ? '\u2016' : '\u25b6';
+      el.appendChild(actionIcon);
+      el.appendChild(document.createTextNode(' ' + label + suffix));
+      return;
+    }
+
+    if (variant === 'compact') {
+      el.classList.toggle('playing', !stopped && state.isPlaying);
+      el.innerHTML = hasIntent || stopped
+        ? '<span class="mmr-play-icon">&#9208;</span>'
+        : '<span class="mmr-play-icon">&#9654;</span>';
+      return;
+    }
+
+    if (variant === 'hero') el.textContent = label;
+  }
+
+  function _setNavPlayControl(stopped) {
+    _setPlayControl($('nav-cta'), stopped, 'nav');
+  }
+
+  function _setCompactPlayControl(stopped) {
+    _setPlayControl(playBtnSmall, stopped, 'compact');
+  }
+
+  function _setHeroPlayControl(stopped) {
+    _setPlayControl(heroPlay, stopped, 'hero');
+  }
+
+  function _setPlaybackControls(stopped) {
+    _setNavPlayControl(stopped);
+    _setCompactPlayControl(stopped);
+    _setHeroPlayControl(stopped);
   }
 
   function _setNowPlayingEyebrow(stopped) {
@@ -158,18 +259,58 @@
   }
 
   /* ── Playback ── */
+  function _clearPlaybackRetry() {
+    if (state.retryTimer !== null) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+    }
+  }
+
+  function _stationIsStopped() {
+    return Boolean(state.status && state.status.session_stopped);
+  }
+
+  function _scheduleStreamRetry(delayMs) {
+    if (!state.wantsPlay || state.retryTimer !== null || _stationIsStopped()) return;
+    state.retryTimer = setTimeout(() => {
+      state.retryTimer = null;
+      if (!state.wantsPlay || _stationIsStopped()) return;
+      state.playPending = false;
+      startStream();
+    }, delayMs);
+  }
+
   function startStream() {
+    if (!audio || _stationIsStopped() || state.isPlaying || state.playPending) return;
+    _clearPlaybackRetry();
     state.wantsPlay = true;
+    state.playPending = true;
+    _setPlaybackControls(false);
     if (!audio.src || audio.src !== _base + '/stream') {
       audio.src = _base + '/stream';
     }
-    audio.play().catch(() => {});
+    const playResult = audio.play();
+    if (playResult && typeof playResult.catch === 'function') {
+      playResult.catch(() => {
+        state.playPending = false;
+        _setPlaybackControls(false);
+        _scheduleStreamRetry(2000);
+      });
+    }
+  }
+
+  function stopStream() {
+    state.wantsPlay = false;
+    state.playPending = false;
+    _clearPlaybackRetry();
+    if (audio) audio.pause();
+    setPlayingUi(false);
   }
 
   function togglePlay() {
-    if (state.isPlaying) {
-      state.wantsPlay = false;
-      audio.pause();
+    if (_stationIsStopped()) return;
+    if (state.isPlaying || state.playPending || state.wantsPlay) {
+      stopStream();
     } else {
       startStream();
     }
@@ -177,14 +318,12 @@
 
   function setPlayingUi(isPlaying) {
     state.isPlaying = isPlaying;
-    if (playBtnSmall) {
-      playBtnSmall.classList.toggle('playing', isPlaying);
-      playBtnSmall.innerHTML = isPlaying
-        ? '<span class="mmr-play-icon">&#9208;</span>'
-        : '<span class="mmr-play-icon">&#9654;</span>';
-      playBtnSmall.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
-      playBtnSmall.setAttribute('aria-pressed', isPlaying ? 'true' : 'false');
+    if (isPlaying) {
+      state.playPending = false;
+      state.wantsPlay = true;
+      _clearPlaybackRetry();
     }
+    _setPlaybackControls(_stationIsStopped());
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     }
@@ -241,8 +380,8 @@
   if ('mediaSession' in navigator) {
     try {
       navigator.mediaSession.setActionHandler('play', () => { if (!state.isPlaying) startStream(); });
-      navigator.mediaSession.setActionHandler('pause', () => { audio && audio.pause(); });
-      navigator.mediaSession.setActionHandler('stop', () => { audio && audio.pause(); state.wantsPlay = false; });
+      navigator.mediaSession.setActionHandler('pause', stopStream);
+      navigator.mediaSession.setActionHandler('stop', stopStream);
     } catch (e) { /* ignore */ }
   }
 
@@ -308,15 +447,29 @@
     updateMediaSession(np);
   }
 
+  // A second or two past the end is normal — the server reports elapsed as
+  // wall-clock since the segment started, and we read it on a poll interval, so
+  // a track can briefly measure longer than itself. Clamp that quietly.
+  //
+  // A large overshoot is a different thing: it means the segment we are timing
+  // is not what is still playing. A 4-second continuity clip that has been on
+  // air for minutes reported "3:24 / 0:04" to listeners. Clamping would only
+  // trade that for "0:04 / 0:04" frozen at the end, which reads as a stuck
+  // player. When the numbers have stopped describing anything, show nothing —
+  // a live stream with no time code is ordinary; a lying one is not.
+  const PROGRESS_OVERSHOOT_GRACE_SEC = 5;
+
   function renderProgress(progressSec, durationSec) {
     const fill = $('np-fill');
     const tCur = $('np-time-cur');
     const tTot = $('np-time-tot');
     if (!fill) return;
-    const pct = durationSec > 0 ? Math.min(100, (progressSec / durationSec) * 100) : 0;
-    fill.style.width = pct + '%';
-    if (tCur) tCur.textContent = fmtTime(progressSec);
-    if (tTot) tTot.textContent = durationSec > 0 ? fmtTime(durationSec) : '—';
+    const trustworthy = durationSec > 0
+      && progressSec <= durationSec + PROGRESS_OVERSHOOT_GRACE_SEC;
+    const shown = trustworthy ? Math.min(progressSec, durationSec) : 0;
+    fill.style.width = (trustworthy ? (shown / durationSec) * 100 : 0) + '%';
+    if (tCur) tCur.textContent = trustworthy ? fmtTime(shown) : '—';
+    if (tTot) tTot.textContent = trustworthy ? fmtTime(durationSec) : '—';
   }
 
   function renderHeroStats(status, caps) {
@@ -331,10 +484,8 @@
     }
     const stat2 = $('stat-tracks');
     if (stat2) {
-      const played = status && typeof status.tracks_played === 'number' ? status.tracks_played : null;
-      const queued = status && status.upcoming ? status.upcoming.length : 0;
-      const value = played !== null ? played : queued;
-      stat2.textContent = value > 0 ? value : '—';
+      const rotationCount = status ? status.rotation_track_count : null;
+      stat2.textContent = Number.isInteger(rotationCount) && rotationCount >= 0 ? String(rotationCount) : '—';
     }
     const stat3 = $('stat-hosts');
     if (stat3 && caps && caps.hosts && caps.hosts.length) {
@@ -449,7 +600,7 @@
         <div class="mmr-dedica">
           <div class="eyebrow">${eyebrowParts.join(' · ')}</div>
           <div class="quote">${escHtml(msg)}</div>
-          <div class="sig">${sig}</div>
+          <div class="sig" lang="it">${sig}</div>
         </div>
       `;
     }).join('');
@@ -463,7 +614,11 @@
       el.setAttribute('hidden', '');
       return;
     }
-    const recent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
+    const rawRecent = (ha && Array.isArray(ha.recent)) ? ha.recent : [];
+    // Defense in depth: the public API already projects only aired/airing
+    // receipts, and the listener keeps that privacy promise if a malformed
+    // payload ever reaches the browser.
+    const recent = rawRecent.filter((m) => m && (m.status === 'airing' || m.status === 'aired'));
     if (!ha || (!ha.mood && !ha.weather && !ha.last_event_label && !recent.length)) {
       el.setAttribute('hidden', '');
       return;
@@ -487,13 +642,24 @@
        from the wire is ever interpreted as HTML. */
     const momentsWrap = $('casa-moments');
     const momentsRows = $('casa-moments-rows');
+    const staleNote = $('casa-moments-stale');
     if (momentsWrap && momentsRows) {
       if (!recent.length) {
         momentsWrap.setAttribute('hidden', '');
         momentsRows.textContent = '';
+        if (staleNote) staleNote.setAttribute('hidden', '');
       } else {
         momentsWrap.removeAttribute('hidden');
         momentsRows.textContent = '';
+        const hasAiring = recent.some((m) => m.status === 'airing');
+        const latestReceiptAge = recent.reduce((newest, m) => {
+          const age = casaMomentAgeMinutes(m.ago_min);
+          return age !== null && (newest === null || age < newest) ? age : newest;
+        }, null);
+        if (staleNote) {
+          const showStaleNote = !hasAiring && latestReceiptAge !== null && latestReceiptAge >= 24 * 60;
+          staleNote.toggleAttribute('hidden', !showStaleNote);
+        }
         recent.forEach((m) => {
           const row = document.createElement('div');
           row.className = 'row' + (m.status === 'airing' ? '' : ' dim');
@@ -501,10 +667,9 @@
           ico.className = 'ico';
           ico.textContent = m.status === 'airing' ? '●' : '·';
           const text = document.createElement('span');
-          const minutes = m.ago_min || 1;
           text.textContent = m.status === 'airing'
             ? (m.label || '') + ' · ' + _t('casa_moment_airing', 'on air now')
-            : (m.label || '') + ' · ' + _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
+            : (m.label || '') + ' · ' + formatCasaMomentAge(m.ago_min);
           row.appendChild(ico);
           row.appendChild(text);
           momentsRows.appendChild(row);
@@ -529,17 +694,16 @@
   function renderStoppedState(status) {
     const stopped = status && status.session_stopped === true;
     document.body.setAttribute('data-stopped', stopped ? 'true' : 'false');
-    _setLiveChip($('nav-cta'), stopped);
+    if (stopped && (state.wantsPlay || state.playPending || state.isPlaying)) {
+      stopStream();
+    }
+    _setPlaybackControls(stopped);
     _setLiveChip(document.querySelector('.mmr-stage-header .mmr-live'), stopped);
     _setNowPlayingEyebrow(stopped);
     const wave = $('mmr-wave-bars');
     if (wave) wave.classList.toggle('paused', stopped);
     const radio = $('mmr-radio');
     if (radio) radio.classList.toggle('is-stopped', stopped);
-    if (stopped && state.wantsPlay) {
-      state.wantsPlay = false;
-      audio && audio.pause();
-    }
     state.wasStopped = stopped;
     if (stopped) {
       const nowStreaming = (status && status.now_streaming) || {};
@@ -670,9 +834,7 @@
       const r = await fetch(_base + '/public-status');
       if (!r.ok) return;
       const status = await r.json();
-      if (status.identity && status.identity.station_name) {
-        try { localStorage.setItem('stationName', status.identity.station_name); } catch (_) {}
-      }
+      syncStationName(status);
       // Capabilities live inside the public payload (PR-B). Wrap to match the
       // legacy { capabilities: {...} } shape the rest of listener.js expects.
       const caps = { capabilities: status.capabilities || {} };
@@ -728,35 +890,81 @@
    * .form-sent.is-visible (a CSS transition — already collapsed to 0.01ms
    * under prefers-reduced-motion by base.css's blanket rule, so it needs no
    * separate JS gate). */
+  function _setRequestFieldsHidden(formEl, hidden) {
+    if (!formEl) return;
+    Array.from(formEl.children).forEach((child) => {
+      if (child.id !== 'request-sent') child.style.display = hidden ? 'none' : '';
+    });
+  }
+
   function _revealSentCrossfade(formEl, sentEl) {
-    if (formEl) formEl.style.display = 'none';
+    _setRequestFieldsHidden(formEl, true);
     if (sentEl) {
+      delete sentEl.dataset.validation;
       sentEl.style.display = '';
       requestAnimationFrame(() => sentEl.classList.add('is-visible'));
+    }
+  }
+
+  function _showEmptyRequestMessage() {
+    const msgInput = $('req-msg');
+    const sentEl = $('request-sent');
+    if (msgInput) {
+      msgInput.setAttribute('aria-invalid', 'true');
+      msgInput.focus();
+    }
+    if (sentEl) {
+      sentEl.dataset.validation = 'empty';
+      sentEl.textContent = _t(
+        'form_message_required',
+        'Write a message first, then send it to the DJ.',
+      );
+      sentEl.style.display = '';
+      sentEl.classList.add('is-visible');
+    }
+  }
+
+  function _clearEmptyRequestMessage() {
+    const msgInput = $('req-msg');
+    const sentEl = $('request-sent');
+    if (msgInput) msgInput.removeAttribute('aria-invalid');
+    if (sentEl && sentEl.dataset.validation === 'empty') {
+      delete sentEl.dataset.validation;
+      sentEl.style.display = 'none';
+      sentEl.classList.remove('is-visible');
+      sentEl.textContent = '';
     }
   }
 
   function _resetRequestForm(formEl, sentEl) {
     if (formEl) {
       formEl.style.display = '';
+      _setRequestFieldsHidden(formEl, false);
       formEl.classList.remove('is-sending');
       delete formEl.dataset.submitting;
       const submitBtn = formEl.querySelector('button[type="submit"]');
       if (submitBtn) submitBtn.disabled = false;
     }
     if (sentEl) {
+      delete sentEl.dataset.validation;
       sentEl.style.display = 'none';
       sentEl.classList.remove('is-visible');
     }
+    const msgInput = $('req-msg');
+    if (msgInput) msgInput.removeAttribute('aria-invalid');
   }
 
   async function submitRequest(ev) {
     ev.preventDefault();
     const name = ($('req-name')?.value || '').trim();
     const msg = ($('req-msg')?.value || '').trim();
-    if (!msg) return;
     const formEl = $('request-form');
     const sentEl = $('request-sent');
+    if (!msg) {
+      _showEmptyRequestMessage();
+      return;
+    }
+    _clearEmptyRequestMessage();
     // Act VI now leaves the form visibly on-screen for up to ~1.7s of
     // stamp-press + card-lift before it hides (previously an instant swap) —
     // that widened window makes a double-click/double-tap resubmission easy
@@ -791,17 +999,18 @@
       clearTimeout(fetchTimeout);
       let isSuccess = false;
       let text;
-      if (d.ok) {
+      if (r.ok && d.ok) {
         isSuccess = true;
         text = d.type === 'song_request'
-          ? 'Canzone in arrivo! I conduttori la suoneranno presto.'
-          : 'Saluto ricevuto! I conduttori ti menzioneranno presto.';
+          ? _t('form_success_song', 'Song request received! The hosts will cue it soon.')
+          : _t('form_success_shoutout', 'Dedication received! The hosts will read it soon.');
       } else if (r.status === 429) {
-        text = d.retry_after
-          ? `Aspetta ${d.retry_after}s prima di mandare un altro saluto.`
-          : 'Coda piena, riprova tra poco.';
+        text = d.retry_after != null
+          ? _t('form_rate_limited', 'Give the DJ {s}s before sending another dedication.')
+              .replace('{s}', String(d.retry_after))
+          : _t('form_queue_full', 'The dedication queue is full — wait a moment and try again.');
       } else {
-        text = 'Il saluto non è partito — aspetta un attimo e riprova.';
+        text = _t('form_declined', "That dedication didn't go through — wait a moment and try again.");
       }
       if (sentEl) sentEl.textContent = text;
 
@@ -813,8 +1022,8 @@
           liftDone = true;
           formEl.removeEventListener('animationend', onCardLiftEnd);
           clearTimeout(liftFallback);
-          formEl.style.display = 'none';
           formEl.classList.remove('is-sending');
+          _setRequestFieldsHidden(formEl, true);
           if (sentEl) {
             // #request-sent is aria-live="polite" — its text was set while
             // still display:none (below), which most screen readers won't
@@ -840,7 +1049,7 @@
         // Reduced motion: instant swap, no animation delay — but .form-sent
         // now defaults to opacity:0 (needs .is-visible to show), so this
         // must add the class directly or the confirmation renders invisible.
-        if (formEl) formEl.style.display = 'none';
+        _setRequestFieldsHidden(formEl, true);
         if (sentEl) {
           sentEl.style.display = '';
           sentEl.classList.add('is-visible');
@@ -851,12 +1060,19 @@
 
       setTimeout(() => {
         _resetRequestForm(formEl, sentEl);
-        const msgInput = $('req-msg');
-        if (msgInput) msgInput.value = '';
-      }, 15000);
+        if (isSuccess) {
+          const msgInput = $('req-msg');
+          if (msgInput) msgInput.value = '';
+        }
+      }, isSuccess ? 15000 : 6000);
     } catch (e) {
       clearTimeout(fetchTimeout);
-      if (sentEl) sentEl.textContent = 'Invio non riuscito. Controlla la connessione e riprova.';
+      if (sentEl) {
+        sentEl.textContent = _t(
+          'form_network_error',
+          'We lost the connection — check it and try again.',
+        );
+      }
       _revealSentCrossfade(formEl, sentEl);
       setTimeout(() => {
         _resetRequestForm(formEl, sentEl);
@@ -869,12 +1085,12 @@
     audio = $('radio-audio');
     playBtn = $('nav-cta');
     playBtnSmall = $('np-play');
+    heroPlay = $('hero-play');
 
     if (playBtn) playBtn.addEventListener('click', (e) => { e.preventDefault(); togglePlay(); });
     if (playBtnSmall) playBtnSmall.addEventListener('click', togglePlay);
 
     // Hero secondary buttons
-    const heroPlay = $('hero-play');
     const heroPal = $('hero-palinsesto');
     if (heroPlay) heroPlay.addEventListener('click', togglePlay);
     if (heroPal) heroPal.addEventListener('click', () => {
@@ -884,33 +1100,49 @@
     // Audio element event wiring
     if (audio) {
       audio.addEventListener('play', () => setPlayingUi(true));
-      audio.addEventListener('pause', () => setPlayingUi(false));
+      audio.addEventListener('pause', () => {
+        if (!audio.ended && !audio.error) {
+          state.wantsPlay = false;
+          state.playPending = false;
+          _clearPlaybackRetry();
+        }
+        setPlayingUi(false);
+      });
       audio.addEventListener('ended', () => {
-        if (state.wantsPlay) setTimeout(startStream, 800);
+        state.playPending = false;
+        setPlayingUi(false);
+        _scheduleStreamRetry(800);
       });
       audio.addEventListener('error', () => {
-        if (state.wantsPlay) setTimeout(startStream, 2000);
+        state.playPending = false;
+        setPlayingUi(false);
+        _scheduleStreamRetry(2000);
       });
     }
 
     // Request form
     const reqForm = $('request-form');
     if (reqForm) reqForm.addEventListener('submit', submitRequest);
+    const reqMsg = $('req-msg');
+    if (reqMsg) {
+      // `required` prevents the submit event on an empty field. Mirror the
+      // browser constraint in our visible aria-live region so keyboard and
+      // screen-reader users get the same warm, actionable way out.
+      reqMsg.addEventListener('invalid', (e) => {
+        e.preventDefault();
+        _showEmptyRequestMessage();
+      });
+      reqMsg.addEventListener('input', () => {
+        if (reqMsg.value.trim()) _clearEmptyRequestMessage();
+      });
+    }
 
     // Clip sharing button
     const shareBtn = document.getElementById('share-clip-btn');
     if (shareBtn) shareBtn.addEventListener('click', doShare);
 
-    // Auto-start on first interaction (bypass autoplay block)
-    function autoStartOnce() {
-      if (!state.wantsPlay && state.firstDataReceived) {
-        startStream();
-      }
-      document.removeEventListener('click', autoStartOnce);
-      document.removeEventListener('touchstart', autoStartOnce);
-    }
-    document.addEventListener('click', autoStartOnce);
-    document.addEventListener('touchstart', autoStartOnce);
+    // Playback intent is scoped to the three explicit play affordances above.
+    // Form, navigation, share, and install interactions must never start audio.
 
     // Service-worker registration (PWA install). Uses _base so HA ingress works.
     if ('serviceWorker' in navigator) {

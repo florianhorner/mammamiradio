@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+BASE_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "base.css"
 _ADMIN_HTML_TEXT = ADMIN_HTML.read_text(encoding="utf-8")
 CANONICAL_STATUS_STATES = {"ready", "working", "degraded", "blocked", "idle"}
 
@@ -81,24 +82,50 @@ def test_status_helper_call_sites_use_canonical_literal_states() -> None:
     assert not unknown, f"Unknown status helper states in admin.html: {unknown}"
 
 
-def test_record_hunt_banner_has_phase_copy_and_wrapping_guard() -> None:
+def test_record_hunt_card_has_phase_copy_and_wrapping_guard() -> None:
     html = _read_admin_html()
     block = _function_block(html, "updateHeadingBanner")
-    style = re.search(r"\.course-banner\s*\{([^}]*)\}", html, re.DOTALL)
+    card = re.search(r"\.record-hunt\s*\{([^}]*)\}", html, re.DOTALL)
+    status = re.search(r"\.record-hunt-status-copy\s*\{([^}]*)\}", html, re.DOTALL)
 
-    assert style is not None
-    assert "min-width: 0" in style.group(1)
-    assert "overflow-wrap: break-word" in style.group(1)
-    assert 'class="record-hunt-truth"' in html
-    assert 'class="record-hunt-stage" aria-hidden="true"' in html
-    assert "Record Hunt: <b>Auto rotation</b>" in html
+    assert card is not None
+    assert "background: var(--surface-strong)" in card.group(1)
+    assert status is not None
+    assert "min-width: 0" in status.group(1)
+    assert "overflow-wrap: break-word" in status.group(1)
+    assert 'class="record-hunt-status-copy" id="courseBanner"' in html
+    assert 'class="record-hunt-truth" id="recordHuntTruth"' in html
+    assert 'class="record-hunt-stage" id="recordHuntStage" aria-hidden="true"' in html
+    assert "Auto rotation is ready for a new direction." in html
     assert "Record Hunt:" in block
-    assert "Record Hunt is searching for" in block
-    assert "Record Hunt is opening the back room for" in html
-    assert "is shaping the next stretch" in block
+    assert "Hunting for" in block
+    assert "Steering toward" in block
     assert "Hunt pick" in block
     assert "played through. Back on auto." in block
     assert "Course:" not in block
+
+
+def test_record_hunt_pulse_is_scoped_without_overriding_global_status_pulse() -> None:
+    """Record Hunt must not redefine the animation used by global status chips."""
+    html = _read_admin_html()
+    base_css = BASE_CSS.read_text(encoding="utf-8")
+
+    assert ".record-hunt-status-shape.working { animation: record-hunt-pulse" in html
+    assert "@keyframes record-hunt-pulse" in html
+    assert "@keyframes status-pulse" not in html
+    assert "@keyframes status-pulse" in base_css
+    assert "0%, 100% { opacity: 0.4; }" in base_css
+
+
+def test_record_hunt_reset_is_active_only_and_survives_status_renders() -> None:
+    html = _read_admin_html()
+    desk = _function_block(html, "renderRecordHuntDesk")
+
+    assert 'id="clearHeadingBtn" onclick="clearHeading(this)" hidden>Back to auto</button>' in html
+    assert "const reset=document.getElementById('clearHeadingBtn');" in desk
+    assert "if(reset)reset.hidden=!active;" in desk
+    assert "banner.innerHTML" not in desk
+    assert ".record-hunt-reset[hidden] { display: none; }" in html
 
 
 def test_record_hunt_matches_are_visible_in_rotation_rows() -> None:
@@ -139,9 +166,9 @@ def test_record_hunt_pending_guard_blocks_stale_auto_rotation_poll() -> None:
     block = _function_block(_read_admin_html(), "updateHeadingBanner")
 
     assert "}else if(_recordHuntOptimistic.active){" in block
-    assert "Record Hunt is opening the back room for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>" in block
-    assert "renderRecordHuntDesk(false,'Record Hunt: <b>Auto rotation</b>')" in block
-    assert block.index("_recordHuntOptimistic.active") < block.index("Record Hunt: <b>Auto rotation</b>")
+    assert "Hunting for <b>${esc(_recordHuntOptimistic.label||'that vibe')}</b>" in block
+    assert "renderRecordHuntDesk(false,'Auto rotation is ready for a new direction.')" in block
+    assert block.index("_recordHuntOptimistic.active") < block.index("Auto rotation is ready for a new direction.")
 
 
 def test_failed_direction_clears_pending_record_hunt_before_refresh() -> None:
@@ -178,32 +205,134 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         "statusChip('degraded','Anthropic')",
         "statusChip('ready','Anthropic')",
         "statusChip('blocked','Anthropic')",
-        "statusChip('ready','Stream')",
         "statusChip('idle','HA: off')",
     ):
         assert expected in block
+    assert "statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail)" in block
+    assert "statusChip('ready','Stream')" not in block
 
 
-def test_setup_keys_banner_includes_voice_provider_credentials() -> None:
+def test_pipeline_stream_status_is_driven_by_fast_runtime_truth() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "stationRuntimeVerdict")
+    pipeline = _function_block(html, "pipelineStreamStatus")
+    refresh = _function_block(html, "refreshFast")
+
+    assert "const runtime=st?.runtime_status||{}" in block
+    assert "const fastGoldenPath=st?.golden_path" in block
+    assert "const goldenPath=fastGoldenPath||caps?.golden_path||{}" in block
+    assert "st?.session_stopped===true" in block
+    assert "runtime.recovering===true" in block
+    assert "runtime.health_state==='blocked'" in block
+    assert "runtime.station_on_air===true" in block
+    assert "goldenPath.blocking===true" in block
+    assert "activeListenerCount(st)>0" in block
+    assert "guidedStream.status==='ready'||fastGoldenPath?.blocking===false" in block
+    for state in ("'idle'", "'blocked'", "'degraded'", "'ready'", "'working'"):
+        assert state in block
+    assert "return stationRuntimeVerdict(st,caps)" in pipeline
+    assert "updatePipelineStatus(_caps,_st)" in refresh
+
+
+def test_runtime_status_surfaces_share_one_pause_first_verdict() -> None:
+    html = _read_admin_html()
+    verdict = _function_block(html, "stationRuntimeVerdict")
+    pipeline = _function_block(html, "pipelineStreamStatus")
+    runtime = _function_block(html, "updateRuntimeStatus")
+
+    assert "st?.session_stopped===true" in verdict
+    assert "runtime.recovering===true" in verdict
+    assert "runtime.health_state==='blocked'" in verdict
+    assert verdict.index("st?.session_stopped===true") < verdict.index("runtime.health_state==='blocked'")
+    # `blocked` outranks `recovering`. force_recovery_active clears only when a
+    # listener accepts audio, so a rebuild that never succeeds holds the flag
+    # forever — ranking it first rendered indefinite dead air, and even a dead
+    # runtime task, as a benign "Starting". A deliberate pause still wins over
+    # both, because a paused station is not a failure.
+    assert verdict.index("runtime.health_state==='blocked'") < verdict.index("runtime.recovering===true")
+    assert "stationRuntimeVerdict(st,caps)" in pipeline
+    assert "stationRuntimeVerdict(st,_caps)" in runtime
+    assert "guidedStream.status==='stopped'" not in pipeline
+
+
+def test_metadata_only_admin_mutations_distinguish_pause_from_epoch_race() -> None:
+    html = _read_admin_html()
+    helper = _function_block(html, "metadataOnlyMutationCopy")
+
+    assert "response?.metadata_only!==true" in helper
+    assert "response?.resume_required===true" in helper
+    assert "saved. Nothing new will air until you press Start." in helper
+    assert "saved without interrupting the current audio." in helper
+    for name in ("enrichPlaylistSource", "setHeading", "setDirectionText"):
+        block = _function_block(html, name)
+        assert "metadataOnlyMutationCopy(" in block
+        assert block.index("metadataOnlyMutationCopy(") < block.rindex("await refreshFast()")
+
+
+def test_resume_offers_force_start_only_after_confirmed_assetless_refusal() -> None:
+    html = _read_admin_html()
+    block = _function_block(html, "doResume")
+
+    normal_request = "apiResponse('POST','/api/resume')"
+    force_request = "apiResponse('POST','/api/resume?force=true')"
+    force_gate = "response.status===503&&payload?.force_available===true"
+    assert normal_request in block
+    assert force_gate in block
+    assert "window.confirm(FORCE_RESUME_CONFIRM_COPY)" in block
+    assert force_request in block
+    assert block.index(normal_request) < block.index(force_gate)
+    assert block.index(force_gate) < block.index("window.confirm(FORCE_RESUME_CONFIRM_COPY)")
+    assert block.index("window.confirm(FORCE_RESUME_CONFIRM_COPY)") < block.index(force_request)
+    assert block.count(force_request) == 1
+    assert (
+        'const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? '
+        'The station may be quiet briefly while the studio rebuilds.";'
+    ) in html
+    assert "Station remains paused." in block
+    assert "Station is recovering. A host break is being prepared." in block
+
+
+def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> None:
     block = _function_block(_read_admin_html(), "renderSetup")
 
-    assert "Provider keys configured" in _read_admin_html()
+    html = _read_admin_html()
+    assert "Voice providers configured" in html
+    assert "AI host key configured" in html
+    assert "Provider keys configured" not in html
     assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
     assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
+    assert "providerKeysConfigured=configuredKeys.length>0" in block
+    assert "aiKeysConfigured=configuredLlmKeys.length>0" in block
+    assert "providerReadiness=setupProviderReadiness(configuredKeys)" in block
+    assert "providerSetupIncomplete=providerKeysConfigured&&" in block
+    assert "providerSetupIncomplete?'△ Provider setup needs attention'" in block
+    assert "keysBanner.dataset.state=providerSetupIncomplete?'incomplete':'ready'" in block
+    assert "setupProviderLabels(configuredKeys).join(' · ')" in block
+    labels = _function_block(html, "setupProviderLabels")
+    for capability in (
+        "Anthropic AI hosts",
+        "OpenAI AI hosts + voices",
+        "Azure Speech voices",
+        "ElevenLabs voices",
+    ):
+        assert capability in labels
+    readiness = _function_block(html, "setupProviderReadiness")
+    assert "voiceReady:keys.has('OPENAI_API_KEY')" in readiness
+    assert "azureIncomplete:hasAzureKey!==hasAzureRegion" in readiness
 
 
-def test_runtime_status_header_reads_station_on_air_not_health_state() -> None:
+def test_runtime_status_header_uses_shared_runtime_verdict() -> None:
     block = _function_block(_read_admin_html(), "updateRuntimeStatus")
 
+    assert "const verdict=stationRuntimeVerdict(st,_caps)" in block
     assert "const stationOnAir=rs.station_on_air===true" in block
-    assert "const taskBlocked=rs.health_state==='blocked'" in block
-    assert "const headerState=taskBlocked?'blocked':stationOnAir?'ready':'degraded'" in block
-    assert "const headerLabel=taskBlocked?'Error':stationOnAir?'On Air':'Paused'" in block
-    assert "const headerDetail=rs.health_explanation?headerLabel+' · '+rs.health_explanation:headerLabel" in block
+    assert "const headerState=verdict.state" in block
+    assert "const headerLabel=verdict.label" in block
+    assert "const headerDetail=verdict.detail" in block
     assert "header.className='status-dot '+headerState" in block
     assert "header.setAttribute('aria-label',headerDetail)" in block
     assert "header.innerHTML='<span class=\"dot\"></span>'+esc(headerLabel)" in block
-    assert "statusRow('Current health',headerState,headerLabel" in block
+    assert "statusRow('Current health',headerState,headerLabel,headerDetail)" in block
     assert "const state=rs.health_state||'ready'" not in block
 
 
@@ -222,6 +351,27 @@ def test_runtime_status_card_renders_queue_rescue_from_bridge_health() -> None:
     assert "rescueRow," in block
 
 
+def test_runtime_status_card_renders_cached_rotation_from_rotation_status() -> None:
+    """The admin card exposes the cached-music rest window, not just raw JSON."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const rr=rs.rescue_rotation" in block
+    assert "statusRow('Cached rotation'" in block
+    assert "No cached music rescue has reached a listener this session" in block
+    assert "Rotating" in block
+    assert "rotationRow," in block
+
+
+def test_runtime_status_card_projects_capacity_exempt_continuity() -> None:
+    """The safety slot is visible to admins without joining the real queue shadow."""
+    block = _function_block(_read_admin_html(), "updateRuntimeStatus")
+
+    assert "const continuity=rs.continuity_slot" in block
+    assert "statusRow('Protected continuity'" in block
+    assert "No out-of-band safety audio reserved" in block
+    assert "continuityRow," in block
+
+
 def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> None:
     """#397: the Runtime Status card adds a Generated waste row driven by
     rs.generation_waste, flipping to the colorblind-safe 'degraded' state when
@@ -235,20 +385,125 @@ def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> 
 
 
 def test_runtime_provider_row_handles_recovery_mode() -> None:
-    block = _function_block(_read_admin_html(), "runtimeProviderRow")
+    html = _read_admin_html()
+    block = _function_block(html, "runtimeProviderRow")
+    runtime = _function_block(html, "updateRuntimeStatus")
 
-    assert "item?.recovery_mode==='circuit_breaker'||item?.recovery_mode==='action_required'" in block
+    assert "const latest=item?.latest_observation||null" in block
+    assert "const operational=latest||item" in block
+    assert "operational?.recovery_mode==='circuit_breaker'||operational?.recovery_mode==='action_required'" in block
     assert "state='degraded'" in block
     assert "label='Backup active'" in block
-    assert "item?.recovery_mode==='transient'" in block
+    assert "operational?.recovery_mode==='transient'" in block
     assert "state='working'" in block
     assert "label='Auto-recovering'" in block
-    assert "const reasonLine=item?.action_guidance||item?.switch_reason||''" in block
-    assert (
-        "const retryLine=item?.retry_in_seconds>0?'Retrying in '+Math.ceil(item.retry_in_seconds/60)+' min':''"
-    ) in block
-    assert "reasonLine" in block
+    assert "const observationLabel=stationOnAir?'Current on air':'Last heard'" in block
+    assert "const currentReason=item?.current_reason||''" in block
+    assert "'Latest studio observation: '" in block
+    assert "const guidanceLine=operational?.action_guidance||''" in block
+    assert "action_guidance||item?.switch_reason" not in block
+    assert "const retrySeconds=Math.max(0,Number(operational?.retry_in_seconds)||0)" in block
+    assert "retrySeconds<60?retrySeconds+' sec':Math.ceil(retrySeconds/60)+' min'" in block
+    assert "const switchLine=item?.last_switch_timestamp" in block
+    assert "'Last switch: '+fmtRuntimeTs(item.last_switch_timestamp)" in block
+    assert "item?.switch_reason||''" in block
+    assert "currentReason" in block
+    assert "latestLine" in block
+    assert "guidanceLine" in block
     assert "retryLine" in block
+    for title in ("Audio source", "Script provider", "TTS provider"):
+        assert f"runtimeProviderRow('{title}',providers." in runtime
+    assert runtime.count(",stationOnAir)") == 3
+
+
+def test_stop_and_resume_require_http_and_json_success_then_refresh() -> None:
+    html = _read_admin_html()
+    response_helper = _function_block(html, "apiResponse")
+
+    assert "const response=await fetch(_base+p,options)" in response_helper
+    assert "payload=await response.json()" in response_helper
+    assert "return {response,payload}" in response_helper
+
+    for name, endpoint, success_copy, failure_constant in (
+        ("doStop", "/api/stop", "Station paused", "STOP_FAILURE_COPY"),
+        ("doResume", "/api/resume", "Station resumed", "RESUME_FAILURE_COPY"),
+    ):
+        block = _function_block(html, name)
+        assert f"apiResponse('POST','{endpoint}')" in block
+        assert "response.ok&&payload?.ok===true" in block
+        assert f"toast('{success_copy}')" in block
+        # A refusal shows the station's own reason; the generic line is only the
+        # fallback, and the transport-error catch has nothing better to offer.
+        assert f"toast(transportFailureCopy(payload,{failure_constant}))" in block
+        assert block.count(f"toast({failure_constant})") == 1
+        assert "}finally{" in block
+        assert "await refreshFast()" in block
+        assert "updateStopState(" not in block
+
+    assert "Give the studio a few seconds, then press Stop again." in html
+    assert "Give the studio a few seconds, then press Start again." in html
+
+
+def test_failover_line_names_providers_in_words() -> None:
+    """The failover line is operator copy, not a dump of provider keys.
+
+    It used to render "audio_source: charts → norm_cache"; raw snake_case keys
+    are machine words and belong in logs.
+    """
+
+    html = _read_admin_html()
+    assert "lastFailover.provider_class_label||'Provider'" in html
+    assert "lastFailover.from_provider_label||'—'" in html
+    assert "lastFailover.to_provider_label||'—'" in html
+    assert "lastFailover.provider_class||" not in html
+    assert "lastFailover.from_provider||" not in html
+    assert "lastFailover.to_provider||" not in html
+
+
+def test_transport_failures_prefer_the_stations_own_reason() -> None:
+    """The backend names the exact way out; the admin must not overwrite it."""
+
+    html = _read_admin_html()
+    helper = _function_block(html, "transportFailureCopy")
+
+    assert "typeof payload?.error==='string'" in helper
+    assert "payload.error.trim()" in helper
+    assert "return reported||fallback" in helper
+
+
+def test_failed_fast_refresh_marks_last_snapshot_stale_and_success_clears_it() -> None:
+    html = _read_admin_html()
+    stale = _function_block(html, "markFastStatusStale")
+    fresh = _function_block(html, "markFastStatusFresh")
+    refresh = _function_block(html, "refreshFast")
+
+    assert 'id="statusFreshness" role="status" aria-live="polite" aria-atomic="true" hidden' in html
+    assert 'id="statusFreshnessText"' in html
+    assert "let _lastFastStatusSuccessAt=null" in html
+    assert "String(part).padStart(2,'0')" in html
+    assert "?formatFastStatusSuccessAt(_lastFastStatusSuccessAt)" in stale
+    # Names the problem AND the next step ("still trying" = wait, don't go hunting),
+    # and never prints a placeholder where a timestamp belongs.
+    assert "'Status may be out of date — still trying. Last updated '+lastUpdated" in stale
+    assert "'Status may be out of date — still trying.'" in stale
+    assert "'unknown'" not in stale
+    assert "freshness.hidden=false" in stale
+    assert "_lastFastStatusSuccessAt=Date.now()" in fresh
+    assert "freshness.hidden=true" in fresh
+    assert "markFastStatusStale()" in refresh
+    assert "_st=nextStatus;\n  markFastStatusFresh();" in refresh
+
+    failure_start = refresh.index("}catch(e){", refresh.index("nextStatus=await"))
+    failure_end = refresh.index("\n  }\n\n  if(generation!==_fastPollGeneration)return;", failure_start)
+    failure_block = refresh[failure_start:failure_end]
+    assert "_st=" not in failure_block, "a failed poll must retain the last authoritative snapshot"
+
+
+def test_fast_poll_cadence_remains_three_seconds() -> None:
+    html = _read_admin_html()
+
+    assert "const FAST_POLL_INTERVAL_MS=3000" in html
+    assert "setInterval(refreshFast,FAST_POLL_INTERVAL_MS)" in html
 
 
 def test_segment_labels_use_canonical_status_surfaces() -> None:
@@ -295,6 +550,8 @@ def test_engine_room_capability_lines_use_status_helpers() -> None:
     block = _function_block(_read_admin_html(), "updateEngineRoom")
 
     assert "anthropicLine=statusInline('degraded','suspended'+retry" in block
+    assert "Temporarily unavailable; OpenAI fallback" in block
+    assert "Auth failed; OpenAI fallback" not in block
     assert "anthropicLine=statusInline('ready','connected')" in block
     assert "anthropicLine=statusInline('idle','not configured')" in block
     # Auth-rejected key reads as a persistent not-working state (red ✗ blocked chip),
@@ -315,6 +572,35 @@ def test_engine_room_ha_observability_escapes_home_assistant_values() -> None:
     assert "esc(k)+': <strong>'" in block
 
 
+def test_engine_room_ha_refresh_states_are_truthful_and_human() -> None:
+    html = _read_admin_html()
+    presentation = _function_block(html, "homeSnapshotPresentation")
+    refresh_result = _function_block(html, "homeRefreshResultLine")
+    engine = _function_block(html, "updateEngineRoom")
+
+    assert "function formatHomeSnapshotAge" in html
+    assert "function formatHomeSnapshotTimestamp" in html
+    for state in ("'fresh'", "'stale'", "'working'", "'degraded'", "'idle'"):
+        assert state in presentation
+    for phrase in ("current", "catching up", "waiting for its first update"):
+        assert phrase in presentation
+    assert "background_timeout:'took too long to finish'" in refresh_result
+    assert "stale:'arrived too late to use'" in refresh_result
+    assert "continued after the audio deadline" in refresh_result
+    assert "if(r.adoption_pending)" in _function_block(html, "homeSnapshotPresentation")
+    assert "update ready" in _function_block(html, "homeSnapshotPresentation")
+    assert presentation.index("if(r.adoption_pending)") < presentation.index("if(r.freshness==='stale')")
+    assert presentation.index("if(r.freshness==='stale')") < presentation.index("if(r.in_flight)")
+    assert "The old snapshot is withheld; hosts are waiting for its replacement." in presentation
+    assert "Hosts are using a snapshot from '+age+'." in presentation
+    assert "const refresh=hd.refresh||{}" in engine
+    assert "homeSnapshotPresentation(refresh)" in engine
+    assert "formatHomeSnapshotTimestamp(refresh.last_success_at)" in engine
+    assert "formatHomeSnapshotAge(refresh.age_seconds)" in engine
+    assert "homeRefreshResultLine(refresh)" in engine
+    assert "statusInline(snapshot.state,snapshot.label)" in engine
+
+
 def test_system_health_rows_use_canonical_status_helpers() -> None:
     html = _read_admin_html()
     status_row = _function_block(html, "statusRow")
@@ -328,6 +614,8 @@ def test_system_health_rows_use_canonical_status_helpers() -> None:
     assert "musicState='ready'" in update_systems
     assert "musicState='working'" in update_systems
     assert "musicState='blocked'" in update_systems
+    assert "const gp=st?.golden_path||caps?.golden_path||{}" in update_systems
+    assert "const gp=caps?.golden_path||st?.golden_path||{}" not in update_systems
     assert "const needsMusicSource=gp.stage==='needs_music_source'" in update_systems
     assert "const hasMusicSource=!needsMusicSource&&!!(st?.current_source||st?.playlist_source)" in update_systems
     assert "if(needsMusicSource||!hasMusicSource)" in update_systems
@@ -400,18 +688,104 @@ def test_production_feed_surfaces_operator_trigger() -> None:
     assert "statusInline('working','',segmentText(segmentTypeKey(fp)))" in block
 
 
-def test_buffered_ready_readout_shows_airtime_not_item_count() -> None:
-    """The buffered readout surfaces SECONDS of audio (not an item count), is
-    wired into the fast poll, blanks (not '0s') when empty, and rounds to whole
-    seconds before splitting so it can never print an impossible '1m60s'.
+def test_production_unavailable_uses_approved_update_delayed_copy() -> None:
+    """The status fallback must use the approved 'update delayed' copy, keep the old
+    producer-jargon copy gone, announce politely on entry only, and wire a retry
+    control to the existing refreshFast() path that survives a paused station."""
+    html = _read_admin_html()
+    block = _function_block(html, "renderProductionUnavailable")
+
+    # Exact approved strings (verbatim).
+    assert "In produzione · update delayed" in block
+    assert "statusInline('working','Status update delayed','Status update delayed')" in block
+    assert "Can't update this panel right now. We'll keep trying automatically." in block
+    assert ">Try again now</button>" in block
+
+    # Old producer-jargon copy is gone from the whole template.
+    assert "In produzione · reconnecting" not in html
+    assert "The producer desk will retry automatically." not in html
+    assert "Producer desk reconnecting" not in html
+    assert "Reconnecting" not in block
+
+    # A persistent polite atomic region exists before the outage; populating it on
+    # entry is reliable across screen readers and avoids repeated poll announcements.
+    live_region = (
+        'id="productionStatusAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"'
+    )
+    assert live_region in html
+    assert "const alreadyUnavailable=_productionUnavailable" in block
+    assert "let _productionRetryInFlight=false" in html
+    assert "if(!alreadyUnavailable){" in block
+    assert "const announcement=document.getElementById('productionStatusAnnouncement')" in block
+    announcement_copy = (
+        "announcement.textContent=\"Status update delayed. Can't update this panel "
+        "right now. We'll keep trying automatically.\""
+    )
+    assert announcement_copy in block
+
+    # Retry control reuses the existing poll path with a visible pending/busy state.
+    assert 'onclick="retryProductionNow(this)"' in block
+    retry = _function_block(html, "retryProductionNow")
+    assert "await refreshFast()" in retry
+    assert "if(_productionRetryInFlight)return" in retry
+    assert "_productionRetryInFlight=true" in retry
+    assert "_productionRetryInFlight=false" in retry
+    busy = _function_block(html, "_setProductionRetryBusy")
+    assert "btn.disabled=busy" in busy
+    assert "'Trying…'" in busy
+
+    # A successfully rendered poll clears the latch so a later outage re-announces.
+    refresh_fast = _function_block(html, "refreshFast")
+    assert refresh_fast.index("renderProduction(_st);") < refresh_fast.index("_productionUnavailable=false")
+    assert "_productionUnavailable=false" in refresh_fast
+    assert "productionAnnouncement.textContent=''" in refresh_fast
+
+    # The retry button is NOT a producer-action control, so it stays available while
+    # the station is paused (updateStopState only inerts the producer-action set).
+    update_stop = _function_block(html, "updateStopState")
+    assert "prod-retry" not in update_stop
+    assert "productionRetryBtn" not in update_stop
+
+
+def test_unrenderable_production_status_replaces_stale_rows_with_fallback() -> None:
+    """A malformed production block must never leave an older live-work row visible."""
+    refresh_fast = _function_block(_read_admin_html(), "refreshFast")
+    production_guard = refresh_fast[
+        refresh_fast.index("try{\n      renderProduction(_st);") : refresh_fast.index("if (_st.station)")
+    ]
+
+    assert "console.error('refreshFast production',e);" in production_guard
+    assert "renderProductionUnavailable();" in production_guard
+    assert production_guard.index("console.error('refreshFast production',e);") < production_guard.index(
+        "renderProductionUnavailable();"
+    )
+
+
+def test_scaletta_runway_translates_rendered_audio_into_host_progress() -> None:
+    """Scaletta turns real rendered-audio seconds into the producer-facing
+    promise that the hosts are ahead, rather than exposing a cold buffer metric.
     """
     html = _read_admin_html()
 
-    assert 'id="bufferedReady"' in html
-    block = _function_block(html, "updateBufferedReady")
+    assert 'id="programmeRunway"' in html
+    assert 'id="programmeAhead"' in html
+    block = _function_block(html, "updateProgrammeRunway")
     assert "st.buffered_audio_sec" in block
-    assert "if(!(sec>0)){el.textContent='';return;}" in block  # no dead "0s" box
-    # Carry-safe: round to whole seconds, THEN split — guards the 1m60s boundary.
-    assert "const total=Math.round(sec),m=Math.floor(total/60),s=total%60;" in block
-    assert "el.textContent='· ~'+(m>0?m+'m'+(s<10?'0':'')+s+'s':s+'s')+' ready'" in block
-    assert "updateBufferedReady(_st)" in _function_block(html, "refreshFast")
+    assert "wrap.hidden=true;ahead.textContent='';detail.textContent='';" in block
+    assert "The hosts are " in block
+    assert "aheadLabel+' ahead'" in block
+    # Sub-minute precision: a near-starvation buffer must read in seconds, not
+    # get rounded up to a falsely-reassuring "1 minute ahead".
+    assert "totalSec<60" in block
+    assert "totalSec+' '+(totalSec===1?'second':'seconds')" in block
+    assert "The next record is already cued." in block
+    assert "The next '+records+' records are already cued." in block
+    assert "The next set is already cued." in block
+    # Filter-aware detail: an active filter pill (Music/Banter/Ads) must narrow
+    # the count instead of always reporting the total queue size.
+    assert "filterActive" in block
+    assert "filteredCount+' of '+records+' cued.'" in block
+    # aria-live="polite" must not re-announce identical text on every ~2s poll —
+    # a hash guard skips the DOM write when nothing actually changed.
+    assert "_lastRunwayHash" in block
+    assert "updateProgrammeRunway(_st)" in _function_block(html, "refreshFast")

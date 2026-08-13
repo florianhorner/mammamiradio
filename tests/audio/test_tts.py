@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -56,6 +58,24 @@ def _music_bed_side_effect(output_path, mood, duration):
     return output_path
 
 
+@pytest.fixture(autouse=True)
+def _reset_openai_tts_model():
+    """Keep the module-level OpenAI TTS model selection out of cross-test state.
+
+    The selection is a process global; without this reset a test that configures
+    it (even to None, which now marks the station as explicitly configured) would
+    change what a later, unconfigured test resolves — order-dependent under
+    pytest-randomly.
+    """
+    import mammamiradio.audio.tts as tts_mod
+
+    tts_mod._openai_tts_model = None
+    tts_mod._openai_tts_model_configured = False
+    yield
+    tts_mod._openai_tts_model = None
+    tts_mod._openai_tts_model_configured = False
+
+
 @pytest.fixture
 def _mock_all(monkeypatch):
     """Patch every external dependency used by tts.py."""
@@ -70,6 +90,7 @@ def _mock_all(monkeypatch):
         tts_mod._elevenlabs_client_key = ""
         tts_mod._failed_edge_voices.clear()  # edge-failure memoization leaks across tests otherwise
         tts_mod._failed_cloud_voices.clear()
+        tts_mod._failed_cloud_routes.clear()
         tts_mod._cloud_voice_attempt_locks.clear()
 
     _reset_provider_clients()
@@ -119,27 +140,6 @@ def _mock_all(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_after_first_voice_anchor_uses_the_rendered_pause_and_join_timeline():
-    from mammamiradio.audio.tts import _first_voice_end_in_rendered_timeline, _recipe_cue_offset
-
-    first_voice_end = _first_voice_end_in_rendered_timeline([("pause", 0.5), ("voice", 1.0), ("voice", 1.0)])
-
-    assert first_voice_end == pytest.approx(1.8)
-    assert _recipe_cue_offset(
-        "after_first_voice",
-        voice_duration_sec=3.1,
-        first_voice_end_sec=first_voice_end,
-        max_duration_sec=0.5,
-    ) == pytest.approx(1.8)
-    with pytest.raises(ValueError, match="Unsupported recipe cue anchor"):
-        _recipe_cue_offset(
-            "after_hook",
-            voice_duration_sec=3.1,
-            first_voice_end_sec=first_voice_end,
-            max_duration_sec=0.5,
-        )
-
-
 @pytest.mark.asyncio
 async def test_synthesize_happy_path(_mock_all, tmp_path):
     from mammamiradio.audio.tts import synthesize
@@ -173,7 +173,7 @@ async def test_synthesize_edge_coerces_openai_voice_to_fallback(_mock_all, tmp_p
 
 @pytest.mark.asyncio
 async def test_synthesize_error_retries_fallback_voice(_mock_all, tmp_path):
-    """When primary voice fails, synthesize should retry with DiegoNeural before silence."""
+    """When primary voice fails, synthesize retries with the house voice."""
     from mammamiradio.audio.tts import synthesize
 
     call_count = 0
@@ -199,33 +199,108 @@ async def test_synthesize_error_retries_fallback_voice(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_synthesize_error_falls_back_to_silence(_mock_all, tmp_path):
-    """When both primary and fallback voices fail, generate silence."""
-    from mammamiradio.audio.tts import synthesize
+async def test_synthesize_error_fails_closed_and_removes_partial_files(_mock_all, tmp_path):
+    """Total voice failure raises and never leaves silent or partial speech."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
 
     _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("all voices down"))
 
     output = tmp_path / "out.mp3"
-    result = await synthesize("Ciao", "it-IT-IsabellaNeural", output)
+    raw = output.with_suffix(".raw.mp3")
+    output.write_bytes(b"partial normalized speech")
+    raw.write_bytes(b"partial provider speech")
 
-    assert result == output
-    _mock_all["generate_silence"].assert_called_once()
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes") as exc_info:
+        await synthesize("Ciao", "it-IT-IsabellaNeural", output)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert "all voices down" in str(exc_info.value.__cause__)
+    assert not output.exists()
+    assert not raw.exists()
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_then_configured_edge_then_house_total_failure_order(_mock_all, tmp_path, monkeypatch):
+    """A cloud outage exhausts the configured Edge voice before the house voice."""
+    from mammamiradio.audio.tts import TTSUnavailableError, configure_openai_tts_model, synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    configure_openai_tts_model("registry-selected-tts")
+    configured_edge = "it-IT-GiuseppeMultilingualNeural"
+    house_edge = "it-IT-DiegoNeural"
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("edge routes down"))
+
+    output = tmp_path / "cloud_edge_house_failure.mp3"
+    raw = output.with_suffix(".raw.mp3")
+    output.write_bytes(b"partial final")
+    raw.write_bytes(b"partial raw")
+
+    with (
+        patch("mammamiradio.audio.tts._get_openai_client", side_effect=RuntimeError("cloud down")),
+        pytest.raises(TTSUnavailableError, match="all configured TTS routes"),
+    ):
+        await synthesize(
+            "Ciao",
+            "onyx",
+            output,
+            engine="openai",
+            edge_fallback_voice=configured_edge,
+        )
+
+    attempted_edge_voices = [call.args[1] for call in _mock_all["Communicate"].call_args_list]
+    assert attempted_edge_voices == [configured_edge, house_edge]
+    assert not output.exists()
+    assert not raw.exists()
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cleanup_unlink_error_preserves_tts_unavailable(
+    _mock_all,
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """Best-effort scratch cleanup cannot replace the actionable TTS failure."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
+
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("all voices down"))
+    output = tmp_path / "busy_output.mp3"
+    output.write_bytes(b"partial final")
+    original_unlink = Path.unlink
+
+    def _busy_final_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path == output:
+            raise OSError("file is busy")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _busy_final_unlink)
+
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes") as exc_info:
+        await synthesize("Ciao", "it-IT-IsabellaNeural", output)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert output.exists(), "the simulated filesystem refusal should leave only the undeletable file"
+    assert "Could not remove TTS scratch file" in caplog.text
+    assert "file is busy" in caplog.text
+    _mock_all["generate_silence"].assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_synthesize_diego_skips_fallback_retry(_mock_all, tmp_path):
     """When DiegoNeural itself fails, don't retry with DiegoNeural again."""
-    from mammamiradio.audio.tts import synthesize
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
 
     _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("diego down"))
 
     output = tmp_path / "out.mp3"
-    result = await synthesize("Ciao", "it-IT-DiegoNeural", output)
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+        await synthesize("Ciao", "it-IT-DiegoNeural", output)
 
-    assert result == output
     # Should only be called once (no self-retry)
     assert _mock_all["Communicate"].call_count == 1
-    _mock_all["generate_silence"].assert_called_once()
+    _mock_all["generate_silence"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +311,10 @@ async def test_synthesize_diego_skips_fallback_retry(_mock_all, tmp_path):
 @pytest.mark.asyncio
 async def test_synthesize_openai_happy_path(_mock_all, tmp_path, monkeypatch):
     """When engine='openai' and OPENAI_API_KEY is set, use OpenAI TTS."""
-    from mammamiradio.audio.tts import synthesize
+    from mammamiradio.audio.tts import configure_openai_tts_model, synthesize
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    configure_openai_tts_model("registry-selected-tts")
 
     mock_response = MagicMock()
     mock_response.content = b"\x00" * 512
@@ -246,21 +322,81 @@ async def test_synthesize_openai_happy_path(_mock_all, tmp_path, monkeypatch):
     mock_client_instance = MagicMock()
     mock_client_instance.audio.speech.create.return_value = mock_response
 
-    with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client_instance) as mock_get_client:
-        output = tmp_path / "openai_out.mp3"
+    try:
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=mock_client_instance) as mock_get_client:
+            output = tmp_path / "openai_out.mp3"
+            result = await synthesize("Ciao mondo", "onyx", output, engine="openai")
+
+            assert result == output
+            mock_get_client.assert_called_once_with("sk-test-key")
+            mock_client_instance.audio.speech.create.assert_called_once_with(
+                model="registry-selected-tts",
+                voice="onyx",
+                input="Ciao mondo",
+                instructions="Speak like a charismatic Italian radio host. Warm, energetic, natural pacing.",
+            )
+            _mock_all["normalize"].assert_called_once()
+            # Edge TTS should NOT have been called
+            _mock_all["Communicate"].assert_not_called()
+    finally:
+        configure_openai_tts_model(None)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_falls_back_to_edge_when_tts_model_unavailable(_mock_all, tmp_path, monkeypatch):
+    """Registry TTS model missing -> OpenAI synth raises, synthesize() lands on Edge.
+
+    _configured_openai_tts_model() is neutralized so the test exercises the None
+    branch rather than silently reading the packaged registry's real model.
+    """
+    from mammamiradio.audio import tts as tts_mod
+    from mammamiradio.audio.tts import configure_openai_tts_model, synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    configure_openai_tts_model(None)
+    monkeypatch.setattr(tts_mod, "_configured_openai_tts_model", lambda: None)
+
+    openai_client = MagicMock()
+    try:
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=openai_client) as mock_get_client:
+            output = tmp_path / "edge_fallback.mp3"
+            result = await synthesize("Ciao mondo", "onyx", output, engine="openai")
+
+            assert result == output
+            # OpenAI speech was never billed; Edge covered the render.
+            openai_client.audio.speech.create.assert_not_called()
+            mock_get_client.assert_not_called()
+            _mock_all["Communicate"].assert_called_once()
+    finally:
+        configure_openai_tts_model(None)
+
+
+@pytest.mark.asyncio
+async def test_configured_none_does_not_read_cwd_registry(_mock_all, tmp_path, monkeypatch):
+    """Explicit startup config of None must win over a real CWD registry model.
+
+    The repo-root model_registry.toml (the process CWD in tests) DOES carry an
+    OpenAI TTS model. Once the station is explicitly configured to None, that
+    decision is authoritative: synthesize() must land on Edge and never call
+    OpenAI with the unrelated CWD registry's model.
+    """
+    from mammamiradio.audio.tts import _configured_openai_tts_model, configure_openai_tts_model, synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    configure_openai_tts_model(None)
+
+    # No monkeypatch on the disk read: the flag alone must suppress it.
+    assert _configured_openai_tts_model() is None
+
+    openai_client = MagicMock()
+    with patch("mammamiradio.audio.tts._get_openai_client", return_value=openai_client) as mock_get_client:
+        output = tmp_path / "cwd_guard.mp3"
         result = await synthesize("Ciao mondo", "onyx", output, engine="openai")
 
-        assert result == output
-        mock_get_client.assert_called_once_with("sk-test-key")
-        mock_client_instance.audio.speech.create.assert_called_once_with(
-            model="gpt-4o-mini-tts",
-            voice="onyx",
-            input="Ciao mondo",
-            instructions="Speak like a charismatic Italian radio host. Warm, energetic, natural pacing.",
-        )
-        _mock_all["normalize"].assert_called_once()
-        # Edge TTS should NOT have been called
-        _mock_all["Communicate"].assert_not_called()
+    assert result == output
+    mock_get_client.assert_not_called()
+    openai_client.audio.speech.create.assert_not_called()
+    _mock_all["Communicate"].assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -337,6 +473,119 @@ async def test_synthesize_openai_fallback_uses_edge_fallback_voice(_mock_all, tm
         # Should have used the fallback voice, not "onyx"
         call_args = _mock_all["Communicate"].call_args
         assert call_args[0][1] == "it-IT-GiuseppeMultilingualNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_404_disables_only_that_voice_not_the_route(_mock_all, tmp_path, monkeypatch):
+    """A bad OpenAI voice ID must not push every other OpenAI voice to Edge.
+
+    Regression coverage: openai.APIStatusError does not subclass
+    httpx.HTTPStatusError, so a naive isinstance(exc, httpx.HTTPStatusError)
+    check never recognized an OpenAI 404 as voice-specific — every OpenAI
+    voice error, including a simple bad voice ID, disabled the whole route.
+    """
+    import openai as openai_mod
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-404-key")
+    calls = {"cloud": 0}
+
+    async def _fake_openai(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if voice == "bad-voice-id":
+            request = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
+            response = httpx.Response(404, content=b"voice not found", request=request)
+            raise openai_mod.NotFoundError("Not Found", response=response, body=None)
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.synthesize_openai", _fake_openai)
+
+    bad = await synthesize("Ciao", "bad-voice-id", tmp_path / "openai_404_bad.mp3", engine="openai")
+    good = await synthesize("Ancora", "onyx", tmp_path / "openai_404_good.mp3", engine="openai")
+
+    assert bad.exists() and good.exists()
+    # Both voices reached the cloud call — the 404 did not disable the route.
+    assert calls["cloud"] == 2
+    assert _mock_all["Communicate"].call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_auth_error_stays_disabled_past_cooldown_window(_mock_all, tmp_path, monkeypatch):
+    """An OpenAI auth failure stays disabled for the session, not just 30s.
+
+    Regression coverage: because openai.AuthenticationError never satisfied
+    the old isinstance(exc, httpx.HTTPStatusError) check,
+    ``_non_retryable_cloud_tts_error`` always returned "" for OpenAI, so
+    every OpenAI failure — including a definitely-dead API key — was
+    classified as merely transient and got retried every 30 seconds forever.
+    """
+    import openai as openai_mod
+
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-dead-key")
+    clock = [100.0]
+    calls = {"cloud": 0}
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    async def _fake_openai(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        request = httpx.Request("POST", "https://api.openai.com/v1/audio/speech")
+        response = httpx.Response(401, content=b"invalid_api_key", request=request)
+        raise openai_mod.AuthenticationError("Incorrect API key provided", response=response, body=None)
+
+    monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_openai)
+
+    first = await synthesize("Ciao", "onyx", tmp_path / "openai_dead_first.mp3", engine="openai")
+    assert first.exists()
+    assert calls["cloud"] == 1
+
+    # Past the transient-failure cooldown window, a truly dead key must NOT
+    # get a half-open retry — it stays disabled until the session restarts.
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    second = await synthesize("Ancora", "nova", tmp_path / "openai_dead_second.mp3", engine="openai")
+
+    assert second.exists()
+    assert calls["cloud"] == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_route_retries_after_transient_cooldown(_mock_all, tmp_path, monkeypatch):
+    """A transient OpenAI route failure gets one half-open retry after its cooldown.
+
+    Mirrors the Azure cooldown test — this path shares the same circuit
+    breaker, but OpenAI's error classification only started working once
+    ``_cloud_http_status`` learned to recognize openai.APIStatusError too.
+    """
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-cooldown-key")
+    clock = [100.0]
+    calls = {"cloud": 0}
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    async def _fake_openai(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary OpenAI outage")
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_openai", _fake_openai)
+
+    first = await synthesize("Prima", "onyx", tmp_path / "openai_cooldown_first.mp3", engine="openai")
+    second = await synthesize("Seconda", "nova", tmp_path / "openai_cooldown_second.mp3", engine="openai")
+
+    assert first.exists() and second.exists()
+    assert calls["cloud"] == 1
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    third = await synthesize("Terza", "onyx", tmp_path / "openai_cooldown_third.mp3", engine="openai")
+
+    assert third.exists()
+    assert calls["cloud"] == 2
 
 
 @pytest.mark.asyncio
@@ -442,6 +691,177 @@ async def test_synthesize_azure_missing_key_falls_back_to_edge(_mock_all, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_synthesize_cloud_fallback_records_route_provenance(_mock_all, tmp_path, monkeypatch, caplog):
+    """A cloud fallback must be visible as degradation, not as ordinary Edge synthesis."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+    state = StationState()
+
+    with caplog.at_level(logging.INFO, logger="mammamiradio.audio.tts"):
+        result = await synthesize(
+            "Ciao",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "azure_provenance.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            host_name="Roberto",
+            state=state,
+        )
+
+    assert result.exists()
+    assert "TTS fallback provider=azure" in caplog.text
+    assert "requested_voice=it-IT-Alessio:DragonHDLatestNeural" in caplog.text
+    assert "effective_provider=edge" in caplog.text
+    assert "reason=missing_credentials" in caplog.text
+    assert "Synthesized (Edge fallback):" in caplog.text
+    assert state.runtime_provider_state["tts_provider"]["current_provider"] == "edge"
+    assert state.runtime_provider_state["tts_provider"]["fallback_active"] is True
+    assert "missing_credentials" in state.runtime_provider_state["tts_provider"]["reason"]
+    assert state.runtime_provider_state["tts_provider"]["last_switch_timestamp"] is None
+    assert list(state.runtime_events) == []
+
+
+@pytest.mark.asyncio
+async def test_tts_aggregate_does_not_inherit_fallback_from_prior_render(_mock_all, tmp_path, monkeypatch):
+    """A later successful render must not carry an earlier render's fallback."""
+    from mammamiradio.audio.tts import synthesize
+
+    state = StationState()
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+
+    first_scope = state.bind_runtime_provider_observation_scope("azure-fallback-render")
+    try:
+        await synthesize(
+            "Prima",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "azure_fallback.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            state=state,
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(first_scope)
+    first_render = state.take_runtime_provider_observations("azure-fallback-render")
+    assert first_render["tts_provider"].current_provider == "edge"
+    assert first_render["tts_provider"].fallback_active is True
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+
+    async def _successful_elevenlabs(_text, _voice, output_path, **kwargs):
+        _touch(output_path)
+        on_paid_provider_success = kwargs.get("on_paid_provider_success")
+        if on_paid_provider_success is not None:
+            on_paid_provider_success()
+        return output_path
+
+    second_scope = state.bind_runtime_provider_observation_scope("elevenlabs-success-render")
+    try:
+        with patch(
+            "mammamiradio.audio.tts.synthesize_elevenlabs",
+            new=AsyncMock(side_effect=_successful_elevenlabs),
+        ):
+            await synthesize(
+                "Seconda",
+                "voice_italian_character",
+                tmp_path / "elevenlabs_success.mp3",
+                engine="elevenlabs",
+                state=state,
+            )
+    finally:
+        state.reset_runtime_provider_observation_scope(second_scope)
+    second_render = state.take_runtime_provider_observations("elevenlabs-success-render")
+
+    assert second_render["tts:elevenlabs"].current_provider == "elevenlabs"
+    assert second_render["tts:elevenlabs"].fallback_active is False
+    assert second_render["tts_provider"].current_provider == "elevenlabs"
+    assert second_render["tts_provider"].fallback_active is False
+    assert second_render["tts_provider"].current_reason == "Cloud TTS route rendered successfully"
+
+
+@pytest.mark.asyncio
+async def test_tts_aggregate_preserves_fallback_within_same_mixed_render(_mock_all, tmp_path, monkeypatch):
+    """One failed voice keeps its own mixed render on Edge aggregate truth."""
+    from mammamiradio.audio.tts import synthesize
+
+    state = StationState()
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+
+    async def _successful_elevenlabs(_text, _voice, output_path, **kwargs):
+        _touch(output_path)
+        return output_path
+
+    scope = state.bind_runtime_provider_observation_scope("mixed-tts-render")
+    try:
+        await synthesize(
+            "Prima",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "mixed_azure_fallback.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+            state=state,
+        )
+        with patch(
+            "mammamiradio.audio.tts.synthesize_elevenlabs",
+            new=AsyncMock(side_effect=_successful_elevenlabs),
+        ):
+            await synthesize(
+                "Seconda",
+                "voice_italian_character",
+                tmp_path / "mixed_elevenlabs_success.mp3",
+                engine="elevenlabs",
+                state=state,
+            )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+    render = state.take_runtime_provider_observations("mixed-tts-render")
+
+    assert render["tts:azure"].fallback_active is True
+    assert render["tts:elevenlabs"].fallback_active is False
+    assert render["tts_provider"].current_provider == "edge"
+    assert render["tts_provider"].fallback_active is True
+    assert "azure=missing_credentials" in render["tts_provider"].current_reason
+
+
+def test_tts_aggregate_preserves_earlier_same_engine_fallback_in_one_render():
+    """A later voice success cannot erase fallback audio already in the render."""
+    from mammamiradio.audio.tts import _record_tts_runtime_state
+
+    state = StationState()
+    scope = state.bind_runtime_provider_observation_scope("same-engine-render")
+    try:
+        _record_tts_runtime_state(
+            state,
+            engine="azure",
+            current_provider="edge",
+            fallback_active=True,
+            reason="first_voice_failed",
+        )
+        _record_tts_runtime_state(
+            state,
+            engine="azure",
+            current_provider="azure",
+            fallback_active=False,
+            reason="second_voice_ok",
+        )
+    finally:
+        state.reset_runtime_provider_observation_scope(scope)
+
+    render = state.take_runtime_provider_observations("same-engine-render")
+    assert render["tts:azure"].current_provider == "azure"
+    assert render["tts:azure"].fallback_active is False
+    assert render["tts_provider"].current_provider == "edge"
+    assert render["tts_provider"].fallback_active is True
+    assert "first_voice_failed" in render["tts_provider"].current_reason
+
+
+@pytest.mark.asyncio
 async def test_synthesize_elevenlabs_happy_path(_mock_all, tmp_path, monkeypatch):
     from mammamiradio.audio.tts import synthesize
 
@@ -472,7 +892,16 @@ async def test_synthesize_elevenlabs_happy_path(_mock_all, tmp_path, monkeypatch
     assert result == output
     assert seen["url"] == "https://api.elevenlabs.io/v1/text-to-speech/voice_italian_character"
     assert seen["headers"]["xi-api-key"] == "eleven-secret"
-    assert seen["json"]["model_id"] == "eleven_multilingual_v2"
+    assert seen["json"] == {
+        "text": "Ciao mondo",
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.42,
+            "similarity_boost": 0.78,
+            "style": 0.45,
+            "use_speaker_boost": True,
+        },
+    }
     _mock_all["normalize"].assert_called_once()
     _mock_all["Communicate"].assert_not_called()
 
@@ -542,6 +971,163 @@ async def test_synthesize_threads_voice_settings_to_elevenlabs(_mock_all, tmp_pa
     await synthesize("Ciao", "voice_x", tmp_path / "t.mp3", engine="elevenlabs", voice_settings={"stability": 0.6})
     assert seen["json"]["voice_settings"]["stability"] == 0.6
     assert seen["json"]["voice_settings"]["similarity_boost"] == 0.78  # other house defaults preserved
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_uses_only_stability_and_code_owned_tag(
+    _mock_all, tmp_path, monkeypatch, caplog
+):
+    """V3 receives only compatible tuning and semantic—not raw—delivery markup."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-key")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, headers, json):
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    with caplog.at_level(logging.INFO, logger="mammamiradio.audio.tts"):
+        await synthesize(
+            "Ciao Giulia",
+            "voice_marco",
+            tmp_path / "v3.mp3",
+            engine="elevenlabs",
+            elevenlabs_model="eleven_v3",
+            delivery_profile="marco",
+            delivery_cue="energetic",
+            voice_settings={"stability": 0.6},
+            host_name="Marco",
+        )
+
+    assert seen["json"] == {
+        "text": "[excited] Ciao Giulia",
+        "model_id": "eleven_v3",
+        "voice_settings": {"stability": 0.6},
+    }
+    assert "host=Marco model=eleven_v3 delivery=energetic" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_keeps_provider_default_and_rejects_raw_tag_input(
+    _mock_all, tmp_path, monkeypatch
+):
+    """A raw bracket tag is not an instruction; Giulia's omitted stability stays provider-default."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-default-key")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, headers, json):
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    await synthesize(
+        "Non mi impressiona.",
+        "voice_giulia",
+        tmp_path / "v3-default.mp3",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="giulia",
+        delivery_cue="[laughs]",
+    )
+
+    assert seen["json"] == {
+        "text": "Non mi impressiona.",
+        "model_id": "eleven_v3",
+    }
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_fallback_receives_clean_text(_mock_all, tmp_path, monkeypatch):
+    """A V3 failure cannot make Edge pronounce its internal performance tag."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-fallback-key")
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _HttpErrorClient)
+
+    await synthesize(
+        "Questo resta pulito.",
+        "voice_marco",
+        tmp_path / "v3-fallback.mp3",
+        engine="elevenlabs",
+        edge_fallback_voice="it-IT-DiegoNeural",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+        delivery_cue="energetic",
+    )
+
+    assert _mock_all["Communicate"].call_args.args[0] == "Questo resta pulito."
+    assert _mock_all["Communicate"].call_args.args[1] == "it-IT-DiegoNeural"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_v3_strips_model_bracket_directives_from_payload(_mock_all, tmp_path, monkeypatch):
+    """Non-banter host speech (transitions/news) is not pre-cleaned, so the V3 boundary
+    must strip model-emitted bracket directives — only the code-owned tag may be markup."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-v3-strip-key")
+    seen: dict[str, object] = {}
+
+    class _ElevenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def post(self, url, headers, json):
+            seen["json"] = json
+            return httpx.Response(200, content=b"\x00" * 512, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _ElevenClient)
+
+    # Neutral delivery (e.g. a news flash): raw directive stripped, no code tag added.
+    await synthesize(
+        "[sospira] Ultim'ora dalla redazione.",
+        "voice_marco",
+        tmp_path / "v3-news.mp3",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+    )
+    assert seen["json"]["text"] == "Ultim'ora dalla redazione."
+
+    # Authorized cue: the code-owned tag survives, the smuggled directive does not.
+    await synthesize(
+        "Musica [laughs] adesso.",
+        "voice_marco",
+        tmp_path / "v3-banter.mp3",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+        delivery_cue="energetic",
+    )
+    assert seen["json"]["text"] == "[excited] Musica adesso."
+
+
+def test_elevenlabs_failure_memoization_key_is_model_specific(monkeypatch):
+    from mammamiradio.audio.tts import _cloud_failure_key
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "same-account")
+    v2_key = _cloud_failure_key("elevenlabs", "same-voice", elevenlabs_model="eleven_multilingual_v2")
+    v3_key = _cloud_failure_key("elevenlabs", "same-voice", elevenlabs_model="eleven_v3")
+
+    assert v2_key != v3_key
+    assert v2_key[-1] == "eleven_multilingual_v2"
+    assert v3_key[-1] == "eleven_v3"
 
 
 class _HttpErrorClient:
@@ -662,6 +1248,51 @@ async def test_synthesize_azure_auth_error_lock_collapses_concurrent_attempts(_m
         "it-IT-DiegoNeural",
         "it-IT-DiegoNeural",
     ]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_401_disables_route_for_a_different_voice_too(_mock_all, tmp_path, monkeypatch):
+    """A 401 must block the whole route, not just the voice that hit it.
+
+    The auth-memoization tests above only ever reuse the SAME voice, so they'd
+    pass even if just per-voice memoization (not route memoization) were doing
+    the work. This proves a 401 on one voice also stops a DIFFERENT voice on
+    the same Azure route from reaching the cloud at all.
+    """
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-401-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        request = httpx.Request("POST", "https://example.invalid/tts")
+        response = httpx.Response(401, content=b"unauthorized", request=request)
+        raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.synthesize_azure", _fake_azure)
+
+    first = await synthesize(
+        "Ciao",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "azure_401_first.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    second = await synthesize(
+        "Ancora",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        tmp_path / "azure_401_second.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert first.exists() and second.exists()
+    # Only the first (different) voice actually reached Azure — the route,
+    # not just that one voice, was disabled after the 401.
+    assert calls["cloud"] == 1
+    assert _mock_all["Communicate"].call_count == 2
 
 
 @pytest.mark.asyncio
@@ -789,6 +1420,466 @@ async def test_synthesize_azure_http_error_falls_back_to_edge(_mock_all, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_synthesize_cloud_route_failure_is_not_retried_for_each_ad_voice(
+    _mock_all, tmp_path, monkeypatch, caplog
+):
+    """A provider-wide 5xx must not spend another cloud timeout on each voice."""
+    import logging
+
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-route-err-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    seen = {"posts": 0}
+
+    class _CountingHttpErrorClient(_HttpErrorClient):
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            return await super().post(url, **kwargs)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _CountingHttpErrorClient)
+
+    with caplog.at_level(logging.INFO, logger="mammamiradio.audio.tts"):
+        first = await synthesize(
+            "Prima",
+            "it-IT-Isabella:DragonHDLatestNeural",
+            tmp_path / "route_first.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+        second = await synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "route_second.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    assert first.exists() and second.exists()
+    assert seen["posts"] == 1
+    assert _mock_all["Communicate"].call_count == 2
+    assert "Azure TTS route cooldown" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_healthy_route_renders_different_voices_concurrently(_mock_all, tmp_path, monkeypatch):
+    """Marco and Giulia's lines on one healthy route must overlap, not queue.
+
+    Regression guard for the route-wide mutex that briefly serialized every
+    dialogue line on a shared provider route — it doubled banter render time
+    on every break. Only the half-open probe is single-flight; healthy
+    traffic never is.
+    """
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-healthy-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    first_in_provider = asyncio.Event()
+    second_in_provider = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        if voice == "it-IT-Isabella:DragonHDLatestNeural":
+            first_in_provider.set()
+        else:
+            second_in_provider.set()
+        await release.wait()
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    first = asyncio.create_task(
+        synthesize(
+            "Prima",
+            "it-IT-Isabella:DragonHDLatestNeural",
+            tmp_path / "healthy_first.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    await asyncio.wait_for(first_in_provider.wait(), timeout=1.0)
+    second = asyncio.create_task(
+        synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "healthy_second.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    # Both provider calls must be in flight AT THE SAME TIME while the first
+    # is still blocked — a route-wide lock would leave the second waiting.
+    await asyncio.wait_for(second_in_provider.wait(), timeout=1.0)
+
+    release.set()
+    first_result, second_result = await asyncio.wait_for(asyncio.gather(first, second), timeout=2.0)
+    assert first_result.exists() and second_result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_route_recheck_stops_timeout_cascade(_mock_all, tmp_path, monkeypatch):
+    """A call queued behind an outage must not fire its own doomed request.
+
+    With two render slots, a third voice passes the breaker check while the
+    first two calls are still hanging, then waits for a slot. Without the
+    post-acquisition re-check it would fire its own full-timeout call as a
+    slot freed — stacking timeout waves instead of going straight to Edge.
+    """
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    # The choreography below saturates the render slots with exactly two
+    # hanging calls; if the concurrency policy changes, rework the setup.
+    assert tts_mod._HEAVY_SEM._value == 2, "cascade setup assumes two render slots"
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-cascade-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    posts_started: list[asyncio.Event] = [asyncio.Event(), asyncio.Event()]
+    release_posts = asyncio.Event()
+    seen = {"posts": 0}
+
+    class _BlockingCountingHttpErrorClient(_HttpErrorClient):
+        async def post(self, url, **kwargs):
+            seen["posts"] += 1
+            if seen["posts"] <= 2:
+                posts_started[seen["posts"] - 1].set()
+            await release_posts.wait()
+            return await super().post(url, **kwargs)
+
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _BlockingCountingHttpErrorClient)
+
+    voices = [
+        "it-IT-Isabella:DragonHDLatestNeural",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        "it-IT-Marcello:DragonHDLatestNeural",
+    ]
+    first = asyncio.create_task(
+        synthesize(
+            "Prima", voices[0], tmp_path / "cascade_1.mp3", engine="azure", edge_fallback_voice="it-IT-DiegoNeural"
+        )
+    )
+    await asyncio.wait_for(posts_started[0].wait(), timeout=1.0)
+    second = asyncio.create_task(
+        synthesize(
+            "Seconda", voices[1], tmp_path / "cascade_2.mp3", engine="azure", edge_fallback_voice="it-IT-DiegoNeural"
+        )
+    )
+    await asyncio.wait_for(posts_started[1].wait(), timeout=1.0)
+    # Both render slots are now occupied by hanging cloud calls. The third
+    # voice passes the pre-check (breaker still closed) and queues on a slot.
+    third = asyncio.create_task(
+        synthesize(
+            "Terza", voices[2], tmp_path / "cascade_3.mp3", engine="azure", edge_fallback_voice="it-IT-DiegoNeural"
+        )
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert seen["posts"] == 2
+
+    release_posts.set()
+    results = await asyncio.wait_for(asyncio.gather(first, second, third), timeout=2.0)
+
+    assert all(r.exists() for r in results)
+    # The third call re-checked the breaker after getting its slot and went
+    # straight to Edge — no third doomed provider request.
+    assert seen["posts"] == 2
+    assert _mock_all["Communicate"].call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_route_half_open_probe_is_single_flight(_mock_all, tmp_path, monkeypatch):
+    """After the cooldown, exactly one caller probes; others stay on Edge."""
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-probe-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    clock = [100.0]
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary Azure outage")
+        probe_started.set()
+        await release_probe.wait()
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    tripped = await synthesize(
+        "Prima",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "probe_trip.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert tripped.exists()
+    assert calls["cloud"] == 1
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    probe = asyncio.create_task(
+        synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "probe_winner.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    await asyncio.wait_for(probe_started.wait(), timeout=1.0)
+    # While the probe is in flight, another voice must NOT get a second probe.
+    bystander = await asyncio.wait_for(
+        synthesize(
+            "Terza",
+            "it-IT-Marcello:DragonHDLatestNeural",
+            tmp_path / "probe_bystander.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        ),
+        timeout=2.0,
+    )
+    assert bystander.exists()
+    assert calls["cloud"] == 2  # trip + the single probe; no third call
+
+    release_probe.set()
+    probe_result = await asyncio.wait_for(probe, timeout=2.0)
+    assert probe_result.exists()
+
+    # The successful probe closed the breaker: the next call goes to the cloud.
+    recovered = await synthesize(
+        "Quarta",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "probe_recovered.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert recovered.exists()
+    assert calls["cloud"] == 3
+
+
+@pytest.mark.asyncio
+async def test_synthesize_probe_success_outranks_stale_concurrent_failure(_mock_all, tmp_path, monkeypatch):
+    """A successful probe reopens the route even if a straggler failed meanwhile.
+
+    A call that was already in flight when the breaker first tripped can fail
+    AFTER the probe started and install a fresh cooldown over the probe
+    marker. The probe's success is fresher evidence — it must win, or the
+    route sits on Edge another 30 seconds despite a proven-healthy provider.
+    """
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-stale-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    clock = [100.0]
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary Azure outage")
+        probe_started.set()
+        await release_probe.wait()
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    tripped = await synthesize(
+        "Prima",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "stale_trip.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert tripped.exists()
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    route_key = tts_mod._cloud_route_key("azure")
+    probe = asyncio.create_task(
+        synthesize(
+            "Seconda",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            tmp_path / "stale_probe.mp3",
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+    )
+    await asyncio.wait_for(probe_started.wait(), timeout=1.0)
+    # A straggler from before the trip fails route-wide mid-probe.
+    tts_mod._memoize_failed_cloud_route(route_key, retryable=True)
+
+    release_probe.set()
+    assert (await asyncio.wait_for(probe, timeout=2.0)).exists()
+
+    # The probe's success reopened the route despite the stale cooldown.
+    third = await synthesize(
+        "Terza",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "stale_third.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert third.exists()
+    assert calls["cloud"] == 3
+
+
+def test_memoize_never_downgrades_a_session_disable_to_a_cooldown():
+    """A straggler timeout must not turn a revoked-key disable into 30s retries."""
+    import mammamiradio.audio.tts as tts_mod
+
+    tts_mod.reset_voice_failures()
+    route_key = ("azure", "westeurope", "fp", "")
+    try:
+        tts_mod._memoize_failed_cloud_route(route_key, retryable=False)
+        tts_mod._memoize_failed_cloud_route(route_key, retryable=True)
+        assert tts_mod._claim_cloud_route(route_key) == "permanent"
+    finally:
+        tts_mod.reset_voice_failures()
+
+
+def test_should_disable_cloud_route_ignores_local_post_provider_failures():
+    """FFmpeg/disk errors after the provider answered say nothing about the route."""
+    import openai as openai_mod
+
+    from mammamiradio.audio.tts import _should_disable_cloud_route
+
+    # Local failures: never route evidence.
+    assert _should_disable_cloud_route(RuntimeError("normalize failed")) is False
+    assert _should_disable_cloud_route(OSError("disk full")) is False
+
+    # Provider/network failures: route-wide.
+    assert _should_disable_cloud_route(TimeoutError("hung")) is True
+    request = httpx.Request("POST", "https://example.invalid/tts")
+    assert _should_disable_cloud_route(httpx.ConnectError("refused", request=request)) is True
+    response_500 = httpx.Response(500, request=request)
+    assert _should_disable_cloud_route(httpx.HTTPStatusError("boom", request=request, response=response_500)) is True
+    response_401 = httpx.Response(401, request=request, content=b"unauthorized")
+    assert (
+        _should_disable_cloud_route(openai_mod.AuthenticationError("bad key", response=response_401, body=None)) is True
+    )
+
+    # Voice-specific statuses: never route-wide, from either error family.
+    response_404 = httpx.Response(404, request=request, content=b"voice not found")
+    assert _should_disable_cloud_route(httpx.HTTPStatusError("nf", request=request, response=response_404)) is False
+    assert _should_disable_cloud_route(openai_mod.NotFoundError("nf", response=response_404, body=None)) is False
+
+
+@pytest.mark.asyncio
+async def test_synthesize_cloud_route_retries_after_transient_cooldown(_mock_all, tmp_path, monkeypatch):
+    """A transient route failure gets one half-open retry after its cooldown."""
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-cooldown-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    clock = [100.0]
+    calls = {"cloud": 0}
+    monkeypatch.setattr(tts_mod.time, "monotonic", lambda: clock[0])
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if calls["cloud"] == 1:
+            raise TimeoutError("temporary Azure outage")
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    first = await synthesize(
+        "Prima",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "cooldown_first.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    second = await synthesize(
+        "Seconda",
+        "it-IT-Alessio:DragonHDLatestNeural",
+        tmp_path / "cooldown_second.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert first.exists() and second.exists()
+    assert calls["cloud"] == 1
+
+    clock[0] += tts_mod._CLOUD_ROUTE_COOLDOWN_SECONDS + 0.1
+    third = await synthesize(
+        "Terza",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "cooldown_third.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert third.exists()
+    assert calls["cloud"] == 2
+
+
+@pytest.mark.asyncio
+async def test_synthesize_azure_404_disables_only_that_voice_not_the_route(_mock_all, tmp_path, monkeypatch):
+    """A 404 for one bad voice ID must not push other configured voices to Edge."""
+    import mammamiradio.audio.tts as tts_mod
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-404-key")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
+    calls = {"cloud": 0}
+
+    async def _fake_azure(text, voice, output_path, **kwargs):
+        calls["cloud"] += 1
+        if voice == "it-IT-BadVoice:DragonHDLatestNeural":
+            request = httpx.Request("POST", "https://example.invalid/tts")
+            response = httpx.Response(404, content=b"voice not found", request=request)
+            raise httpx.HTTPStatusError("Not Found", request=request, response=response)
+        return _touch(Path(output_path))
+
+    monkeypatch.setattr(tts_mod, "synthesize_azure", _fake_azure)
+
+    bad = await synthesize(
+        "Ciao",
+        "it-IT-BadVoice:DragonHDLatestNeural",
+        tmp_path / "bad.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    good = await synthesize(
+        "Ancora",
+        "it-IT-Isabella:DragonHDLatestNeural",
+        tmp_path / "good.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert bad.exists() and good.exists()
+    # Both voices reached the cloud call — the 404 did not disable the route.
+    assert calls["cloud"] == 2
+    # Only the bad voice fell back to Edge; the good voice was served by the cloud stub.
+    assert _mock_all["Communicate"].call_count == 1
+    assert _mock_all["Communicate"].call_args_list[0].args[1] == "it-IT-DiegoNeural"
+
+    # The bad voice itself stays memoized this session (per-voice, not route-wide).
+    again = await synthesize(
+        "Ancora una volta",
+        "it-IT-BadVoice:DragonHDLatestNeural",
+        tmp_path / "bad_again.mp3",
+        engine="azure",
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+    assert again.exists()
+    assert calls["cloud"] == 2
+
+
+@pytest.mark.asyncio
 async def test_synthesize_elevenlabs_http_error_falls_back_to_edge(_mock_all, tmp_path, monkeypatch):
     """ElevenLabs returning 5xx mid-synthesis must degrade to edge-tts, not dead air."""
     from mammamiradio.audio.tts import synthesize
@@ -832,9 +1923,9 @@ async def test_synthesize_elevenlabs_missing_key_falls_back_to_edge(_mock_all, t
 
 
 @pytest.mark.asyncio
-async def test_synthesize_azure_full_failure_falls_back_to_silence(_mock_all, tmp_path, monkeypatch):
-    """Azure 5xx AND edge-tts down → silence, never a terminal failure (Scenario 2)."""
-    from mammamiradio.audio.tts import synthesize
+async def test_synthesize_azure_full_failure_fails_closed(_mock_all, tmp_path, monkeypatch):
+    """Azure 5xx plus Edge outage propagates after the complete fallback chain."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
 
     monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-silence-key")
     monkeypatch.setenv("AZURE_SPEECH_REGION", "northeurope")
@@ -842,17 +1933,42 @@ async def test_synthesize_azure_full_failure_falls_back_to_silence(_mock_all, tm
     # Edge save also fails — both the cloud and the edge path are down.
     _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("edge down"))
 
-    output = tmp_path / "azure_then_silence.mp3"
-    result = await synthesize(
-        "Ciao",
-        "it-IT-Alessio:DragonHDLatestNeural",
-        output,
-        engine="azure",
-        edge_fallback_voice="it-IT-DiegoNeural",
-    )
+    output = tmp_path / "azure_then_failure.mp3"
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+        await synthesize(
+            "Ciao",
+            "it-IT-Alessio:DragonHDLatestNeural",
+            output,
+            engine="azure",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
 
-    assert result == output
-    _mock_all["generate_silence"].assert_called_once()
+    assert not output.exists()
+    _mock_all["generate_silence"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_elevenlabs_full_failure_fails_closed(_mock_all, tmp_path, monkeypatch):
+    """ElevenLabs 5xx plus Edge outage propagates after the complete fallback chain."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-silence-key")
+    monkeypatch.setattr("mammamiradio.audio.tts.httpx.AsyncClient", _HttpErrorClient)
+    # Edge save also fails — both the cloud and the edge path are down.
+    _mock_all["comm_instance"].save = AsyncMock(side_effect=RuntimeError("edge down"))
+
+    output = tmp_path / "eleven_then_failure.mp3"
+    with pytest.raises(TTSUnavailableError, match="all configured TTS routes"):
+        await synthesize(
+            "Ciao",
+            "voice_italian_character",
+            output,
+            engine="elevenlabs",
+            edge_fallback_voice="it-IT-DiegoNeural",
+        )
+
+    assert not output.exists()
+    _mock_all["generate_silence"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -983,24 +2099,333 @@ async def test_synthesize_ad_sfx_failure_falls_back_to_short_silence(_mock_all, 
 
 
 @pytest.mark.asyncio
-async def test_synthesize_ad_skips_unknown_sfx_instead_of_reusing_generic_chime(_mock_all, tmp_path, caplog):
+async def test_synthesize_ad_optional_sfx_total_failure_removes_partial(_mock_all, tmp_path):
+    """A decorative SFX outage is omittable but cannot leak its partial file."""
     from mammamiradio.audio.tts import synthesize_ad
+
+    def _fail_optional(path: Path, *_args, **_kwargs):
+        path.write_bytes(b"partial optional audio")
+        raise RuntimeError("optional renderer unavailable")
 
     script = AdScript(
         brand="EspressoPlus",
         parts=[
             AdPart(type="voice", text="Vuoi un caffè?"),
-            AdPart(type="sfx", sfx="unapproved_laser"),
+            AdPart(type="sfx", sfx="cash_register"),
         ],
         mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.generate_sfx", side_effect=_fail_optional),
+        patch("mammamiradio.audio.tts.generate_silence", side_effect=_fail_optional),
+    ):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_required_voice_failure_waits_for_sibling_and_cleans_scratch(_mock_all, tmp_path):
+    """One failed voice aborts only after successful sibling writes have settled."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
+
+    sibling_started = asyncio.Event()
+    sibling_finished = asyncio.Event()
+
+    async def _fake_synthesize(text, voice, output_path, **kwargs):
+        if text == "bad voice":
+            await sibling_started.wait()
+            output_path.with_suffix(".raw.mp3").write_bytes(b"partial")
+            raise TTSUnavailableError("voice unavailable")
+        sibling_started.set()
+        await asyncio.sleep(0.01)
+        _touch(output_path)
+        sibling_finished.set()
+        return output_path
+
+    script = AdScript(
+        brand="Voce Vera",
+        parts=[
+            AdPart(type="voice", text="bad voice"),
+            AdPart(type="voice", text="good voice"),
+            AdPart(type="sfx", sfx="chime"),
+        ],
+        sonic=SonicWorld(sonic_signature="chime"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_fake_synthesize),
+        pytest.raises(TTSUnavailableError, match="voice unavailable"),
+    ):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert sibling_finished.is_set()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+    assert not list(tmp_path.glob("motif_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_prioritizes_total_tts_outage_over_sibling_error(_mock_all, tmp_path):
+    """A simultaneous generic renderer error cannot hide required voice outage."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
+
+    async def _failed_voice(text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"partial voice")
+        if text == "generic failure":
+            raise RuntimeError("local renderer failed")
+        raise TTSUnavailableError("all voice routes unavailable")
+
+    script = AdScript(
+        brand="Priorita Voce",
+        parts=[
+            AdPart(type="voice", text="generic failure"),
+            AdPart(type="voice", text="typed failure"),
+        ],
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_failed_voice),
+        pytest.raises(TTSUnavailableError, match="all voice routes unavailable"),
+    ):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_cancellation_waits_for_voice_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancelling an ad waits for owned voice work before deleting its outputs."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    voice_started = asyncio.Event()
+    release_voice = asyncio.Event()
+    voice_finished = asyncio.Event()
+
+    async def _late_synthesize(text, voice, output_path, **kwargs):
+        voice_started.set()
+        await release_voice.wait()
+        _touch(output_path)
+        output_path.with_suffix(".raw.mp3").write_bytes(b"late raw")
+        voice_finished.set()
+        return output_path
+
+    script = AdScript(
+        brand="Voce Paziente",
+        parts=[AdPart(type="voice", text="Aspetta la voce.")],
+        sonic=SonicWorld(sonic_signature="chime"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_late_synthesize):
+        task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+        await asyncio.wait_for(voice_started.wait(), timeout=1.0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for the owned voice renderer"
+        release_voice.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert voice_finished.is_set()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+    assert not list(tmp_path.glob("motif_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_failed_motif_removes_partial_before_voice_only_success(_mock_all, tmp_path):
+    """A decorative motif failure cannot leave its partially-written scratch file."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    def _partial_motif(path: Path, *_args, **_kwargs) -> Path:
+        path.write_bytes(b"partial motif")
+        raise RuntimeError("motif render failed")
+
+    _mock_all["generate_brand_motif"].side_effect = _partial_motif
+    script = AdScript(
+        brand="Motivo Pulito",
+        parts=[AdPart(type="voice", text="La voce resta completa.")],
+        sonic=SonicWorld(sonic_signature="chime"),
     )
     voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
 
     result = await synthesize_ad(script, voices, tmp_path)
 
     assert result.exists()
-    _mock_all["generate_sfx"].assert_not_called()
-    assert "Skipping unsupported ad SFX 'unapproved_laser'" in caplog.text
+    assert not list(tmp_path.glob("motif_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_bed_failure_waits_for_executor_siblings(_mock_all, tmp_path):
+    """One failed ad bed cannot let a still-running sibling outlive assembly."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    sibling_started = threading.Event()
+    release_sibling = threading.Event()
+    sibling_finished = threading.Event()
+
+    def _bed(path: Path, mood: str, duration: float) -> Path:
+        if mood == "showroom":
+            sibling_started.set()
+            assert release_sibling.wait(timeout=2.0)
+            _touch(path)
+            sibling_finished.set()
+            return path
+        assert sibling_started.wait(timeout=1.0)
+        raise RuntimeError("main bed failed")
+
+    _mock_all["generate_music_bed"].side_effect = _bed
+    script = AdScript(
+        brand="Letti Uniti",
+        parts=[AdPart(type="voice", text="Ogni letto finisce.")],
+        mood="lounge",
+        sonic=SonicWorld(environment="showroom"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+    async with asyncio.timeout(1.0):
+        while not sibling_started.is_set():
+            await asyncio.sleep(0.001)
+    await asyncio.sleep(0.02)
+    completed_before_release = task.done()
+    release_sibling.set()
+    result = await task
+
+    assert not completed_before_release, "ad assembly must wait until every executor-backed bed settles"
+    assert sibling_finished.is_set()
+    assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_bed_cancellation_waits_then_cleans_owned_audio(_mock_all, tmp_path):
+    """Cancellation during optional bed fan-out waits, then removes ad scratch."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed_started = threading.Event()
+    release_beds = threading.Event()
+
+    def _slow_bed(path: Path, *_args, **_kwargs) -> Path:
+        bed_started.set()
+        assert release_beds.wait(timeout=2.0)
+        _touch(path)
+        return path
+
+    _mock_all["generate_music_bed"].side_effect = _slow_bed
+    script = AdScript(
+        brand="Letti Cancellati",
+        parts=[AdPart(type="voice", text="La voce non resta indietro.")],
+        mood="lounge",
+        sonic=SonicWorld(environment="showroom"),
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+    async with asyncio.timeout(1.0):
+        while not bed_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for executor-backed bed renderers"
+    release_beds.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("adpart_*.mp3", "adbed_*.mp3", "envbed_*.mp3", "foley_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_final_mix_cancellation_waits_then_cleans_all_audio(_mock_all, tmp_path):
+    """Cancellation after bed fan-out waits for the sequential mix worker before cleanup."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    mix_started = threading.Event()
+    release_mix = threading.Event()
+
+    def _slow_mix(_voice_path, _bed_path, output_path, _volume_scale=0.12):
+        mix_started.set()
+        assert release_mix.wait(timeout=2.0)
+        _touch(output_path)
+        return output_path
+
+    _mock_all["mix_with_bed"].side_effect = _slow_mix
+    script = AdScript(
+        brand="Mix Cancellato",
+        parts=[AdPart(type="voice", text="Il mix deve aspettare.")],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    task = asyncio.create_task(synthesize_ad(script, voices, tmp_path))
+    async with asyncio.timeout(1.0):
+        while not mix_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for the sequential mix worker"
+    release_mix.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("ad_*.mp3", "adpart_*.mp3", "adbed_*.mp3", "ad_broadcast_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_sfx_only_script_uses_spoken_brand_fallback(_mock_all, tmp_path):
+    """Decorative audio alone cannot count as a completed spoken ad."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    spoken: list[str] = []
+
+    async def _fake_synthesize(text, voice, output_path, **kwargs):
+        spoken.append(text)
+        return _touch(output_path)
+
+    script = AdScript(brand="Solo Suono", parts=[AdPart(type="sfx", sfx="chime")])
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_fake_synthesize):
+        result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    assert spoken == ["Solo Suono"]
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_sfx_only_fallback_voice_failure_propagates(_mock_all, tmp_path):
+    """When an SFX-only ad's spoken-brand fallback voice fails, the error must
+    propagate (fail closed) instead of silently swallowing it."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
+
+    async def _fail_fallback(text, voice, output_path, **kwargs):
+        raise TTSUnavailableError("fallback brand voice unavailable")
+
+    script = AdScript(brand="Solo Suono", parts=[AdPart(type="sfx", sfx="chime")])
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_fail_fallback),
+        pytest.raises(TTSUnavailableError, match="fallback brand voice unavailable"),
+    ):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert not list(tmp_path.glob("*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("ad_fallback_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1015,6 +2440,52 @@ async def test_synthesize_ad_empty_parts_fallback(_mock_all, tmp_path):
     # Should have synthesized the brand name as fallback
     _mock_all["Communicate"].assert_called_once_with("EmptyBrand", "it-IT-DiegoNeural", rate="+0%", pitch="+0Hz")
     assert result.exists()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_empty_parts_fallback_keeps_direct_voice_settings(tmp_path, monkeypatch):
+    """The empty-script rescue keeps its selected character and tuned payload."""
+    import mammamiradio.audio.tts as tts
+
+    seen: list[dict[str, object]] = []
+
+    async def _synthesize(text, voice, output_path, **kwargs):
+        seen.append({"text": text, "voice": voice, **kwargs})
+        output_path.write_bytes(b"x" * 2048)
+        return output_path
+
+    monkeypatch.setattr(tts, "synthesize", _synthesize)
+    direct = AdVoice(
+        name="Il Razzo",
+        voice="voice-razzo",
+        style="fast",
+        role="disclaimer_goblin",
+        engine="elevenlabs",
+        voice_settings={"stability": 0.6},
+    )
+    hammer = AdVoice(name="House Hammer", voice="house-hammer", style="clear", role="hammer")
+
+    result = await tts.synthesize_ad(
+        AdScript(brand="Scarpe Volanti", parts=[]),
+        {"hammer": hammer, "disclaimer_goblin": direct},
+        tmp_path,
+        default_voice=direct,
+    )
+
+    assert result.exists()
+    assert seen == [
+        {
+            "text": "Scarpe Volanti",
+            "voice": "voice-razzo",
+            "engine": "elevenlabs",
+            "edge_fallback_voice": "",
+            "openai_instructions": "Perform as an Italian radio commercial character. "
+            "Role: disclaimer_goblin. Style: fast.",
+            "voice_settings": {"stability": 0.6},
+            "host_name": "Il Razzo",
+            "state": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1077,6 +2548,34 @@ async def test_synthesize_ad_multi_voice_dict(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_voice_concat_failure_cleans_all_parts(_mock_all, tmp_path):
+    """A failed multi-voice concat cannot leave undiscoverable ad scratch."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    def _failed_concat(_parts, output_path, *_args, **_kwargs):
+        output_path.write_bytes(b"partial concatenation")
+        raise RuntimeError("voice concat failed")
+
+    _mock_all["concat_files"].side_effect = _failed_concat
+    script = AdScript(
+        brand="Duo Pulito",
+        parts=[
+            AdPart(type="voice", text="Prima voce."),
+            AdPart(type="voice", text="Seconda voce."),
+        ],
+        mood="upbeat",
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    with pytest.raises(RuntimeError, match="voice concat failed"):
+        await synthesize_ad(script, voices, tmp_path)
+
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("ad_voice_*.mp3"))
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_role_resolution_fallback(_mock_all, tmp_path):
     """Parts with unknown role fall back to first voice in dict."""
     from mammamiradio.audio.tts import synthesize_ad
@@ -1092,6 +2591,54 @@ async def test_synthesize_ad_role_resolution_fallback(_mock_all, tmp_path):
     assert result.exists()
     # Should use first voice (hammer) since "unknown_role" not in dict
     _mock_all["Communicate"].assert_called_once_with("Ciao!", "it-IT-GianniNeural", rate="+0%", pitch="+0Hz")
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_forwards_ad_voice_settings_and_direct_default(_mock_all, tmp_path, monkeypatch):
+    """Configured ad tuning reaches TTS, while roleless copy keeps its direct character."""
+    import mammamiradio.audio.tts as tts
+
+    seen: list[dict[str, object]] = []
+
+    async def _synthesize(text, voice, output_path, **kwargs):
+        seen.append({"text": text, "voice": voice, **kwargs})
+        output_path.write_bytes(b"x" * 2048)
+        return output_path
+
+    monkeypatch.setattr(tts, "synthesize", _synthesize)
+    direct = AdVoice(
+        name="Il Razzo",
+        voice="voice-razzo",
+        style="fast",
+        role="disclaimer_goblin",
+        engine="elevenlabs",
+        voice_settings={"stability": 0.6},
+    )
+    hammer = AdVoice(name="House Hammer", voice="house-hammer", style="clear", role="hammer")
+    script = AdScript(brand="Scarpe Volanti", parts=[AdPart(type="voice", text="Compra ora!")], mood="lounge")
+
+    result = await tts.synthesize_ad(
+        script,
+        {"hammer": hammer, "disclaimer_goblin": direct},
+        tmp_path,
+        default_voice=direct,
+    )
+
+    assert result.exists()
+    assert seen == [
+        {
+            "text": "Compra ora!",
+            "voice": "voice-razzo",
+            "engine": "elevenlabs",
+            "edge_fallback_voice": "",
+            "openai_instructions": "Perform as an Italian radio commercial character. "
+            "Role: disclaimer_goblin. Style: fast.",
+            "voice_settings": {"stability": 0.6},
+            "loudnorm": False,
+            "host_name": "Il Razzo",
+            "state": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1135,130 +2682,6 @@ async def test_synthesize_ad_environment_bed(_mock_all, tmp_path):
     assert len(env_mix) >= 1 or any(
         c.kwargs.get("volume_scale") == 0.14 or (len(c.args) >= 4 and c.args[3] == 0.14) for c in mix_calls
     )
-
-
-@pytest.mark.asyncio
-async def test_synthesize_ad_packaged_bed_replaces_layered_drone(_mock_all, tmp_path):
-    """The default pack is one authored bed, not three tonal layers under voice."""
-    from mammamiradio.audio.tts import synthesize_ad
-
-    beds_dir = tmp_path / "imaging" / "beds"
-    beds_dir.mkdir(parents=True)
-    (beds_dir / "casa_notte.mp3").write_bytes(b"night-drive-bed")
-    script = AdScript(
-        brand="NightDrive",
-        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
-        mood="suspicious_jazz",
-        sonic=SonicWorld(environment="beach"),
-    )
-    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
-
-    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
-
-    assert result.exists()
-    _mock_all["loop_audio_bed"].assert_called_once()
-    assert _mock_all["loop_audio_bed"].call_args.args[0] == beds_dir / "casa_notte.mp3"
-    _mock_all["generate_music_bed"].assert_not_called()
-    _mock_all["generate_foley_loop"].assert_not_called()
-    assert _mock_all["mix_with_bed"].call_args.args[3] == 0.14
-
-
-@pytest.mark.asyncio
-async def test_synthesize_ad_recipe_owns_bed_and_two_real_cues(_mock_all, tmp_path):
-    """A resolved recipe bypasses legacy motifs, LLM SFX, and tonal layers."""
-    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
-    from mammamiradio.audio.tts import synthesize_ad
-
-    bed = _touch(tmp_path / "recorded-bed.mp3")
-    applause = _touch(tmp_path / "applause.mp3")
-    trumpet = _touch(tmp_path / "trumpet.mp3")
-    recipe = ResolvedAdRecipe(
-        id="stadium_win",
-        bed_path=bed,
-        bed_gain_db=-25.0,
-        cues=(
-            ResolvedRecipeCue("intro", applause, -11.0, 0.7),
-            ResolvedRecipeCue("outro", trumpet, -13.0, 0.5),
-        ),
-    )
-    script = AdScript(
-        brand="Night Drive",
-        parts=[
-            AdPart(type="sfx", sfx="whoosh"),
-            AdPart(type="voice", text="Una vittoria molto seria."),
-            AdPart(type="sfx", sfx="chime"),
-        ],
-        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
-    )
-    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
-
-    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
-
-    assert result.exists()
-    _mock_all["generate_sfx"].assert_not_called()
-    _mock_all["generate_brand_motif"].assert_not_called()
-    _mock_all["generate_music_bed"].assert_not_called()
-    _mock_all["generate_foley_loop"].assert_not_called()
-    _mock_all["loop_audio_bed"].assert_called_once()
-    assert _mock_all["loop_audio_bed"].call_args.args[0] == bed
-    assert _mock_all["mix_with_bed"].call_args.args[3] == pytest.approx(10 ** (-25.0 / 20.0))
-    _mock_all["mix_oneshot_layers"].assert_called_once()
-    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
-    assert len(layers) == 2
-    assert [layer[0] for layer in layers] == [applause, trumpet]
-
-
-@pytest.mark.asyncio
-async def test_synthesize_ad_recipe_render_failure_restores_legacy_opener_and_motif(_mock_all, tmp_path):
-    """A recipe that resolves but fails in FFmpeg gets the complete legacy identity back."""
-    from mammamiradio.audio.imaging import ResolvedAdRecipe
-    from mammamiradio.audio.tts import synthesize_ad
-
-    bed = _touch(tmp_path / "recorded-bed.mp3")
-    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
-    script = AdScript(
-        brand="Night Drive",
-        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
-        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
-    )
-    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
-    _mock_all["loop_audio_bed"].side_effect = RuntimeError("corrupt recorded bed")
-
-    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
-
-    assert result.exists()
-    _mock_all["generate_sfx"].assert_called_once()
-    assert _mock_all["generate_sfx"].call_args.args[1] == "whoosh"
-    _mock_all["generate_brand_motif"].assert_called_once()
-    assert _mock_all["generate_brand_motif"].call_args.args[1] == "ice_clink+startup_synth"
-
-
-@pytest.mark.asyncio
-async def test_synthesize_ad_corrupt_packaged_bed_retries_synthetic_layers(_mock_all, tmp_path, caplog):
-    """A corrupt selected pack behaves like a missing pack, never a dry ad."""
-    from mammamiradio.audio.tts import synthesize_ad
-
-    beds_dir = tmp_path / "imaging" / "beds"
-    beds_dir.mkdir(parents=True)
-    (beds_dir / "casa_notte.mp3").write_bytes(b"corrupt-night-drive-bed")
-    _mock_all["loop_audio_bed"].side_effect = RuntimeError("invalid mp3")
-    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
-    script = AdScript(
-        brand="NightDrive",
-        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
-        mood="suspicious_jazz",
-        sonic=SonicWorld(environment="beach"),
-    )
-    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
-
-    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
-
-    assert result.exists()
-    _mock_all["loop_audio_bed"].assert_called_once()
-    _mock_all["generate_music_bed"].assert_called()
-    _mock_all["generate_foley_loop"].assert_called_once()
-    assert _mock_all["mix_with_bed"].call_count >= 2
-    assert "retrying synthetic fallback" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1399,6 +2822,175 @@ async def test_synthesize_dialogue_single_host(_mock_all, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_synthesize_dialogue_failure_waits_for_sibling_and_cleans_scratch(_mock_all, tmp_path):
+    """Failed parallel dialogue settles every line before removing scratch audio."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    sibling_started = asyncio.Event()
+    sibling_finished = asyncio.Event()
+
+    async def _fake_synthesize(text, voice, output_path, **kwargs):
+        if text == "bad line":
+            await sibling_started.wait()
+            output_path.with_suffix(".raw.mp3").write_bytes(b"partial")
+            raise TTSUnavailableError("voice unavailable")
+        sibling_started.set()
+        await asyncio.sleep(0.01)
+        _touch(output_path)
+        sibling_finished.set()
+        return output_path
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_fake_synthesize),
+        pytest.raises(TTSUnavailableError, match="voice unavailable"),
+    ):
+        await synthesize_dialogue([(host, "bad line"), (host, "good line")], tmp_path)
+
+    assert sibling_finished.is_set()
+    assert not list(tmp_path.glob("line_*.mp3"))
+    assert not list(tmp_path.glob("line_*.raw.mp3"))
+    _mock_all["concat_files"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_prioritizes_total_tts_outage_over_sibling_error(_mock_all, tmp_path):
+    """Required dialogue preserves typed outage semantics across line failures."""
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+
+    async def _failed_line(text, _voice, output_path, **_kwargs):
+        output_path.write_bytes(b"partial line")
+        if text == "generic failure":
+            raise RuntimeError("local renderer failed")
+        raise TTSUnavailableError("all voice routes unavailable")
+
+    with (
+        patch("mammamiradio.audio.tts.synthesize", side_effect=_failed_line),
+        pytest.raises(TTSUnavailableError, match="all voice routes unavailable"),
+    ):
+        await synthesize_dialogue(
+            [(host, "generic failure"), (host, "typed failure")],
+            tmp_path,
+        )
+
+    assert not list(tmp_path.glob("line_*.mp3"))
+    _mock_all["concat_files"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_cancellation_waits_for_lines_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancelling dialogue settles every line before removing final and raw files."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    lines_started = asyncio.Event()
+    release_lines = asyncio.Event()
+    finished_lines: list[str] = []
+
+    async def _late_synthesize(text, voice, output_path, **kwargs):
+        lines_started.set()
+        await release_lines.wait()
+        _touch(output_path)
+        output_path.with_suffix(".raw.mp3").write_bytes(b"late raw")
+        finished_lines.append(text)
+        return output_path
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_late_synthesize):
+        task = asyncio.create_task(
+            synthesize_dialogue(
+                [(host, "prima linea"), (host, "seconda linea")],
+                tmp_path,
+            )
+        )
+        await asyncio.wait_for(lines_started.wait(), timeout=1.0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for every owned dialogue line"
+        release_lines.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert sorted(finished_lines) == ["prima linea", "seconda linea"]
+    assert not list(tmp_path.glob("line_*.mp3"))
+    assert not list(tmp_path.glob("line_*.raw.mp3"))
+    _mock_all["concat_files"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_concat_cancellation_waits_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancellation during dialogue concat waits for FFmpeg before deleting inputs."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    concat_started = threading.Event()
+    release_concat = threading.Event()
+
+    def _slow_concat(_parts, output_path, *_args, **_kwargs):
+        concat_started.set()
+        assert release_concat.wait(timeout=2.0)
+        _touch(output_path)
+        return output_path
+
+    _mock_all["concat_files"].side_effect = _slow_concat
+    task = asyncio.create_task(
+        synthesize_dialogue(
+            [(host, "prima linea"), (host, "seconda linea")],
+            tmp_path,
+        )
+    )
+    async with asyncio.timeout(1.0):
+        while not concat_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for dialogue concat"
+    release_concat.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("line_*.mp3", "line_*.raw.mp3", "dialogue_raw_*.mp3", "dialogue_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_dialogue_normalize_cancellation_waits_then_cleans_scratch(_mock_all, tmp_path):
+    """Cancellation during final dialogue normalization waits before cleanup."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+
+    host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
+    normalize_started = threading.Event()
+    release_normalize = threading.Event()
+
+    def _slow_final_normalize(input_path, output_path, config=None, *, loudnorm=True):
+        if input_path.name.startswith("dialogue_raw_"):
+            normalize_started.set()
+            assert release_normalize.wait(timeout=2.0)
+        return _normalize_side_effect(input_path, output_path, config, loudnorm=loudnorm)
+
+    _mock_all["normalize"].side_effect = _slow_final_normalize
+    task = asyncio.create_task(
+        synthesize_dialogue(
+            [(host, "prima linea"), (host, "seconda linea")],
+            tmp_path,
+        )
+    )
+    async with asyncio.timeout(1.0):
+        while not normalize_started.is_set():
+            await asyncio.sleep(0.001)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must wait for final dialogue normalization"
+    release_normalize.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for pattern in ("line_*.mp3", "line_*.raw.mp3", "dialogue_raw_*.mp3", "dialogue_*.mp3"):
+        assert not list(tmp_path.glob(pattern))
+
+
+@pytest.mark.asyncio
 async def test_synthesize_dialogue_rejects_zero_byte_intermediate_before_concat(_mock_all, tmp_path):
     from mammamiradio.audio.audio_quality import AudioQualityError
     from mammamiradio.audio.tts import synthesize_dialogue
@@ -1467,6 +3059,41 @@ async def test_synthesize_dialogue_single_line_skips_per_line_validation(_mock_a
 
 
 @pytest.mark.asyncio
+async def test_synthesize_dialogue_forwards_v3_delivery_sidecar(_mock_all, tmp_path):
+    """The dialogue boundary carries semantic cue metadata without changing clean text."""
+    from mammamiradio.audio.tts import synthesize_dialogue
+    from mammamiradio.core.models import DialogueLine
+
+    host = HostPersonality(
+        name="Marco",
+        voice="voice_marco",
+        style="energetic",
+        engine="elevenlabs",
+        elevenlabs_model="eleven_v3",
+        delivery_profile="marco",
+        voice_settings={"stability": 0.6},
+    )
+
+    async def _synthesize_line(text, voice, output_path, **kwargs):
+        _touch(output_path)
+        assert text == "Il testo resta pulito."
+        assert voice == "voice_marco"
+        assert kwargs["elevenlabs_model"] == "eleven_v3"
+        assert kwargs["delivery_profile"] == "marco"
+        assert kwargs["delivery_cue"] == "energetic"
+        assert kwargs["host_name"] == "Marco"
+        return output_path
+
+    with patch("mammamiradio.audio.tts.synthesize", side_effect=_synthesize_line):
+        result = await synthesize_dialogue(
+            [DialogueLine(host=host, text="Il testo resta pulito.", delivery="energetic")],
+            tmp_path,
+        )
+
+    assert result.exists()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_dialogue_tolerates_unprobeable_intermediate(_mock_all, tmp_path):
     """An unprobeable line (ffprobe timeout on a loaded Pi) is not proof of corruption.
 
@@ -1518,11 +3145,13 @@ async def test_synthesize_dialogue_normalize_failure_cleans_temporary_parts(_moc
 
     host = HostPersonality(name="Marco", voice="it-IT-DiegoNeural", style="energetic")
 
-    def _normalize_fails(raw_path, output_path, **kwargs):
-        raise RuntimeError("normalize failed")
+    def _normalize_fails_final(raw_path, output_path, **kwargs):
+        if raw_path.name.startswith("dialogue_raw_"):
+            raise RuntimeError("normalize failed")
+        return _normalize_side_effect(raw_path, output_path, **kwargs)
 
     with (
-        patch("mammamiradio.audio.tts.normalize", side_effect=_normalize_fails),
+        patch("mammamiradio.audio.tts.normalize", side_effect=_normalize_fails_final),
         pytest.raises(RuntimeError, match="normalize failed"),
     ):
         await synthesize_dialogue([(host, "prima linea"), (host, "seconda linea")], tmp_path)
@@ -1891,6 +3520,386 @@ async def test_synthesize_ad_normalize_ad_empty_falls_back_to_unprocessed(_mock_
 # ---------------------------------------------------------------------------
 
 
+def test_cloud_helpers_keep_paid_success_callback_optional() -> None:
+    """Direct audition callers may keep omitting the station-only callback."""
+    from mammamiradio.audio import tts
+
+    for helper in (tts.synthesize_openai, tts.synthesize_azure, tts.synthesize_elevenlabs):
+        callback = inspect.signature(helper).parameters["on_paid_provider_success"]
+        assert callback.kind is inspect.Parameter.KEYWORD_ONLY
+        assert callback.default is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("engine", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_synthesize_counts_confirmed_paid_response_before_normalize_failure(
+    _mock_all, tmp_path, monkeypatch, engine, voice
+):
+    """A paid response counts once even when local normalization needs Edge rescue."""
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Ciao, costa davvero"
+    state = StationState(playlist=[])
+    normalizer_calls = 0
+
+    def _fail_first_normalize(*args, **kwargs):
+        nonlocal normalizer_calls
+        normalizer_calls += 1
+        if normalizer_calls == 1:
+            raise RuntimeError("cloud normalizer failed")
+        return _normalize_side_effect(*args, **kwargs)
+
+    _mock_all["normalize"].side_effect = _fail_first_normalize
+    output = tmp_path / f"{engine}.mp3"
+    synthesize_kwargs = {
+        "engine": engine,
+        "state": state,
+        "edge_fallback_voice": "it-IT-DiegoNeural",
+    }
+
+    if engine == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        response = MagicMock(content=b"\x00" * 512)
+        client = MagicMock()
+        client.audio.speech.create.return_value = response
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+    else:
+        response = httpx.Response(
+            200,
+            content=b"\x00" * 512,
+            request=httpx.Request("POST", f"https://{engine}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if engine == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+
+    assert result == output
+    assert _mock_all["normalize"].call_count == 2
+    _mock_all["Communicate"].assert_called_once()
+    assert _mock_all["Communicate"].call_args.args[1] == "it-IT-DiegoNeural"
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("engine", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_synthesize_counts_confirmed_paid_response_before_raw_write_failure(
+    _mock_all, tmp_path, monkeypatch, engine, voice
+):
+    """A paid response counts once even when raw-file I/O needs Edge rescue."""
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Ciao, costa davvero"
+    state = StationState(playlist=[])
+    output = tmp_path / f"{engine}-write-failure.mp3"
+    raw_path = output.with_suffix(".raw.mp3")
+    real_write_bytes = Path.write_bytes
+    cloud_raw_write_failed = False
+
+    def _fail_first_cloud_raw_write(path, data):
+        nonlocal cloud_raw_write_failed
+        if path == raw_path and not cloud_raw_write_failed:
+            cloud_raw_write_failed = True
+            raise OSError("cloud raw write failed")
+        return real_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", _fail_first_cloud_raw_write)
+    synthesize_kwargs = {
+        "engine": engine,
+        "state": state,
+        "edge_fallback_voice": "it-IT-DiegoNeural",
+    }
+
+    if engine == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        response = MagicMock(content=b"\x00" * 512)
+        client = MagicMock()
+        client.audio.speech.create.return_value = response
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+    else:
+        response = httpx.Response(
+            200,
+            content=b"\x00" * 512,
+            request=httpx.Request("POST", f"https://{engine}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if engine == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await synthesize(text, voice, output, **synthesize_kwargs)
+
+    assert cloud_raw_write_failed
+    assert result == output
+    assert output.exists()
+    assert _mock_all["normalize"].call_count == 1
+    _mock_all["Communicate"].assert_called_once()
+    assert _mock_all["Communicate"].call_args.args[1] == "it-IT-DiegoNeural"
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_billing_guard_prevents_double_count(_mock_all, tmp_path, monkeypatch):
+    """The billed idempotency guard counts a confirmed paid response once even if the
+    provider's success callback fires more than once."""
+    from mammamiradio.audio import tts
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Ciao, costa davvero"
+    state = StationState(playlist=[])
+    output = tmp_path / "azure-double-bill.mp3"
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+    monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+
+    async def _double_notify(_text, _voice, output_path, *, on_paid_provider_success=None, **_kwargs):
+        # A hypothetical double-wired provider path fires the paid-success callback twice;
+        # the nonlocal `billed` guard must collapse it to a single billed response.
+        if on_paid_provider_success is not None:
+            on_paid_provider_success()
+            on_paid_provider_success()
+        output_path.write_bytes(b"\x00" * 512)
+        return output_path
+
+    monkeypatch.setattr(tts, "synthesize_azure", _double_notify)
+    result = await synthesize(
+        text,
+        "it-IT-IsabellaNeural",
+        output,
+        engine="azure",
+        state=state,
+        edge_fallback_voice="it-IT-DiegoNeural",
+    )
+
+    assert result == output
+    # Guard collapses the double callback into a single billed response.
+    assert state.tts_characters == len(text)
+    assert state.tts_characters_by_category["tts"] == len(text)
+    # Confirmed paid response — no Edge fallback.
+    _mock_all["Communicate"].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("engine", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_synthesize_does_not_count_before_paid_provider_response(_mock_all, tmp_path, monkeypatch, engine, voice):
+    """Missing/failed provider responses stay out of the paid session estimate."""
+    from mammamiradio.audio.tts import synthesize
+
+    text = "Nessuna risposta a pagamento"
+    state = StationState(playlist=[])
+    output = tmp_path / f"{engine}-failed.mp3"
+
+    if engine == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        client = MagicMock()
+        client.audio.speech.create.side_effect = RuntimeError("provider unavailable")
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await synthesize(text, voice, output, engine=engine, state=state)
+    else:
+        response = httpx.Response(
+            503,
+            request=httpx.Request("POST", f"https://{engine}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if engine == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await synthesize(text, voice, output, engine=engine, state=state)
+
+    assert result == output
+    _mock_all["Communicate"].assert_called_once()
+    assert state.tts_characters == 0
+    assert state.tts_characters_by_category.get("tts", 0) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "voice"),
+    [
+        pytest.param("openai", "onyx", id="openai"),
+        pytest.param("azure", "it-IT-IsabellaNeural", id="azure"),
+        pytest.param("elevenlabs", "voice_italian_character", id="elevenlabs"),
+    ],
+)
+async def test_cloud_helpers_ignore_paid_success_callback_errors(_mock_all, tmp_path, monkeypatch, provider, voice):
+    """A bookkeeping callback failure cannot turn a successful cloud render into fallback audio."""
+    from mammamiradio.audio import tts
+
+    callback = MagicMock(side_effect=RuntimeError("accounting unavailable"))
+    output = tmp_path / f"{provider}-callback.mp3"
+    text = "Audio remains available"
+
+    if provider == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        client = MagicMock()
+        client.audio.speech.create.return_value = MagicMock(content=b"\x00" * 512)
+        with patch("mammamiradio.audio.tts._get_openai_client", return_value=client):
+            result = await tts.synthesize_openai(
+                text,
+                voice,
+                output,
+                model="test-tts",
+                on_paid_provider_success=callback,
+            )
+    else:
+        response = httpx.Response(
+            200,
+            content=b"\x00" * 512,
+            request=httpx.Request("POST", f"https://{provider}.example.test/tts"),
+        )
+        client = MagicMock()
+        client.post = AsyncMock(return_value=response)
+        if provider == "azure":
+            monkeypatch.setenv("AZURE_SPEECH_KEY", "azure-secret")
+            monkeypatch.setenv("AZURE_SPEECH_REGION", "westeurope")
+            helper = tts.synthesize_azure
+            client_getter = "mammamiradio.audio.tts._get_azure_client"
+        else:
+            monkeypatch.setenv("ELEVENLABS_API_KEY", "eleven-secret")
+            helper = tts.synthesize_elevenlabs
+            client_getter = "mammamiradio.audio.tts._get_elevenlabs_client"
+        with patch(client_getter, return_value=client):
+            result = await helper(text, voice, output, on_paid_provider_success=callback)
+
+    await asyncio.sleep(0)
+    assert result == output
+    assert output.exists()
+    callback.assert_called_once_with()
+    _mock_all["Communicate"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_openai_continues_when_paid_callback_cannot_schedule(_mock_all, tmp_path, monkeypatch):
+    """A closing owner loop cannot turn a confirmed cloud response into an audio failure."""
+    from mammamiradio.audio.tts import synthesize_openai
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    real_loop = asyncio.get_running_loop()
+
+    class _ClosedSchedulingLoop:
+        def run_in_executor(self, *args, **kwargs):
+            return real_loop.run_in_executor(*args, **kwargs)
+
+        def call_soon_threadsafe(self, *args, **kwargs):
+            raise RuntimeError("Event loop is closed")
+
+    callback = MagicMock()
+    client = MagicMock()
+    client.audio.speech.create.return_value = MagicMock(content=b"\x00" * 512)
+    with (
+        patch("mammamiradio.audio.tts._get_openai_client", return_value=client),
+        patch("mammamiradio.audio.tts.asyncio.get_running_loop", return_value=_ClosedSchedulingLoop()),
+    ):
+        result = await synthesize_openai(
+            "Audio keeps flowing",
+            "onyx",
+            tmp_path / "closed-loop.mp3",
+            model="test-tts",
+            on_paid_provider_success=callback,
+        )
+
+    assert result.exists()
+    callback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_records_late_openai_success_after_outer_timeout(_mock_all, tmp_path, monkeypatch):
+    """A late OpenAI worker response is counted after Edge has already returned."""
+    from mammamiradio.audio.tts import synthesize
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    billing_seen = asyncio.Event()
+    original_wait_for = asyncio.wait_for
+
+    class _TrackingState:
+        tts_characters = 0
+
+        def record_tts_usage(self, characters):
+            self.tts_characters += characters
+            billing_seen.set()
+
+    response = MagicMock(content=b"\x00" * 512)
+    client = MagicMock()
+
+    def _late_create(**kwargs):
+        worker_started.set()
+        assert release_worker.wait(timeout=2), "test did not release the OpenAI worker"
+        return response
+
+    async def _timeout_only_openai(awaitable, timeout):
+        if timeout == 30.0:
+            for _ in range(1000):
+                if worker_started.is_set():
+                    break
+                await asyncio.sleep(0.001)
+            assert worker_started.is_set(), "OpenAI executor worker did not start"
+            raise TimeoutError
+        return await original_wait_for(awaitable, timeout)
+
+    client.audio.speech.create.side_effect = _late_create
+    state = _TrackingState()
+    try:
+        with (
+            patch("mammamiradio.audio.tts._get_openai_client", return_value=client),
+            patch("mammamiradio.audio.tts.asyncio.wait_for", new=_timeout_only_openai),
+        ):
+            result = await synthesize(
+                "Risposta in ritardo", "onyx", tmp_path / "late.mp3", engine="openai", state=state
+            )
+            assert result.exists()
+            assert state.tts_characters == 0
+            _mock_all["Communicate"].assert_called_once()
+    finally:
+        release_worker.set()
+
+    await original_wait_for(billing_seen.wait(), timeout=1.0)
+    assert state.tts_characters == len("Risposta in ritardo")
+
+
 @pytest.mark.asyncio
 async def test_synthesize_bills_tts_chars_on_cloud_success(_mock_all, tmp_path, monkeypatch):
     """A successful PAID cloud synth adds len(text) to state.tts_characters."""
@@ -2124,3 +4133,153 @@ async def test_synthesize_ad_forwards_state_billing(_mock_all, tmp_path, monkeyp
     ):
         await synthesize_ad(script, voices, tmp_path, state=state)
     assert state.tts_characters == len(text)
+
+
+# ---------------------------------------------------------------------------
+# Night Drive recorded recipes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_skips_unknown_sfx_instead_of_reusing_generic_chime(_mock_all, tmp_path, caplog):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="EspressoPlus",
+        parts=[
+            AdPart(type="voice", text="Vuoi un caffè?"),
+            AdPart(type="sfx", sfx="unapproved_laser"),
+        ],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_not_called()
+    assert "Skipping unsupported ad SFX 'unapproved_laser'" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_corrupt_packaged_bed_retries_synthetic_layers(_mock_all, tmp_path, caplog):
+    """A corrupt selected pack behaves like a missing pack, never a dry ad."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    (beds_dir / "casa_notte.mp3").write_bytes(b"corrupt-night-drive-bed")
+    _mock_all["loop_audio_bed"].side_effect = RuntimeError("invalid mp3")
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="suspicious_jazz",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    _mock_all["generate_music_bed"].assert_called()
+    _mock_all["generate_foley_loop"].assert_called_once()
+    assert _mock_all["mix_with_bed"].call_count >= 2
+    assert "retrying synthetic fallback" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_packaged_bed_replaces_layered_drone(_mock_all, tmp_path):
+    """The default pack is one authored bed, not three tonal layers under voice."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    (beds_dir / "casa_notte.mp3").write_bytes(b"night-drive-bed")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="suspicious_jazz",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    assert _mock_all["loop_audio_bed"].call_args.args[0] == beds_dir / "casa_notte.mp3"
+    _mock_all["generate_music_bed"].assert_not_called()
+    _mock_all["generate_foley_loop"].assert_not_called()
+    assert _mock_all["mix_with_bed"].call_args.args[3] == 0.14
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_owns_bed_and_two_real_cues(_mock_all, tmp_path):
+    """A resolved recipe bypasses legacy motifs, LLM SFX, and tonal layers."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    applause = _touch(tmp_path / "applause.mp3")
+    trumpet = _touch(tmp_path / "trumpet.mp3")
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=bed,
+        bed_gain_db=-25.0,
+        cues=(
+            ResolvedRecipeCue("intro", applause, -11.0, 0.7),
+            ResolvedRecipeCue("outro", trumpet, -13.0, 0.5),
+        ),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[
+            AdPart(type="sfx", sfx="whoosh"),
+            AdPart(type="voice", text="Una vittoria molto seria."),
+            AdPart(type="sfx", sfx="chime"),
+        ],
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_not_called()
+    _mock_all["generate_brand_motif"].assert_not_called()
+    _mock_all["generate_music_bed"].assert_not_called()
+    _mock_all["generate_foley_loop"].assert_not_called()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    assert _mock_all["loop_audio_bed"].call_args.args[0] == bed
+    assert _mock_all["mix_with_bed"].call_args.args[3] == pytest.approx(10 ** (-25.0 / 20.0))
+    _mock_all["mix_oneshot_layers"].assert_called_once()
+    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
+    assert len(layers) == 2
+    assert [layer[0] for layer in layers] == [applause, trumpet]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_render_failure_restores_legacy_opener_and_motif(_mock_all, tmp_path):
+    """A recipe that resolves but fails in FFmpeg gets the complete legacy identity back."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    _mock_all["loop_audio_bed"].side_effect = RuntimeError("corrupt recorded bed")
+
+    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_called_once()
+    assert _mock_all["generate_sfx"].call_args.args[1] == "whoosh"
+    _mock_all["generate_brand_motif"].assert_called_once()
+    assert _mock_all["generate_brand_motif"].call_args.args[1] == "ice_clink+startup_synth"

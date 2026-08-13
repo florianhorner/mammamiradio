@@ -8,9 +8,11 @@ Do the local setup, run targeted tests, then do a quick listen-through.
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e . && cp .env.example .env
+python -m pip install -e . -r requirements-dev.txt
+cp .env.example .env
 ./start.sh                # or: docker compose up
-pytest tests/             # before any commit
+pytest tests/core/test_config.py -q  # fast loop while editing
+make check                         # complete gate before committing
 ```
 
 Full prerequisites, run modes, tests, lint, and commit-message rules below.
@@ -21,16 +23,18 @@ Full prerequisites, run modes, tests, lint, and commit-message rules below.
 - FFmpeg on your `PATH`
 - Optional: Anthropic and/or OpenAI credentials for the full AI radio experience
 
-Music source fallback chain: when `MAMMAMIRADIO_ALLOW_YTDLP=true` the app blends live Italian charts with anything in `music/`; with yt-dlp disabled it plays local `music/` only; if neither is available it falls through to silence. No external service credentials are required to run the station.
+No AI key is required to run the station: host writing falls back to stock copy and fallback voices. Music is separate. With `MAMMAMIRADIO_ALLOW_YTDLP=true`, the app can use live charts when the network permits; Jamendo is the other network source. In a source checkout, you can also put MP3s in the repo-local `music/` directory. That development path is not mounted by the stock Docker Compose or Home Assistant packages. The bundled recovery clip can cover a thin queue, but it is not a music rotation.
 
 ## Local setup
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install -e . -r requirements-dev.txt
 cp .env.example .env
 ```
+
+That one install command includes the application plus the repo's pinned developer tools: pytest, Ruff, mypy, coverage, and the test watcher.
 
 If you use Conductor, see [docs/conductor.md](docs/conductor.md) for workspace lifecycle details.
 
@@ -96,19 +100,22 @@ Useful URLs:
 - `http://127.0.0.1:8000/public-status` — public JSON
 - `http://127.0.0.1:8000/status` — admin JSON
 
-## Tests
+## Fast loop and complete gate
 
-Fast tests:
+During an edit, run the smallest relevant test file or test target. For a broader fast pass without coverage instrumentation, use `make test-fast`:
 
 ```bash
 pytest tests/core/test_config.py tests/scheduling/test_scheduler.py
+make test-fast
 ```
 
-Full suite:
+Before committing, run the complete local gate:
 
 ```bash
-pytest tests/
+make check
 ```
+
+`make check` is the pre-commit source of truth: lint, format check, type checking, dead-code scan, the full pytest suite, coverage, and per-module coverage floors. A focused test is the fast feedback loop, not a substitute for this gate.
 
 Notes:
 
@@ -120,6 +127,85 @@ scripts/validate-addon.sh
 ```
 
 That command checks the same add-on invariants CI validates. Add `--build` when you also want the slower local container build. If it fails locally, do not commit or push.
+
+### Auditioning a new ad voice
+
+New ad identities are staged by default. Keep `airtime_approved = false` until
+a provider render and human review approve them; only then set it explicitly to
+`true`. Run configured samples with real credentials; audio and manifests remain
+ignored under `tmp/voice-auditions/`:
+
+When upgrading an existing custom roster, review every `[[ads.voices]]` row:
+omitting `airtime_approved` now means `false`. Set it explicitly to `true` only
+for a character with existing provider and human approval; leave every other row
+`false`. A legacy role pin can keep serving its campaign while a replacement
+waits for approval. Otherwise an unapproved direct character's campaign is
+excluded, another safe campaign is tried, and an ad break with no safe campaign
+is skipped rather than recasting the character.
+
+```bash
+./.venv/bin/python scripts/audition_tts_voices.py --config radio.toml --providers elevenlabs --strict
+```
+
+For an on-demand A/B comparison of ElevenLabs stability, generate all variants
+from the same configured text and compare the profile-labelled clips in the
+same ignored audition directory:
+
+```bash
+./.venv/bin/python scripts/audition_tts_voices.py \
+  --config radio.toml --providers elevenlabs --strict \
+  --elevenlabs-stability 0.42 0.60 0.75
+```
+
+Alternate matching clips at the same volume when listening. Differences can be
+subtle and voice-specific; this command creates comparison samples only and
+does not record or apply an approval.
+
+Listen before changing `airtime_approved`. Record the human decision with the
+receipt mode. `--selection-manifest` and `--selection-decisions` must be
+supplied together: the ignored manifest is the completed provider run, and the
+local JSON array contains only the profile-aware `candidate_id` copied from
+that manifest, `candidate_name`,
+`approval_status`, and a controlled `rationale` code. Accepted codes are
+`accepted_clear_natural_delivery`,
+`accepted_distinct_character`, and `accepted_balanced_brand_fit`; rejected
+codes are `rejected_provider_failure`, `rejected_unintelligible_delivery`,
+`rejected_unconvincing_character`, `rejected_off_brand_delivery`, and
+`rejected_profile_mismatch`:
+
+```bash
+./.venv/bin/python scripts/audition_tts_voices.py \
+  --selection-manifest tmp/voice-auditions/audition-YYYYMMDDTHHMMSSZ/manifest.json \
+  --selection-decisions /tmp/ad-voice-decisions.json \
+  --selection-receipt-path proof/YYYY-MM-DD-voice-selection.json
+```
+
+Use a distinct tracked receipt path for each reviewed selection. Without
+`--selection-receipt-path`, the command uses
+`proof/2026-07-13-voice-diversity-selection.json` and refuses to replace an
+existing receipt. `--overwrite-selection-receipt` deliberately replaces that
+chosen receipt; use it only to correct the same review, never to start a new
+audit history.
+
+Two proof/ conventions coexist, on purpose: append-only dated receipts like the
+one above (audit history — never overwritten), and fixed-name current-state
+files that ARE overwritten each run (`proof/preship-review.json`,
+`proof/checks.txt`, `proof/review-findings.json`) where git history is the
+audit trail. New proof artifacts should say which convention they follow.
+
+The redacted tracked proof stores the candidate ID and name, selected profile,
+text and audio hashes, provider result, duration, approval status, and human
+rationale code only. It never stores raw audition copy, audio, local paths, or
+credentials.
+
+For Home Context Director changes, first run the credential-free contract path:
+
+```bash
+pytest tests/home/test_context_director.py tests/home/test_entity_policy.py tests/core/test_home_context_director_lifecycle.py tests/web/test_context_director_public_metadata.py \
+  tests/web/test_streamer_routes.py -k "personal_moment or home_fact or entity_policy"
+```
+
+It covers safe selection, policy migration, queue settlement, public metadata exclusion, and the `PATCH /api/homeassistant/entity-policy` contract (consent gate, queue purge, in-flight reservation release) without a live Home Assistant or provider key.
 
 ## Lint, format, and type check
 
@@ -153,6 +239,11 @@ After starting the app:
 
 If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
 
+For First Listen or any Home Assistant-facing manual QA, use the
+[disposable local Home Assistant lab](docs/runbooks/first-listen-local-ha.md).
+It exercises a real HA Media Source and Mac VLC `media_player` without exposing
+branch code, test credentials, or synthetic state to the live home.
+
 ## Documentation expectations
 
 When behavior changes, update the matching docs in the same change:
@@ -165,6 +256,8 @@ When behavior changes, update the matching docs in the same change:
 - `CHANGELOG.md` for shipped behavior worth calling out
 
 If you add a new config key, env var, route, auth rule, or fallback path and do not document it, the docs are wrong. Fix them in the same change.
+
+When changing the public install or add-on guides, run `bash scripts/check-docs-safety.sh`. It catches retired Home Assistant navigation, unsafe live-recovery instructions, and broken relative Markdown links before CI does.
 
 
 

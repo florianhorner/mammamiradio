@@ -1,0 +1,42 @@
+Verification evidence — ElevenLabs V3 host delivery + host-performance gate
+Branch: florianhorner/fix/v3-voice-hotfix
+Base: origin/main (merged, incl. #866), 2026-07-17
+
+## Full test suite (merged state)
+$ .venv/bin/python -m pytest tests/ -q
+5247 passed, 3 skipped, 21 deselected, 1 warning in 169.65s
+
+## Coverage ratchet (CI gate)
+$ make coverage-check
+Required test coverage of 92.0% reached. Total coverage: 92.39%
+All coverage floors held. Total: 92% (floor: 92%)
+
+## Lint / format / typecheck (pinned ruff 0.15.20 = CI parity)
+$ .venv/bin/ruff check .        -> All checks passed!
+$ .venv/bin/ruff format --check . -> 318 files already formatted
+$ .venv/bin/mypy mammamiradio/  -> Success: no issues found in 91 source files
+
+## Runtime paths exercised by tests (real code, mocked provider HTTP)
+V3 payload boundary (audio/tts.py):
+  test_synthesize_elevenlabs_v3_uses_only_stability_and_code_owned_tag
+    asserts payload == {"text":"[excited] Ciao Giulia","model_id":"eleven_v3","voice_settings":{"stability":0.6}}
+  test_synthesize_elevenlabs_v3_keeps_provider_default_and_rejects_raw_tag_input
+  test_synthesize_elevenlabs_v3_fallback_receives_clean_text
+    Edge fallback receives the clean line, never the tag
+  test_synthesize_elevenlabs_v3_strips_model_bracket_directives_from_payload
+    non-banter host speech: model-emitted [..] stripped at the provider boundary
+Delivery sidecar stays out of transcript/memory (hosts/scriptwriter.py):
+  test_write_banter_keeps_v3_delivery_semantic_and_text_clean
+  test_write_banter_keeps_v3_delivery_out_of_memory_transcript
+  test_write_banter_keeps_chaos_delivery_neutral
+  test_listener_truth_guard_clears_delivery_from_repaired_copy
+Config validation (core/config.py):
+  test_validate_host_elevenlabs_config_guards_direct_construction
+  test_load_config_rejects_* (v3-on-v2-settings, non-elevenlabs engine,
+    profile-without-v3, wrong-host profile, v3-without-profile)
+Audition receipt + gate CLI (scripts/audition_tts_voices.py, driven via audition.main()):
+  test_host_performance_receipt_keeps_only_complete_safe_evidence_and_gate_matrix
+  test_host_performance_receipt_rejects_raw_copy_paths_and_credentials
+  test_host_performance_gate_blocks_rejected_or_incomplete_v3_matrix
+  test_host_performance_gate_blocks_incomplete_v3_matrix
+  test_cli_verifies_complete_host_performance_gate

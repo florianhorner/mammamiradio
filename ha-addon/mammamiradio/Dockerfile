@@ -17,6 +17,10 @@ RUN pip3 install --no-cache-dir --break-system-packages .
 # Copy radio.toml default config
 COPY radio.toml ./
 
+# Model selection and pricing policy is canonical at the repository root and
+# staged into this build context by the add-on build workflow.
+COPY model_registry.toml ./
+
 # Create persistent directories
 RUN mkdir -p /data/cache /data/music /data/tmp
 

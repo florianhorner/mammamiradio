@@ -35,22 +35,84 @@ fi
 echo ""
 echo "2. Packaged recovery audio"
 
-if [ -d mammamiradio/assets/demo/recovery ]; then
-    RECOVERY_MP3_COUNT=$(find mammamiradio/assets/demo/recovery -maxdepth 1 -type f -name '*.mp3' -size +1024c | wc -l | tr -d ' ')
-else
-    RECOVERY_MP3_COUNT=0
-fi
+RECOVERY_DIR="mammamiradio/assets/demo/recovery"
+REQUIRED_RECOVERY_ASSETS=(
+    "continuity_1.mp3"
+    "emergency_tone.mp3"
+)
 
-if [ "$RECOVERY_MP3_COUNT" -gt 0 ]; then
-    ok "packaged recovery clip is present ($RECOVERY_MP3_COUNT mp3 file(s))"
-else
-    fail "No packaged recovery MP3 under mammamiradio/assets/demo/recovery/ — image can fall through to technical fallback audio"
-fi
+for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
+    asset_path="$RECOVERY_DIR/$asset_name"
+    if [ ! -f "$asset_path" ]; then
+        fail "Required recovery asset is missing: $asset_path"
+        continue
+    fi
+
+    asset_size=$(wc -c < "$asset_path" | tr -d '[:space:]')
+    if [ "$asset_size" -gt 1024 ]; then
+        ok "$asset_name is present and nontrivial ($asset_size bytes)"
+    else
+        fail "$asset_name is too small ($asset_size bytes; must be > 1024)"
+    fi
+done
 
 if grep -q 'generate_silence' mammamiradio/scheduling/producer.py; then
     fail "producer.py must not call generate_silence in recovery paths — use recovery clip, norm cache, or emergency tone"
 else
     ok "producer recovery paths do not call generate_silence"
+fi
+
+if python3 "$SCRIPT_DIR/validate-spoken-assets.py"; then
+    ok "packaged spoken assets are manifest-bound and listener-truth safe"
+else
+    fail "packaged spoken asset manifest validation failed"
+fi
+
+for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
+    if python3 - "$asset_name" <<'PY'
+from importlib import resources
+from pathlib import Path
+import sys
+
+from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
+from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset
+
+name = sys.argv[1]
+resource = resources.files("mammamiradio").joinpath("assets", "demo", "recovery", name)
+try:
+    payload = resource.read_bytes()
+except (FileNotFoundError, IsADirectoryError, OSError) as exc:
+    raise SystemExit(f"{name} is not readable through importlib.resources: {exc}") from exc
+if len(payload) <= 1024:
+    raise SystemExit(f"{name} package resource is only {len(payload)} bytes")
+
+asset_path = Path(DEMO_ASSETS_DIR) / "recovery" / name
+if not is_approved_packaged_audio_asset(asset_path, assets_root=Path(DEMO_ASSETS_DIR)):
+    raise SystemExit(f"{name} is not approved by the packaged manifest/hash boundary")
+PY
+    then
+        ok "$asset_name is package-reachable and manifest/hash approved"
+    else
+        fail "$asset_name is not package-reachable or failed its manifest/hash check"
+    fi
+done
+
+if command -v ffprobe >/dev/null 2>&1; then
+    for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
+        asset_path="$RECOVERY_DIR/$asset_name"
+        if probe_output=$(ffprobe \
+            -v error \
+            -select_streams a:0 \
+            -show_entries stream=codec_type \
+            -of csv=p=0 \
+            "$asset_path" 2>&1) && grep -qi 'audio' <<<"$probe_output"; then
+            ok "$asset_name contains an ffprobe-readable audio stream"
+        else
+            fail "$asset_name is not ffprobe-readable audio (${probe_output:-no audio stream})"
+        fi
+    done
+else
+    fail "ffprobe is required to validate every packaged recovery asset"
 fi
 
 # ── 3. Test: _pick_canned_clip returns None (missing packaged clip scenario) ──

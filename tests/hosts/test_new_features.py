@@ -70,6 +70,7 @@ def _mock_anthropic_response(text: str):
     mock_response = MagicMock()
     mock_response.content = [mock_content_block]
     mock_client = MagicMock()
+    mock_client.with_options.return_value = mock_client
     mock_client.messages = MagicMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
     mock_cls = MagicMock(return_value=mock_client)
@@ -89,6 +90,9 @@ async def test_write_news_flash_each_category(category):
 
     config = load_config(TOML_PATH)
     config.anthropic_api_key = "test-key"
+    # The assertion is about category routing and response shape; preserve the
+    # pre-policy exact fixture while opting this test into the explicit Italian mode.
+    config.super_italian_mode = True
     state = _make_state()
     # played_tracks is a deque (doesn't support slicing); convert to list for test
     state.played_tracks = list(state.played_tracks)
@@ -587,11 +591,10 @@ def test_get_system_prompt_rebuilds_when_hosts_change():
 def _make_app_with_queue(items: list[str]):
     """Build a test app with pre-seeded asyncio.Queue and queued_segments shadow."""
     import asyncio
-    from unittest.mock import MagicMock
 
     from fastapi import FastAPI
 
-    from mammamiradio.core.models import Segment
+    from mammamiradio.core.models import Segment, SegmentType
     from mammamiradio.web.streamer import LiveStreamHub, router
 
     app = FastAPI()
@@ -600,12 +603,15 @@ def _make_app_with_queue(items: list[str]):
     state = _make_state()
     q: asyncio.Queue = asyncio.Queue()
 
-    for label in items:
-        seg = MagicMock(spec=Segment)
-        seg.path = MagicMock()
-        seg.path.read_bytes = MagicMock(return_value=b"")
+    for index, label in enumerate(items):
+        queue_id = f"queue-{index}"
+        seg = Segment(
+            type=SegmentType.MUSIC,
+            path=Path(f"/tmp/mammamiradio-test-{queue_id}.mp3"),
+            metadata={"title": label, "queue_id": queue_id},
+        )
         q.put_nowait(seg)
-        state.queued_segments.append({"type": "music", "label": label})
+        state.queued_segments.append({"id": queue_id, "type": "music", "label": label})
 
     app.state.queue = q
     app.state.skip_event = asyncio.Event()

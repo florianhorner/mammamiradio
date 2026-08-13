@@ -9,6 +9,7 @@ from mammamiradio.web.ui_copy import COPY, copy_strings, get_copy
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ADMIN_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+_LISTENER_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "listener.html"
 _LISTENER_JS = _REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
 
 
@@ -19,16 +20,65 @@ def test_key_parity_between_languages():
     assert en_keys == it_keys, f"missing in it: {en_keys - it_keys}; missing in en: {it_keys - en_keys}"
 
 
+def test_every_listener_copy_reference_exists_in_both_modes():
+    """Parity alone is false-green when a key is absent from both dictionaries."""
+    js = _LISTENER_JS.read_text(encoding="utf-8")
+    html = _LISTENER_HTML.read_text(encoding="utf-8")
+    referenced = set(re.findall(r"_t\(\s*['\"]([^'\"]+)", js))
+    referenced.update(re.findall(r"copy\.get\(\s*['\"]([^'\"]+)", html))
+
+    for lang in ("en", "it"):
+        missing = referenced - set(COPY[lang])
+        assert not missing, f"listener copy references missing from {lang}: {sorted(missing)}"
+
+
 def test_default_off_returns_english():
     assert get_copy(False, "listen_now") == "Listen Now"
+    assert get_copy(False, "listen_pause_aria") == "Pause station"
     assert get_copy(False, "stat_tracks") == "Tracks in Rotation"
     assert get_copy(False, "form_message_placeholder").startswith("Dear Radio")
+    assert get_copy(False, "form_message_required").startswith("Write a message")
+    assert get_copy(False, "form_success_shoutout").startswith("Dedication received")
+    assert "{s}" in get_copy(False, "form_rate_limited")
+    assert get_copy(False, "form_network_error").startswith("We lost the connection")
 
 
 def test_super_italian_on_returns_italian():
     assert get_copy(True, "listen_now") == "Ascolta Ora"
+    assert get_copy(True, "listen_pause_aria") == "Metti in pausa la radio"
     assert get_copy(True, "stat_tracks") == "Tracce in playlist"
     assert get_copy(True, "form_message_placeholder").startswith("Cara Radio")
+    assert get_copy(True, "form_message_required").startswith("Scrivi prima")
+    assert get_copy(True, "form_success_shoutout").startswith("Dedica ricevuta")
+    assert "{s}" in get_copy(True, "form_rate_limited")
+    assert get_copy(True, "form_network_error").startswith("Abbiamo perso la connessione")
+
+
+def test_request_outcome_copy_is_complete_in_both_modes():
+    outcome_keys = (
+        "form_success_song",
+        "form_success_shoutout",
+        "form_rate_limited",
+        "form_queue_full",
+        "form_declined",
+        "form_network_error",
+    )
+    for lang in ("en", "it"):
+        for key in outcome_keys:
+            assert COPY[lang].get(key), f"missing request outcome {key} in {lang}"
+        assert "{s}" in COPY[lang]["form_rate_limited"]
+
+    text = _LISTENER_JS.read_text(encoding="utf-8")
+    for key in outcome_keys:
+        assert re.search(rf"_t\(\s*'{key}'", text), f"listener request flow bypasses localized {key} copy"
+
+    hardcoded_italian_receipts = (
+        "Saluto ricevuto",
+        "Canzone in arrivo",
+        "Coda piena",
+        "Invio non riuscito",
+    )
+    assert not any(receipt in text for receipt in hardcoded_italian_receipts)
 
 
 def test_missing_key_returns_default():
@@ -58,13 +108,53 @@ def test_clip_copy_keys_present():
 
 
 def test_listener_moment_receipt_copy_is_localized():
+    keys = (
+        "casa_moments_title",
+        "casa_moments_helper",
+        "casa_moment_airing",
+        "casa_moment_minutes_ago",
+        "casa_moment_hours_ago",
+        "casa_moment_yesterday",
+        "casa_moment_days_ago",
+        "casa_moment_stale",
+    )
     for lang in ("en", "it"):
-        assert COPY[lang].get("casa_moment_airing"), f"missing casa_moment_airing in {lang}"
+        for key in keys:
+            assert COPY[lang].get(key), f"missing {key} in {lang}"
         assert "{m}" in COPY[lang].get("casa_moment_minutes_ago", "")
+        assert "{h}" in COPY[lang].get("casa_moment_hours_ago", "")
+        assert "{d}" in COPY[lang].get("casa_moment_days_ago", "")
+    assert COPY["en"]["casa_moments_title"] == "On-air moments from your home"
+    assert "not every change at home" in COPY["en"]["casa_moments_helper"]
+
     text = _LISTENER_JS.read_text(encoding="utf-8")
     assert "_t('casa_moment_airing'" in text
     assert "_t('casa_moment_minutes_ago'" in text
+    assert "_t('casa_moment_hours_ago'" in text
+    assert "_t('casa_moment_yesterday'" in text
+    assert "_t('casa_moment_days_ago'" in text
     assert "in onda ora" not in text
+
+
+def test_listener_moment_receipts_stay_private_and_readable():
+    """The browser renders only public receipts with human time and no HTML sink."""
+    text = _LISTENER_JS.read_text(encoding="utf-8")
+    html = _LISTENER_HTML.read_text(encoding="utf-8")
+    age_fn = text[text.index("function formatCasaMomentAge(") : text.index("function segmentKindLabel(")]
+    casa_fn = text[text.index("function updateCasa(") : text.index("function renderPalinsestoDate(")]
+
+    assert "m.status === 'airing' || m.status === 'aired'" in casa_fn
+    assert "if (minutes < 60)" in age_fn
+    assert "if (minutes < 24 * 60)" in age_fn
+    assert "if (minutes < 48 * 60)" in age_fn
+    assert "Math.floor(minutes / (24 * 60))" in age_fn
+    assert "!hasAiring" in casa_fn
+    assert "latestReceiptAge >= 24 * 60" in casa_fn
+    assert "textContent" in casa_fn
+    assert "innerHTML" not in casa_fn
+    assert 'id="casa-moments-stale"' in html
+    assert "casa_moments_helper" in html
+    assert "casa_moment_stale" in html
 
 
 def test_no_tech_lingo_reaches_the_listener():
@@ -123,6 +213,19 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
         "through wayOut()/offlineMsg() (warm + a concrete way-out, principle #5):\n  " + "\n  ".join(hits)
     )
 
+    # Trigger routes return deliberately human, actionable copy (for example,
+    # how to resume a paused station). That server copy may reach a toast only
+    # through the established r&&r.error path with a wayOut() fallback; every
+    # other raw error field remains forbidden.
+    for line in text.splitlines():
+        if not re.search(r"\br\.error\b", line):
+            continue
+        assert "r&&r.error" in line and "||wayOut(" in line, (
+            "server error copy must use the guarded r&&r.error form and retain "
+            "a local wayOut() fallback so an unexpected response never becomes "
+            f"a dead end: {line.strip()}"
+        )
+
     # Pattern-based backstop so unanticipated variants (double quotes, new
     # wrappers, raw fields) cannot slip past the exact-string list above.
     patterns = (
@@ -130,9 +233,13 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
         r"toast\(\s*['\"](?:Error:|Failed |Network error)",
         # A toast that interpolates a raw backend error field. [^;] (no \n
         # exclusion) + DOTALL so a multiline toast() can't slip the field past.
-        r"toast\([^;]*\b(?:r\.error|r\.exception|error_code|r\.detail|resp\.error)\b",
+        r"toast\([^;]*\b(?:r\.exception|error_code|r\.detail|resp\.error)\b",
     )
-    pattern_hits = [m.group(0) for p in patterns for m in re.finditer(p, text, re.DOTALL)]
+    pattern_hits = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.DOTALL):
+            hit = match.group(0)
+            pattern_hits.append(hit)
     assert not pattern_hits, (
         "admin.html has a toast() that shows a machine phrase or a raw error "
         "field — use wayOut()/offlineMsg() instead (principle #5):\n  " + "\n  ".join(pattern_hits)

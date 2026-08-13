@@ -8,7 +8,7 @@ per-segment voice errors.
 
 from __future__ import annotations
 
-# OpenAI gpt-4o-mini-tts voice catalog. Names are case-insensitive on the API
+# OpenAI speech voice catalog. Names are case-insensitive on the API
 # so we match case-insensitively as well.
 OPENAI_VOICES = frozenset(
     {

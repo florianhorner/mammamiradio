@@ -4,36 +4,65 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 
 import mammamiradio.hosts.scriptwriter as scriptwriter_module
-from mammamiradio.core.config import DEFAULT_ROLE, load_config, resolve_model
+from mammamiradio.core.config import DEFAULT_ROLE, _empty_models, load_config, resolve_model
+from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.models import (
     LLM_COST_CATEGORIES,
     ChaosSubtype,
+    DialogueLine,
     Heading,
     HostPersonality,
     SegmentType,
     StationState,
     Track,
 )
-from mammamiradio.hosts.ad_creative import AD_FORMATS, SPEAKER_ROLES, AdBrand, AdFormat, AdScript, AdVoice
+from mammamiradio.hosts.ad_creative import (
+    AD_FORMATS,
+    SPEAKER_ROLES,
+    AdBrand,
+    AdFormat,
+    AdScript,
+    AdVoice,
+    CampaignSpine,
+)
+from mammamiradio.hosts.language_policy import (
+    NORMAL_MODE_ENGLISH_MAX,
+    NORMAL_MODE_ENGLISH_MIN,
+    NORMAL_MODE_ENGLISH_TARGET,
+    assess_language,
+)
 from mammamiradio.hosts.memory_extractor import MEMORY_EXTRACT_CALLER, MemoryExtractionCommit
+from mammamiradio.hosts.prompt_world import language_mode_rule
 from mammamiradio.hosts.scriptwriter import (
     _LOCAL_BALLOON_GUEST_HOST,
+    _NORMAL_MODE_LANGUAGE_REPAIR,
     CHAOS_MODE_BLOCK,
     ListenerRequestCommit,
     _banter_commit,
     _banter_exchange_count,
+    _banter_fallback_pools,
+    _banter_turn_taking_ok,
     _build_system_prompt,
     _chaos_prompt_block,
+    _chaos_stock_exchange,
     _host_expression_block,
     _massage_transition_text,
     _personality_modifier,
     _plan_listener_request_block,
     _regular_hosts,
+    assess_spoken_texts,
+    repair_banter_without_listener_context,
     write_ad,
     write_banter,
     write_news_flash,
@@ -56,8 +85,20 @@ def state():
 
 
 @pytest.fixture(autouse=True)
-def _reset_provider_backoff_state():
+def _reset_provider_backoff_state(monkeypatch):
     scriptwriter_module.reset_provider_backoff()
+    original_get_client = scriptwriter_module._get_client
+
+    def _get_client_with_mock_options(*args, **kwargs):
+        client = original_get_client(*args, **kwargs)
+        # The real SDK returns a configured client here. Existing unit mocks
+        # model only messages.create, so make their per-call configuration
+        # preserve that same fake transport rather than fabricate a new mock.
+        if isinstance(client, MagicMock):
+            client.with_options.return_value = client
+        return client
+
+    monkeypatch.setattr(scriptwriter_module, "_get_client", _get_client_with_mock_options)
     yield
     scriptwriter_module.reset_provider_backoff()
 
@@ -76,6 +117,20 @@ def _mock_anthropic_response(text: str):
 
     mock_cls = MagicMock(return_value=mock_client)
     return mock_cls
+
+
+def _anthropic_status_error(
+    error_class,
+    status_code: int,
+    *,
+    message: str = "Anthropic API error",
+    error_type: str = "api_error",
+    headers: dict[str, str] | None = None,
+):
+    """Build a real Anthropic SDK status exception with a real HTTP response."""
+    request = httpx.Request("POST", "https://api.anthropic.test/v1/messages")
+    response = httpx.Response(status_code, headers=headers, request=request)
+    return error_class(message, response=response, body={"error": {"type": error_type}})
 
 
 def _openai_completion(text: str, *, finish_reason: str = "stop", completion_tokens: int = 7):
@@ -132,6 +187,33 @@ def test_system_prompt_includes_station_name(config):
     assert config.station.name in prompt
 
 
+def test_system_prompt_bans_forward_framing_for_played_tracks(config):
+    """A track pulled from played_tracks history must never be framed as upcoming
+    — this is what let a host's "and after that ... —" line about an already-aired
+    song sound like it was teasing something still ahead of the listener."""
+    prompt = _build_system_prompt(config)
+    assert "ALREADY-PLAYED TRACKS" in prompt
+    assert '"after that"' in prompt
+    assert '"next"' in prompt
+    assert "we just heard" in prompt
+
+
+def test_system_prompt_requires_answered_interruptions(config):
+    """Prompt fiction keeps the cut-ins but forbids a stranded final host line."""
+    prompt = _build_system_prompt(config)
+
+    assert "immediate answer or counter from a different host" in prompt
+    assert "The final line of every exchange is a complete thought." in prompt
+    assert "hosts abandon sentences" not in prompt
+
+    from mammamiradio.hosts import prompt_world
+
+    storm = prompt_world.CHAOS_SUBTYPE_BLOCKS[ChaosSubtype.ABANDONED_STORM]
+    assert "immediately answers or counters" in storm
+    assert "ending on a complete thought" in storm
+    assert "No sentence finishes cleanly" not in storm
+
+
 def test_system_prompt_uses_resolved_station_identity(config):
     config.station.name = "Engine Internal"
     config.brand.station_name = "Legacy Brand"
@@ -173,7 +255,7 @@ def test_prompt_world_constants_byte_stable():
     )
     assert (
         hashlib.sha256(blob.encode("utf-8")).hexdigest()
-        == "b4901714e3e4476dfd2da6645cdf5c9d79ed50354d0aac71832fdea5a209001f"
+        == "c68bf92a2c5650e78d988efc5a308b0378773ca8260fd923ae5744481cdb29d7"
     ), "prompt-fiction constants changed — if intentional, re-capture the hash"
 
 
@@ -230,6 +312,57 @@ def test_transitions_fallbacks_extraction_structural_and_reexport():
     assert scriptwriter_module.AD_BREAK_OUTROS is fallbacks.AD_BREAK_OUTROS
     assert scriptwriter_module._massage_transition_text is transitions._massage_transition_text
     assert scriptwriter_module._transition_stem is transitions._transition_stem
+    assert scriptwriter_module._transition_text_usable is transitions._transition_text_usable
+    assert scriptwriter_module._transition_stock_copy is transitions._transition_stock_copy
+
+
+def test_transition_stock_fallbacks_cover_all_segments_and_modes():
+    """Every deterministic handoff is complete, mode-specific, and airable."""
+    from mammamiradio.hosts import transitions
+
+    expected_normal = {
+        "banter": "Stay with us, amici — we have one more thing to settle.",
+        "ad": "Stay close, amici — a quick word from our sponsors.",
+        "news_flash": "Hold that thought, amici — a bulletin just reached the desk.",
+    }
+    expected_italian = {
+        "banter": "Restate con noi, amici — c'è ancora qualcosa da chiarire.",
+        "ad": "Restate con noi, amici — un messaggio dai nostri sponsor.",
+        "news_flash": "Attenzione, amici — è arrivato un aggiornamento in redazione.",
+    }
+
+    for super_italian, expected in ((False, expected_normal), (True, expected_italian)):
+        fallbacks = transitions._transition_stock_fallbacks(super_italian=super_italian)
+        assert fallbacks == expected
+        assert len(set(fallbacks.values())) == 3
+        for segment, text in expected.items():
+            assert transitions._transition_stock_copy(segment, super_italian=super_italian) == text
+            assert transitions._transition_text_usable(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (None, False),
+        (42, False),
+        ("Go", False),
+        ("And now", False),
+        ("Hold that—", False),
+        ("Hold that–", False),
+        ("Hold that-", False),
+        ("Hold that--", False),
+        ("Hold that thought--", False),
+        ('Hold that-")]', False),
+        ('Hold that-- " )', False),
+        ("Hold that...", False),
+        ("Hold that…", False),
+        ("That landing has teeth, amici.", True),
+    ],
+)
+def test_transition_text_usable_predicate(text, expected):
+    from mammamiradio.hosts.transitions import _transition_text_usable
+
+    assert _transition_text_usable(text) is expected
 
 
 def test_news_flash_category_prompts_do_not_seed_recycled_premises():
@@ -392,6 +525,7 @@ def test_massage_transition_text_all_rewrites_exhausted_returns_first():
 
 @pytest.mark.asyncio
 async def test_write_banter_parses_valid_json(config, state):
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps(
         {
@@ -417,6 +551,212 @@ async def test_write_banter_parses_valid_json(config, state):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_keeps_v3_delivery_semantic_and_text_clean(config, state):
+    """Only one audited cue per V3 host survives; transcript text stays tag-free."""
+    config.super_italian_mode = True
+    marco, giulia = config.hosts[:2]
+    marco.engine = "elevenlabs"
+    marco.elevenlabs_model = "eleven_v3"
+    marco.delivery_profile = "marco"
+    giulia.engine = "elevenlabs"
+    giulia.elevenlabs_model = "eleven_v3"
+    giulia.delivery_profile = "giulia"
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "[excited] Ci siamo davvero.", "delivery": "energetic"},
+            {"host": marco.name, "text": "[laughs] Non fare il poeta.", "delivery": "playful"},
+            {"host": giulia.name, "text": "[sarcastic] Certo, era indispensabile.", "delivery": "dry"},
+            {"host": giulia.name, "text": "[whispers] Basta così, per favore.", "delivery": "whispers"},
+        ],
+        "new_joke": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(return_value=response),
+    ) as generate:
+        result, _ = await write_banter(state, config)
+
+    assert all(isinstance(line, DialogueLine) for line in result)
+    assert [(line.text, line.delivery) for line in result] == [
+        ("Ci siamo davvero.", "energetic"),
+        ("Non fare il poeta.", "neutral"),
+        ("Certo, era indispensabile.", "dry"),
+        ("Basta così, per favore.", "neutral"),
+    ]
+    assert all("[" not in line.text and "]" not in line.text for line in result)
+    prompt = generate.await_args.kwargs["prompt"]
+    assert "V3 DELIVERY CONTRACT" in prompt
+    assert '"delivery": "neutral"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_keeps_chaos_delivery_neutral(config, state):
+    """Chaos is intentionally expressive in words, never through V3 tag metadata."""
+    config.super_italian_mode = True
+    marco, giulia = config.hosts[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "[excited] No, aspetta—", "delivery": "energetic"},
+            {"host": giulia.name, "text": "[sarcastic] Ti sto aspettando da ore.", "delivery": "dry"},
+        ],
+        "new_joke": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(return_value=response),
+    ) as generate:
+        result, _ = await write_banter(state, config, chaos_subtype=ChaosSubtype.ICON_MOMENT)
+
+    assert [line.delivery for line in result] == ["neutral", "neutral"]
+    assert [line.text for line in result] == ["No, aspetta—", "Ti sto aspettando da ore."]
+    assert "V3 DELIVERY CONTRACT" not in generate.await_args.kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_uses_only_selected_home_fact_and_keeps_opaque_handoff(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
+    from mammamiradio.home.context_director import PromptFact
+
+    fact = PromptFact(
+        fact_id="opaque-fact-1",
+        entity_id="weather.home",
+        topic_key="ambient.temperature",
+        fingerprint="fingerprint",
+        prompt="Oggi il meteo è soleggiato, con 24 gradi.",
+        policy_revision=3,
+    )
+    state.ha_context = "- Private bedroom sensor: on"
+    response = {
+        "lines": [
+            {"host": config.hosts[0].name, "text": "Fuori sembra proprio estate."},
+            {"host": config.hosts[1].name, "text": "E noi litighiamo anche col sole."},
+        ],
+        "new_joke": None,
+        "home_fact_id": "opaque-fact-1",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ) as generate:
+        result, _ = await write_banter(
+            state,
+            config,
+            prompt_fact=fact,
+            use_directed_home_context=True,
+        )
+
+    assert len(result) == 2
+    assert state.last_banter_home_fact == fact
+    prompt = generate.await_args.kwargs["prompt"]
+    assert "Oggi il meteo è soleggiato" in prompt
+    assert "Private bedroom sensor" not in prompt
+    assert "opaque-fact-1" in prompt
+
+
+@pytest.mark.asyncio
+async def test_context_off_drops_supplied_prompt_fact_from_prompt_contract_and_handoff(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    from mammamiradio.home.context_director import PromptFact
+
+    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    response = {
+        "lines": [
+            {"host": config.hosts[0].name, "text": "The studio stays with the music."},
+            {"host": config.hosts[1].name, "text": "Always does."},
+        ],
+        "new_joke": None,
+        "home_fact_id": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=response,
+    ) as generate:
+        result, _ = await write_banter(state, config, prompt_fact=fact, use_directed_home_context=True)
+
+    assert len(result) == 2
+    # One call only: the contract must expect null, not force a repair round
+    # for a cue the model never received.
+    assert generate.await_count == 1
+    prompt = generate.await_args.kwargs["prompt"]
+    assert "AMBIENT CUE" not in prompt
+    assert "Sole e 24 gradi." not in prompt
+    assert "opaque-fact-1" not in prompt
+    assert "Return home_fact_id as null." in prompt
+    # The producer handoff must not attach home-fact metadata either.
+    assert state.last_banter_home_fact is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_repairs_mismatched_home_fact_id_once(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
+    from mammamiradio.home.context_director import PromptFact
+
+    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    invalid = {
+        "lines": [{"host": config.hosts[0].name, "text": "È una bella giornata."}],
+        "new_joke": None,
+        "home_fact_id": "wrong",
+    }
+    repaired = {**invalid, "home_fact_id": "opaque-fact-1"}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[invalid, repaired],
+    ) as generate:
+        await write_banter(state, config, prompt_fact=fact, use_directed_home_context=True)
+
+    assert generate.await_count == 2
+    assert "REPAIR: The previous reply violated HOME FACT CONTRACT" in generate.await_args_list[1].kwargs["prompt"]
+    assert state.last_banter_home_fact == fact
+
+
+@pytest.mark.asyncio
+async def test_write_banter_keeps_good_banter_when_home_fact_id_unrecoverable(config, state):
+    """A model that refuses the id contract twice must NOT sink good banter to
+    stock copy — the banter airs, just without an attached (tracked) home fact."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
+    from mammamiradio.home.context_director import HomeContextDirector, PromptFact
+
+    fact = PromptFact("opaque-fact-1", "weather.home", "ambient.temperature", "fingerprint", "Sole e 24 gradi.", 3)
+    state.home_context_director = HomeContextDirector()
+    invalid = {
+        "lines": [{"host": config.hosts[0].name, "text": "È una bella giornata di sole."}],
+        "new_joke": None,
+        "home_fact_id": "wrong",
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=[invalid, invalid],  # the model refuses the id on both attempts
+    ) as generate:
+        result, _ = await write_banter(state, config, prompt_fact=fact, use_directed_home_context=True)
+
+    assert generate.await_count == 2
+    # Good banter survived (not the stock fallback), but no fact is attached.
+    assert len(result) == 1
+    assert "bella giornata" in result[0][1]
+    assert state.last_banter_home_fact is None
+    counters = state.home_context_director.admin_status()["session_counters"]
+    assert counters["fact_free_fallback"] == 1
+    assert counters["repaired"] == 0
+
+
+@pytest.mark.asyncio
 async def test_write_banter_skips_thinking_blocks(config, state):
     """Thinking-capable models (Fable 5) prepend thinking blocks to resp.content.
 
@@ -424,6 +764,7 @@ async def test_write_banter_skips_thinking_blocks(config, state):
     every creative call to the OpenAI fallback (fallback_reason
     anthropic_AttributeError) even though Anthropic answered fine.
     """
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps(
         {
@@ -516,6 +857,7 @@ class _GuestGateReleaseCampaign:
 
 @pytest.mark.asyncio
 async def test_write_banter_closed_guest_gate_prompt_and_parser_drop(config, state):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
@@ -549,6 +891,7 @@ async def test_write_banter_closed_guest_gate_prompt_and_parser_drop(config, sta
 
 @pytest.mark.asyncio
 async def test_write_banter_closed_guest_gate_treats_short_hans_tag_as_guest_attempt(config, state):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
@@ -578,6 +921,7 @@ async def test_write_banter_closed_guest_gate_treats_short_hans_tag_as_guest_att
 
 @pytest.mark.asyncio
 async def test_write_banter_open_guest_gate_accepts_one_hans_line_and_arms_cooldown(config, state):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
@@ -610,6 +954,7 @@ async def test_write_banter_open_guest_gate_accepts_one_hans_line_and_arms_coold
 
 @pytest.mark.asyncio
 async def test_write_banter_cooldown_closes_next_eligible_break_and_decrements_on_commit(config, state):
+    config.super_italian_mode = True
     state.guest_host_banter_cooldown_remaining = 1
     regulars = _regular_hosts(config)
     response_json = json.dumps(
@@ -644,6 +989,7 @@ async def test_write_banter_cooldown_closes_next_eligible_break_and_decrements_o
 
 @pytest.mark.asyncio
 async def test_write_banter_open_guest_gate_caps_multiple_hans_lines(config, state):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
@@ -674,6 +1020,7 @@ async def test_write_banter_open_guest_gate_caps_multiple_hans_lines(config, sta
 
 @pytest.mark.asyncio
 async def test_write_banter_guest_cooldown_not_armed_when_hans_deduped_out(config, state):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
@@ -704,6 +1051,7 @@ async def test_write_banter_guest_cooldown_not_armed_when_hans_deduped_out(confi
 
 @pytest.mark.asyncio
 async def test_write_banter_guest_gate_handles_case_insensitive_hans_tags(config, state):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
@@ -732,6 +1080,7 @@ async def test_write_banter_guest_gate_handles_case_insensitive_hans_tags(config
 
 @pytest.mark.asyncio
 async def test_write_banter_open_guest_gate_accepts_case_insensitive_hans_tag(config, state):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
@@ -760,14 +1109,14 @@ async def test_write_banter_open_guest_gate_accepts_case_insensitive_hans_tag(co
     "lines",
     [
         [
-            {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Apro io."},
-            {"host": "Marco", "text": "Troppo presto."},
-            {"host": "Giulia", "text": "Rifacciamo."},
+            {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "We open, amici."},
+            {"host": "Marco", "text": "Too soon, stay with us."},
+            {"host": "Giulia", "text": "Let's redo it."},
         ],
         [
-            {"host": "Marco", "text": "Prima noi."},
-            {"host": "Giulia", "text": "E poi basta."},
-            {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "Chiudo io."},
+            {"host": "Marco", "text": "First we talk, amici."},
+            {"host": "Giulia", "text": "And then we stop."},
+            {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "I close now."},
         ],
     ],
 )
@@ -933,7 +1282,7 @@ async def test_write_banter_normal_mode_retries_all_italian_response(config, sta
             },
             {
                 "host": regulars[1].name,
-                "text": "Exactly. A little Italian sparkle, but the facts stay in English.",
+                "text": "Exactly. A little Italian sparkle, amici, but the facts stay in English, grazie.",
             },
         ],
         "new_joke": None,
@@ -951,13 +1300,144 @@ async def test_write_banter_normal_mode_retries_all_italian_response(config, sta
 
     assert [text for _, text in result] == [
         "That outro had teeth, mamma mia, and now we keep the room moving.",
-        "Exactly. A little Italian sparkle, but the facts stay in English.",
+        "Exactly. A little Italian sparkle, amici, but the facts stay in English, grazie.",
     ]
     assert commit is None
     assert mock_generate.await_count == 2
     assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
     assert list(state.running_jokes) == []
     assert state.pending_verbal_gag is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_normal_mode_keeps_all_lines_when_repair_is_english_heavy(config, state):
+    """An English-heavy repair is returned in full instead of collapsing to stock."""
+    config.super_italian_mode = False
+    regulars = _regular_hosts(config)
+    italian_response = {
+        "lines": [
+            {
+                "host": regulars[0].name,
+                "text": "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
+            },
+            {
+                "host": regulars[1].name,
+                "text": "Si, la casa respira piano e la musica continua senza nessuna fretta.",
+            },
+        ],
+        "new_joke": None,
+    }
+    repaired_texts = [
+        "The music is back, and we are here for the next song.",
+        "That is exactly right; the room is ready and the show keeps moving.",
+        "We have more music for you, and this track is very good.",
+        "Stay here with us because the next song is ready now.",
+        "Anyway, we are back on the radio and the music is still up.",
+        "Ciao amici, grazie; the show is here and we keep listening.",
+    ]
+    # Only the two-sided-band precondition is load-bearing here; pinning exact
+    # marker-bank hit counts would red-fail this floor test on unrelated
+    # vocabulary edits.  ``is_short`` guards the branch: a bank change that drops
+    # classified tokens below the short-copy limit would otherwise reroute this
+    # test through the short-copy rule and pass while testing nothing.
+    repaired_language = assess_language(repaired_texts)
+    assert repaired_language.is_short is False
+    assert repaired_language.italian_tokens > 0
+    assert repaired_language.english_share > NORMAL_MODE_ENGLISH_MAX
+    english_heavy_repair = {
+        "lines": [
+            {"host": regulars[index % len(regulars)].name, "text": text} for index, text in enumerate(repaired_texts)
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            side_effect=[italian_response, english_heavy_repair],
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert len(result) == 6
+    assert [line.text for line in result] == repaired_texts
+    assert commit is None
+    assert mock_generate.await_count == 2
+    assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_normal_mode_accepts_english_heavy_first_response(config, state):
+    """English-heavy copy airs on the first attempt: no wasted repair round-trip."""
+    config.super_italian_mode = False
+    regulars = _regular_hosts(config)
+    texts = [
+        "The music is back, and we are here for the next song.",
+        "That is exactly right; the room is ready and the show keeps moving.",
+        "Ciao amici, grazie; the show is here and we keep listening.",
+    ]
+    language = assess_language(texts)
+    assert language.is_short is False
+    assert language.english_share > NORMAL_MODE_ENGLISH_MAX
+    response = {
+        "lines": [{"host": regulars[index % len(regulars)].name, "text": text} for index, text in enumerate(texts)],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=response,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert [line.text for line in result] == texts
+    assert commit is None
+    assert mock_generate.await_count == 1
+
+
+def test_normal_mode_repair_prompt_still_asks_for_the_target_band(config):
+    """The guard stopped policing the ceiling; the prompt must not stop asking.
+
+    Nothing in code rejects English-only copy any more, so these strings are the
+    only thing keeping Italian in a Normal Mode break.  Pin them to the policy
+    constants so the numbers the host is told cannot drift from the band the
+    ledger reports against.
+    """
+    band = f"{round(NORMAL_MODE_ENGLISH_MIN * 100)}–{round(NORMAL_MODE_ENGLISH_MAX * 100)}%"
+    target = f"{round(NORMAL_MODE_ENGLISH_TARGET * 100)}%"
+
+    assert band in _NORMAL_MODE_LANGUAGE_REPAIR
+    assert band in language_mode_rule(False, "en")
+    assert target in _NORMAL_MODE_LANGUAGE_REPAIR
+    assert target in language_mode_rule(False, "en")
+    assert "Do not answer by dropping\nItalian altogether" in _NORMAL_MODE_LANGUAGE_REPAIR
+
+
+def test_assess_spoken_texts_separates_acceptance_from_the_preferred_band(config):
+    """English-only copy is accepted, and the ledger still records the drift.
+
+    ``accepted`` is now true for both a healthy 75/25 exchange and an all-English
+    one, so ``within_preferred_band`` is what keeps an English-only station
+    visible to the same provenance analysis that surfaced the original bug.
+    """
+    config.super_italian_mode = False
+    on_target = assess_spoken_texts(["The music is back and we stay with the song, ciao amici grazie"], config)
+    english_only = assess_spoken_texts(["The music is back and we stay with the song tonight"], config)
+
+    assert on_target["target_english_share"] == NORMAL_MODE_ENGLISH_TARGET
+    assert (on_target["accepted"], on_target["within_preferred_band"]) == (True, True)
+
+    assert english_only["english_share"] == 1.0
+    assert english_only["italian_tokens"] == 0
+    assert english_only["accepted"] is True
+    assert english_only["decision"] == "accepted"
+    assert english_only["within_preferred_band"] is False
 
 
 def test_normal_mode_language_guard_ignores_ambiguous_short_markers(config):
@@ -1016,7 +1496,13 @@ async def test_write_banter_normal_mode_rechecks_after_guest_gate_drops_english_
         "lines": [
             {
                 "host": _LOCAL_BALLOON_GUEST_HOST,
-                "text": "This English line would make the raw language check pass, but the gate drops it.",
+                "text": (
+                    "This is the English radio update. The music is here, and we are listening to the next "
+                    "track. Stay with us, because the show is still moving, and the room is ready for more "
+                    "music. We have a little story for you, and then we go back to the song. Anyway, keep "
+                    "listening, amici. The next song is here, and we are ready to hear it now, with the show "
+                    "still on."
+                ),
             },
             {
                 "host": regulars[0].name,
@@ -1128,6 +1614,35 @@ async def test_write_news_flash_normal_mode_fallback_after_all_italian_repair_is
 
 
 @pytest.mark.asyncio
+async def test_write_news_flash_does_not_retire_callback_when_final_language_guard_falls_back(config, state):
+    config.super_italian_mode = False
+    response = {
+        "text": "This bulletin is ready, amici.",
+        "intro_jingle": "notizie flash",
+        "callback_used": True,
+    }
+
+    # The generation guard accepts the provider response, but final
+    # post-processing rejects it. The fallback did not speak the callback, so
+    # the pending ledger offer must remain unretired.
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter._normal_mode_language_ok",
+            side_effect=[True, False],
+        ),
+    ):
+        _host, text, _category = await write_news_flash(state, config, category="breaking", callback_gag="callback")
+
+    assert "breaking news" in text.lower()
+    assert state.pending_callback_landed is False
+
+
+@pytest.mark.asyncio
 async def test_write_transition_normal_mode_retries_all_italian_response(config, state):
     config.super_italian_mode = False
     state.played_tracks = [Track(title="Volare", artist="Domenico Modugno", duration_ms=180000, spotify_id="v1")]
@@ -1142,7 +1657,7 @@ async def test_write_transition_normal_mode_retries_all_italian_response(config,
         ) as mock_generate,
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
     ):
-        _host, text = await write_transition(state, config, song_cues=[])
+        _host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert text == "That landing was clean, mamma mia, and now we keep moving."
     assert mock_generate.await_count == 2
@@ -1163,9 +1678,10 @@ async def test_write_transition_normal_mode_fallback_after_all_italian_repair_is
         ),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
     ):
-        _host, text = await write_transition(state, config, song_cues=[])
+        _host, text, played_track_ref = await write_transition(state, config, next_segment="ad", song_cues=[])
 
-    assert text == "All right..."
+    assert text == "Stay close, amici — a quick word from our sponsors."
+    assert played_track_ref is None
 
 
 @pytest.mark.asyncio
@@ -1230,17 +1746,18 @@ async def test_write_ad_normal_mode_fallback_after_all_italian_repair_is_english
 
     assert result.parts[0].type == "sfx"
     assert result.parts[0].sfx == "chime"
-    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Because you deserve it."]
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
     assert result.summary == "Fallback ad for FallbackBrand"
 
 
 @pytest.mark.asyncio
-async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(config, state):
+async def test_write_banter_has_no_connection_arrival_prompt(config, state):
     regulars = _regular_hosts(config)
     response_json = json.dumps(
         {
             "lines": [
-                {"host": _LOCAL_BALLOON_GUEST_HOST, "text": "New listener, I enter now."},
                 {"host": regulars[0].name, "text": "No, we welcome them ourselves, piano piano."},
                 {"host": regulars[1].name, "text": "Exactly. Guest mic closed, warm room open."},
             ],
@@ -1254,15 +1771,128 @@ async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(c
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
     ):
-        result, commit = await write_banter(state, config, is_new_listener=True)
+        result, commit = await write_banter(state, config)
 
     prompt = _banter_user_prompt(mock_cls)
-    assert "IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!" in prompt
-    assert "GUEST HOST GATE" in prompt
+    assert "new listener" not in prompt.lower()
+    assert "tuned in" not in prompt.lower()
     assert [(host.name, text) for host, text in result] == [
         (regulars[0].name, "No, we welcome them ourselves, piano piano."),
         (regulars[1].name, "Exactly. Guest mic closed, warm room open."),
     ]
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_context_is_bounded_and_returns_proof(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {
+                    "host": regulars[0].name,
+                    "text": "We have had company for roughly half an hour, amici, piano piano.",
+                },
+                {"host": regulars[1].name, "text": "Exactly, the music is still here."},
+            ],
+            "new_joke": None,
+            "listener_session_cue": "companionship",
+            "listener_session_duration_bucket": "30-44_minutes",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    state.persona_store = MagicMock()
+    state.persona_store.get_persona = AsyncMock()
+    state.listener.play_count = 99
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        result, commit = await write_banter(state, config, companionship_context=context)
+
+    prompt = _banter_user_prompt(mock_cls)
+    assert "COMPANIONSHIP CUE" in prompt
+    assert "roughly half an hour" in prompt
+    assert "listener-epoch" not in prompt
+    assert "1800" not in prompt
+    assert "Station sessions so far" not in prompt
+    assert "<listener_behavior>" not in prompt
+    assert "COMPANIONSHIP PROOF CONTRACT" in prompt
+    assert '"listener_session_cue": "companionship"' in prompt
+    state.persona_store.get_persona.assert_not_awaited()
+    assert len(result) == 2
+    assert isinstance(commit, scriptwriter_module.BanterCommit)
+    assert commit.companionship == scriptwriter_module.CompanionshipBanterCommit(
+        duration_bucket=CompanionshipDurationBucket.MINUTES_30_TO_44
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_without_matching_model_proof_is_ordinary(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": regulars[0].name, "text": "We have had company for a while, amici."},
+                {"host": regulars[1].name, "text": "Exactly, the music keeps moving."},
+            ],
+            "new_joke": None,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        lines, commit = await write_banter(state, config, companionship_context=context)
+
+    assert lines
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_model_fields_without_spoken_context_are_not_proof(config, state):
+    regulars = _regular_hosts(config)
+    response_json = json.dumps(
+        {
+            "lines": [
+                {"host": regulars[0].name, "text": "The studio keeps moving, amici."},
+                {"host": regulars[1].name, "text": "Exactly, the next record is ready."},
+            ],
+            "new_joke": None,
+            "listener_session_cue": "companionship",
+            "listener_session_duration_bucket": "30-44_minutes",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        lines, commit = await write_banter(state, config, companionship_context=context)
+
+    assert lines
+    assert commit is None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_companionship_fallback_carries_no_proof(config, state):
+    context = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(side_effect=RuntimeError("provider down")),
+    ):
+        lines, commit = await write_banter(state, config, companionship_context=context)
+
+    assert lines
     assert commit is None
 
 
@@ -1275,15 +1905,17 @@ async def test_write_banter_special_new_listener_break_keeps_guest_gate_closed(c
         ("listener_request", "LISTENER REQUEST"),
         ("course_change", "RECORD HUNT"),
         ("release_beat", "<release_beat>"),
-        ("new_listener", "IMPOSSIBLE MOMENT: A new listener JUST tuned in right now!"),
     ],
 )
 async def test_write_banter_guest_gate_stays_closed_for_priority_blocks(config, state, blocker, expected_prompt):
+    config.super_italian_mode = True
     regulars = _regular_hosts(config)
     kwargs = {}
     if blocker == "chaos":
         kwargs["chaos_subtype"] = ChaosSubtype.FOURTH_WALL
     elif blocker == "ha_directive":
+        config.homeassistant.enabled = True
+        config.homeassistant.context_enabled = True
         state.ha_pending_directive = "the kitchen light just came on"
     elif blocker == "listener_request":
         state.pending_requests.append({"name": "Luca", "message": "saluti", "type": "message"})
@@ -1293,9 +1925,6 @@ async def test_write_banter_guest_gate_stays_closed_for_priority_blocks(config, 
         state.heading_pending_announcement = "Anni '90"
     elif blocker == "release_beat":
         state.release_campaign = _GuestGateReleaseCampaign()
-    elif blocker == "new_listener":
-        kwargs["is_new_listener"] = True
-
     response_json = json.dumps(
         {
             "lines": [
@@ -1332,6 +1961,7 @@ async def test_write_banter_guest_gate_stays_closed_for_priority_blocks(config, 
 
 @pytest.mark.asyncio
 async def test_write_banter_guest_cooldown_not_decremented_on_generation_fallback(config, state):
+    config.super_italian_mode = True
     state.guest_host_banter_cooldown_remaining = 1
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
@@ -1370,6 +2000,8 @@ async def test_write_banter_prompt_is_short_by_default(config, state):
 async def test_write_banter_prompt_stretches_for_ha_directive(config, state):
     # A warranted moment (home event) earns the longer break. Festival off so the
     # stretch is attributable to the directive, not ambient festival env.
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.party_mode = None
     state.ha_pending_directive = "the kitchen light just came on"
     host_name = config.hosts[0].name
@@ -1403,6 +2035,7 @@ async def test_write_banter_chaos_mode_ambient_stays_short(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_strips_markdown_fences(config, state):
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_text = (
         "```json\n"
@@ -1428,6 +2061,7 @@ async def test_write_banter_strips_markdown_fences(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_adds_new_joke(config, state):
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps(
         {
@@ -1442,8 +2076,11 @@ async def test_write_banter_adds_new_joke(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        await write_banter(state, config)
+        _, commit = await write_banter(state, config)
 
+    assert isinstance(commit, scriptwriter_module.BanterCommit)
+    assert len(state.running_jokes) == 0
+    commit.apply_queue_acceptance(state)
     assert "The traffic joke" in state.running_jokes
 
 
@@ -1451,6 +2088,7 @@ async def test_write_banter_adds_new_joke(config, state):
 async def test_write_banter_stashes_pending_verbal_gag(config, state):
     """new_joke {text, punch} is stashed on state.pending_verbal_gag for the producer
     to commit to the cross-domain ledger at queue time (Callback Director seed path)."""
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps(
         {
@@ -1465,10 +2103,14 @@ async def test_write_banter_stashes_pending_verbal_gag(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        await write_banter(state, config)
+        _, commit = await write_banter(state, config)
 
+    assert isinstance(commit, scriptwriter_module.BanterCommit)
+    assert state.pending_verbal_gag is None
+    assert "bathroom fans" not in state.running_jokes
+    commit.apply_queue_acceptance(state)
     assert state.pending_verbal_gag == {"text": "bathroom fans", "punch": 5.0}
-    assert "bathroom fans" in state.running_jokes  # running_jokes still seeded too
+    assert "bathroom fans" in state.running_jokes
 
 
 @pytest.mark.asyncio
@@ -1515,6 +2157,8 @@ async def test_write_banter_falls_back_on_api_exception(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_restores_pending_directive_on_fallback(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     # Quotes are rewritten by _sanitize_prompt_data before the directive reaches
     # the prompt; the restore must put back the RAW directive, not that copy.
     raw_directive = 'Mention the "kitchen" light.'
@@ -1532,6 +2176,222 @@ async def test_write_banter_restores_pending_directive_on_fallback(config, state
 
     assert len(result) >= 2
     assert state.ha_pending_directive == raw_directive
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["", "ha", "timer", "ha:light.private_kitchen", "unknown"])
+async def test_context_off_retires_stale_home_directive_before_no_llm_return(config, state, source):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_pending_directive = "Mention the private kitchen light."
+    state.ha_pending_directive_moment_id = "private-moment"
+    state.ha_pending_directive_source = source
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+
+
+@pytest.mark.asyncio
+async def test_context_off_retires_stale_running_gag_before_no_llm_return(config, state):
+    from mammamiradio.home.moment_receipts import MomentStore
+
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    store = MomentStore()
+    gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
+    state.moment_store = store
+    state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = gag_id
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+    (row,) = store.rows
+    assert row.status == "dropped"
+    assert row.drop_reason == "stale_context"
+
+
+@pytest.mark.asyncio
+async def test_context_off_running_gag_never_reaches_prompt_after_reenable(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    private_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag = private_gag
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = "private-gag-moment"
+    prompts: list[str] = []
+
+    async def _generate(**kwargs):
+        prompts.append(kwargs["prompt"])
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "The studio stays with the music."}],
+            "new_joke": None,
+            "home_fact_id": None,
+        }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        await write_banter(state, config)
+        # A later re-enable must start from a clean slate, not revive the
+        # gag that was observed before the disable.
+        config.homeassistant.context_enabled = True
+        await write_banter(state, config)
+
+    assert len(prompts) == 2
+    assert all(private_gag not in prompt for prompt in prompts)
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["operator", "skip_bit"])
+async def test_context_off_retires_running_gag_even_when_studio_directive_survives(config, state, source):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_pending_directive = "Play the explicit studio bit next."
+    state.ha_pending_directive_source = source
+    state.ha_running_gag = "The robot vacuum staged its third breakout tonight."
+    state.ha_running_gag_key = "vacuum.goldstaubsucher|breakout"
+    state.ha_running_gag_moment_id = "private-gag-moment"
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_pending_directive == "Play the explicit studio bit next."
+    assert state.ha_running_gag == ""
+    assert state.ha_running_gag_key == ""
+    assert state.ha_running_gag_moment_id == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["operator", "skip_bit"])
+async def test_context_off_preserves_explicit_studio_directive_before_no_llm_return(config, state, source):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    state.ha_pending_directive = "Play the explicit studio bit next."
+    state.ha_pending_directive_moment_id = ""
+    state.ha_pending_directive_source = source
+
+    lines, _commit = await write_banter(state, config)
+
+    assert lines
+    assert state.ha_pending_directive == "Play the explicit studio bit next."
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == source
+
+
+@pytest.mark.asyncio
+async def test_context_off_clears_stale_home_directive_from_state_and_llm_prompt(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    raw_directive = "Mention the private kitchen light."
+    state.ha_pending_directive = raw_directive
+    state.ha_pending_directive_moment_id = "private-moment"
+    state.ha_pending_directive_source = "ha:light.private_kitchen"
+    prompts: list[str] = []
+
+    async def _generate(**kwargs):
+        prompts.append(kwargs["prompt"])
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "The studio stays with the music."}],
+            "new_joke": None,
+            "home_fact_id": None,
+        }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert lines == [DialogueLine(config.hosts[0], "The studio stays with the music.")]
+    assert raw_directive not in prompts[0]
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+
+
+@pytest.mark.asyncio
+async def test_revoked_home_directive_stays_retired_across_next_banter_iteration(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    raw_directive = "Mention the private kitchen light."
+    state.ha_pending_directive = raw_directive
+    state.ha_pending_directive_moment_id = "private-moment"
+    state.ha_pending_directive_source = "ha:light.private_kitchen"
+    submission_allowed = True
+    prompts: list[str] = []
+    calls = 0
+
+    async def _generate(**kwargs):
+        nonlocal calls, submission_allowed
+        calls += 1
+        prompts.append(kwargs["prompt"])
+        if calls == 1:
+            submission_allowed = False
+            raise RuntimeError("script submission revoked before provider call")
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "The studio stays with the music."}],
+            "new_joke": None,
+            "home_fact_id": None,
+        }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        first, _ = await write_banter(state, config, submission_guard=lambda: submission_allowed)
+        assert len(first) >= 2  # deterministic stock fallback still keeps audio moving
+        assert state.ha_pending_directive == ""
+        assert state.ha_pending_directive_moment_id == ""
+        assert state.ha_pending_directive_source == ""
+
+        config.homeassistant.context_enabled = False
+        second, _ = await write_banter(state, config, submission_guard=lambda: True)
+
+    assert second == [DialogueLine(config.hosts[0], "The studio stays with the music.")]
+    assert raw_directive in prompts[0]
+    assert raw_directive not in prompts[1]
+    assert state.ha_pending_directive == ""
+    assert state.ha_pending_directive_moment_id == ""
+    assert state.ha_pending_directive_source == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["operator", "skip_bit"])
+async def test_revoked_submission_restores_only_explicit_non_home_directives(config, state, source):
+    directive = "Play the explicit studio bit again."
+    state.ha_pending_directive = directive
+    state.ha_pending_directive_source = source
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=AsyncMock(side_effect=RuntimeError("script submission revoked before provider call")),
+    ):
+        result, _ = await write_banter(state, config, submission_guard=lambda: False)
+
+    assert len(result) >= 2
+    assert state.ha_pending_directive == directive
+    assert state.ha_pending_directive_source == source
 
 
 @pytest.mark.asyncio
@@ -1559,6 +2419,9 @@ async def test_write_banter_releases_gag_key_on_fallback(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_hands_off_moment_id_on_success(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     state.ha_pending_directive = "The coffee machine just woke up — react."
     state.ha_pending_directive_moment_id = "moment123abc"
@@ -1580,6 +2443,8 @@ async def test_write_banter_hands_off_moment_id_on_success(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_restores_moment_id_on_fallback(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_pending_directive = "Mention the kitchen light."
     state.ha_pending_directive_moment_id = "moment456def"
     mock_client = MagicMock()
@@ -1603,6 +2468,10 @@ async def test_write_banter_restores_moment_id_on_fallback(config, state):
 async def test_write_banter_drops_gag_moment_row_on_fallback(config, state):
     from mammamiradio.home.moment_receipts import MomentStore
 
+    # The gag only rides a generation while home context is enabled; with
+    # context off it is retired as stale before generation starts.
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     store = MomentStore()
     gag_id = store.record(lane="running_gag", family="shower_bathroom", public_label="Bathroom ritual")
     state.moment_store = store
@@ -1649,6 +2518,7 @@ async def test_write_banter_handles_string_shaped_lines(config, state):
     # The OpenAI fallback (gpt-4o-mini) sometimes returns `lines` as a list of
     # plain strings instead of {"host","text"} dicts. This must air as banter,
     # not crash to stock copy (observed live: AttributeError at scriptwriter.py).
+    config.super_italian_mode = True
     response_json = json.dumps(
         {
             "lines": ["Ciao a tutti!", "Che ridere!", "Restate con noi!"],
@@ -1676,6 +2546,7 @@ async def test_write_banter_handles_string_shaped_lines(config, state):
 
 @pytest.mark.asyncio
 async def test_write_banter_handles_mixed_and_empty_lines(config, state):
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     response_json = json.dumps(
         {
@@ -1766,6 +2637,7 @@ async def test_write_banter_falls_back_when_data_not_dict(config, state):
 async def test_write_banter_string_lines_single_host(config, state):
     # A single-host operator config: string lines all assign the only host
     # (alternation degenerates cleanly, no crash).
+    config.super_italian_mode = True
     config.hosts = config.hosts[:1]
     response_json = json.dumps({"lines": ["Ciao!", "Ancora noi!"], "new_joke": None})
     mock_cls = _mock_anthropic_response(response_json)
@@ -1784,9 +2656,10 @@ async def test_write_banter_string_lines_single_host(config, state):
 async def test_write_banter_string_lines_alternate_around_blanks(config, state):
     # Interleaved blank strings must not collapse two aired lines onto one host:
     # alternation counts only emitted string lines, not raw positions.
+    config.super_italian_mode = True
     if len(config.hosts) < 2:
         pytest.skip("needs at least two hosts to assert alternation")
-    response_json = json.dumps({"lines": ["uno", "", "due"], "new_joke": None})
+    response_json = json.dumps({"lines": ["Uno.", "", "Due."], "new_joke": None})
     mock_cls = _mock_anthropic_response(response_json)
 
     with (
@@ -1795,7 +2668,7 @@ async def test_write_banter_string_lines_alternate_around_blanks(config, state):
     ):
         result, _ = await write_banter(state, config)
 
-    assert [text for _, text in result] == ["uno", "due"]
+    assert [text for _, text in result] == ["Uno.", "Due."]
     assert result[0][0] is not result[1][0]
 
 
@@ -1807,11 +2680,12 @@ async def test_write_banter_no_llm_returns_language_fallback(config, state):
     result, _ = await write_banter(state, config)
 
     assert len(result) == 1
-    assert result[0][1] == "E torniamo alla musica!"
+    assert result[0][1] == "And back to the music, amici!"
 
 
 @pytest.mark.asyncio
 async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, state):
+    config.super_italian_mode = True
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(
@@ -1836,8 +2710,9 @@ async def test_write_banter_falls_back_to_openai_when_anthropic_fails(config, st
 
 
 @pytest.mark.asyncio
-async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
-    """Lock the production default: balanced creative fallback uses GPT-5.5."""
+async def test_openai_fallback_default_model_is_gpt_5_4_mini(config, state):
+    """Lock the production default: balanced creative fallback uses GPT-5.4 mini."""
+    config.super_italian_mode = True
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
@@ -1855,11 +2730,12 @@ async def test_openai_fallback_default_model_is_gpt_5_5(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5"
+    assert call_kwargs["model"] == "gpt-5.4-mini"
 
 
 @pytest.mark.asyncio
 async def test_openai_fallback_uses_max_completion_tokens(config, state):
+    config.super_italian_mode = True
     """Regression: gpt-5.x models 400 on `max_tokens` and require
     `max_completion_tokens`. Sending the old name silently killed the entire
     OpenAI fallback whenever Anthropic was unavailable (observed live on the
@@ -1910,6 +2786,7 @@ async def test_openai_fallback_retries_without_reasoning_effort_on_400(config, s
     """An operator can override OPENAI_SCRIPT_MODEL to a non-reasoning model that
     rejects `reasoning_effort` with a 400. The fallback must retry once without
     the param rather than re-introducing the total-failure mode this path fixes."""
+    config.super_italian_mode = True
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     good_response = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
@@ -1949,10 +2826,11 @@ async def test_openai_fallback_retries_without_reasoning_effort_on_400(config, s
 
 @pytest.mark.asyncio
 async def test_openai_fallback_uses_configured_model(config, state):
+    config.super_italian_mode = True
     """When the OpenAI catalog is overridden, OpenAI is called with that model."""
     config.openai_api_key = "openai-key"
-    # banter → creative role → balanced openai creative = "large"
-    config.models.catalog["openai"]["large"] = "gpt-5.5-test"
+    # banter → creative role → balanced OpenAI creative = "small"
+    config.models.catalog["openai"]["small"] = "gpt-5.4-mini-test"
     host_name = config.hosts[0].name
     openai_client = _mock_openai_response(json.dumps({"lines": [{"host": host_name, "text": "hi"}], "new_joke": None}))
     mock_client = MagicMock()
@@ -1969,19 +2847,20 @@ async def test_openai_fallback_uses_configured_model(config, state):
         await write_banter(state, config)
 
     call_kwargs = openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-5.5-test"
+    assert call_kwargs["model"] == "gpt-5.4-mini-test"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "expected_model"),
     [
-        ("news_flash", "gpt-5.5"),
-        ("ad", "gpt-5.5"),
+        ("news_flash", "gpt-5.4-mini"),
+        ("ad", "gpt-5.4-mini"),
         ("transition", "gpt-5.4-mini"),
     ],
 )
 async def test_openai_fallback_routes_by_caller_role(config, state, caller, expected_model):
+    config.super_italian_mode = True
     """Creative fallbacks use GPT-5.5; latency-sensitive transitions use GPT-5.4-mini."""
     config.openai_api_key = "openai-key"
     openai_client = _mock_openai_response(json.dumps({"ok": True}))
@@ -2011,6 +2890,7 @@ async def test_openai_fallback_routes_by_caller_role(config, state, caller, expe
 
 @pytest.mark.asyncio
 async def test_openai_fallback_logs_structured_event(config, state, caplog):
+    config.super_italian_mode = True
     """OpenAI fallback emits a structured 'openai_script_fallback' log event with eval-ready fields."""
     import logging
 
@@ -2034,7 +2914,7 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     fallback_records = [r for r in caplog.records if getattr(r, "event", None) == "openai_script_call"]
     assert fallback_records, "expected at least one openai_script_call log record"
     record = fallback_records[-1]
-    assert record.model == "gpt-5.5"
+    assert record.model == "gpt-5.4-mini"
     assert record.caller == "banter"
     assert record.fallback_reason == "anthropic_exception"
     assert record.json_ok is True
@@ -2042,17 +2922,16 @@ async def test_openai_fallback_logs_structured_event(config, state, caplog):
     assert record.prompt_tokens == 11
     assert record.completion_tokens == 7
     switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
-    assert switch_records, "expected provider switch telemetry when Anthropic falls back to OpenAI"
-    switch = switch_records[-1]
-    assert switch.provider_class == "script_provider"
-    assert switch.from_provider == "anthropic"
-    assert switch.to_provider == "openai"
-    assert switch.reason == "anthropic_exception"
-    assert state.runtime_events[-1].provider_class == "script_provider"
+    assert switch_records == []
+    assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "anthropic_exception"
+    assert state.runtime_provider_state["script_provider"]["last_switch_timestamp"] is None
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio
 async def test_anthropic_max_tokens_truncation_is_labelled_honestly(config, state, caplog):
+    config.super_italian_mode = True
     """A truncated Anthropic response (stop_reason=max_tokens + unterminated JSON)
     is reported as 'anthropic_max_tokens_truncated', not a generic JSONDecodeError,
     while still falling back to OpenAI so the listener gets banter. With the
@@ -2107,8 +2986,9 @@ async def test_anthropic_max_tokens_truncation_is_labelled_honestly(config, stat
     assert fallback_records[-1].fallback_reason == "anthropic_max_tokens_truncated"
 
     switch_records = [r for r in caplog.records if getattr(r, "event", None) == "provider_switch_event"]
-    assert switch_records, "expected provider switch telemetry on truncation fallback"
-    assert switch_records[-1].reason == "anthropic_max_tokens_truncated"
+    assert switch_records == []
+    assert state.runtime_provider_state["script_provider"]["current_reason"] == "anthropic_max_tokens_truncated"
+    assert state.runtime_provider_state["script_provider"]["last_switch_timestamp"] is None
     # Illusion preserved: listener still gets banter via the OpenAI fallback —
     # whose visible floor inherits the ESCALATED budget, not the original.
     assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
@@ -2123,6 +3003,7 @@ async def test_anthropic_max_tokens_empty_content_is_labelled_honestly(config, s
     thinking-capable model cut mid-thinking (content holds only a thinking block) —
     raises IndexError in _anthropic_text and is still recognized as truncation:
     stop_reason is read before text extraction."""
+    config.super_italian_mode = True
     import logging
 
     config.anthropic_api_key = "anthropic-key"
@@ -2231,7 +3112,7 @@ async def test_anthropic_max_tokens_escalation_retry_succeeds(config, state, cap
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
     good = _good_anthropic_response(
-        json.dumps({"lines": [{"host": host_name, "text": "Escalation win!"}], "new_joke": None})
+        json.dumps({"lines": [{"host": host_name, "text": "The win is ours, amici!"}], "new_joke": None})
     )
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
@@ -2252,7 +3133,7 @@ async def test_anthropic_max_tokens_escalation_retry_succeeds(config, state, cap
     assert mock_client.messages.create.call_count == 2
     escalated = round(_BANTER_MAX_TOKENS * _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR)
     assert mock_client.messages.create.call_args_list[1].kwargs["max_tokens"] == escalated
-    assert any(text == "Escalation win!" for _host, text in lines)
+    assert any(text == "The win is ours, amici!" for _host, text in lines)
     # OpenAI never entered the picture.
     openai_client_factory.assert_not_called()
     assert "Anthropic escalation retry succeeded" in caplog.text
@@ -2280,6 +3161,7 @@ async def test_anthropic_truncation_without_openai_key_still_retries(config, sta
     get its escalated retry: the retry decision runs BEFORE the no-OpenAI-key
     raise. Naively reusing the old ordering made the mechanism dead for exactly
     the configuration that has no other fallback."""
+    config.super_italian_mode = True
     config.anthropic_api_key = "anthropic-key"
     config.openai_api_key = ""
     host_name = config.hosts[0].name
@@ -2303,6 +3185,7 @@ async def test_anthropic_truncation_without_openai_key_still_retries(config, sta
 
 @pytest.mark.asyncio
 async def test_circuit_tripped_between_attempts_stops_retry(config, state):
+    config.super_italian_mode = True
     """A sibling task can trip the auth circuit between our attempts. The
     per-attempt blocked re-check must BREAK to OpenAI, not run a second
     Anthropic attempt against a provider the circuit just declared down.
@@ -2349,6 +3232,7 @@ async def test_total_deadline_skips_escalation(config, state):
     """Past the total generation deadline the escalations are skipped — but the
     BASE OpenAI fallback still runs, so the existing rescue ladder never
     shrinks. The deadline bounds only the NEW mechanism."""
+    config.super_italian_mode = True
     import mammamiradio.hosts.scriptwriter as sw
     from mammamiradio.hosts.scriptwriter import _BANTER_MAX_TOKENS, _OPENAI_REASONING_HEADROOM
 
@@ -2383,6 +3267,7 @@ async def test_anthropic_non_truncation_error_skips_escalation_retry(config, sta
     """Only a max_tokens truncation earns a retry. A generic provider error
     (timeout, network, 4xx) takes the existing single-attempt fallback path —
     exactly one Anthropic call, then OpenAI."""
+    config.super_italian_mode = True
     config.anthropic_api_key = "anthropic-key"
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
@@ -2411,6 +3296,7 @@ async def test_openai_empty_completion_retries_with_bigger_budget(config, state)
     tokens starving the visible JSON — finish_reason='length'). One escalated
     retry with a bigger visible budget must recover real banter instead of
     degrading to stock copy."""
+    config.super_italian_mode = True
     from mammamiradio.hosts.scriptwriter import (
         _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR,
         _BANTER_MAX_TOKENS,
@@ -2447,6 +3333,7 @@ async def test_openai_empty_completion_retries_with_bigger_budget(config, state)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal_reason", ["stop", "content_filter"])
 async def test_openai_empty_with_terminal_finish_reason_does_not_retry(config, state, terminal_reason):
+    config.super_italian_mode = True
     """An empty completion with finish_reason='stop' (finished on purpose) or
     'content_filter' (refusal) is an outcome a bigger budget cannot fix — no
     escalated retry is spent; the stock-copy fallback takes over immediately."""
@@ -2475,6 +3362,7 @@ async def test_openai_partial_json_with_length_finish_reason_retries(config, sta
     escalated retry — the gate is 'cut at the cap', not 'came back empty'.
     Guards against narrowing the gate to empty-only, which would pass the rest
     of the suite while re-breaking the truncated-partial case."""
+    config.super_italian_mode = True
     from mammamiradio.hosts.scriptwriter import (
         _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR,
         _BANTER_MAX_TOKENS,
@@ -2510,6 +3398,7 @@ async def test_openai_partial_json_with_length_finish_reason_retries(config, sta
 async def test_openai_empty_with_no_finish_reason_retries(config, state):
     """An empty completion with finish_reason=None (SDK/edge shapes) is NOT a
     provable refusal — it gets the escalated retry."""
+    config.super_italian_mode = True
     config.anthropic_api_key = ""
     config.openai_api_key = "openai-key"
     host_name = config.hosts[0].name
@@ -2532,6 +3421,7 @@ async def test_openai_empty_with_no_finish_reason_retries(config, state):
 
 @pytest.mark.asyncio
 async def test_openai_both_attempts_empty_falls_to_stock_copy(config, state):
+    config.super_italian_mode = True
     """Both OpenAI attempts cut at the cap → loop exhausts → stock copy airs,
     and the failed attempt leaves an honest openai_empty_or_length ledger row."""
     import mammamiradio.hosts.scriptwriter as sw
@@ -2561,6 +3451,7 @@ async def test_openai_both_attempts_empty_falls_to_stock_copy(config, state):
 
 @pytest.mark.asyncio
 async def test_openai_deadline_skips_escalation_but_base_runs(config, state):
+    config.super_italian_mode = True
     """Past the total deadline the OpenAI escalation is skipped but the BASE
     fallback attempt still runs (floored at 45s) — the rescue ladder never
     shrinks, the deadline only bounds the new mechanism's tail."""
@@ -2588,6 +3479,7 @@ async def test_openai_deadline_skips_escalation_but_base_runs(config, state):
 
 @pytest.mark.asyncio
 async def test_anthropic_only_both_truncated_falls_to_stock_copy(config, state):
+    config.super_italian_mode = True
     """The Anthropic-only tier's terminal floor: base + escalated attempts both
     truncate, no OpenAI key → the truncation error reaches write_banter's catch
     and stock copy airs. Two calls prove the retry ran before the terminal raise."""
@@ -2616,6 +3508,7 @@ async def test_truncation_then_generic_error_keeps_escalated_openai_floor(config
     error → the OpenAI floor must still inherit the ESCALATED budget, not the
     base — otherwise the fallback re-runs the exact starved-floor failure the
     incident showed."""
+    config.super_italian_mode = True
     from mammamiradio.hosts.scriptwriter import (
         _ANTHROPIC_MAX_TOKENS_ESCALATION_FACTOR,
         _BANTER_MAX_TOKENS,
@@ -2664,6 +3557,7 @@ def test_warn_budget_pressure_thresholds(caplog):
 
 @pytest.mark.asyncio
 async def test_transition_caller_escalates_too(config, state):
+    config.super_italian_mode = True
     """The mechanism is generic across callers: a truncated 100-token
     transition retries at round(100 * factor) — cheap, fast, and equally valid."""
     from mammamiradio.hosts.scriptwriter import (
@@ -2697,6 +3591,7 @@ async def test_transition_caller_escalates_too(config, state):
 async def test_write_banter_populates_api_tokens_by_model(config, state):
     """End-to-end: a successful Anthropic banter call records tokens under the
     resolved model id, so the model-aware cost counter prices the right model."""
+    config.super_italian_mode = True
     config.anthropic_api_key = "test-key"
     host_name = config.hosts[0].name
     mock_usage = MagicMock()
@@ -2728,10 +3623,105 @@ async def test_write_banter_populates_api_tokens_by_model(config, state):
 
 
 @pytest.mark.asyncio
+async def test_generate_json_response_submission_guard_blocks_all_provider_calls(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    anthropic_client = MagicMock()
+    anthropic_client.messages = MagicMock()
+    anthropic_client.messages.create = AsyncMock()
+    openai_client = _mock_openai_response(json.dumps({"ok": True}))
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_client", return_value=anthropic_client) as get_anthropic,
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client) as get_openai,
+        pytest.raises(RuntimeError, match="submission revoked"),
+    ):
+        await _generate_json_response(
+            prompt="private Home context",
+            config=config,
+            state=state,
+            model="claude-test",
+            max_tokens=100,
+            caller="banter",
+            submission_guard=lambda: False,
+        )
+
+    get_anthropic.assert_not_called()
+    anthropic_client.messages.create.assert_not_awaited()
+    get_openai.assert_not_called()
+    openai_client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_json_response_rechecks_submission_guard_before_openai_fallback(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    anthropic_client = MagicMock()
+    anthropic_client.messages = MagicMock()
+    anthropic_client.messages.create = AsyncMock(return_value=_good_anthropic_response("not-json"))
+    anthropic_client.with_options.return_value = anthropic_client
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    guard = MagicMock(side_effect=[True, False])
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter._get_client", return_value=anthropic_client),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        pytest.raises(RuntimeError, match="submission revoked"),
+    ):
+        await _generate_json_response(
+            prompt="private Home context",
+            config=config,
+            state=state,
+            model="claude-test",
+            max_tokens=100,
+            caller="banter",
+            submission_guard=guard,
+        )
+
+    assert guard.call_count == 2
+    anthropic_client.messages.create.assert_awaited_once()
+    openai_client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_json_response_rechecks_submission_guard_before_anthropic_retry(config, state):
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = ""
+    anthropic_client = MagicMock()
+    anthropic_client.messages = MagicMock()
+    anthropic_client.messages.create = AsyncMock(return_value=_truncated_anthropic_response())
+    anthropic_client.with_options.return_value = anthropic_client
+    guard = MagicMock(side_effect=[True, False])
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._get_client", return_value=anthropic_client),
+        pytest.raises(RuntimeError, match="submission revoked"),
+    ):
+        await _generate_json_response(
+            prompt="private Home context",
+            config=config,
+            state=state,
+            model="claude-test",
+            max_tokens=100,
+            caller="banter",
+            submission_guard=guard,
+        )
+
+    assert guard.call_count == 2
+    anthropic_client.messages.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller", "category"),
     [
         ("banter", "script_banter"),
+        ("banter_listener_truth_repair", "script_banter"),
         ("news_flash", "script_banter"),
         ("transition", "script_transition"),
         ("ad", "script_ads"),
@@ -2765,7 +3755,7 @@ def test_script_cost_callers_have_valid_categories_and_model_routes(config):
     assert set(mapping.values()) <= set(LLM_COST_CATEGORIES)
     assert config.models.routing[MEMORY_EXTRACT_CALLER] == "fast"
     assert config.models.routing[MEMORY_EXTRACT_CALLER] == config.models.routing["transition"]
-    assert "direction" not in config.models.routing  # intentional DEFAULT_ROLE fallback
+    assert config.models.routing["direction"] == DEFAULT_ROLE
 
     for caller in mapping:
         role = config.models.routing.get(caller, DEFAULT_ROLE)
@@ -2845,11 +3835,12 @@ async def test_malformed_anthropic_response_does_not_mark_anthropic_active(confi
 
     assert result == {"ok": "fallback"}
     assert state.runtime_provider_state["script_provider"]["current_provider"] == "openai"
-    assert [event.to_provider for event in state.runtime_events] == ["openai"]
+    assert list(state.runtime_events) == []
 
 
 @pytest.mark.asyncio
 async def test_openai_call_logs_json_parse_failure_and_reraises(config, state, caplog):
+    config.super_italian_mode = True
     """When OpenAI returns malformed JSON, log fires with json_ok=False and JSONDecodeError propagates."""
     import logging
 
@@ -3025,6 +4016,256 @@ def test_usage_limit_classifier_matches_quota_patterns_only():
     assert _is_anthropic_usage_limit_error(Exception("404 model not found; usage limit reached")) is False
 
 
+def test_billing_error_is_classified_by_sdk_type():
+    from mammamiradio.hosts.scriptwriter import _is_anthropic_usage_limit_error
+
+    billing_error = _anthropic_status_error(
+        anthropic.APIStatusError,
+        402,
+        error_type="billing_error",
+    )
+
+    assert billing_error.status_code == 402
+    assert not isinstance(billing_error, anthropic.BadRequestError)
+    assert billing_error.type == "billing_error"
+    assert _is_anthropic_usage_limit_error(billing_error) is True
+
+
+def test_transient_classifier_wins_over_fuzzy_usage_and_provider_text():
+    from mammamiradio.hosts.scriptwriter import (
+        _is_anthropic_nonretryable_provider_error,
+        _is_anthropic_transient_error,
+        _is_anthropic_usage_limit_error,
+    )
+
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        message="usage limit reached while model was not found",
+        error_type="rate_limit_error",
+    )
+    overloaded = _anthropic_status_error(
+        anthropic.APIStatusError,
+        529,
+        error_type="overloaded_error",
+    )
+    ordinary_bad_request = _anthropic_status_error(
+        anthropic.BadRequestError,
+        400,
+        error_type="invalid_request_error",
+    )
+
+    assert _is_anthropic_transient_error(rate_limited) is True
+    assert _is_anthropic_transient_error(overloaded) is True
+    assert _is_anthropic_transient_error(ordinary_bad_request) is False
+    assert _is_anthropic_usage_limit_error(rate_limited) is False
+    assert _is_anthropic_nonretryable_provider_error(rate_limited) is False
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_seconds"),
+    [
+        ("30", 30),
+        ("9999", 60),
+        ("1", 5),
+        ("0", 5),
+        # A negative delta-seconds value is invalid, unlike zero, so use the
+        # conservative default rather than treating it as a very short retry.
+        ("-1", 20),
+        (None, 20),
+        ("garbage", 20),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", 20),
+        ("nan", 20),
+        ("inf", 20),
+    ],
+)
+def test_transient_backoff_seconds_honors_bounded_delta_retry_after(retry_after, expected_seconds):
+    from mammamiradio.hosts.scriptwriter import _anthropic_transient_backoff_seconds
+
+    headers = {"retry-after": retry_after} if retry_after is not None else None
+    exc = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+        headers=headers,
+    )
+
+    assert _anthropic_transient_backoff_seconds(exc) == expected_seconds
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_backoff_is_model_scoped_and_skips_repeated_anthropic_calls(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+        headers={"retry-after": "30"},
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=rate_limited)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(sw, "_emit_llm_call", wraps=sw._emit_llm_call) as emit_spy,
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 1
+    mock_client.with_options.assert_called_once_with(max_retries=0)
+    assert 0 < state.anthropic_disabled_until - sw.time.time() <= 31
+    assert state.anthropic_auth_failures == 0
+    assert sw._anthropic_blocked_model == "model-a"
+    fallback_reasons = [
+        call.kwargs["fallback_reason"]
+        for call in emit_spy.call_args_list
+        if call.kwargs.get("provider") == "openai" and call.kwargs.get("ok") is True
+    ]
+    assert fallback_reasons == ["anthropic_transient", "anthropic_transient_blocked"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_backoff_keeps_state_mirror_for_other_model(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+    from mammamiradio.web.streamer import _provider_health_snapshot, _script_provider_status
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+        headers={"retry-after": "30"},
+    )
+    ok_response = MagicMock()
+    ok_response.content = [MagicMock(text=json.dumps({"ok": "anthropic"}))]
+    ok_response.stop_reason = None
+    ok_response.usage = None
+
+    async def _create(**kwargs):
+        if kwargs["model"] == "model-a":
+            raise rate_limited
+        return ok_response
+
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=_create)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+        blocked_until = state.anthropic_disabled_until
+        blocked_error = state.anthropic_last_error
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-b", max_tokens=100, caller="banter"
+        )
+        provider_health = _provider_health_snapshot(config, state)
+        provider = _script_provider_status(config, state, provider_health)
+        third = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="banter"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "anthropic"}
+    assert third == {"ok": "fallback"}
+    assert state.anthropic_disabled_until == blocked_until
+    assert state.anthropic_disabled_until > sw.time.time()
+    assert state.anthropic_last_error == blocked_error
+    assert provider_health["anthropic"]["degraded"] is True
+    assert provider["current_provider"] == "openai"
+    assert provider["fallback_active"] is True
+    assert provider["recovery_mode"] == "circuit_breaker"
+    assert mock_client.messages.create.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_overload_backoff_is_account_wide_across_models(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    overloaded = _anthropic_status_error(
+        anthropic.APIStatusError,
+        529,
+        error_type="overloaded_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=overloaded)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="transition"
+        )
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-b", max_tokens=100, caller="transition"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 1
+    assert 0 < state.anthropic_disabled_until - sw.time.time() <= 21
+    assert sw._anthropic_blocked_model == ""
+    assert state.anthropic_auth_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_transient_without_openai_uses_stock_copy_without_benching_anthropic(config, state, monkeypatch):
+    import mammamiradio.hosts.scriptwriter as sw
+
+    config.openai_api_key = ""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=rate_limited)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+    ):
+        lines, _commit = await write_banter(state, config)
+
+    assert lines  # Terminal stock copy preserves the listener's audio path.
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_disabled_until == 0.0
+    assert state.anthropic_last_error == ""
+    assert sw._anthropic_auth_blocked_until == 0.0
+    assert sw._anthropic_blocked_model == ""
+
+
 @pytest.mark.asyncio
 async def test_model_not_found_backoff_is_scoped_to_model(config, state):
     import mammamiradio.hosts.scriptwriter as sw
@@ -3058,9 +4299,14 @@ async def test_model_not_found_backoff_is_scoped_to_model(config, state):
         first = await _generate_json_response(
             prompt="p", config=config, state=state, model="bad-model", max_tokens=100, caller="banter"
         )
+        blocked_until = state.anthropic_disabled_until
+        blocked_error = state.anthropic_last_error
         second = await _generate_json_response(
             prompt="p", config=config, state=state, model="good-model", max_tokens=100, caller="banter"
         )
+        assert state.anthropic_disabled_until == blocked_until
+        assert state.anthropic_disabled_until > sw.time.time()
+        assert state.anthropic_last_error == blocked_error
         third = await _generate_json_response(
             prompt="p", config=config, state=state, model="bad-model", max_tokens=100, caller="banter"
         )
@@ -3105,6 +4351,51 @@ async def test_usage_limit_backoff_is_account_wide_across_models(config, state):
     assert mock_client.messages.create.await_count == 1
     assert sw._anthropic_blocked_model == ""
     assert state.anthropic_auth_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_billing_error_backoff_is_account_wide_across_models(config, state):
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    billing_error = _anthropic_status_error(
+        anthropic.APIStatusError,
+        402,
+        error_type="billing_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=billing_error)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(sw, "_emit_llm_call", wraps=sw._emit_llm_call) as emit_spy,
+    ):
+        first = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-a", max_tokens=100, caller="transition"
+        )
+        second = await _generate_json_response(
+            prompt="p", config=config, state=state, model="model-b", max_tokens=100, caller="transition"
+        )
+
+    assert first == {"ok": "fallback"}
+    assert second == {"ok": "fallback"}
+    assert mock_client.messages.create.await_count == 1
+    assert state.anthropic_disabled_until > sw.time.time()
+    assert state.anthropic_auth_failures == 0
+    assert sw._anthropic_blocked_reason == "usage limit"
+    assert sw._anthropic_blocked_model == ""
+    fallback_reasons = [
+        call.kwargs["fallback_reason"]
+        for call in emit_spy.call_args_list
+        if call.kwargs.get("provider") == "openai" and call.kwargs.get("ok") is True
+    ]
+    assert fallback_reasons == ["anthropic_usage_limit", "anthropic_usage_limit_blocked"]
 
 
 @pytest.mark.asyncio
@@ -3153,6 +4444,7 @@ async def test_live_auth_error_no_openai_reraises(config, state):
 @pytest.mark.asyncio
 async def test_write_banter_injects_persona_context(config, state, tmp_path):
     """When a PersonaStore is attached, persona context appears in the prompt."""
+    config.super_italian_mode = True
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -3199,7 +4491,7 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
     # Verify persona context was in the prompt
     assert len(captured_prompts) == 1
     prompt_text = captured_prompts[0][0]["content"]
-    assert "listener_memory" in prompt_text
+    assert "station_memory" in prompt_text
     assert "jazz notturno" in prompt_text
 
     # Generation no longer persists persona memory. It only carries a post-air
@@ -3214,7 +4506,95 @@ async def test_write_banter_injects_persona_context(config, state, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_write_banter_keeps_v3_delivery_out_of_memory_transcript(config, state, tmp_path):
+    """A live V3 delivery cue rides the DialogueLine sidecar but must never leak into
+    the post-air memory/transcript projection (guards against an asdict()-style refactor)."""
+    config.super_italian_mode = True
+    from mammamiradio.core.sync import init_db
+    from mammamiradio.hosts.persona import PersonaStore
+
+    db_path = tmp_path / "persona.db"
+    init_db(db_path)
+    store = PersonaStore(db_path)
+    await store.update_persona({"new_theories": ["ama il jazz notturno"]})
+    await store.increment_session()
+    state.persona_store = store
+
+    marco = config.hosts[0]
+    marco.name = "Marco"
+    marco.engine = "elevenlabs"
+    marco.elevenlabs_model = "eleven_v3"
+    marco.delivery_profile = "marco"
+
+    response_json = json.dumps(
+        {
+            "lines": [{"host": "Marco", "text": "Ci siamo davvero!", "delivery": "energetic"}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+    )
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", _mock_anthropic_response(response_json)),
+    ):
+        result, commit = await write_banter(state, config)
+
+    # The cue is live on the line…
+    assert result[0].delivery == "energetic"
+    # …but the memory/transcript projection carries only host + text, never the cue.
+    memory = commit.memory_extraction
+    assert memory is not None
+    assert memory.script_lines == [{"host": "Marco", "text": "Ci siamo davvero!"}]
+    assert all("delivery" not in entry for entry in memory.script_lines)
+
+
+@pytest.mark.asyncio
+async def test_repair_banter_without_listener_context_returns_safe_exchange(config, state):
+    """The final truth fence can obtain a clean exchange without station context."""
+    first_host = config.hosts[0]
+    second_host = config.hosts[1] if len(config.hosts) > 1 else first_host
+    response = {
+        "lines": [
+            None,
+            {"host": first_host.name, "text": "[sarcastic] The music keeps moving."},
+            {"host": second_host.name, "text": "[laughs] And the studio is still awake."},
+            {"host": first_host.name, "text": ""},
+        ]
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new=AsyncMock(return_value=response),
+    ) as generate:
+        result = await repair_banter_without_listener_context(state, config)
+
+    assert result == [
+        DialogueLine(first_host, "The music keeps moving."),
+        DialogueLine(second_host, "And the studio is still awake."),
+    ]
+    assert all(line.delivery == "neutral" for line in result)
+    generate.assert_awaited_once()
+    assert "listener-session" not in generate.await_args.kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_repair_banter_without_listener_context_skips_without_llm(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=AsyncMock()) as generate:
+        result = await repair_banter_without_listener_context(state, config)
+
+    assert result is None
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_write_banter_prompt_includes_optional_context_blocks(config, state, tmp_path):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -3265,7 +4645,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
             ],
         ),
     ):
-        result, commit = await write_banter(state, config, is_first_listener=True)
+        result, commit = await write_banter(state, config)
 
     assert len(result) == 1
     prompt = captured["prompt"]
@@ -3278,8 +4658,8 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     assert "HIGH PRIORITY" in prompt
     assert "<listener_behavior>" in prompt
     assert "<arc_phase>" in prompt
-    assert "<listener_memory>" in prompt
-    assert "FIRST listener" in prompt
+    assert "<station_memory>" in prompt
+    assert "FIRST listener" not in prompt
     assert '"persona_updates"' not in prompt
     assert '"song_cues"' not in prompt
     assert state.ha_pending_directive == ""
@@ -3292,6 +4672,9 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
 
 @pytest.mark.asyncio
 async def test_write_banter_keeps_interrupt_directive_until_producer_queues(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     state.ha_pending_directive = "La pasta scotta. Interrompi tutto."
     state.chaos_pending = ChaosSubtype.URGENT_INTERRUPT
 
@@ -3308,38 +4691,43 @@ async def test_write_banter_keeps_interrupt_directive_until_producer_queues(conf
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
         result, _ = await write_banter(state, config)
 
-    assert result == [(config.hosts[0], "Muoviti.")]
+    assert result == [DialogueLine(config.hosts[0], "Muoviti.")]
     assert "HIGH PRIORITY" in captured["prompt"]
     assert "La pasta scotta" in captured["prompt"]
     assert state.ha_pending_directive == "La pasta scotta. Interrompi tutto."
 
 
 @pytest.mark.asyncio
-async def test_write_banter_prompt_includes_new_listener_block_for_non_first_listener(config, state):
+async def test_write_banter_prompt_excludes_connection_arrival_block(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_home_mood = "Mood sconosciuto"
+    state.ha_home_mood_en = "Unknown mood"
     state.ha_weather_arc = "Pioggia in avvicinamento"
     captured = {}
 
     async def _fake_generate_json_response(**kwargs):
         captured["prompt"] = kwargs["prompt"]
         return {
-            "lines": [{"host": config.hosts[0].name, "text": "Ci siete?"}],
+            "lines": [{"host": config.hosts[0].name, "text": "The rain is still coming, piano piano."}],
             "new_joke": None,
         }
 
     with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
-        result, _ = await write_banter(state, config, is_new_listener=True, is_first_listener=False)
+        result, _ = await write_banter(state, config)
 
     assert len(result) == 1
     prompt = captured["prompt"]
-    assert "A new listener JUST tuned in right now!" in prompt
+    assert "new listener" not in prompt.lower()
+    assert "tuned in" not in prompt.lower()
     assert "FIRST listener" not in prompt
-    assert "HOME MOOD: Mood sconosciuto" in prompt
+    assert "HOME MOOD: Unknown mood" in prompt
 
 
 @pytest.mark.asyncio
 async def test_write_banter_works_without_persona_store(config, state):
     """Banter generation still works when no persona store is attached."""
+    config.super_italian_mode = True
     assert not hasattr(state, "persona_store") or state.persona_store is None
 
     host_name = config.hosts[0].name
@@ -3364,6 +4752,7 @@ async def test_write_banter_works_without_persona_store(config, state):
 @pytest.mark.asyncio
 async def test_write_banter_defers_listener_request_mutation_until_commit(config, state):
     """Listener requests stay pending until the produced banter is actually committed."""
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     state.pending_requests.append(
         {
@@ -3743,6 +5132,7 @@ def test_listener_request_commit_apply_noops_when_request_missing(state):
 @pytest.mark.asyncio
 async def test_write_banter_survives_persona_get_failure(config, state, tmp_path):
     """Banter still generates when persona_store.get_persona() throws."""
+    config.super_italian_mode = True
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -3772,6 +5162,7 @@ async def test_write_banter_survives_persona_get_failure(config, state, tmp_path
 @pytest.mark.asyncio
 async def test_write_banter_does_not_apply_persona_updates_during_generation(config, state, tmp_path):
     """Banter generation carries memory metadata but never writes persona state inline."""
+    config.super_italian_mode = True
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -3814,7 +5205,7 @@ async def test_write_ad_returns_adscript(config, state):
         {
             "parts": [
                 {"type": "sfx", "sfx": "chime"},
-                {"type": "voice", "text": "Comprate ora!"},
+                {"type": "voice", "text": "Buy now, amici!"},
             ],
             "mood": "upbeat",
             "summary": "A test ad for TestBrand",
@@ -3838,13 +5229,14 @@ async def test_write_ad_returns_adscript(config, state):
     assert len(result.parts) == 2
     assert result.parts[0].type == "sfx"
     assert result.parts[1].type == "voice"
-    assert result.parts[1].text == "Comprate ora!"
+    assert result.parts[1].text == "Buy now, amici!"
 
 
 @pytest.mark.asyncio
 async def test_write_ad_strips_foreign_station_name_from_voice_parts(config, state):
     """Illusion guard wired into ads: an improvised competitor station name in an
     ad voice line is replaced with our station name before the spot airs."""
+    config.super_italian_mode = True
     brand = AdBrand(name="TestBrand", tagline="Il meglio", category="food")
     voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
 
@@ -3864,9 +5256,41 @@ async def test_write_ad_strips_foreign_station_name_from_voice_parts(config, sta
 
 
 @pytest.mark.asyncio
+async def test_write_ad_pharma_appends_ibuprofen_disclaimer_goblin(config, state):
+    """Fictional pharma ads, including Capellissimo, keep the deliberate disclaimer gag."""
+    config.super_italian_mode = True
+    brand = AdBrand(
+        name="Capellissimo",
+        tagline="I capelli che hai sempre sognato. Circa.",
+        category="pharma",
+    )
+    voices = {"default": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value={
+            "parts": [{"type": "voice", "text": "Capellissimo: capelli da sogno, circa."}],
+            "summary": "Capellissimo ad",
+        },
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    disclaimer = result.parts[-1]
+    assert disclaimer.type == "voice"
+    assert disclaimer.role == "disclaimer_goblin"
+    assert disclaimer.text == (
+        "È un medicinale a base di ibuprofene. Leggere attentamente "
+        "il foglio illustrativo. Autorizzazione del 10 dicembre 2015. "
+        "Non somministrare ai bambini al di sotto dei 12 anni."
+    )
+
+
+@pytest.mark.asyncio
 async def test_write_news_flash_strips_foreign_station_name(config, state):
     """Illusion guard wired into news flashes: an improvised competitor station
     name in the bulletin is replaced with our station name."""
+    config.super_italian_mode = True
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
@@ -3900,7 +5324,9 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
     assert len(result.parts) >= 1
     assert result.parts[0].type == "sfx"
     assert result.parts[0].sfx == "chime"
-    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Because you deserve it."]
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
 
 
 @pytest.mark.asyncio
@@ -3916,7 +5342,9 @@ async def test_write_ad_no_llm_restores_legacy_attention_script(config, state):
     assert result.summary == "Sempre il top"
     assert result.parts[0].type == "sfx"
     assert result.parts[0].sfx == "chime"
-    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Because you deserve it."]
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
 
 
 @pytest.mark.asyncio
@@ -3967,6 +5395,9 @@ async def test_write_ad_ensures_voice_part_when_llm_returns_none(config, state):
 
 @pytest.mark.asyncio
 async def test_write_ad_prompt_includes_campaign_and_home_context(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     captured = {}
     state.ha_context = "Il balcone e aperto."
     state.record_ad_spot(brand="SagaBrand", summary="Il primo capitolo")
@@ -4050,6 +5481,7 @@ def test_speaker_roles_constant():
 @pytest.mark.asyncio
 async def test_write_ad_multi_role_json(config, state):
     """write_ad parses multi-role JSON from LLM."""
+    config.super_italian_mode = True
     response_json = json.dumps(
         {
             "parts": [
@@ -4080,6 +5512,86 @@ async def test_write_ad_multi_role_json(config, state):
     assert "hammer" in roles
     assert "witness" in roles
     assert result.roles_used == sorted(roles)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ad_format", "partner_role"),
+    [("classic_pitch", "disclaimer_goblin"), ("duo_scene", "maniac")],
+)
+async def test_write_ad_replaces_partner_only_direct_campaign_output(config, state, ad_format, partner_role):
+    """A direct campaign cannot air solely through its supporting actor."""
+    response_json = json.dumps(
+        {
+            "parts": [
+                {"type": "voice", "text": "   ", "role": "hammer"},
+                {"type": "voice", "text": "Parlo solo io, partner!", "role": partner_role},
+            ],
+            "mood": "upbeat",
+            "summary": "Partner-only direct ad",
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    brand = AdBrand(
+        name="Owned Brand",
+        tagline="Tag",
+        category="tech",
+        campaign=CampaignSpine(spokesperson_voice="Owned Hammer", spokesperson_role="hammer"),
+    )
+    voices = {
+        "hammer": AdVoice(name="Owned Hammer", voice="owned", style="main", role="hammer"),
+        partner_role: AdVoice(name="House Partner", voice="partner", style="support", role=partner_role),
+    }
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format=ad_format)
+
+    assert result.format == "classic_pitch"
+    assert [part.role for part in result.parts if part.type == "voice"] == ["hammer"]
+
+
+@pytest.mark.asyncio
+async def test_write_ad_language_fallback_preserves_direct_role_and_format(config, state):
+    """A final language fallback remains an owned classic-pitch campaign."""
+    config.super_italian_mode = False
+    response_json = json.dumps(
+        {
+            "parts": [
+                {"type": "voice", "text": "Buy this now, amici, grazie, and keep the music moving.", "role": "hammer"},
+                {"type": "voice", "text": "The deal is ready for you today.", "role": "maniac"},
+            ],
+            "mood": "upbeat",
+            "summary": "Pharma direct campaign",
+            "callback_used": True,
+        }
+    )
+    mock_cls = _mock_anthropic_response(response_json)
+    brand = AdBrand(
+        name="Owned Pharma",
+        tagline="Tag",
+        category="pharma",
+        campaign=CampaignSpine(spokesperson_voice="Owned Hammer", spokesperson_role="hammer"),
+    )
+    voices = {
+        "hammer": AdVoice(name="Owned Hammer", voice="owned", style="main", role="hammer"),
+        "maniac": AdVoice(name="House Partner", voice="partner", style="support", role="maniac"),
+    }
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+        patch("mammamiradio.hosts.scriptwriter._normal_mode_language_ok", side_effect=[True, False]),
+    ):
+        result = await write_ad(brand, voices, state, config, ad_format="duo_scene", callback_gag="callback")
+
+    assert result.format == AdFormat.CLASSIC_PITCH
+    voice_parts = [part for part in result.parts if part.type == "voice"]
+    assert voice_parts[0].role == "hammer"
+    assert "hammer" in result.roles_used
+    assert state.pending_callback_landed is False
 
 
 @pytest.mark.asyncio
@@ -4114,6 +5626,7 @@ async def test_write_ad_legacy_json_compat(config, state):
 @pytest.mark.asyncio
 async def test_write_ad_demotes_duo_scene_with_single_role(config, state):
     """duo_scene with only 1 role in LLM output should be demoted to classic_pitch."""
+    config.super_italian_mode = True
     response_json = json.dumps(
         {
             "parts": [
@@ -4147,6 +5660,7 @@ async def test_write_ad_demotes_duo_scene_with_single_role(config, state):
 
 @pytest.mark.asyncio
 async def test_write_news_flash_returns_tuple(config, state):
+    config.super_italian_mode = True
     response_json = json.dumps({"text": "NOTIZIA BOMBA: i treni arrivano in orario."})
     mock_cls = _mock_anthropic_response(response_json)
 
@@ -4209,6 +5723,9 @@ async def test_write_news_flash_sports_prompt_prioritizes_clarity(config, state)
 @pytest.mark.asyncio
 async def test_write_news_flash_weather_injects_real_forecast(config, state):
     """Real-weather meteo: a live HA forecast is grounded into the weather flash."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     state.ha_weather_arc = "Meteo: pioggia, 12°C."
     state.ha_home_mood = "Serata cinema"
 
@@ -4237,6 +5754,9 @@ async def test_write_news_flash_weather_injects_real_forecast(config, state):
 @pytest.mark.asyncio
 async def test_write_news_flash_weather_forecast_without_mood(config, state):
     """Forecast present but no home mood: grounded prompt, no 'Home mood:' line."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     state.ha_weather_arc = "Meteo: soleggiato, 22°C."
     state.ha_home_mood = ""
 
@@ -4305,6 +5825,8 @@ async def test_write_news_flash_english_station_uses_english_weather_arc(config,
     """#627: an English station grounds the meteo flash in the ENGLISH arc, never
     the Italian one — injecting Italian reference data into an English prompt was
     the bug."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     config.station.language = "en"
     state.ha_weather_arc = "Meteo: pioggia battente, 12C."
     state.ha_weather_arc_en = "Forecast: heavy rain, 12C."
@@ -4393,17 +5915,18 @@ async def test_write_news_flash_exception_fallback_follows_spoken_mode(
     [("it", "Meteo: sereno."), ("en", "Forecast: clear."), ("de", "Forecast: clear.")],
 )
 def test_localized_weather_arc_selects_by_language(config, state, language, expected):
-    """The helper returns the native arc for Italian and the English arc for every
-    other language (including a third language like German), never the Italian arc."""
+    """Super Italian uses the native arc; Normal Mode uses the English projection."""
     state.ha_weather_arc = "Meteo: sereno."
     state.ha_weather_arc_en = "Forecast: clear."
     config.station.language = language
+    config.super_italian_mode = language == "it"
 
     assert scriptwriter_module._localized_weather_arc(state, config) == expected
 
 
 @pytest.mark.asyncio
 async def test_write_news_flash_strips_markdown_fences(config, state):
+    config.super_italian_mode = True
     response_text = '```json\n{"text": "Traffico bloccato."}\n```'
     mock_cls = _mock_anthropic_response(response_text)
 
@@ -4416,11 +5939,182 @@ async def test_write_news_flash_strips_markdown_fences(config, state):
     assert text == "Traffico bloccato."
 
 
+def test_stock_banter_and_chaos_exchanges_satisfy_turn_taking_contract(config):
+    """The recovery copy must obey the same no-stranded-speech invariant."""
+    for super_italian in (False, True):
+        config.super_italian_mode = super_italian
+        for exchange in _banter_fallback_pools(config):
+            assert _banter_turn_taking_ok(exchange)
+
+    for subtype in ChaosSubtype:
+        assert _banter_turn_taking_ok(_chaos_stock_exchange(config, subtype))
+
+    config.hosts = [_regular_hosts(config)[0]]
+    for super_italian in (False, True):
+        config.super_italian_mode = super_italian
+        for exchange in _banter_fallback_pools(config):
+            assert _banter_turn_taking_ok(exchange)
+    for subtype in ChaosSubtype:
+        assert _banter_turn_taking_ok(_chaos_stock_exchange(config, subtype))
+
+
+@pytest.mark.parametrize("cutoff", ["-", "--", '-")]', '-- " )'])
+def test_banter_turn_taking_treats_ascii_hyphens_as_cutoffs(config, cutoff):
+    """ASCII cutoff markers remain stranded unless a different host answers them."""
+    marco, giulia = _regular_hosts(config)[:2]
+
+    # Unanswered cutoff ending → stranded → rejected.
+    assert not _banter_turn_taking_ok(
+        [
+            (marco, "Questa canzone aveva davvero carattere."),
+            (giulia, f"No, ma aspetta{cutoff}"),
+        ]
+    )
+    # The same cut-in is valid when another host answers immediately.
+    assert _banter_turn_taking_ok(
+        [
+            (marco, f"No, ma aspetta{cutoff}"),
+            (giulia, "Il punto è che hai perso il ritmo."),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_banter_preserves_paired_different_host_cutoff(config, state):
+    """Marco may trail off when Giulia immediately answers him."""
+    config.super_italian_mode = True
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "Io volevo dire che—"},
+            {"host": giulia.name, "text": "No, il punto vero è che hai perso il ritmo."},
+        ],
+        "new_joke": None,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert [text for _, text in result] == [
+        "Io volevo dire che—",
+        "No, il punto vero è che hai perso il ritmo.",
+    ]
+    assert _banter_turn_taking_ok(result)
+
+
+@pytest.mark.asyncio
+async def test_write_banter_terminal_cutoff_uses_stock_exchange(config, state):
+    config.super_italian_mode = True
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "Questa canzone aveva davvero carattere."},
+            {"host": giulia.name, "text": "No, aspetta—"},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cutoff", ["-", "--", '-")]', '-- " )'])
+async def test_write_banter_normal_mode_ascii_terminal_cutoff_uses_stock_exchange(config, state, cutoff):
+    """Normal Mode rejects an orphaned ASCII cut-off after all output guards."""
+    config.super_italian_mode = False
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "That track had a real point of view tonight."},
+            {"host": giulia.name, "text": f"No, wait{cutoff}"},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_same_speaker_cutoff_uses_stock_exchange(config, state):
+    config.super_italian_mode = True
+    marco = _regular_hosts(config)[0]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "Aspetta—"},
+            {"host": marco.name, "text": "volevo soltanto dire che questa parte funziona."},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_deduped_unpaired_fragment_uses_stock_exchange(config, state):
+    """The guard checks the emitted sequence after de-duplication, not raw JSON."""
+    config.super_italian_mode = True
+    marco, giulia = _regular_hosts(config)[:2]
+    response = {
+        "lines": [
+            {"host": marco.name, "text": "No davvero"},
+            {"host": giulia.name, "text": "No davvero"},
+        ],
+        "new_joke": None,
+    }
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.choice", side_effect=lambda choices: choices[0]),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert result == _banter_fallback_pools(config)[0]
+
+
 # --- write_transition tests ---
 
 
 @pytest.mark.asyncio
 async def test_write_transition_returns_host_and_text(config, state):
+    config.super_italian_mode = True
     state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
     response_json = json.dumps({"text": "Bellissima... e adesso una pausa."})
     mock_cls = _mock_anthropic_response(response_json)
@@ -4429,33 +6123,101 @@ async def test_write_transition_returns_host_and_text(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config, next_segment="ad")
+        host, text, _ = await write_transition(state, config, next_segment="ad")
 
     assert isinstance(host, HostPersonality)
     assert text == "Bellissima... e adesso una pausa."
 
 
 @pytest.mark.asyncio
+async def test_write_transition_returns_played_track_ref_matching_last_played(config, state):
+    """The third return value lets a caller detect when a later queue reorder
+    breaks this transition's "just finished playing" claim (see
+    _front_insert_queue_and_shadow's stale-head drop)."""
+    config.super_italian_mode = True
+    track = Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")
+    state.played_tracks = [track]
+    response_json = json.dumps({"text": "Bellissima... e adesso una pausa."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, _text, played_track_ref = await write_transition(state, config, next_segment="ad")
+
+    assert played_track_ref == track.cache_key
+
+
+@pytest.mark.asyncio
+async def test_write_transition_played_track_ref_none_when_no_history(config, state):
+    """No played_tracks history yet (opening of the show) means no specific
+    track claim to invalidate later."""
+    state.played_tracks = []
+    response_json = json.dumps({"text": "E si comincia."})
+    mock_cls = _mock_anthropic_response(response_json)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
+    ):
+        _host, _text, played_track_ref = await write_transition(state, config, next_segment="ad")
+
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
 async def test_write_transition_no_key_returns_fallback(config, state):
     config.anthropic_api_key = ""
-    for next_seg, expected in [("banter", "All right..."), ("ad", "And now..."), ("news_flash", "Attention...")]:
-        host, text = await write_transition(state, config, next_segment=next_seg)
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+    for next_seg, expected in [
+        ("banter", "Stay with us, amici — we have one more thing to settle."),
+        ("ad", "Stay close, amici — a quick word from our sponsors."),
+        ("news_flash", "Hold that thought, amici — a bulletin just reached the desk."),
+    ]:
+        host, text, played_track_ref = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
+        # Generic fallback lines never name a specific track, even with history present.
+        assert played_track_ref is None
 
 
 @pytest.mark.asyncio
 async def test_write_transition_no_key_super_italian_returns_italian_fallback(config, state):
     config.super_italian_mode = True
     config.anthropic_api_key = ""
-    for next_seg, expected in [("banter", "Allora..."), ("ad", "E adesso..."), ("news_flash", "Attenzione...")]:
-        host, text = await write_transition(state, config, next_segment=next_seg)
+    for next_seg, expected in [
+        ("banter", "Restate con noi, amici — c'è ancora qualcosa da chiarire."),
+        ("ad", "Restate con noi, amici — un messaggio dai nostri sponsor."),
+        ("news_flash", "Attenzione, amici — è arrivato un aggiornamento in redazione."),
+    ]:
+        host, text, _ = await write_transition(state, config, next_segment=next_seg)
         assert isinstance(host, HostPersonality)
         assert text == expected
 
 
 @pytest.mark.asyncio
+async def test_super_italian_non_italian_stock_fallbacks_use_english(config, state):
+    """Italian stock is reserved for a Super Italian station that speaks Italian."""
+    config.super_italian_mode = True
+    config.station.language = "de"
+    config.anthropic_api_key = ""
+    brand = AdBrand(name="FallbackBrand", tagline="Italian slogan", category="tech")
+
+    _host, transition, _ = await write_transition(state, config, next_segment="ad")
+
+    assert scriptwriter_module._spoken_fallback_language(config) == "en"
+    assert transition == "Stay close, amici — a quick word from our sponsors."
+    assert (
+        scriptwriter_module._news_flash_fallback(config)
+        == "And in breaking news: everything's fine, amici. More or less."
+    )
+    assert scriptwriter_module._ad_fallback_text(brand, config) == "FallbackBrand. Because you deserve it, amici."
+
+
+@pytest.mark.asyncio
 async def test_write_transition_api_exception_returns_fallback(config, state):
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
     mock_client = MagicMock()
     mock_client.messages = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=Exception("timeout"))
@@ -4465,29 +6227,112 @@ async def test_write_transition_api_exception_returns_fallback(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config, next_segment="banter")
+        host, text, played_track_ref = await write_transition(state, config, next_segment="banter")
 
     assert isinstance(host, HostPersonality)
-    assert text == "All right..."
+    assert text == "Stay with us, amici — we have one more thing to settle."
+    # The LLM-exception fallback also uses a generic line — no track claim to invalidate.
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
+async def test_write_transition_provider_exception_uses_segment_stock_copy(config, state):
+    """A direct provider failure cannot leave a partial handoff on air."""
+    config.super_italian_mode = False
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("provider unavailable"),
+    ):
+        _host, text, played_track_ref = await write_transition(state, config, next_segment="news_flash", song_cues=[])
+
+    assert text == "Hold that thought, amici — a bulletin just reached the desk."
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
+async def test_write_transition_short_successful_response_uses_stock_copy(config, state):
+    """A successful JSON response still falls back when its spoken text is cut off."""
+    config.super_italian_mode = False
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": "And now..."},
+    ):
+        _host, text, played_track_ref = await write_transition(state, config, next_segment="ad", song_cues=[])
+
+    assert text == "Stay close, amici — a quick word from our sponsors."
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("next_segment", "short_text", "expected"),
+    [
+        ("banter", "Ecco—", "Restate con noi, amici — c'è ancora qualcosa da chiarire."),
+        ("ad", "E adesso...", "Restate con noi, amici — un messaggio dai nostri sponsor."),
+        ("news_flash", "Attenzione", "Attenzione, amici — è arrivato un aggiornamento in redazione."),
+    ],
+)
+async def test_write_transition_super_italian_invalid_response_uses_exact_stock_copy(
+    config, state, next_segment, short_text, expected
+):
+    config.super_italian_mode = True
+    state.played_tracks = [Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")]
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": short_text},
+    ):
+        _host, text, played_track_ref = await write_transition(state, config, next_segment=next_segment, song_cues=[])
+
+    assert text == expected
+    assert played_track_ref is None
+
+
+@pytest.mark.asyncio
+async def test_write_transition_valid_complete_response_preserves_track_reference(config, state):
+    track = Track(title="L'Estate", artist="Vivaldi", duration_ms=180000, spotify_id="v1")
+    state.played_tracks = [track]
+    text = "That landing had teeth, amici, so we keep the room moving."
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        return_value={"text": text},
+    ):
+        _host, actual_text, played_track_ref = await write_transition(
+            state, config, next_segment="banter", song_cues=[]
+        )
+
+    assert actual_text == text
+    assert played_track_ref == track.cache_key
 
 
 @pytest.mark.asyncio
 async def test_write_transition_strips_markdown_fences(config, state):
-    response_text = '```json\n{"text": "Che bel pezzo..."}\n```'
+    config.super_italian_mode = True
+    response_text = '```json\n{"text": "Che bel pezzo, andiamo avanti."}\n```'
     mock_cls = _mock_anthropic_response(response_text)
 
     with (
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        _host, text = await write_transition(state, config)
+        _host, text, _ = await write_transition(state, config)
 
-    assert text == "Che bel pezzo..."
+    assert text == "Che bel pezzo, andiamo avanti."
 
 
 @pytest.mark.asyncio
 async def test_write_transition_exclaim_style_selected_when_cues_present(config, state):
     """Exclaim style fires when r < 0.10 AND song_cues is non-empty."""
+    config.super_italian_mode = True
     state.played_tracks = [Track(title="Volare", artist="Modugno", duration_ms=180000, spotify_id="v1")]
     cues = [{"type": "anthem", "text": "starts slow then builds to a crescendo"}]
     captured_prompts = []
@@ -4500,7 +6345,7 @@ async def test_write_transition_exclaim_style_selected_when_cues_present(config,
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.05),
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config, song_cues=cues)
+        host, text, _ = await write_transition(state, config, song_cues=cues)
 
     assert isinstance(host, HostPersonality)
     assert text == "—e dai, basta così— e adesso parliamo."
@@ -4510,6 +6355,7 @@ async def test_write_transition_exclaim_style_selected_when_cues_present(config,
 @pytest.mark.asyncio
 async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
     """Empty list suppresses cue loading; exclaim style never fires without cues."""
+    config.super_italian_mode = True
     state.played_tracks = [
         Track(
             title="Volare",
@@ -4523,16 +6369,16 @@ async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
 
     async def capture_prompt(*args, **kwargs):
         captured_prompts.append(kwargs.get("prompt", args[0] if args else ""))
-        return {"text": "Bellissima, e adesso..."}
+        return {"text": "Bellissima, e adesso cambiamo marcia."}
 
     with (
         patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.05),
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config, song_cues=[])
+        host, text, _ = await write_transition(state, config, song_cues=[])
 
     assert isinstance(host, HostPersonality)
-    assert text == "Bellissima, e adesso..."
+    assert text == "Bellissima, e adesso cambiamo marcia."
     assert captured_prompts, "_generate_json_response was never called — patch path may be wrong"
     assert "Musical exclamation FIRST" not in captured_prompts[0]
 
@@ -4540,6 +6386,7 @@ async def test_write_transition_exclaim_suppressed_when_no_cues(config, state):
 @pytest.mark.asyncio
 async def test_write_transition_loads_song_cues_from_current_track(config, state):
     """Default transition path should auto-load per-track cues for live callers."""
+    config.super_italian_mode = True
     state.played_tracks = [
         Track(
             title="Volare",
@@ -4561,7 +6408,7 @@ async def test_write_transition_loads_song_cues_from_current_track(config, state
         patch("mammamiradio.playlist.song_cues.get_cues", new=AsyncMock(return_value=fake_cues)) as mock_get_cues,
         patch("mammamiradio.hosts.scriptwriter._generate_json_response", capture_prompt),
     ):
-        host, text = await write_transition(state, config)
+        host, text, _ = await write_transition(state, config)
 
     assert isinstance(host, HostPersonality)
     assert text == "—e dai, basta così— e adesso parliamo."
@@ -4689,7 +6536,7 @@ async def test_write_transition_default_song_cues_is_none(config, state):
         patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
         patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", mock_cls),
     ):
-        host, text = await write_transition(state, config)
+        host, text, _ = await write_transition(state, config)
 
     assert isinstance(host, HostPersonality)
     assert isinstance(text, str)
@@ -4807,6 +6654,7 @@ def test_fix_wrong_station_names_replaces_competitor():
 @pytest.mark.asyncio
 async def test_write_banter_dedup_drops_identical_consecutive_lines(config, state):
     """Banter dedup guard removes consecutive lines with identical text."""
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     # LLM returns two consecutive identical lines — a real copy-paste error
     response_json = json.dumps(
@@ -4839,6 +6687,8 @@ async def test_write_banter_dedup_drops_identical_consecutive_lines(config, stat
 @pytest.mark.asyncio
 async def test_banter_ha_tiered_no_mood(config, state):
     """When no mood is active, prompt says 'ONE item'."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_context = "Luci accese."
 
     captured = {}
@@ -4857,6 +6707,9 @@ async def test_banter_ha_tiered_no_mood(config, state):
 @pytest.mark.asyncio
 async def test_banter_ha_tiered_with_mood(config, state):
     """When mood is active, prompt says 'UP TO TWO'."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     state.ha_context = "Luci accese."
     state.ha_home_mood = "Serata cinema"
 
@@ -4876,6 +6729,9 @@ async def test_banter_ha_tiered_with_mood(config, state):
 @pytest.mark.asyncio
 async def test_banter_weather_mood_fusion(config, state):
     """When both weather and mood are set, fusion instruction appears."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     state.ha_context = "Luci accese."
     state.ha_home_mood = "Serata cinema"
     state.ha_weather_arc = "Meteo: pioggia, 12°C."
@@ -4913,6 +6769,9 @@ async def test_banter_weather_only_no_fusion(config, state):
 @pytest.mark.asyncio
 async def test_banter_security_boundary_preserved(config, state):
     """HA instructions must be OUTSIDE <home_state_data> tags."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
     state.ha_context = "Test data."
     state.ha_home_mood = "Serata cinema"
 
@@ -4941,6 +6800,7 @@ async def test_banter_security_boundary_preserved(config, state):
 @pytest.mark.asyncio
 async def test_write_banter_memory_commit_uses_empty_youtube_id_when_no_track_id(config, state, tmp_path):
     """When a track has no youtube_id, the deferred memory commit cannot file song cues."""
+    config.super_italian_mode = True
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -4975,6 +6835,7 @@ async def test_write_banter_memory_commit_uses_empty_youtube_id_when_no_track_id
 @pytest.mark.asyncio
 async def test_write_banter_bump_usage_exception_is_swallowed(config, state, tmp_path):
     """bump_usage raising must not abort banter generation."""
+    config.super_italian_mode = True
     from mammamiradio.core.sync import init_db
     from mammamiradio.hosts.persona import PersonaStore
 
@@ -5032,6 +6893,64 @@ def test_module_state_reset_after_reload():
     assert _sw._anthropic_client is None
 
 
+def test_fresh_process_reaches_anthropic_generation_after_a_previous_backoff():
+    """A restart has no persisted breaker state, so the next listener can use Anthropic again."""
+    scriptwriter_module._anthropic_auth_blocked_key = "previous-key"
+    scriptwriter_module._anthropic_auth_blocked_until = float("inf")
+    script = textwrap.dedent(
+        """
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import mammamiradio.hosts.scriptwriter as scriptwriter
+        from mammamiradio.core.config import load_config
+        from mammamiradio.core.models import StationState, Track
+
+        config = load_config()
+        config.anthropic_api_key = "fresh-key"
+        config.openai_api_key = ""
+        state = StationState(
+            playlist=[Track(title="Test", artist="Artist", duration_ms=1000, spotify_id="test")]
+        )
+        content = MagicMock()
+        content.text = json.dumps({"ok": True})
+        response = MagicMock()
+        response.content = [content]
+        response.usage = None
+        client = MagicMock()
+        client.with_options.return_value = client
+        client.messages = MagicMock()
+        client.messages.create = AsyncMock(return_value=response)
+
+        with patch.object(scriptwriter.anthropic, "AsyncAnthropic", return_value=client):
+            result = asyncio.run(
+                scriptwriter._generate_json_response(
+                    prompt="p",
+                    config=config,
+                    state=state,
+                    model="claude-test",
+                    max_tokens=100,
+                    caller="banter",
+                )
+            )
+
+        assert result == {"ok": True}
+        assert client.messages.create.await_count == 1
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_has_script_llm_is_public():
     """has_script_llm (no underscore) must be importable and callable after rename."""
     from pathlib import Path
@@ -5043,6 +6962,98 @@ def test_has_script_llm_is_public():
     config = load_config(toml_path)
     # Result is bool — function is accessible and callable
     assert isinstance(has_script_llm(config), bool)
+
+
+def test_has_script_llm_true_with_registry_false_when_registry_unavailable(config):
+    """The gate that keeps a None model out of the API path.
+
+    With keys present it must be True only while the registry resolves a route;
+    an unavailable registry (empty catalog/profiles) must read as no-LLM so the
+    callers degrade to stock copy instead of sending model=None to a provider.
+    """
+    from mammamiradio.hosts.scriptwriter import has_script_llm
+
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    # Real registry loaded by the fixture resolves a route.
+    assert has_script_llm(config) is True
+
+    # Registry unavailable — keys still set, but no route resolves.
+    config.models = _empty_models()
+    assert has_script_llm(config) is False
+
+
+@pytest.mark.asyncio
+async def test_write_banter_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """Keys present but no registry route -> stock copy, never model=None to an API."""
+    config.super_italian_mode = True
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.models = _empty_models()
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        result, _ = await write_banter(state, config)
+
+    assert len(result) == 1
+    assert result[0][1] == "E torniamo alla musica!"
+
+
+@pytest.mark.asyncio
+async def test_write_ad_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """Ad generation with keys but no registry route -> minimal stock spot, no API call."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.models = _empty_models()
+    brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
+    voices = {"default": AdVoice(name="Voce Due", voice="it-IT-DiegoNeural", style="calm")}
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        result = await write_ad(brand, voices, state, config)
+
+    assert result.brand == "FallbackBrand"
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_write_news_flash_degrades_to_stock_copy_when_registry_unavailable(config, state):
+    """News flash with keys but no registry route -> mode-driven stock line, no API call."""
+    config.anthropic_api_key = "test-key"
+    config.openai_api_key = "openai-key"
+    config.super_italian_mode = False
+    config.models = _empty_models()
+
+    anthropic_cls = MagicMock(side_effect=AssertionError("Anthropic must not be constructed"))
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", anthropic_cls),
+        patch(
+            "mammamiradio.hosts.scriptwriter._get_openai_client",
+            side_effect=AssertionError("OpenAI must not be constructed"),
+        ),
+    ):
+        _host, text, _category = await write_news_flash(state, config)
+
+    assert "breaking news" in text.lower()
 
 
 # --- WS3-A concurrent auth-flood prevention ---
@@ -5093,6 +7104,48 @@ async def test_concurrent_401s_trigger_exactly_one_anthropic_attempt(config, sta
     )
     assert state.anthropic_auth_failures == 1
     assert all(not isinstance(r, Exception) for r in results), f"unexpected exceptions: {results}"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_429s_trigger_one_short_circuit_trip_and_prompt_fallbacks(config, state):
+    """Concurrent overload work should reach the backup writer without a retry storm."""
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    rate_limited = _anthropic_status_error(
+        anthropic.RateLimitError,
+        429,
+        error_type="rate_limit_error",
+    )
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=rate_limited)
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+        patch.object(
+            sw, "_trip_anthropic_circuit_and_fallback", wraps=sw._trip_anthropic_circuit_and_fallback
+        ) as trip_spy,
+    ):
+        results = await asyncio.gather(
+            *(
+                _generate_json_response(
+                    prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+                )
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+
+    assert mock_client.messages.create.await_count == 1
+    assert trip_spy.call_count == 1
+    assert openai_client.chat.completions.create.call_count == 8
+    assert all(result == {"ok": "fallback"} for result in results), f"unexpected results: {results}"
 
 
 @pytest.mark.asyncio
@@ -5229,6 +7282,45 @@ async def test_backoff_expiry_allows_exactly_one_retry_and_logs_once(config, sta
 
 
 @pytest.mark.asyncio
+async def test_transient_backoff_expiry_logs_once_for_each_newly_expired_block(config, state, caplog):
+    """Each expired transient block gets one recovery log before the next short trip."""
+    import logging
+
+    import mammamiradio.hosts.scriptwriter as sw
+    from mammamiradio.hosts.scriptwriter import _generate_json_response
+
+    config.openai_api_key = "openai-key"
+    openai_client = _mock_openai_response(json.dumps({"ok": "fallback"}))
+    errors = [_anthropic_status_error(anthropic.RateLimitError, 429, error_type="rate_limit_error") for _ in range(3)]
+    mock_client = MagicMock()
+    mock_client.messages = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=errors)
+    caplog.set_level(logging.INFO, logger="mammamiradio.hosts.scriptwriter")
+
+    with (
+        patch("mammamiradio.hosts.scriptwriter._anthropic_client", None),
+        patch("mammamiradio.hosts.scriptwriter._openai_client", None),
+        patch("mammamiradio.hosts.scriptwriter.anthropic.AsyncAnthropic", MagicMock(return_value=mock_client)),
+        patch("mammamiradio.hosts.scriptwriter._get_openai_client", return_value=openai_client),
+    ):
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
+        sw._anthropic_auth_blocked_until = sw.time.time() - 1
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
+        sw._anthropic_auth_blocked_until = sw.time.time() - 1
+        await _generate_json_response(
+            prompt="p", config=config, state=state, model="claude-test", max_tokens=100, caller="banter"
+        )
+
+    assert mock_client.messages.create.await_count == 3
+    expiry_logs = [record for record in caplog.records if "backoff expired" in record.getMessage()]
+    assert len(expiry_logs) == 2
+
+
+@pytest.mark.asyncio
 async def test_key_rotation_clears_block(config, state):
     """Loading a different anthropic_api_key resets the block so the new key is tried."""
     import mammamiradio.hosts.scriptwriter as sw
@@ -5259,6 +7351,8 @@ async def test_key_rotation_clears_block(config, state):
 @pytest.mark.asyncio
 async def test_write_banter_injects_running_gag_with_instruction_outside_fence(config, state):
     """Gag DATA goes inside <home_state_data>; the use/no-use INSTRUCTION outside it."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
     state.ha_running_gag = "La macchina del caffè: spento/a → acceso/a, di nuovo stasera."
     captured = {}
 
@@ -5291,6 +7385,7 @@ async def test_write_banter_injects_running_gag_with_instruction_outside_fence(c
 @pytest.mark.asyncio
 async def test_write_banter_omits_running_gag_block_when_empty(config, state):
     """S2 empty-fallback: no gag → no STASERA block, no instruction, no crash."""
+    config.super_italian_mode = True
     state.ha_running_gag = ""
     captured = {}
 
@@ -5312,12 +7407,12 @@ async def test_write_banter_omits_running_gag_block_when_empty(config, state):
 
 # ---------------------------------------------------------------------------
 # Language-mode policy: every LLM speech surface carries the shared mode rule
-# (Super Italian ON = full Italian; OFF = roughly 70% English / 30% Italian).
+# (Super Italian ON = full Italian; OFF = roughly 75% English / 25% Italian).
 # ---------------------------------------------------------------------------
 
 _LANG_MODE_CASES = [
-    (True, "ALL text in Italian.", "Roughly 70% English"),
-    (False, "Roughly 70% English / 30% Italian", "ALL text in Italian."),
+    (True, "ALL text in Italian.", "Target 75% English"),
+    (False, "Target 75% English / 25% Italian", "ALL text in Italian."),
 ]
 
 
@@ -5329,7 +7424,7 @@ async def test_news_flash_prompt_carries_mode_language_rule(config, state, super
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
-        return_value={"text": "Notizia assurda ma sicura."},
+        return_value={"text": "Breaking news, amici: the update is certain."},
     ) as mock_generate:
         await write_news_flash(state, config, category="breaking")
 
@@ -5341,7 +7436,7 @@ async def test_news_flash_prompt_carries_mode_language_rule(config, state, super
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("super_italian", "expected"),
-    [(True, "ALL text in Italian."), (False, "Roughly 70% English / 30% Italian")],
+    [(True, "ALL text in Italian."), (False, "Target 75% English / 25% Italian")],
 )
 async def test_weather_flash_language_governed_by_mode_rule_only(config, state, super_italian, expected):
     """The weather category description carries no language clause of its own — it
@@ -5351,7 +7446,7 @@ async def test_weather_flash_language_governed_by_mode_rule_only(config, state, 
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
-        return_value={"text": "Sole fuori, caos in studio."},
+        return_value={"text": "Sunny outside, amici — chaos in the studio."},
     ) as mock_generate:
         await write_news_flash(state, config, category="weather")
 
@@ -5390,7 +7485,7 @@ async def test_ad_prompt_carries_mode_language_rule(config, state, super_italian
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
         return_value={
-            "parts": [{"type": "voice", "text": "Comprate ora!"}],
+            "parts": [{"type": "voice", "text": "Buy now, amici!"}],
             "mood": "upbeat",
             "summary": "Un test",
         },
@@ -5422,7 +7517,7 @@ async def test_record_hunt_block_carries_mode_language_rule(config, state, super
         patch(
             "mammamiradio.hosts.scriptwriter._generate_json_response",
             new_callable=AsyncMock,
-            return_value={"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None},
+            return_value={"lines": [{"host": host_name, "text": "Okay, we are here, amici."}], "new_joke": None},
         ) as mock_generate,
         patch("mammamiradio.hosts.scriptwriter.write_persisted_heading"),
     ):
@@ -5437,6 +7532,7 @@ async def test_record_hunt_block_carries_mode_language_rule(config, state, super
 
 @pytest.mark.asyncio
 async def test_record_hunt_coexists_with_persistent_festival_mode(config, state):
+    config.super_italian_mode = True
     host_name = config.hosts[0].name
     config.party_mode = "festival"
     state.heading = Heading(
@@ -5452,7 +7548,7 @@ async def test_record_hunt_coexists_with_persistent_festival_mode(config, state)
     with patch(
         "mammamiradio.hosts.scriptwriter._generate_json_response",
         new_callable=AsyncMock,
-        return_value={"lines": [{"host": host_name, "text": "Ok"}], "new_joke": None},
+        return_value={"lines": [{"host": host_name, "text": "Ok, ci siamo."}], "new_joke": None},
     ) as mock_generate:
         await write_banter(state, config)
 

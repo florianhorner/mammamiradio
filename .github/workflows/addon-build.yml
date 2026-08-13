@@ -8,6 +8,11 @@ on:
       - "mammamiradio/**"
       - "pyproject.toml"
       - "radio.toml"
+      - "model_registry.toml"
+      - "scripts/validate-addon.sh"
+      - "scripts/ha-green-launch-smoke.py"
+      - "scripts/ha-green-perf-smoke.py"
+      - ".github/workflows/addon-build.yml"
   workflow_dispatch:
 
 # Serialize runs on the same ref so two near-simultaneous merges don't run
@@ -81,12 +86,13 @@ jobs:
         run: |
           cp -r mammamiradio/ ha-addon/mammamiradio/mammamiradio/
           cp pyproject.toml ha-addon/mammamiradio/
+          cp model_registry.toml ha-addon/mammamiradio/
 
-      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -110,28 +116,55 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: build
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
     steps:
-      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+      # Needed by "Assert installed model registry": it hashes the canonical
+      # root model_registry.toml against the copy baked into the image. Without
+      # a checkout the file is absent on the runner and the step fails.
+      # Read-only: this checkout only reads the registry for hashing, so the
+      # token is not persisted into .git/config (zizmor: artipacked).
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull amd64 image
-        id: pull_amd64
-        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+      - name: Pull exact SHA image
+        id: pull_image
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+        run: docker pull "$IMAGE_REF"
 
       - name: Assert installed recovery assets
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}"
+          IMAGE="$IMAGE_REF"
           docker run --rm -i "$IMAGE" python3 - <<'PY'
           from importlib import resources
+          from pathlib import Path
           import subprocess
+
+          from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
+          from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset
+
+          REQUIRED_RECOVERY_ASSETS = ("continuity_1.mp3", "emergency_tone.mp3")
 
           try:
               recovery_dir = resources.files("mammamiradio").joinpath("assets", "demo", "recovery")
@@ -139,31 +172,33 @@ jobs:
               raise SystemExit(f"cannot import mammamiradio package: {exc}") from exc
 
           try:
-              clips = sorted(
-                  (clip for clip in recovery_dir.iterdir() if clip.is_file() and clip.name.endswith(".mp3")),
-                  key=lambda clip: clip.name,
-              )
+              clips = {
+                  clip.name: clip
+                  for clip in recovery_dir.iterdir()
+                  if clip.is_file() and clip.name.endswith(".mp3")
+              }
           except (FileNotFoundError, NotADirectoryError, OSError) as exc:
               raise SystemExit(f"missing recovery asset directory in installed image: {exc}") from exc
 
-          if not clips:
-              raise SystemExit("no installed recovery MP3s found under mammamiradio/assets/demo/recovery/")
-
-          serviceable = []
-          for clip in clips:
+          failures = []
+          for asset_name in REQUIRED_RECOVERY_ASSETS:
+              clip = clips.get(asset_name)
+              if clip is None:
+                  failures.append(f"{asset_name}: missing")
+                  continue
               try:
                   size = len(clip.read_bytes())
               except OSError as exc:
-                  raise SystemExit(f"could not read installed recovery MP3 {clip.name}: {exc}") from exc
-              if size > 1024:
-                  serviceable.append((clip, size))
+                  failures.append(f"{asset_name}: unreadable ({exc})")
+                  continue
+              if size <= 1024:
+                  failures.append(f"{asset_name}: only {size} bytes")
+                  continue
+              asset_path = Path(DEMO_ASSETS_DIR) / "recovery" / asset_name
+              if not is_approved_packaged_audio_asset(asset_path, assets_root=Path(DEMO_ASSETS_DIR)):
+                  failures.append(f"{asset_name}: manifest/hash validation failed")
+                  continue
 
-          if not serviceable:
-              names = ", ".join(clip.name for clip in clips)
-              raise SystemExit(f"installed recovery MP3s are missing or too small: {names}")
-
-          failures = []
-          for clip, size in serviceable:
               try:
                   with resources.as_file(clip) as path:
                       result = subprocess.run(
@@ -186,51 +221,83 @@ jobs:
               except FileNotFoundError as exc:
                   raise SystemExit("ffprobe is not installed in the image") from exc
               except subprocess.TimeoutExpired:
-                  failures.append(f"{clip.name}: ffprobe timed out")
+                  failures.append(f"{asset_name}: ffprobe timed out")
                   continue
 
               stdout = result.stdout.strip()
               stderr = result.stderr.strip()
               if result.returncode == 0 and "audio" in stdout.lower():
-                  print(f"recovery asset OK: {clip.name} ({size} bytes)")
-                  raise SystemExit(0)
-              failures.append(f"{clip.name}: {stderr or stdout or f'ffprobe exit {result.returncode}'}")
+                  print(f"recovery asset OK: {asset_name} ({size} bytes)")
+                  continue
+              failures.append(f"{asset_name}: {stderr or stdout or f'ffprobe exit {result.returncode}'}")
 
-          raise SystemExit(
-              "no ffprobe-playable installed recovery MP3 found; "
-              + "; ".join(failures)
-          )
+          if failures:
+              raise SystemExit("required recovery asset validation failed: " + "; ".join(failures))
           PY
 
-      - name: Run container smoke test
-        if: ${{ always() && steps.pull_amd64.outcome == 'success' }}
+      - name: Assert installed model registry
+        env:
+          # Route trusted expansions through env so they reach the script as shell
+          # variables, not inline ${{ }} interpolation (zizmor: template-injection).
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
         run: |
-          # The addon entrypoint (rootfs/run.sh) hardcodes uvicorn to bind
-          # 0.0.0.0:8000 — the HA Supervisor ingress contract requires it.
-          # The MAMMAMIRADIO_PORT env var is overwritten inside the container,
-          # so the host-side port mapping must target the container's real port (8000).
-          # Supervisor always sets SUPERVISOR_TOKEN; the addon's tokenless-LAN-admin
-          # path requires it (see config._is_addon). Without it the image boots in
-          # standalone mode, where binding 0.0.0.0 with no admin token is a fatal
-          # config error and uvicorn never starts.
-          docker run -d --name mamma-smoke \
-            -p 8765:8000 \
-            -e LOG_LEVEL=WARNING \
-            -e SUPERVISOR_TOKEN=smoke-ci \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
-          sleep 40
-          HEALTH=$(curl -sS --retry 8 --retry-delay 3 --retry-connrefused http://localhost:8765/healthz)
-          echo "$HEALTH"
-          STATUS=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
-          QE=$(echo "$HEALTH" | python3 -c 'import json,sys; print(float(json.load(sys.stdin).get("queue_empty_elapsed_s",0) or 0))')
-          if [ "$STATUS" = "failing" ] || awk "BEGIN{exit !($QE > 30)}"; then
-            echo "::error::Smoke failed: status=$STATUS queue_empty_elapsed_s=$QE"
-            docker logs mamma-smoke 2>&1 | tail -50
+          set -euo pipefail
+          IMAGE="$IMAGE_REF"
+          EXPECTED="$(sha256sum model_registry.toml | awk '{print $1}')"
+          ACTUAL="$(docker run --rm -i "$IMAGE" python3 - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+
+          registry = Path("/app/model_registry.toml")
+          if not registry.is_file():
+              raise SystemExit("missing /app/model_registry.toml in installed image")
+          print(sha256(registry.read_bytes()).hexdigest())
+          PY
+          )"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Installed model_registry.toml does not match the canonical root registry"
             exit 1
           fi
-          echo "Smoke OK: status=$STATUS queue_empty_elapsed_s=$QE"
-          docker logs mamma-smoke 2>&1 | tail -50
+          echo "Installed model registry matches the canonical root registry"
 
-      - name: Cleanup
-        if: always()
-        run: docker stop mamma-smoke && docker rm mamma-smoke || true
+      - name: Run built-image launch smoke
+        if: ${{ always() && steps.pull_image.outcome == 'success' }}
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+        run: python3 scripts/ha-green-launch-smoke.py --image "$IMAGE_REF"
+
+      - name: Verify published add-on port
+        if: ${{ always() && steps.pull_image.outcome == 'success' }}
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-${{ matrix.arch }}:${{ github.sha }}
+          SMOKE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          CONTAINER_NAME="mamma-published-${SMOKE_ARCH}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run --detach \
+            --name "$CONTAINER_NAME" \
+            --publish 127.0.0.1:8765:8000 \
+            --env LOG_LEVEL=WARNING \
+            --env SUPERVISOR_TOKEN=smoke-ci \
+            "$IMAGE_REF"
+
+          HEALTH="$(
+            curl --fail --silent --show-error \
+              --retry 20 --retry-all-errors --retry-delay 1 \
+              --max-time 3 \
+              http://127.0.0.1:8765/healthz
+          )"
+          python3 - "$HEALTH" <<'PY'
+          import json
+          import sys
+
+          payload = json.loads(sys.argv[1])
+          if payload.get("status") != "ok":
+              raise SystemExit(f"published /healthz was not healthy: {payload}")
+          print("Published add-on port is reachable and healthy")
+          PY

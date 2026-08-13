@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -34,7 +35,11 @@ def _heading() -> Heading:
 
 
 def _producer_config():
-    return SimpleNamespace(playlist=SimpleNamespace(repeat_cooldown=8, artist_cooldown=3))
+    return SimpleNamespace(
+        playlist=SimpleNamespace(repeat_cooldown=8, artist_cooldown=3),
+        cache_dir=Path("cache"),
+        music_dir=Path("music"),
+    )
 
 
 def test_accepted_tagged_selection_arms_heading_once():
@@ -151,6 +156,8 @@ async def test_write_banter_prompt_frames_heading_as_request_mood(tmp_path):
     config.openai_api_key = ""
     config.cache_dir = tmp_path
     config.party_mode = None
+    # Heading announcement semantics are independent of the spoken-language policy.
+    config.super_italian_mode = True
     heading = _heading()
     state = StationState(heading=heading, heading_pending_announcement=heading.label)
     captured: dict[str, str] = {}
@@ -186,6 +193,8 @@ async def test_hunt_start_notice_does_not_mark_first_record_announced(tmp_path):
     config.openai_api_key = ""
     config.cache_dir = tmp_path
     config.party_mode = None
+    # Heading announcement semantics are independent of the spoken-language policy.
+    config.super_italian_mode = True
     heading = _heading()
     state = StationState(
         heading=heading,
@@ -241,6 +250,8 @@ async def test_discarded_heading_notice_rearms_but_queued_notice_spends_once(tmp
     config.openai_api_key = ""
     config.cache_dir = tmp_path
     config.party_mode = None
+    # Heading announcement semantics are independent of the spoken-language policy.
+    config.super_italian_mode = True
     heading = _heading()
     tagged = _track("Vibe", heading_id=heading.id)
     state = StationState(playlist=[tagged], heading=heading, heading_pending_announcement=heading.label)

@@ -1,0 +1,3 @@
+Record Hunt delivered share — 8-track hunt vs 150-track pool, 6000 picks, seed=42
+  OLD fixed x4 lift : 17.6%
+  NEW adaptive lift : 44.2%  (target HEADING_TARGET_SHARE=45%)

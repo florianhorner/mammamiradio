@@ -20,8 +20,8 @@ What is pinned here:
 2. an operator AIR-NEXT discarded by that gate releases ``operator_force_pending``
    so the operator is not locked out (``producer.py:3022-3023``);
 3. direct-enqueue paths (prewarm + bridges, via ``_enqueue_with_egress`` with no
-   front-insert) air with NO up-next shadow row, while outer error-recovery
-   rescue — which flows through the epilogue — DOES get a row (``producer.py:3060``);
+   front-insert) publish the same identity-backed up-next row as the main-loop
+   epilogue, while outer error-recovery rescue follows that same contract;
 4. prewarm discards a stale segment when the SOURCE switches mid-render — it keys on
    ``source_revision`` (true switches only), not the broad ``playlist_revision``, so a
    benign in-place edit keeps the pre-roll; and a switch landing during the egress encode
@@ -46,16 +46,29 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mammamiradio.audio.audio_quality import AudioQualityError
+from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    GenerationWasteReason,
+    PlaylistSource,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
+    RenderedMusicTrack,
     _adjacent_music_source,
     _enqueue_with_egress,
     _normalized_cache_path,
     prewarm_first_segment,
     run_producer,
 )
+from mammamiradio.web.status_payload import _source_readiness_status
+from mammamiradio.web.streamer import _apply_ban
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -149,20 +162,23 @@ async def _wait_for(predicate, timeout: float = 5.0) -> None:
         # A true source switch (switch_playlist) bumps BOTH source_revision and
         # playlist_revision → classified stale_source.
         (["source_revision", "playlist_revision"], GenerationWasteReason.STALE_SOURCE),
-        # A same-source playlist edit (shuffle/add/move/enrich) bumps only
-        # playlist_revision → classified stale_playlist (#397 split).
-        (["playlist_revision"], GenerationWasteReason.STALE_PLAYLIST),
+        # A source switch is checked on its own axis, so it discards even when the
+        # broad playlist counter did not move.
+        (["source_revision"], GenerationWasteReason.STALE_SOURCE),
         (["chaos_cutover_epoch"], GenerationWasteReason.STALE_CHAOS),
     ],
 )
 @pytest.mark.asyncio
 async def test_stale_gate_discards_generated_speech(tmp_path, stale_fields, expected_reason):
-    """A TIME_CHECK built before a source switch, a same-source playlist edit, or a
-    chaos cutover is discarded by the same shared epilogue gate that guards music
-    (``producer.py``). Pins that the gate is NOT music-specific, covers all stale
-    axes, and classifies a true source switch (``stale_source``) apart from a
-    same-source edit (``stale_playlist``); a discard queues nothing and runs no
-    success callback (``state.segments_produced`` stays 0)."""
+    """A TIME_CHECK built before a source switch or a chaos cutover is discarded by
+    the same shared epilogue gate that guards music (``producer.py``). Pins that the
+    gate is NOT music-specific and that a true source switch classifies as
+    ``stale_source``; a discard queues nothing and runs no success callback
+    (``state.segments_produced`` stays 0).
+
+    A bare ``playlist_revision`` bump is deliberately NOT in this list — see
+    ``test_benign_playlist_edit_keeps_generated_speech``. Speech is not bound to a
+    rotation row, so a pool that merely grew must not bin a finished render."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
@@ -199,6 +215,316 @@ async def test_stale_gate_discards_generated_speech(tmp_path, stale_fields, expe
             await _cancel(task)
 
 
+@pytest.mark.asyncio
+async def test_benign_playlist_edit_keeps_generated_speech(tmp_path):
+    """A pool edit cannot make speech stale — the scriptwriter never reads the pool.
+
+    The counterpart to the parametrized gate test above: bumping only
+    ``playlist_revision`` around a TIME_CHECK must leave the finished render
+    alone, not bin it.
+    """
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _staling_probe(_path):
+        state.playlist.append(Track(title="Nuova", artist="Artista", duration_ms=190_000, spotify_id="demo3"))
+        state.playlist_revision += 1
+        return 1.0
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_tone", MagicMock()),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_staling_probe),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await _wait_for(lambda: queue.qsize() >= 1)
+            assert state.discard_by_reason.get(GenerationWasteReason.STALE_PLAYLIST, 0) == 0
+        finally:
+            await _cancel(task)
+
+
+@pytest.mark.parametrize(
+    ("edit", "should_survive"),
+    [
+        ("append", True),  # the 2026-07-24 incident: Chaos direction-adds grew the pool
+        ("reverse", True),  # a shuffle reorders but changes nothing about the render
+        ("remove_rendered", False),  # the song genuinely left the rotation
+    ],
+)
+@pytest.mark.asyncio
+async def test_benign_playlist_edits_keep_rendered_music(tmp_path, edit, should_survive):
+    """Only a REMOVAL invalidates finished music; a pool that grew or moved does not.
+
+    Regression test for 2026-07-24: enabling Chaos Mode added eight direction
+    tracks to the rotation, which bumped ``playlist_revision`` and binned a
+    177-second Pi render of a song that was still perfectly in the pool. The
+    queue then starved and the station bridged on canned continuity twice.
+    """
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    rendered = state.playlist[0]
+
+    def _edit_probe(_path):
+        if edit == "append":
+            state.playlist.append(Track(title="Nuova", artist="Artista", duration_ms=190_000, spotify_id="demo3"))
+        elif edit == "reverse":
+            state.playlist.reverse()
+        else:
+            state.playlist = [t for t in state.playlist if t.normalized_key != rendered.normalized_key]
+        state.playlist_revision += 1
+        return 1.0
+
+    async def _render(track, *_args, **_kwargs):
+        path = tmp_path / "rendered.mp3"
+        path.write_bytes(b"audio")
+        return producer.RenderedMusicTrack(track=track, path=path, cache_path=path, cache_hit=True)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._select_accepted_music_track", return_value=rendered),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", side_effect=_edit_probe),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            if should_survive:
+                await _wait_for(lambda: queue.qsize() >= 1)
+                assert state.discard_by_reason.get(GenerationWasteReason.STALE_PLAYLIST, 0) == 0
+            else:
+                await _wait_for(lambda: state.discard_by_reason.get(GenerationWasteReason.STALE_PLAYLIST, 0) >= 1)
+                assert queue.empty()
+        finally:
+            await _cancel(task)
+
+
+def test_epilogue_and_admission_stale_predicates_agree():
+    """The render-time gate and the admission-time re-check must never diverge.
+
+    Both call ``_music_segment_left_rotation``. This walks the whole decision
+    matrix so a future edit to one site cannot silently drift from the other —
+    which is how the original bug survived: the prewarm path already knew a
+    benign edit is not staleness, and the main loop never learned it.
+    """
+    in_pool = Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1")
+    state = StationState(playlist=[in_pool])
+
+    def _music(title: str, artist: str, **extra) -> Segment:
+        return Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/cache/x.mp3"),
+            metadata={"title": f"{artist} – {title}", "title_only": title, "artist": artist, **extra},
+        )
+
+    cases = {
+        "in_pool": (_music("Canzone Uno", "Artista"), False),
+        "removed": (_music("Sparita", "Artista"), True),
+        "case_and_space_insensitive": (_music("  canzone UNO ", " artista "), False),
+        "rescue_fill": (_music("Sparita", "Artista", rescue=True), False),
+        "speech": (Segment(type=SegmentType.BANTER, path=Path("/x.mp3"), metadata={"title": "Marco & Giulia"}), False),
+    }
+
+    for name, (segment, expected) in cases.items():
+        assert producer._music_segment_left_rotation(state, segment) is expected, name
+
+    # An empty pool means "no rotation right now", not "this song was removed".
+    # Reading it as removal bins every finished render during any clear-then-
+    # repopulate window (a source switch mid-flight, startup before the first
+    # fetch) — minutes of Pi CPU discarded, and it opens the very starvation gap
+    # the rescue ladder then has to cover. Deleting that guard leaves the matrix
+    # above entirely green, so it needs its own case.
+    empty_pool = StationState(playlist=[])
+    assert producer._music_segment_left_rotation(empty_pool, _music("Sparita", "Artista")) is False, "empty_pool"
+
+    # Deciding the same way is not enough — BOTH gates must actually consult the
+    # shared predicate. Without this the matrix above passes happily while one
+    # site quietly grows its own copy, which is exactly how the original bug
+    # survived: the prewarm path already knew a benign edit is not staleness and
+    # the main loop never learned it.
+    import inspect
+
+    loop_source = inspect.getsource(producer._run_producer_inner)
+    epilogue, _, admission = loop_source.partition("def _enqueue_stale_reason")
+    assert "_music_segment_left_rotation" in epilogue, "render epilogue stopped using the shared predicate"
+    assert "_music_segment_left_rotation" in admission, "_enqueue_stale_reason stopped using the shared predicate"
+    # Neither may fall back to a bare revision compare as its discard trigger.
+    for site, source in (("epilogue", epilogue), ("admission", admission)):
+        for line in source.splitlines():
+            stripped = line.strip()
+            if "state.playlist_revision" not in stripped or stripped.startswith("#"):
+                continue
+            assert "_music_segment_left_rotation" in stripped or "=" in stripped, (
+                f"{site} compares playlist_revision without the rotation-membership check: {stripped}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_unavailable_music_render_closes_its_timing(tmp_path):
+    """An unavailable music render is a failed attempt, not an abandoned next-cycle artifact."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _unavailable_render(*_args, **_kwargs):
+        await _REAL_ASYNCIO_SLEEP(0)
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_unavailable_render),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await _wait_for(
+                lambda: any(
+                    timing.get("kind") == SegmentType.MUSIC.value and timing.get("reason") == "render_unavailable"
+                    for timing in state.render_timings
+                )
+            )
+        finally:
+            await _cancel(task)
+
+    timing = next(timing for timing in state.render_timings if timing.get("reason") == "render_unavailable")
+    assert timing["outcome"] == "failed"
+    assert not any(timing.get("reason") == "abandoned" for timing in state.render_timings)
+
+
+@pytest.mark.asyncio
+async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_path):
+    """The blocklist fence cannot let a retired render undo source readiness."""
+    track = Track(
+        title="Canzone Uno",
+        artist="Artista",
+        duration_ms=200_000,
+        spotify_id="local1",
+        source="local",
+        local_path=tmp_path / "source.mp3",
+    )
+    track.local_path.write_bytes(b"audio")
+    state = StationState(playlist=[track], listeners_active=1)
+    config = _make_config(tmp_path)
+    config.music_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    rendered_path = tmp_path / "rendered.mp3"
+    rendered_path.write_bytes(b"audio")
+    render_started = asyncio.Event()
+    finish_render = asyncio.Event()
+
+    async def _render_then_finish(*_args, **_kwargs):
+        render_started.set()
+        await finish_render.wait()
+        return RenderedMusicTrack(
+            track=track,
+            path=rendered_path,
+            cache_path=rendered_path,
+            cache_hit=True,
+        )
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render_then_finish),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.wait_for(render_started.wait(), timeout=1.0)
+            result = _apply_ban(state, config, [track], queue=queue)
+            assert result["removed"] == 1
+            assert _source_readiness_status(config, state)["sources"]["local"]["status"] == "unavailable"
+
+            finish_render.set()
+            await _wait_for(lambda: state.discard_by_reason.get(GenerationWasteReason.BLOCKLIST_GATE, 0) >= 1)
+        finally:
+            await _cancel(task)
+
+    readiness = _source_readiness_status(config, state)
+    assert queue.empty()
+    assert state.playlist == []
+    assert readiness["sources"]["local"]["status"] == "unavailable"
+    assert readiness["sources"]["local"]["playable"] == 0
+    assert readiness["programming_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_producer_closes_in_flight_render_timing(tmp_path):
+    """Shutdown during an awaited render cannot leave timing open into a later task."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    render_started = asyncio.Event()
+    hold_render = asyncio.Event()
+
+    async def _blocked_render(*_args, **_kwargs):
+        render_started.set()
+        await hold_render.wait()
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_blocked_render),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        await asyncio.wait_for(render_started.wait(), timeout=1.0)
+        assert state._render_timing_started > 0
+        await _cancel(task)
+        await _REAL_ASYNCIO_SLEEP(0)
+
+    assert state._render_timing_started == 0
+    assert state.render_timings[0]["outcome"] == "failed"
+    assert state.render_timings[0]["reason"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_music_quality_rejection_closes_its_timing(tmp_path):
+    """A quality rejection is recorded at rejection time, not as an abandoned attempt later."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    rendered_path = tmp_path / "rejected.mp3"
+    rendered_path.write_bytes(b"audio")
+
+    async def _render_rejected_track(track, *_args, **_kwargs):
+        await _REAL_ASYNCIO_SLEEP(0)
+        return producer.RenderedMusicTrack(
+            track=track,
+            path=rendered_path,
+            cache_path=rendered_path,
+            cache_hit=False,
+        )
+
+    def _reject_quality(*_args, **_kwargs):
+        raise AudioQualityError("too quiet")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render_rejected_track),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_reject_quality),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await _wait_for(
+                lambda: any(
+                    timing.get("kind") == SegmentType.MUSIC.value
+                    and timing.get("reason") == GenerationWasteReason.QUALITY_GATE_REJECT
+                    for timing in state.render_timings
+                )
+            )
+        finally:
+            await _cancel(task)
+
+    timing = next(
+        timing
+        for timing in state.render_timings
+        if timing.get("kind") == SegmentType.MUSIC.value
+        and timing.get("reason") == GenerationWasteReason.QUALITY_GATE_REJECT
+    )
+    assert timing["outcome"] == "discarded"
+    assert not any(timing.get("reason") == "abandoned" for timing in state.render_timings)
+
+
 # ---------------------------------------------------------------------------
 # 2. Air-next discarded by the stale gate releases the operator one-at-a-time guard.
 # ---------------------------------------------------------------------------
@@ -217,6 +543,10 @@ async def test_air_next_stale_discard_releases_operator_guard(tmp_path):
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     def _staling_probe(_path):
+        # The subject here is operator-guard release on discard, not which stale
+        # axis fired. Use a source switch: a bare playlist_revision bump no
+        # longer discards a TIME_CHECK, which is not bound to a rotation row.
+        state.source_revision += 1
         state.playlist_revision += 1
         return 1.0
 
@@ -237,19 +567,99 @@ async def test_air_next_stale_discard_releases_operator_guard(tmp_path):
             await _cancel(task)
 
 
+@pytest.mark.asyncio
+async def test_air_next_rejected_during_egress_releases_operator_guard(tmp_path):
+    """A cutover during final egress cannot leave every later trigger locked out."""
+    state = _make_state()
+    state.force_next = SegmentType.TIME_CHECK
+    state.operator_force_pending = SegmentType.TIME_CHECK
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _invalidate_during_egress(segment, _config):
+        state.continuity_epoch += 1
+        return segment
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_tone", MagicMock()),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._apply_egress", side_effect=_invalidate_during_egress),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await _wait_for(
+                lambda: any(
+                    item.get("reason") == GenerationWasteReason.STALE_CONTINUITY for item in state.render_timings
+                )
+            )
+        finally:
+            await _cancel(task)
+
+    assert state.operator_force_pending is None
+    assert queue.empty()
+    timing = next(item for item in state.render_timings if item.get("reason") == GenerationWasteReason.STALE_CONTINUITY)
+    assert timing["outcome"] == "discarded"
+
+
+@pytest.mark.asyncio
+async def test_air_next_capacity_rejection_uses_one_consistent_reason(tmp_path):
+    """Preserving an earlier air-next reports overflow in both waste and timing."""
+    state = _make_state()
+    state.force_next = SegmentType.TIME_CHECK
+    state.operator_force_pending = SegmentType.TIME_CHECK
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=1)
+    existing = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "existing-air-next.mp3",
+        duration_sec=30.0,
+        metadata={"title": "Existing air-next", "air_next": True, "queue_id": "existing"},
+        ephemeral=False,
+    )
+    existing.path.write_bytes(b"existing")
+    queue.put_nowait(existing)
+    state.queued_segments = [{"id": "existing", "type": "banter", "label": "Existing air-next"}]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.generate_tone", MagicMock()),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=lambda segment, _: segment),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await _wait_for(
+                lambda: any(
+                    item.get("reason") == GenerationWasteReason.AIR_NEXT_OVERFLOW for item in state.render_timings
+                )
+            )
+        finally:
+            await _cancel(task)
+
+    assert state.operator_force_pending is None
+    assert list(queue._queue) == [existing]
+    assert state.discard_by_reason.get(GenerationWasteReason.AIR_NEXT_OVERFLOW) == 1
+    assert state.render_timings[0]["reason"] == GenerationWasteReason.AIR_NEXT_OVERFLOW
+
+
 # ---------------------------------------------------------------------------
-# 3. Shadow-row visibility: direct-enqueue paths get NO row; epilogue rescue does.
+# 3. Shadow-row visibility: every successful admission gets an identity-backed row.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_direct_enqueue_airs_without_shadow_row(tmp_path):
-    """The funnel prewarm + bridges use (``_enqueue_with_egress`` without
-    front-insert) queues audio but appends NO up-next shadow row — those segments
-    air invisibly in the queue projection. Also pins that a rescue fill skips the
+async def test_direct_enqueue_publishes_matching_shadow_row(tmp_path):
+    """A direct bridge is real queued audio, so Scaletta receives the same stable
+    identity-backed row as a normal producer commit. The rescue still skips the
     egress colour pass (patch ``apply_broadcast_chain``, never ``_apply_egress`` —
     mocking the latter would hide the rescue-skip branch)."""
     state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     bridge = tmp_path / "bridge.mp3"
@@ -266,14 +676,44 @@ async def test_direct_enqueue_airs_without_shadow_row(tmp_path):
 
     assert ok is True
     assert queue.qsize() == 1  # the bridge audio aired
-    assert state.queued_segments == []  # but produced no up-next row
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
+    assert state.queued_segments[0]["label"] == "Resume bridge"
+    assert SEGMENT_PLAYLIST_SOURCE_KIND_KEY not in seg.metadata
     m_chain.assert_not_called()  # rescue skipped the egress colour pass
 
 
 @pytest.mark.asyncio
-async def test_prewarm_airs_without_shadow_row(tmp_path):
-    """A pre-warmed first segment is queued but invisible in the up-next shadow
-    list until it airs (``prewarm_first_segment`` never appends a row)."""
+async def test_direct_enqueue_binds_ordinary_music_to_active_playlist_source(tmp_path):
+    state = _make_state()
+    state.playlist_source = PlaylistSource(kind="charts", source_id="it", label="Italian charts")
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    audio_path = tmp_path / "chart-track.mp3"
+    audio_path.write_bytes(b"audio")
+    seg = Segment(
+        type=SegmentType.MUSIC,
+        path=audio_path,
+        ephemeral=False,
+        metadata={
+            "artist": "Artist",
+            "title": "Artist – Track",
+            "title_only": "Track",
+            "audio_source": "download",
+        },
+    )
+
+    with patch(f"{PRODUCER_MODULE}._apply_egress", return_value=seg):
+        assert await _enqueue_with_egress(queue, state, config, seg) is True
+
+    queued = queue.get_nowait()
+    assert queued.metadata[SEGMENT_PLAYLIST_SOURCE_KIND_KEY] == "charts"
+
+
+@pytest.mark.asyncio
+async def test_prewarm_publishes_matching_shadow_row(tmp_path):
+    """A pre-warmed first segment is real queued audio, so it must be visible in
+    Scaletta with the stable id carried by the matching Segment."""
     state = _make_state()
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue()
@@ -288,7 +728,10 @@ async def test_prewarm_airs_without_shadow_row(tmp_path):
 
     assert result is True
     assert queue.qsize() == 1
-    assert state.queued_segments == []  # prewarm is invisible in up-next until aired
+    queued = queue.get_nowait()
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == queued.metadata["queue_id"]
+    assert state.queued_segments[0]["label"] == queued.metadata["title"]
 
 
 @pytest.mark.asyncio
@@ -496,7 +939,9 @@ async def test_operator_error_recovery_front_inserts_rescue_before_consecutive_f
 @pytest.mark.parametrize(
     ("stale_field", "expected_reason"),
     [
-        ("playlist", GenerationWasteReason.STALE_PLAYLIST),
+        # No "playlist" case: the recovery segment is a rescue fill, which is
+        # pool-independent by construction and must survive a benign pool edit.
+        # `test_rescue_music_survives_benign_playlist_edit` pins that directly.
         ("source", GenerationWasteReason.STALE_SOURCE),
         ("chaos", GenerationWasteReason.STALE_CHAOS),
     ],
@@ -615,6 +1060,88 @@ async def test_error_recovery_enqueue_failure_awaits_consecutive_failure_backoff
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "expected_reason",
+    [
+        GenerationWasteReason.STALE_CONTINUITY,
+        GenerationWasteReason.STALE_SOURCE,
+        GenerationWasteReason.STALE_CHAOS,
+        GenerationWasteReason.SESSION_STOPPED,
+        GenerationWasteReason.BLOCKLIST_GATE,
+    ],
+)
+@pytest.mark.asyncio
+async def test_blocked_queue_put_retracts_segment_if_it_becomes_stale_before_capacity(tmp_path, expected_reason):
+    """A full queue can make admission await after the first stale check.
+
+    The exact segment admitted when capacity opens must be removed synchronously
+    if a live cutover landed during that wait, before its shadow row or commit
+    side effects become visible.
+    """
+    state = _make_state()
+    state.begin_render_timing(SegmentType.MUSIC.value)
+    config = _make_config(tmp_path)
+    blocker = Segment(type=SegmentType.MUSIC, path=tmp_path / "blocker.mp3", metadata={"title": "Blocker"})
+    blocker.path.write_bytes(b"blocker")
+    candidate = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "candidate.mp3",
+        metadata={"title": "Candidate", "title_only": "Candidate", "artist": "Artist"},
+        ephemeral=True,
+    )
+    candidate.path.write_bytes(b"candidate")
+    put_started = asyncio.Event()
+
+    class ObservedQueue(asyncio.Queue[Segment]):
+        async def put(self, item: Segment) -> None:
+            if item is candidate:
+                put_started.set()
+            await super().put(item)
+
+    queue = ObservedQueue(maxsize=1)
+    queue.put_nowait(blocker)
+    stale_reason: str | None = None
+
+    def _stale_reason() -> str | None:
+        return stale_reason
+
+    with (
+        patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, return_value=candidate),
+        patch(f"{PRODUCER_MODULE}._schedule_restart_handoff_spool") as schedule_spool,
+    ):
+        enqueue_task = asyncio.create_task(
+            _enqueue_with_egress(
+                queue,
+                state,
+                config,
+                candidate,
+                shadow_entry={"id": "candidate", "type": "music", "label": "Candidate"},
+                stale_check=_stale_reason,
+            )
+        )
+        await asyncio.wait_for(put_started.wait(), timeout=1.0)
+        await _REAL_ASYNCIO_SLEEP(0.01)
+        if expected_reason == GenerationWasteReason.SESSION_STOPPED:
+            state.session_stopped = True
+        elif expected_reason == GenerationWasteReason.BLOCKLIST_GATE:
+            state.blocklist[("artist", "candidate")] = {"display": "Artist - Candidate"}
+        else:
+            stale_reason = expected_reason
+        assert queue.get_nowait() is blocker
+        queue.task_done()
+        admitted = await asyncio.wait_for(enqueue_task, timeout=1.0)
+
+    state.finish_render_timing("discarded", reason=expected_reason)
+    assert admitted is False
+    assert queue.empty()
+    await asyncio.wait_for(queue.join(), timeout=1.0)
+    assert state.queued_segments == []
+    assert state.discard_by_reason == {expected_reason: 1}
+    assert not candidate.path.exists()
+    schedule_spool.assert_not_called()
+    assert state.render_timings[0]["stages_ms"]["admission"] >= 1
+
+
 @pytest.mark.asyncio
 async def test_prewarm_discards_stale_song_on_revision_bump(tmp_path):
     """A ``/api/playlist/load`` (a true source switch, bumping ``source_revision``) landing
@@ -697,6 +1224,7 @@ async def test_prewarm_discards_on_source_switch_during_egress(tmp_path):
     assert result is False  # caught by the post-egress stale check, not queued
     assert queue.empty()
     assert len(state.played_tracks) == 0
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_SOURCE) == 1
 
 
 @pytest.mark.asyncio
@@ -722,6 +1250,94 @@ async def test_prewarm_discards_stale_song_on_chaos_epoch_bump(tmp_path):
     assert result is False
     assert queue.empty()
     assert len(state.played_tracks) == 0
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_CHAOS) == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_on_continuity_reservation_during_render(tmp_path):
+    """A live continuity reservation landing mid-render must not be refilled by prewarm."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _reserve_continuity(*_args, **_kwargs):
+        state.continuity_epoch += 1
+        return tmp_path / "fake.mp3"
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_reserve_continuity),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    assert len(state.played_tracks) == 0
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY) == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_after_stop_resume_aba_during_render(tmp_path):
+    """A final running boolean cannot revalidate work captured before Stop."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    captured_epoch = state.continuity_epoch
+
+    async def _stop_then_resume(*_args, **_kwargs):
+        state.session_stopped = True
+        state.continuity_epoch += 1
+        state.session_stopped = False
+        return tmp_path / "fake.mp3"
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, side_effect=_stop_then_resume),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert state.session_stopped is False
+    assert state.continuity_epoch != captured_epoch
+    assert result is False
+    assert queue.empty()
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY) == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_on_continuity_reservation_during_egress(tmp_path):
+    """The post-egress prewarm stale gate also honors a live continuity reservation."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _reserve_continuity_during_egress(segment, _config):
+        state.continuity_epoch += 1
+        return segment
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=tmp_path / "fake.mp3"),
+        patch(f"{PRODUCER_MODULE}.normalize"),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2"),
+        patch(f"{PRODUCER_MODULE}._set_last_music_file"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(
+            f"{PRODUCER_MODULE}._apply_egress",
+            new_callable=AsyncMock,
+            side_effect=_reserve_continuity_during_egress,
+        ),
+    ):
+        result = await prewarm_first_segment(queue, state, config)
+
+    assert result is False
+    assert queue.empty()
+    assert len(state.played_tracks) == 0
+    assert state.discard_by_reason.get(GenerationWasteReason.STALE_CONTINUITY) == 1
 
 
 @pytest.mark.asyncio
@@ -791,8 +1407,12 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
     """A banned song dropped at the enqueue funnel must not leave a ghost up-next row
     or overwrite the prior valid music bed used by speech-bed adjacency (#660, #664)."""
     state = _make_state()
+    # This test asserts against the rendered cache for the selected song, so
+    # keep the producer's weighted choice deterministic under pytest-randomly.
+    state.playlist = state.playlist[:1]
     previous_song = tmp_path / "previous_song.mp3"
     previous_song.write_bytes(b"prior-music")
+    save_track_metadata(previous_song, title="Previous Song", artist="Prior Artist")
     state.last_music_file = previous_song
     state.last_enqueued_type = SegmentType.MUSIC
     state.current_track = Track(title="Previous Song", artist="Prior Artist", duration_ms=180_000, spotify_id="prev")

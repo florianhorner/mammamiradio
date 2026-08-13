@@ -247,7 +247,8 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
             bridge = queue.get_nowait()
             assert bridge.metadata.get("resume_bridge") is True
             assert bridge.metadata.get("audio_source") == "emergency_tone"
-            while not state.queued_segments:
+            assert state.queued_segments[0]["id"] == bridge.metadata["queue_id"]
+            while not any(row.get("playlist_index") == 0 for row in state.queued_segments):
                 if asyncio.get_event_loop().time() > deadline:
                     raise TimeoutError("Producer did not queue after resume")
                 await asyncio.sleep(0.05)
@@ -258,7 +259,7 @@ async def test_post_restart_resume_keeps_music_attribution(tmp_path):
             except asyncio.CancelledError:
                 pass
 
-    queued = state.queued_segments[-1]
+    queued = next(row for row in state.queued_segments if row["playlist_index"] == 0)
     assert queued["playlist_index"] == 0
     assert queued["source_kind"] == "classic"
 
@@ -316,7 +317,9 @@ async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(
             f"{SCRIPTWRITER_MODULE}.write_banter",
             new_callable=AsyncMock,
@@ -494,6 +497,36 @@ async def test_render_music_track_uses_actual_duration_for_accepted_youtube_side
     assert track.duration_ms == 180_000
     sidecar = json.loads(norm_cached.with_name(f"{norm_cached.name}.json").read_text())
     assert sidecar["duration_ms"] == 180_000
+
+
+@pytest.mark.asyncio
+async def test_render_music_track_removes_partial_cache_on_non_required_copy_failure(tmp_path):
+    """A failed cache copy must not leave a partial norm_cached on the default
+    (cache_write_required=False) render path — a corrupt file could otherwise be
+    selected by _remember_rendered_music for recovery/continuity playback."""
+    from mammamiradio.scheduling.producer import _normalized_cache_path, _render_music_track
+
+    track = Track(title="Song", artist="Artist", duration_ms=200_000, spotify_id="cache1")
+    config = _make_config(tmp_path)
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"downloaded audio")
+    norm_cached = _normalized_cache_path(track, config)
+
+    def _partial_copy(src, dst):
+        Path(dst).write_bytes(b"partial")
+        raise OSError("disk full")
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=raw_path),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=lambda _src, dst, *_a, **_k: dst.write_bytes(b"norm")),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=_partial_copy),
+    ):
+        result = await _render_music_track(track, config, temp_prefix="music", context="music")
+
+    # The non-required path does not raise, but the partial cache file must be gone.
+    assert result is not None
+    assert not norm_cached.exists()
 
 
 @pytest.mark.asyncio

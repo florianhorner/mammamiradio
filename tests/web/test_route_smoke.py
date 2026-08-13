@@ -26,6 +26,10 @@ from mammamiradio.web.listener_requests import router as listener_requests_route
 from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+ROOT = Path(__file__).resolve().parents[2]
+CANONICAL_LOGO = ROOT / "mammamiradio" / "assets" / "logo.svg"
+FAVICON = ROOT / "mammamiradio" / "web" / "static" / "favicon.svg"
+TEMPLATES = ROOT / "mammamiradio" / "web" / "templates"
 
 
 def _make_app() -> FastAPI:
@@ -144,12 +148,32 @@ async def test_service_worker_served_with_root_scope_header():
 
 @pytest.mark.asyncio
 async def test_favicon_default_path_served():
-    """GET /favicon.ico -> 200. Browsers request this path even when templates link SVG icons."""
+    """GET /favicon.ico serves the canonical app logo for browser fallbacks."""
     app = _make_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.get("/favicon.ico")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("image/svg+xml")
+    assert resp.content == CANONICAL_LOGO.read_bytes()
+
+
+def test_favicon_asset_matches_canonical_app_logo():
+    """Keep the browser-tab asset synchronized with the documented logo source."""
+    assert FAVICON.read_bytes() == CANONICAL_LOGO.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("template_name", "favicon_href"),
+    [
+        ("listener.html", "{{ ingress_prefix }}/static/favicon.svg"),
+        ("admin.html", "/static/favicon.svg"),
+        ("clip.html", "{{ ingress_prefix }}/static/favicon.svg"),
+    ],
+)
+def test_browser_templates_reference_app_logo_favicon(template_name: str, favicon_href: str):
+    """Every browser page must use the app logo rather than a PWA placeholder."""
+    html = (TEMPLATES / template_name).read_text()
+    assert f'<link rel="icon" href="{favicon_href}" type="image/svg+xml">' in html
 
 
 @pytest.mark.asyncio

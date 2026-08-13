@@ -29,6 +29,18 @@ import threading
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+
+from mammamiradio.core import config as config_module
+from mammamiradio.core.config import (
+    ADDON_MAX_CACHE_SIZE_MB,
+    MAX_MAX_CACHE_SIZE_MB,
+    MIN_MAX_CACHE_SIZE_MB,
+    _apply_addon_options,
+    _env_clamped_int,
+)
+from mammamiradio.web import persistence
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_SH = REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh"
 STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
@@ -51,7 +63,7 @@ def _extract_python_snippet(
     # The shell uses $OPTIONS_FILE, $SECRETS_FILE, $SUPERVISOR_API, and
     # $RECOVERY_MARKER_FILE inside the script — substitute them. The default
     # API target is a closed local port so a test that accidentally reaches
-    # recovery fails fast and soft. The default marker path lives beside
+    # recovery fails fast and soft. The versioned marker path lives beside
     # options.json and does not exist by default, so recovery is attempted
     # unless a test deliberately points at a pre-existing marker.
     raw = raw.replace("$OPTIONS_FILE", str(options_file))
@@ -168,6 +180,27 @@ def test_parser_exits_zero_on_valid_options():
     assert rc == 0
 
 
+def test_addon_runtime_exports_one_music_directory_for_persistent_and_fallback_data():
+    body = RUN_SH.read_text(encoding="utf-8")
+
+    # The persistent export is the unconditional default...
+    fallback_branch_match = re.search(
+        r"(?ms)^if ! mkdir -p /data/cache /data/music /data/tmp\b.*?^fi$",
+        body,
+    )
+    assert fallback_branch_match, "run.sh lost its /data-not-writable fallback branch"
+    fallback_branch = fallback_branch_match.group(0)
+    before_branch = body[: fallback_branch_match.start()]
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="/data/music"' in before_branch
+    # ... and the fallback export must stay INSIDE the failure branch. An
+    # unconditional fallback would silently move every install off the
+    # persistent /data/music library.
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' in fallback_branch
+    assert 'mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"' in fallback_branch
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in before_branch
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in body[fallback_branch_match.end() :]
+
+
 def test_parser_exports_anthropic_api_key():
     rc, stdout, _ = _run_parser({"anthropic_api_key": "sk-ant-abc123"})
     assert rc == 0
@@ -274,6 +307,92 @@ def test_parser_malformed_secrets_env_warning_does_not_leak_secret_values():
     assert "ANTHROPIC_API_KEY=legacy-safe-value\n" in stdout
 
 
+@pytest.mark.parametrize(
+    ("secrets_env", "expected", "secret_canaries"),
+    [
+        (
+            "\n".join(
+                [
+                    "ANTHROPIC_API_KEY=sk-ant",
+                    "OPENAI_API_KEY=sk-openai",
+                    "AZURE_SPEECH_KEY=sk-azure",
+                    "AZURE_SPEECH_REGION=westeurope",
+                    "ELEVENLABS_API_KEY=sk-eleven",
+                ]
+            ),
+            {
+                "ANTHROPIC_API_KEY": "sk-ant",
+                "OPENAI_API_KEY": "sk-openai",
+                "AZURE_SPEECH_KEY": "sk-azure",
+                "AZURE_SPEECH_REGION": "westeurope",
+                "ELEVENLABS_API_KEY": "sk-eleven",
+            },
+            (),
+        ),
+        (
+            "\ufeffexport OPENAI_API_KEY = \"sk value=with=equals\"\r\nAZURE_SPEECH_REGION = 'west europe'\r\n",
+            {
+                "OPENAI_API_KEY": "sk value=with=equals",
+                "AZURE_SPEECH_REGION": "west europe",
+            },
+            (),
+        ),
+        (
+            "ANTHROPIC_API_KEY=sk#literal\nELEVENLABS_API_KEY = 'eleven#literal'\n  # ignored full-line comment\n",
+            {
+                "ANTHROPIC_API_KEY": "sk#literal",
+                "ELEVENLABS_API_KEY": "eleven#literal",
+            },
+            (),
+        ),
+        (
+            "ANTHROPIC_API_KEY=\n"
+            "missing-equals-secret-canary\n"
+            "NOT_ALLOWED=unsupported-secret-canary\n"
+            'OPENAI_API_KEY="unterminated-secret-canary\n'
+            "AZURE_SPEECH_KEY='two values' trailing-secret-canary\n",
+            {},
+            (
+                "missing-equals-secret-canary",
+                "unsupported-secret-canary",
+                "unterminated-secret-canary",
+                "trailing-secret-canary",
+            ),
+        ),
+    ],
+)
+def test_provider_secret_catalog_and_grammar_stay_in_parity(
+    tmp_path,
+    caplog,
+    secrets_env,
+    expected,
+    secret_canaries,
+):
+    """The runtime writer, direct loader, and boot parser share one tested contract."""
+    secrets_path = tmp_path / "secrets.env"
+    _write_provider_fixture(secrets_path, secrets_env)
+
+    provider_pairs = tuple(
+        (option_key, env_key) for option_key, (env_key, _config_attr) in persistence._CREDENTIAL_FIELDS.items()
+    )
+    assert provider_pairs == config_module._ADDON_PROVIDER_OPTIONS
+
+    _lines, persistence_values = persistence._read_secret_file(secrets_path)
+    config_values = config_module._read_addon_provider_secrets(secrets_path)
+    rc, stdout, stderr = _run_parser({}, secrets_env)
+    assert rc == 0, stderr
+    run_sh_values = {
+        key: value for key, value in _parse_exports(stdout).items() if key in persistence._CREDENTIAL_ENV_TO_FIELD
+    }
+
+    assert persistence_values == expected
+    assert config_values == expected
+    assert run_sh_values == expected
+    combined_output = stdout + stderr + caplog.text
+    for canary in secret_canaries:
+        assert canary not in combined_output
+
+
 def test_parser_skips_empty_keys():
     """Empty string values must not produce export lines (they'd override env with '')."""
     rc, stdout, _ = _run_parser({"anthropic_api_key": "", "openai_api_key": ""})
@@ -368,7 +487,7 @@ def test_parser_exports_all_supported_keys():
 
 def test_parser_quality_profile_defaults_to_balanced():
     """Missing quality_profile (e.g. upgrade from the old claude_model dropdown)
-    maps to MAMMAMIRADIO_QUALITY=balanced — zero behavior change on update."""
+    maps to MAMMAMIRADIO_QUALITY=balanced, the shipped default profile."""
     rc, stdout, _ = _run_parser({"station_name": "X"})
     assert rc == 0
     exports = _parse_exports(stdout)
@@ -401,11 +520,11 @@ def test_parser_media_player_push_missing_key_preserves_legacy_default():
     assert exports["MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH"] == "true"
 
 
-def test_parser_ha_context_defaults_for_green_class_hardware():
+def test_parser_ha_context_omission_stays_observable():
     rc, stdout, _ = _run_parser({})
     assert rc == 0
     exports = _parse_exports(stdout)
-    assert exports["MAMMAMIRADIO_HA_CONTEXT_ENABLED"] == "true"
+    assert "MAMMAMIRADIO_HA_CONTEXT_ENABLED" not in exports
     assert exports["MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL"] == "300"
 
 
@@ -462,11 +581,13 @@ def test_addon_manifest_media_player_push_defaults_true_for_new_installs():
         )
 
 
-def test_addon_manifest_ha_context_defaults_for_new_installs():
+def test_addon_manifest_keeps_ha_context_optional_without_a_declared_default():
     for config in (STABLE_CONFIG, EDGE_CONFIG):
         body = config.read_text()
-        assert re.search(r"(?m)^  ha_context_enabled: true$", body), (
-            f"{config} must keep HA prompt context enabled unless the operator opts out"
+        options_block = re.search(r"(?ms)^options:\n(.*?)(?=^schema:)", body)
+        assert options_block
+        assert not re.search(r"(?m)^  ha_context_enabled:", options_block.group(1)), (
+            f"{config} must leave omission visible for first-listen privacy classification"
         )
         assert re.search(r"(?m)^  ha_context_poll_interval: 300$", body), (
             f"{config} must default full-state polling to a Green-safe 300s interval"
@@ -559,15 +680,45 @@ def test_parser_no_double_quotes_in_fstring_shell_context():
 
 
 class _SupervisorStub(http.server.BaseHTTPRequestHandler):
-    """Minimal /addons/self/info endpoint returning canned stored options."""
+    """In-memory Supervisor info/full-replacement options contract."""
 
     stored_options: ClassVar[dict] = {}
+    schema_names: ClassVar[list[str]] = []
     seen_auth: ClassVar[list[str]] = []
+    post_count: ClassVar[int] = 0
+    payload_override: ClassVar[dict | None] = None
 
-    def do_GET(self):
+    def do_GET(self):  # noqa: N802, RUF100 - BaseHTTPRequestHandler override
         type(self).seen_auth.append(self.headers.get("Authorization", ""))
-        body = json.dumps({"result": "ok", "data": {"options": type(self).stored_options}}).encode()
+        payload = type(self).payload_override
+        if payload is None:
+            payload = {
+                "result": "ok",
+                "data": {
+                    "options": type(self).stored_options,
+                    "schema": [{"name": name} for name in type(self).schema_names],
+                },
+            }
+        body = json.dumps(payload).encode()
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):  # noqa: N802, RUF100 - BaseHTTPRequestHandler override
+        type(self).seen_auth.append(self.headers.get("Authorization", ""))
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length))
+        options = payload.get("options") if isinstance(payload, dict) else None
+        if self.path != "/addons/self/options" or not isinstance(options, dict):
+            body = json.dumps({"result": "error"}).encode()
+            self.send_response(422)
+        else:
+            type(self).stored_options = dict(options)
+            type(self).post_count += 1
+            body = json.dumps({"result": "ok", "data": {}}).encode()
+            self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -577,10 +728,18 @@ class _SupervisorStub(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def _with_supervisor_stub(stored_options: dict):
+def _with_supervisor_stub(
+    stored_options: dict,
+    *,
+    payload: dict | None = None,
+    schema_names: list[str] | None = None,
+):
     server = http.server.HTTPServer(("127.0.0.1", 0), _SupervisorStub)
-    _SupervisorStub.stored_options = stored_options
+    _SupervisorStub.stored_options = dict(stored_options)
+    _SupervisorStub.schema_names = list(stored_options) if schema_names is None else list(schema_names)
     _SupervisorStub.seen_auth = []
+    _SupervisorStub.post_count = 0
+    _SupervisorStub.payload_override = payload
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, f"http://127.0.0.1:{server.server_address[1]}"
@@ -665,15 +824,193 @@ def test_parser_recovery_skipped_without_supervisor_token():
 
 
 def test_parser_recovery_failure_is_soft():
-    """Unreachable Supervisor API degrades to a warning, never a boot failure."""
-    rc, stdout, _ = _run_parser(
-        {"station_name": "X"},
-        env={"SUPERVISOR_TOKEN": "tok-123"},
-    )
-    assert rc == 0
-    assert "could not check Supervisor for legacy provider keys" in stdout
-    exports = _parse_exports(stdout)
-    assert exports.get("STATION_NAME") == "X", "options must still export after recovery failure"
+    """Unreachable Supervisor stays soft and leaves recovery eligible next boot."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        base = Path(tmp_dir)
+        marker = base / "recovery-marker"
+        rc, stdout, _ = _run_parser(
+            {"station_name": "X"},
+            keep_dir=base,
+            env={"SUPERVISOR_TOKEN": "tok-123"},
+            recovery_marker=marker,
+        )
+        assert rc == 0
+        assert "could not check Supervisor for legacy provider keys" in stdout
+        exports = _parse_exports(stdout)
+        assert exports.get("STATION_NAME") == "X", "options must still export after recovery failure"
+        assert not marker.exists(), "a failed check must retry on the next boot"
+
+
+def test_parser_successful_recovery_check_without_keys_writes_marker():
+    """An authoritative empty result closes recovery without touching secrets."""
+    server, api = _with_supervisor_stub({})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            marker = base / "recovery-marker"
+            rc, _, stderr = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=marker,
+            )
+            assert rc == 0, stderr
+            assert marker.read_text() == "checked\n"
+            assert not (base / "secrets.env").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_malformed_supervisor_response_leaves_marker_absent():
+    server, api = _with_supervisor_stub({}, payload={"result": "ok", "data": []})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            marker = base / "recovery-marker"
+            rc, stdout, _ = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=marker,
+            )
+            assert rc == 0
+            assert "could not check Supervisor for legacy provider keys" in stdout
+            assert not marker.exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_recovered_secret_write_failure_leaves_marker_absent():
+    """Do not consume the one-time recovery chance before secrets are durable."""
+    server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-store"})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            marker = base / "recovery-marker"
+            # A directory at the target path makes both the existing-file read
+            # and atomic replacement fail reliably, including when tests run as
+            # root (permission-bit fixtures alone would not).
+            (base / "secrets.env").mkdir()
+            rc, stdout, _ = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=marker,
+            )
+            assert rc == 0
+            assert "could not persist recovered provider keys to secrets.env" in stdout
+            assert not marker.exists(), "failed secret persistence must remain retryable"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_rejects_multiline_recovered_secret_without_marker():
+    server, api = _with_supervisor_stub({"anthropic_api_key": "line1\nline2"})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            marker = base / "recovery-marker"
+            rc, stdout, stderr = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=marker,
+            )
+
+            assert rc == 0, stderr
+            assert "could not check Supervisor for legacy provider keys" in stdout
+            assert "ANTHROPIC_API_KEY" not in _parse_exports(stdout)
+            assert not (base / "secrets.env").exists()
+            assert not marker.exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_recovered_secret_read_back_failure_leaves_marker_absent():
+    """An unreadable replacement is not enough to consume the recovery chance."""
+    server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-store"})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            options_path = base / "options.json"
+            secrets_path = base / "secrets.env"
+            marker = base / "recovery-marker"
+            options_path.write_text(json.dumps({"station_name": "X"}))
+            snippet = _extract_python_snippet(
+                options_path,
+                secrets_path,
+                supervisor_api=api,
+                recovery_marker=marker,
+            )
+            verification_start = "verified_recovered = {}"
+            assert snippet.count(verification_start) == 1
+            snippet = snippet.replace(
+                verification_start,
+                "raise OSError('simulated secret read-back failure')",
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-c", snippet],
+                capture_output=True,
+                text=True,
+                env=_scrubbed_env({"SUPERVISOR_TOKEN": "tok-123"}),
+            )
+
+            assert result.returncode == 0, result.stderr
+            assert "could not persist recovered provider keys to secrets.env" in result.stdout
+            assert not secrets_path.exists(), "pre-commit verification failure must leave no replacement"
+            assert not marker.exists(), "unverified credentials must remain recoverable"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_parser_recovered_secret_directory_fsync_failure_leaves_marker_absent():
+    """Use a committed recovery now, but keep retry armed until it is durable."""
+    server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-store"})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            options_path = base / "options.json"
+            secrets_path = base / "secrets.env"
+            marker = base / "recovery-marker"
+            options_path.write_text(json.dumps({"station_name": "X"}))
+            snippet = _extract_python_snippet(
+                options_path,
+                secrets_path,
+                supervisor_api=api,
+                recovery_marker=marker,
+            )
+            durable_sync = "os.fsync(dir_fd)"
+            assert snippet.count(durable_sync) == 1
+            snippet = snippet.replace(
+                durable_sync,
+                "raise OSError('simulated directory fsync failure')",
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-c", snippet],
+                capture_output=True,
+                text=True,
+                env=_scrubbed_env({"SUPERVISOR_TOKEN": "tok-123"}),
+            )
+
+            assert result.returncode == 0, result.stderr
+            assert "could not confirm crash durability" in result.stdout
+            assert _parse_exports(result.stdout)["ANTHROPIC_API_KEY"] == "sk-ant-store"
+            assert "ANTHROPIC_API_KEY=sk-ant-store" in secrets_path.read_text()
+            assert not marker.exists(), "the marker must not outrun directory durability"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing():
@@ -716,3 +1053,223 @@ def test_parser_recovery_is_genuinely_one_time_even_with_keys_still_missing():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_parser_retries_recovery_after_the_pre_v2_marker():
+    """A pre-v2 marker cannot suppress the tightened durable-secret recovery."""
+    server, api = _with_supervisor_stub({"anthropic_api_key": "sk-ant-store"})
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            legacy_marker = base / "recovery-marker"
+            legacy_marker.write_text("checked\n")
+            current_marker = base / "recovery-marker-v2"
+
+            rc, stdout, stderr = _run_parser(
+                {"station_name": "X"},
+                keep_dir=base,
+                supervisor_api=api,
+                env={"SUPERVISOR_TOKEN": "tok-123"},
+                recovery_marker=current_marker,
+            )
+
+            assert rc == 0, stderr
+            assert _parse_exports(stdout)["ANTHROPIC_API_KEY"] == "sk-ant-store"
+            assert current_marker.read_text() == "checked\n"
+            assert len(_SupervisorStub.seen_auth) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Supervisor rematerialization of durable admin controls
+# ---------------------------------------------------------------------------
+
+
+def test_parser_restores_all_admin_controls_after_supervisor_rematerialization(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """A managed restart must consume the complete Supervisor-owned selection.
+
+    The real persistence helper changes Supervisor's durable store without
+    mutating the already-materialized startup file. The next managed start
+    rematerializes that store, and run.sh restores every admin control from it.
+    """
+    materialized_options = tmp_path / "options.json"
+    secrets_path = tmp_path / "secrets.env"
+    stale_projection = {
+        "super_italian_mode": False,
+        "chaos_mode_active": False,
+        "festival_mode": False,
+        "quality_profile": "balanced",
+        "broadcast_chain": False,
+        "songs_between_banter": 2,
+        "songs_between_ads": 4,
+        "ad_spots_per_break": 1,
+    }
+    selected = {
+        "super_italian_mode": True,
+        "chaos_mode_active": True,
+        "festival_mode": True,
+        "quality_profile": "premium",
+        "broadcast_chain": True,
+        "songs_between_banter": 5,
+        "songs_between_ads": 7,
+        "ad_spots_per_break": 3,
+    }
+    materialized_options.write_text(json.dumps(stale_projection))
+    server, api = _with_supervisor_stub(
+        stale_projection,
+        schema_names=list(stale_projection),
+    )
+    try:
+        monkeypatch.setenv("SUPERVISOR_API", api)
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+        monkeypatch.delenv("HA_TOKEN", raising=False)
+
+        persistence._save_addon_option_batch(selected)
+
+        assert _SupervisorStub.post_count == 1
+        assert _SupervisorStub.stored_options == selected
+        assert json.loads(materialized_options.read_text()) == stale_projection
+
+        # Model Supervisor's managed-start projection, then exercise the actual
+        # embedded parser rather than duplicating its mapping in the test.
+        materialized_options.write_text(json.dumps(_SupervisorStub.stored_options))
+        snippet = _extract_python_snippet(materialized_options, secrets_path)
+        result = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True,
+            text=True,
+            env=_scrubbed_env(),
+        )
+        assert result.returncode == 0, result.stderr
+        exports = _parse_exports(result.stdout)
+        assert exports["MAMMAMIRADIO_SUPER_ITALIAN"] == "true"
+        assert exports["MAMMAMIRADIO_CHAOS_MODE"] == "true"
+        assert exports["MAMMAMIRADIO_FESTIVAL_MODE"] == "true"
+        assert exports["MAMMAMIRADIO_QUALITY"] == "premium"
+        assert exports["MAMMAMIRADIO_BROADCAST_CHAIN"] == "true"
+        assert exports["MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"] == "5"
+        assert exports["MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"] == "7"
+        assert exports["MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK"] == "3"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# Music cache size
+# This option reaches the app through the parser below. Keep a test here so a
+# missing export cannot silently replace the chosen value with the default.
+
+
+def test_parser_exports_cache_mb_from_norm_cache_mb_option():
+    rc, stdout, _ = _run_parser({"norm_cache_mb": 2200})
+    assert rc == 0
+    assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "2200"
+
+
+def test_parser_cache_mb_missing_key_defaults_to_addon_default():
+    """Older options files may omit norm_cache_mb and should use 1500 MB."""
+    rc, stdout, _ = _run_parser({"station_name": "Test"})
+    assert rc == 0
+    assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
+
+
+def test_parser_cache_mb_invalid_value_defaults_to_addon_default():
+    """JSON booleans are ints in Python, so they must not become a 1 MB cache."""
+    for value in ("not-a-number", 0, -5, None, True, False):
+        rc, stdout, _ = _run_parser({"norm_cache_mb": value})
+        assert rc == 0, f"parser must not fail on norm_cache_mb={value!r}"
+        assert _parse_exports(stdout)["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"
+
+
+_CACHE_MB_CONTRACT_MATRIX = [
+    ("zero", 0, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("negative-five", -5, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("negative-one", -1, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("one", 1, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("fifty", 50, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("one-hundred-ninety-nine", 199, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("minimum", 200, MIN_MAX_CACHE_SIZE_MB, MIN_MAX_CACHE_SIZE_MB, False),
+    ("within-range", 2200, 2200, 2200, False),
+    ("above-maximum", 8001, MAX_MAX_CACHE_SIZE_MB, MAX_MAX_CACHE_SIZE_MB, False),
+    ("boolean-true", True, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("boolean-false", False, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("null", None, ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    ("garbage-string", "garbage", ADDON_MAX_CACHE_SIZE_MB, ADDON_MAX_CACHE_SIZE_MB, False),
+    # Supervisor coerces and validates supported option values before boot, so
+    # these raw JSON types cannot reach either ingestion path in production.
+    ("numeric-string", "3000", 3000, ADDON_MAX_CACHE_SIZE_MB, True),
+    ("whitespace-numeric-string", "  2200  ", 2200, ADDON_MAX_CACHE_SIZE_MB, True),
+    ("float", 2000.5, 2000, ADDON_MAX_CACHE_SIZE_MB, True),
+]
+
+
+@pytest.mark.parametrize(
+    "_case_id, option_value, expected_run_sh, expected_direct, accepted_divergence",
+    _CACHE_MB_CONTRACT_MATRIX,
+    ids=[case[0] for case in _CACHE_MB_CONTRACT_MATRIX],
+)
+def test_cache_mb_ingestion_contract_matrix(
+    _case_id: str,
+    option_value: object,
+    expected_run_sh: int,
+    expected_direct: int,
+    accepted_divergence: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Pin effective parity and the accepted unsupported coercion differences."""
+    cache_env = "MAMMAMIRADIO_MAX_CACHE_MB"
+    options_path = tmp_path / "options.json"
+    secrets_path = tmp_path / "secrets.env"
+    monkeypatch.delenv(cache_env, raising=False)
+
+    try:
+        rc, stdout, _ = _run_parser({"norm_cache_mb": option_value})
+        assert rc == 0
+        monkeypatch.setenv(cache_env, _parse_exports(stdout)[cache_env])
+        run_sh_effective = _env_clamped_int(
+            cache_env,
+            default=ADDON_MAX_CACHE_SIZE_MB,
+            minimum=MIN_MAX_CACHE_SIZE_MB,
+            maximum=MAX_MAX_CACHE_SIZE_MB,
+        )
+
+        monkeypatch.delenv(cache_env, raising=False)
+        options_path.write_text(json.dumps({"norm_cache_mb": option_value}))
+        secrets_path.write_text("")
+        path_fixtures = {
+            "/data/options.json": options_path,
+            "/config/secrets.env": secrets_path,
+        }
+        monkeypatch.setattr(
+            "mammamiradio.core.config.Path",
+            lambda path: path_fixtures[str(path)],
+        )
+        _apply_addon_options()
+        direct_effective = _env_clamped_int(
+            cache_env,
+            default=ADDON_MAX_CACHE_SIZE_MB,
+            minimum=MIN_MAX_CACHE_SIZE_MB,
+            maximum=MAX_MAX_CACHE_SIZE_MB,
+        )
+
+        assert run_sh_effective == expected_run_sh
+        assert direct_effective == expected_direct
+        assert (run_sh_effective != direct_effective) is accepted_divergence
+    finally:
+        monkeypatch.delenv(cache_env, raising=False)
+
+
+def test_parser_cache_mb_does_not_break_sibling_exports():
+    """Invalid cache input must not prevent other options from exporting."""
+    rc, stdout, _ = _run_parser({"norm_cache_mb": "garbage", "anthropic_api_key": "sk-ant-abc123"})
+    assert rc == 0
+    exports = _parse_exports(stdout)
+    assert exports["ANTHROPIC_API_KEY"] == "sk-ant-abc123"
+    assert exports["MAMMAMIRADIO_MAX_CACHE_MB"] == "1500"

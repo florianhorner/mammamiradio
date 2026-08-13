@@ -1,0 +1,35 @@
+Proof artifact — florianhorner/fix/trace-host-temperature-source
+Date:   2026-07-24T22:00:52Z
+(regenerated after CodeRabbit + Copilot review round)
+
+=== pytest (full suite) ===
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5530 passed, 3 skipped, 21 deselected, 1 warning in 178.44s (0:02:58)
+
+=== pytest tests/home (random order, 3 seeds — proves global isolation) ===
+seed 1: 636 passed in 1.54s
+seed 42: 636 passed in 1.84s
+seed 777: 636 passed in 1.97s
+
+=== ruff check . ===
+All checks passed!
+=== ruff format --check . ===
+324 files already formatted
+=== mypy mammamiradio/ tests/ ===
+Success: no issues found in 295 source files
+=== scripts/check-release-invariants.sh ===
+
+All invariants passed.
+=== scripts/check-changelog-lint.sh ===
+Changelog lint clean.
+
+=== runtime behavioral proofs (real code, no mocks) ===
+70F italian arc  : Meteo: soleggiato, 21.1°C.
+70F english arc  : Weather: sunny, 21.1°C.
+weather 68F      : Meteo al PentFLOuse: soleggiato, 20°C
+weather no unit  : Meteo al PentFLOuse: soleggiato
+sensor no unit   : None
+sensor 294.15 K  : Hall: 21°C
+sensor 78C Pi CPU: CPU: 78°C
+malformed unit   : None None
+68F->71.6F reopen: True

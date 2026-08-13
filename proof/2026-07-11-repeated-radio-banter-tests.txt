@@ -1,0 +1,61 @@
+=== pytest tests/scheduling/test_producer_unit.py -k drain_bridge -v ===
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- /Users/florianhorner/conductor/workspaces/mammamiradio/vientiane/.venv/bin/python
+cachedir: .pytest_cache
+Using --randomly-seed=4131653704
+rootdir: /Users/florianhorner/conductor/workspaces/mammamiradio/vientiane
+configfile: pyproject.toml
+plugins: cov-7.1.0, xdist-3.8.0, timeout-2.4.0, asyncio-1.4.0, randomly-4.1.0, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 175 items / 173 deselected / 2 selected
+
+tests/scheduling/test_producer_unit.py::test_drain_bridge_queues_only_canned_clip_when_cache_is_cold PASSED [ 50%]
+tests/scheduling/test_producer_unit.py::test_drain_bridge_queues_cache_music_runway_when_warm PASSED [100%]
+
+====================== 2 passed, 173 deselected in 0.41s =======================
+
+=== pytest tests/ (full suite) tail ===
+4513 passed, 2 skipped, 21 deselected, 1 warning in 136.12s (0:02:16)
+
+=== ruff check ===
+All checks passed!
+
+=== ruff format --check ===
+2 files already formatted
+
+=== mypy mammamiradio/scheduling/producer.py ===
+mammamiradio/audio/tts.py:693: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 1 source file
+
+=== scripts/check-release-invariants.sh ===
+
+=== mammamiradio release invariants ===
+
+1. FFmpeg music_eq filter chain (normalizer.py)
+  [PASS] music_eq_chain has 2 equalizer filters (de-mud 200Hz + presence 3kHz)
+
+2. Packaged recovery audio
+  [PASS] packaged recovery clip is present (1 mp3 file(s))
+  [PASS] producer recovery paths do not call generate_silence
+
+3. Test coverage — missing packaged recovery scenario
+  [PASS] _pick_canned_clip returning None is tested (10 test file(s))
+
+4. Test coverage — post-restart scenario
+  [PASS] session_stopped scenario is tested (54 test file(s))
+
+5. HA Green fallback performance gates
+  [PASS] queue fallback wait is 5.0s (<= 5s)
+  [PASS] norm-cache rescue avoids deterministic first-file selection
+  [PASS] HA Green perf smoke script and Make target are present
+  [PASS] HA Green cold-launch smoke script and Make target are present
+
+6. Release beat manifest
+release beat: no manifest at mammamiradio/assets/release/release_beat.toml; no-op
+  [PASS] release beat manifest is absent, disabled, or schema-valid
+
+=======================================
+  Passed: 10  Failed: 0
+=======================================
+
+All invariants passed.

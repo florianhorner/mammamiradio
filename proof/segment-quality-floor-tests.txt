@@ -1,0 +1,43 @@
+# Proof — segment-quality-floor
+# Generated 2026-07-10T19:53:41Z on branch florianhorner/feat/segment-quality-floor
+
+## ruff check (changed files)
+All checks passed!
+
+## ruff format --check (changed files)
+4 files already formatted
+
+## mypy (module + eval script)
+mammamiradio/audio/tts.py:693: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 2 source files
+
+## pytest — segment_floor + eval (with module coverage)
+................................................................         [100%]
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.11.15-final-0 _______________
+
+Name                                  Stmts   Miss Branch BrPart  Cover   Missing
+---------------------------------------------------------------------------------
+mammamiradio/hosts/segment_floor.py     108      0     52      0   100%
+---------------------------------------------------------------------------------
+TOTAL                                   108      0     52      0   100%
+Required test coverage of 92.0% reached. Total coverage: 100.00%
+64 passed in 0.58s
+
+## full suite tail
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+4508 passed, 2 skipped, 21 deselected, 1 warning in 111.87s (0:01:51)
+
+## eval --dry-run (no network, exit 0)
+EVAL PREFLIGHT (no provider calls)
+fixtures: 14
+models: 2
+logical cases: 28
+maximum provider requests: 112 (absolute HTTP-attempt ceiling; a non-reasoning model can retry both the base and escalated calls without reasoning_effort)
+maximum completion tokens (base + one retry per case): 83122
+max completion cost: $1.4339 (completion only — input/prompt tokens bill on top and are not estimated offline)
+candidates:
+  gpt-5.5: $1.2468 max completion, priced
+  gpt-5.4-mini: $0.1870 max completion, priced
+exit: 0

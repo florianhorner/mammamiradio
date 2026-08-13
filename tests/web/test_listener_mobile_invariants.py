@@ -207,7 +207,7 @@ def test_listener_stopped_state_quiets_live_indicators() -> None:
     js = LISTENER_JS.read_text(encoding="utf-8")
     block = js[js.index("function renderStoppedState") : js.index("/* ── Toast helper")]
     for needle in (
-        "_setLiveChip($('nav-cta')",
+        "_setPlaybackControls(stopped)",
         "document.querySelector('.mmr-stage-header .mmr-live')",
         "_setNowPlayingEyebrow(stopped)",
         "wave.classList.toggle('paused'",
@@ -239,23 +239,246 @@ def test_listener_live_chip_never_reinterprets_configured_frequency_as_html() ->
     like `<img onerror=...>` as markup. Use nodes/textContent only.
     """
     js = LISTENER_JS.read_text(encoding="utf-8")
-    block = js[js.index("function _setLiveChip") : js.index("function _setNowPlayingEyebrow")]
+    block = js[js.index("function _setLiveChip") : js.index("function _setPlayControl")]
     assert "innerHTML" not in block
     assert "replaceChildren()" in block
     assert "document.createElement('span')" in block
     assert "document.createTextNode" in block
+    assert "label.lang = 'it'" in block
+    assert "label.textContent = 'In Onda'" in block
+    assert "_t('np_live'" not in block, "the stage flair must stay Italian, not utility-localized."
 
 
-def test_listener_stopped_nav_cta_announces_action_not_status() -> None:
+def test_listener_stopped_playback_controls_are_honestly_disabled() -> None:
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    for control_id in ("nav-cta", "np-play", "hero-play"):
+        opening_tag = re.search(rf'<button[^>]+id="{control_id}"[^>]*>', html)
+        assert opening_tag, f"missing listener playback control {control_id}"
+        assert "session_stopped" in opening_tag.group(0)
+        assert " disabled" in opening_tag.group(0)
+        assert "listen_paused_aria" in opening_tag.group(0)
+
     js = LISTENER_JS.read_text(encoding="utf-8")
-    block = js[js.index("function _setLiveChip") : js.index("function _setNowPlayingEyebrow")]
-    assert "el.id === 'nav-cta'" in block
-    assert "_t('listen_resume_aria', 'Resume station')" in block
+    block = js[js.index("function _setPlayControl") : js.index("function _setNowPlayingEyebrow")]
+    assert "_t('listen_stopped', 'Station paused')" in block
     assert "_t('listen_paused_aria', 'Station paused')" in block
+    assert "el.disabled = stopped" in block
+    assert "aria-pressed" in block
+    assert "_setCompactPlayControl" in block
+    assert "_setHeroPlayControl" in block
 
     copy = UI_COPY.read_text(encoding="utf-8")
-    assert '"listen_resume_aria": "Resume station"' in copy
-    assert '"listen_resume_aria": "Riprendi la radio"' in copy
+    assert '"listen_stopped": "Station paused"' in copy
+    assert '"listen_stopped": "Radio in pausa"' in copy
+
+
+def test_listener_live_nav_cta_is_an_honest_play_pause_toggle() -> None:
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    button = re.search(r'<button[^>]+id="nav-cta"[^>]*>(.*?)</button>', html, re.DOTALL)
+    assert button, "listener template must render the primary nav playback control."
+    opening_tag = button.group(0).split(">", 1)[0]
+    assert 'aria-pressed="false"' in opening_tag
+    assert "listen_now_aria" in opening_tag and "listen_paused_aria" in opening_tag
+    assert "listen_now" in button.group(1) and "listen_stopped" in button.group(1)
+
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    block = js[js.index("function _setPlayControl") : js.index("function _setNowPlayingEyebrow")]
+    for needle in (
+        "const hasIntent = !stopped && state.wantsPlay",
+        "_t('listen_now', 'Listen Now')",
+        "_t('listen_pause', 'Pause')",
+        "_t('listen_now_aria', 'Listen now')",
+        "_t('listen_pause_aria', 'Pause station')",
+        "el.setAttribute('aria-pressed', hasIntent ? 'true' : 'false')",
+    ):
+        assert needle in block, f"nav playback control must keep its visible/action state via {needle!r}."
+    for needle in (
+        "function _setNavPlayControl",
+        "_setPlayControl($('nav-cta'), stopped, 'nav')",
+        "_setPlayControl(playBtnSmall, stopped, 'compact')",
+        "_setPlayControl(heroPlay, stopped, 'hero')",
+    ):
+        assert needle in block, f"all listener playback controls must share {needle!r}."
+
+    playing_block = js[js.index("function setPlayingUi") : js.index("/* ── Media Session")]
+    assert "_setPlaybackControls" in playing_block, "audio events must update every play toggle immediately."
+
+
+def test_listener_hero_and_compact_controls_share_honest_toggle_state() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    controls = js[js.index("function _setPlayControl") : js.index("function _setNowPlayingEyebrow")]
+    for needle in (
+        "el.disabled = stopped",
+        "_t('listen_pause', 'Pause')",
+        "_t('listen_pause_aria', 'Pause station')",
+        "el.setAttribute('aria-pressed', hasIntent ? 'true' : 'false')",
+        "variant === 'compact'",
+        "variant === 'hero'",
+    ):
+        assert needle in controls
+
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    hero = re.search(r'<button[^>]+id="hero-play"[^>]*>(.*?)</button>', html, re.DOTALL)
+    compact = re.search(r'<button[^>]+id="np-play"[^>]*>', html)
+    assert hero and compact
+    assert 'aria-pressed="false"' in hero.group(0)
+    assert 'aria-pressed="false"' in compact.group(0)
+
+
+def test_listener_empty_request_has_native_and_visible_validation() -> None:
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    textarea = re.search(r'<textarea[^>]+id="req-msg"[^>]*>', html)
+    assert textarea, "dedication message textarea must exist."
+    assert re.search(r"\srequired(?:\s|>)", textarea.group(0))
+    assert 'aria-describedby="request-sent"' in textarea.group(0)
+    assert 'id="request-sent"' in html and 'aria-live="polite"' in html
+
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    feedback = js[js.index("function _showEmptyRequestMessage") : js.index("function _resetRequestForm")]
+    assert "_t(" in feedback and "'form_message_required'" in feedback
+    assert "msgInput.setAttribute('aria-invalid', 'true')" in feedback
+    assert "sentEl.style.display = ''" in feedback
+    assert "sentEl.classList.add('is-visible')" in feedback
+
+    submit = js[js.index("async function submitRequest") : js.index("/* ── Wire everything")]
+    assert re.search(r"if \(!msg\)\s*\{\s*_showEmptyRequestMessage\(\);", submit)
+    wiring = js[js.index("const reqForm = $('request-form')") : js.index("// Clip sharing button")]
+    assert "reqMsg.addEventListener('invalid'" in wiring
+    assert "reqMsg.addEventListener('input'" in wiring
+
+
+def test_listener_request_receipt_does_not_hide_its_form_ancestor() -> None:
+    """#request-sent lives inside the form, so hiding the form also hides the receipt."""
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    form = html[html.index('<form class="mmr-dedica-form"') : html.index("</form>")]
+    assert form.index('id="request-sent"') < len(form)
+
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("function _setRequestFieldsHidden") : js.index("/* ── Wire everything")]
+    assert "child.id !== 'request-sent'" in request_flow
+    assert "_setRequestFieldsHidden(formEl, true)" in request_flow
+    assert "formEl.style.display = 'none'" not in request_flow, (
+        "the live-region receipt is nested inside #request-form; hiding that ancestor makes success invisible."
+    )
+
+
+def test_listener_request_outcomes_are_localized_and_failure_reset_preserves_input() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    submit = js[js.index("async function submitRequest") : js.index("/* ── Wire everything")]
+    for key in (
+        "form_success_song",
+        "form_success_shoutout",
+        "form_rate_limited",
+        "form_queue_full",
+        "form_declined",
+        "form_network_error",
+    ):
+        assert re.search(rf"_t\(\s*'{key}'", submit), f"request outcome bypasses localized {key} copy"
+
+    assert "if (r.ok && d.ok)" in submit, "an HTTP error body must never pose as a successful request."
+    assert "}, isSuccess ? 15000 : 6000)" in submit
+    clear_block = submit[submit.index("_resetRequestForm(formEl, sentEl);") : submit.index("} catch (e)")]
+    assert "if (isSuccess)" in clear_block
+    assert "msgInput.value = ''" in clear_block
+    catch_block = submit[submit.index("} catch (e)") :]
+    assert "msgInput.value = ''" not in catch_block, "network recovery must preserve the listener's retry text."
+
+
+def test_listener_playback_is_scoped_to_explicit_play_controls() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    assert "autoStartOnce" not in js
+    assert "document.addEventListener('touchstart'" not in js
+    assert "document.addEventListener('click'," not in js
+
+    wiring = js[js.index("document.addEventListener('DOMContentLoaded'") :]
+    for needle in (
+        "playBtn.addEventListener('click'",
+        "playBtnSmall.addEventListener('click'",
+        "heroPlay.addEventListener('click'",
+    ):
+        assert needle in wiring, f"explicit play affordance lost its playback binding: {needle}"
+
+
+def test_listener_playback_pending_and_retries_are_cancellable_and_deduplicated() -> None:
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    state = js[js.index("const state = {") : js.index("/* ── DOM refs")]
+    assert "playPending: false" in state
+    assert "retryTimer: null" in state
+
+    playback = js[js.index("function _clearPlaybackRetry") : js.index("/* ── Media Session")]
+    for needle in (
+        "state.retryTimer !== null",
+        "clearTimeout(state.retryTimer)",
+        "if (!state.wantsPlay || state.retryTimer !== null || _stationIsStopped()) return",
+        "if (!state.wantsPlay || _stationIsStopped()) return",
+        "state.isPlaying || state.playPending",
+        "state.wantsPlay = false",
+        "state.playPending = false",
+        "_clearPlaybackRetry()",
+    ):
+        assert needle in playback
+
+    events = js[js.index("// Audio element event wiring") : js.index("// Request form")]
+    assert "setTimeout(startStream" not in events
+    assert events.count("_scheduleStreamRetry(") == 2
+    pause = events[events.index("audio.addEventListener('pause'") : events.index("audio.addEventListener('ended'")]
+    for needle in (
+        "if (!audio.ended && !audio.error)",
+        "state.wantsPlay = false",
+        "state.playPending = false",
+        "_clearPlaybackRetry()",
+        "setPlayingUi(false)",
+    ):
+        assert needle in pause, f"external pause handling lost {needle!r}."
+
+
+def test_listener_decorative_italian_declares_element_language() -> None:
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    required_fragments = (
+        '<a href="#stasera" class="active" lang="it">Stasera</a>',
+        '<a href="#palinsesto" lang="it">Palinsesto</a>',
+        '<span lang="it">In Onda</span>',
+        '<h1 class="mmr-h1" lang="it">',
+        '<p class="mmr-lede" lang="it">',
+        '<h2 lang="it">Stasera in <em>onda</em></h2>',
+        '<h2 lang="it">Dediche &amp; <em>Saluti</em></h2>',
+        '<div class="eyebrow" lang="it">Manda al DJ',
+        '<h2 lang="it">La <em>stazione</em></h2>',
+        '<span lang="it">{{ brand.tagline or "La notte è italiana" }}</span>',
+        '<span lang="it">Stasera · {{ brand.hosts[-1].display_name }}</span>',
+        '<span lang="it">Dediche aperte</span>',
+        '<span lang="it">Manda al DJ</span>',
+    )
+    missing = [fragment for fragment in required_fragments if fragment not in html]
+    assert not missing, "decorative Italian needs per-element lang=it markers:\n" + "\n".join(missing)
+
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    assert '<div class="sig" lang="it">${sig}</div>' in js
+
+
+def test_listener_mixed_language_blocks_use_narrow_overrides() -> None:
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    assert '<div class="track" lang="it">' not in html
+    assert '<div class="mmr-about-card" lang="it"><div class="eyebrow">Codice</div>' not in html
+    assert '<span lang="en">Open source</span> <span lang="it">su</span> GitHub.' in html
+    assert '<span data-cap="llm" lang="en" hidden>AI scriptwriter.</span>' in html
+    assert '<span lang="en">Made with espresso.</span>' in html
+    assert '<p class="fine" lang="it">' not in html
+
+
+def test_listener_station_identity_prefers_and_repairs_from_server_payload() -> None:
+    """Server identity/brand wins; localStorage is a repaired last-resort cache."""
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    resolver = js[js.index("function stationNameFromStatus") : js.index("function syncStationName")]
+    assert resolver.index("status.identity") < resolver.index("status.brand")
+    assert resolver.index("stationNameFromStatus(state.status)") < resolver.index("localStorage.getItem('stationName')")
+
+    sync = js[js.index("function syncStationName") : js.index("/* ── State")]
+    assert "stationNameFromStatus(status)" in sync
+    assert "localStorage.setItem('stationName', serverName)" in sync
+
+    fetch = js[js.index("async function fetchStatus") : js.index("async function fetchRequests")]
+    assert "syncStationName(status)" in fetch, "every successful status update must overwrite stale cache data."
 
 
 def test_listener_schedule_type_pills_do_not_override_timing_state() -> None:
@@ -351,6 +574,139 @@ def test_listener_lang_reflects_copy_register() -> None:
     makes screen readers read English copy with Italian phonemes (WCAG 3.1.1)."""
     html = LISTENER_HTML.read_text(encoding="utf-8")
     assert 'lang="{{ page_lang }}"' in html, "<html lang> must be driven by page_lang, not hardcoded to it."
+
+
+def test_listener_live_chip_label_is_not_the_brand_accent() -> None:
+    """The In Onda chip must not draw its label in `--brand-accent`.
+
+    `--brand-accent` defaults to the same Lancia red the chip is tinted with,
+    so the label rendered red-on-red at 2.8:1 — under the 4.5:1 AA floor, at
+    9px. `core/config.py` validates `accent_color` for hex validity only and
+    deliberately does not contrast-check it, on the stated grounds that it is
+    decorative and never carries body text; using it as a label broke that
+    assumption. The accent belongs on the dot. The design system specifies the
+    Lancia ground and is silent on the label colour; the sibling
+    `.mmr-live-pill` already uses cream, and this matches it.
+    """
+    css = _read_listener_css()
+    bodies = _rule_bodies_for_selector(css, ".mmr-live")
+    assert bodies, "`.mmr-live` rule not found in listener.css."
+    for body in bodies:
+        colour = re.search(r"(?<!-)\bcolor\s*:\s*([^;]+)", body)
+        assert colour, "`.mmr-live` must declare a label colour."
+        assert "--brand-accent" not in colour.group(1), (
+            "`.mmr-live` label must not use --brand-accent — it is the same red as "
+            "the chip's own background. Use --cream."
+        )
+
+
+def test_listener_hidden_elements_are_not_unhidden_by_a_display_rule() -> None:
+    """A class styled with `display` must reset `display` for `[hidden]`.
+
+    The `hidden` attribute is UA-origin `display: none`, so ANY author
+    `display` declaration on a matching selector beats it and forces the
+    element visible. This has now bitten this file twice: first `.mmr-share-btn`
+    (fixed with a `[hidden]` reset), then `.mmr-footer .foot-link-btn`, which
+    picked up `display: inline-flex` as part of a touch-target pass and
+    stranded a permanently visible, permanently dead "Install app" button in
+    the footer for every browser where `beforeinstallprompt` never fires.
+
+    Rather than pin the two known classes, derive the rule: every element that
+    ships with `hidden` in the template, whose class is given a `display`
+    somewhere in listener.css, needs a matching `[hidden]` reset.
+    """
+    html = LISTENER_HTML.read_text(encoding="utf-8")
+    css = _read_listener_css()
+
+    # Tags carrying a bare `hidden` attribute. The negative lookbehind keeps
+    # `aria-hidden="true"` (a different attribute entirely) out of the set.
+    hidden_tags = re.findall(r"<[a-zA-Z][^>]*?(?<![-\w])hidden(?=[\s/>=])[^>]*>", html)
+    elements = [set(m.split()) for tag in hidden_tags for m in re.findall(r'class="([^"]*)"', tag)]
+    assert elements, "No hidden-by-default classed elements found — has the template changed?"
+
+    def subject(selector: str) -> str:
+        """The rightmost compound — the element a selector actually styles.
+
+        `.mmr-casa .eyebrow` styles `.eyebrow`, not the hidden `.mmr-casa`
+        card, so a `display` there is not this element's problem.
+        """
+        return re.split(r"[\s>+~]+", selector.strip())[-1]
+
+    rule_re = re.compile(r"([^{}]+)\{([^}]*)\}", re.DOTALL)
+    styled: set[str] = set()  # classes given a display AS THE SUBJECT
+    reset: set[str] = set()  # classes with a [hidden] display:none reset
+    for selector_block, body in rule_re.findall(css):
+        for selector in selector_block.split(","):
+            tail = subject(selector)
+            classes = re.findall(r"\.([\w-]+)", tail)
+            if not classes:
+                continue
+            if "[hidden]" in tail:
+                if re.search(r"(?<!-)display\s*:\s*none", body):
+                    reset.update(classes)
+            elif re.search(r"(?<!-)display\s*:", body):
+                styled.update(classes)
+
+    # Evaluate per ELEMENT, not per class: an element is safe if ANY of its
+    # classes carries the reset. The share button relies on exactly that —
+    # `.btn-ghost` gives it a display, `.mmr-share-btn[hidden]` takes it back.
+    offenders: list[str] = []
+    for cls_set in elements:
+        if cls_set & styled and not (cls_set & reset):
+            offenders.append(" ".join(sorted(cls_set)))
+
+    assert not offenders, (
+        "These elements ship with `hidden` AND are given a `display` in "
+        "listener.css, which overrides the UA `[hidden] { display: none }` and "
+        "forces them visible. Add a `[hidden] { display: none }` reset for one "
+        "of each element's classes:\n" + "\n".join(f"  {c}" for c in offenders)
+    )
+
+
+def test_listener_touch_targets_meet_the_44px_floor() -> None:
+    """Listener controls that were below the 44px touch floor must declare it.
+
+    The dedica name input measured ~38px and the footer links ~20px — the
+    smallest tap targets on the page, and the only ones in their own containers
+    without the `min-height` their siblings already carry (the dedica submit
+    button and the header nav links both set 44px).
+    """
+    css = _read_listener_css()
+    for selector in (
+        ".mmr-dedica-form-input",
+        ".mmr-footer .foot-col a",
+        ".mmr-footer .foot-link-btn",
+    ):
+        bodies = _rule_bodies_for_selector(css, selector)
+        assert bodies, f"`{selector}` rule not found in listener.css."
+        assert any(re.search(r"min-height\s*:\s*(4[4-9]|[5-9]\d|\d{3,})px", body) for body in bodies), (
+            f"`{selector}` must declare min-height of at least 44px for touch."
+        )
+
+
+def test_listener_progress_text_cannot_outrun_its_own_duration() -> None:
+    """The elapsed time code must be bounded, not just the progress bar.
+
+    `renderProgress` clamped the bar with `Math.min(100, …)` but wrote the
+    elapsed *text* straight from the raw value. The server reports elapsed as
+    wall-clock since the segment started with no upper bound, so a 4-second
+    continuity clip left on air for minutes showed listeners "3:24 / 0:04".
+
+    This is a static shape check: it cannot execute the function, so it asserts
+    the two properties that failed — the raw progress value is not written
+    directly to the time code, and a bound exists.
+    """
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    body = re.search(r"function renderProgress\([^)]*\)\s*\{(.*?)\n  \}", js, re.DOTALL)
+    assert body, "renderProgress() not found in listener.js."
+    source = body.group(1)
+    assert not re.search(r"textContent\s*=\s*fmtTime\(\s*progressSec\s*\)", source), (
+        "The elapsed time code must not be written from the unbounded progressSec — "
+        "it can exceed durationSec and did ship as '3:24 / 0:04'."
+    )
+    assert "durationSec" in source and re.search(r"Math\.min|<=|<", source), (
+        "renderProgress must bound elapsed against durationSec."
+    )
 
 
 def _read_base_css() -> str:

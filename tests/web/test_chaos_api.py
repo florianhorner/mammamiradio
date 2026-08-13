@@ -15,7 +15,6 @@ from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import ChaosSubtype, Segment, SegmentType, StationState, Track
-from mammamiradio.web.persistence import _save_addon_option
 from mammamiradio.web.streamer import LiveStreamHub, _provider_health_snapshot, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -85,11 +84,49 @@ async def test_post_chaos_enable_sets_pending_bumps_epoch_and_purges_queue(tmp_p
     assert state.chaos_mode_active is True
     assert state.chaos_pending in {ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM}
     assert state.chaos_cutover_epoch == 1
-    assert app.state.queue.empty()
-    assert state.queued_segments == []
+    assert app.state.queue.qsize() == len(state.queued_segments) == 1
+    assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert all(not old_file.exists() for old_file in old_files)
     assert os.environ["MAMMAMIRADIO_CHAOS_MODE"] == "true"
     save_dotenv.assert_called_once_with({"MAMMAMIRADIO_CHAOS_MODE": "true"})
+
+
+@pytest.mark.asyncio
+async def test_post_chaos_enable_preserves_ready_head_when_replacement_is_unavailable(tmp_path, monkeypatch):
+    app = _make_test_app()
+    monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
+    state = app.state.station_state
+    head_path = tmp_path / "chaos-head.mp3"
+    tail_path = tmp_path / "chaos-tail.mp3"
+    head_path.write_bytes(b"head")
+    tail_path.write_bytes(b"tail")
+    head = Segment(type=SegmentType.MUSIC, path=head_path, duration_sec=180.0, metadata={"title": "Head"})
+    tail = Segment(type=SegmentType.BANTER, path=tail_path, duration_sec=10.0, metadata={"title": "Tail"})
+    app.state.queue.put_nowait(head)
+    app.state.queue.put_nowait(tail)
+    state.queued_segments = [{"type": "music", "label": "Head"}, {"type": "banter", "label": "Tail"}]
+    state.continuity_epoch = 5
+
+    with (
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://testserver",
+        ) as client:
+            resp = await client.post("/api/chaos", json={"enabled": True})
+
+    assert resp.status_code == 200
+    assert resp.json()["purged"] == 1
+    assert state.chaos_mode_active is True
+    assert state.chaos_pending in {ChaosSubtype.FOURTH_WALL, ChaosSubtype.ABANDONED_STORM}
+    assert state.chaos_cutover_epoch == 1
+    assert list(app.state.queue._queue) == [head]
+    assert len(state.queued_segments) == 1
+    assert state.continuity_epoch == 6
+    assert head_path.exists()
+    assert not tail_path.exists()
 
 
 @pytest.mark.asyncio
@@ -171,13 +208,14 @@ async def test_chaos_endpoints_require_admin_for_public_ip():
 
 
 @pytest.mark.asyncio
-async def test_chaos_addon_mode_writes_options_json(tmp_path, monkeypatch):
+async def test_chaos_addon_mode_uses_supervisor_persistence(monkeypatch):
     app = _make_test_app(is_addon=True)
     monkeypatch.delenv("MAMMAMIRADIO_CHAOS_MODE", raising=False)
-    options_file = tmp_path / "options.json"
-    options_file.write_text(json.dumps({"existing": "value"}))
 
-    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
             base_url="http://testserver",
@@ -185,9 +223,8 @@ async def test_chaos_addon_mode_writes_options_json(tmp_path, monkeypatch):
             resp = await client.post("/api/chaos", json={"enabled": True})
 
     assert resp.status_code == 200
-    options = json.loads(options_file.read_text())
-    assert options["chaos_mode_active"] is True
-    assert options["existing"] == "value"
+    save_addon_option.assert_called_once_with("chaos_mode_active", True)
+    save_dotenv.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -241,16 +278,6 @@ async def test_chaos_persistence_failure_rolls_back_live_state(tmp_path, monkeyp
         assert keep_file.exists()
     finally:
         keep_file.unlink(missing_ok=True)
-
-
-def test_save_addon_option_handles_corrupt_file(tmp_path):
-    options_file = tmp_path / "options.json"
-    options_file.write_text("not json")
-
-    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
-        _save_addon_option("chaos_mode_active", True)
-
-    assert json.loads(options_file.read_text()) == {"chaos_mode_active": True}
 
 
 def test_boot_read_back_does_not_arm_first_strike(tmp_path):

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import mammamiradio.scheduling.producer as producer
 from mammamiradio.audio.audio_quality import AudioQualityError
 from mammamiradio.audio.normalizer import save_track_metadata
 from mammamiradio.core.models import (
@@ -87,6 +89,73 @@ def test_pick_brand_weights_recurring():
     picks = [_pick_brand(brands, []) for _ in range(50)]
     recurring_count = sum(1 for p in picks if p.name == "Recurring")
     assert recurring_count > 25  # Should be weighted 3:1
+
+
+def test_direct_campaign_cast_failure_uses_another_safe_brand(monkeypatch):
+    invalid = AdBrand(
+        name="Invalid direct campaign",
+        tagline="nope",
+        campaign=CampaignSpine(
+            spokesperson_voice="Missing Character",
+            spokesperson_role="hammer",
+            format_pool=["live_remote"],
+        ),
+    )
+    safe = AdBrand(name="Safe campaign", tagline="yes")
+    voice = AdVoice(name="House Hammer", voice="it-IT-DiegoNeural", style="safe", role="hammer")
+
+    monkeypatch.setattr(producer, "_pick_brand", lambda brands, _history: brands[0])
+
+    selected = producer._select_safe_ad_spot(
+        [invalid, safe],
+        [],
+        StationState(),
+        [voice],
+        [],
+    )
+
+    assert selected is not None
+    assert selected[0].name == "Safe campaign"
+
+
+def test_direct_campaign_roleless_fallback_normalizes_character_name() -> None:
+    brand = AdBrand(
+        name="Scarpe Volanti",
+        tagline="T",
+        campaign=CampaignSpine(spokesperson_voice="Il Razzo", spokesperson_role="disclaimer_goblin"),
+    )
+    hammer = AdVoice(name="House Hammer", voice="hammer", style="safe", role="hammer")
+    razzo = AdVoice(name=" Il Razzo ", voice="razzo", style="fast", role="disclaimer_goblin")
+
+    selected = producer._direct_campaign_default_voice(
+        brand,
+        {"hammer": hammer, "disclaimer_goblin": razzo},
+    )
+
+    assert selected is razzo
+
+
+def test_ad_break_promo_uses_only_an_unreserved_approved_house_voice() -> None:
+    staged = AdVoice(name="Staged", voice="staged", style="x", role="hammer", airtime_approved=False)
+    quarantined = AdVoice(
+        name="Quarantined",
+        voice="quarantined",
+        style="x",
+        role="hammer",
+        direct_identity_quarantined=True,
+    )
+    reserved = AdVoice(
+        name="Reserved",
+        voice="reserved",
+        style="x",
+        role="hammer",
+        reserved_for=frozenset({"Owned Brand"}),
+    )
+    support = AdVoice(name="Support", voice="support", style="x", role="hammer", secondary_only=True)
+    house = AdVoice(name="House", voice="house", style="x", role="hammer")
+
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support, house]) is house
+    assert producer._safe_ad_promo_voice([staged, quarantined, reserved, support]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +636,9 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=tmp_path / "voice.mp3"),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dia.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=tmp_path / "banter.mp3"),
@@ -626,7 +697,7 @@ async def test_banter_quality_reject_records_generated_waste(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati."),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -660,6 +731,163 @@ async def test_banter_quality_reject_records_generated_waste(tmp_path):
     # to 30.0s), not 0.0 — so speech waste feeds the duration-based degraded gate
     # like music waste does.
     assert state.discarded_duration_total_sec == 30.0
+
+
+@pytest.mark.asyncio
+async def test_banter_home_fact_reservation_rejected_is_discarded_before_air(tmp_path):
+    """A home-fact banter whose reservation is rejected at admission (the topic is
+    already queued ahead or resting on cooldown) is discarded, not aired without a
+    reservation/cooldown. A following fact-free banter still queues (no dead air)."""
+    from mammamiradio.home.context_director import HomeContextDirector, PromptFact
+
+    state = _make_run_state()
+    state.force_next = SegmentType.BANTER
+    state.home_context_director = HomeContextDirector()  # empty: this fact was never issued
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter_home.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+
+    # policy_revision 0 + an unmuted entity so the policy gate passes and the
+    # discard is driven purely by the rejected reservation.
+    fact = PromptFact("orphan-fact-1", "weather.forecast_home", "ambient.temperature", "fp", "Sole e 24 gradi.", 0)
+    calls = 0
+
+    async def _banter(state_arg, config_arg, **_kwargs):
+        nonlocal calls
+        calls += 1
+        # The first banter carries a fact the director never issued (its
+        # reservation is rejected); later banters are fact-free so the loop settles.
+        if calls == 1:
+            state_arg.last_banter_home_fact = fact
+            state_arg.force_next = SegmentType.BANTER  # keep the retry a banter, not music
+        else:
+            state_arg.last_banter_home_fact = None
+        return ([(host, "Ciao ragazzi!")], None)
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1, timeout=15.0)
+
+    # The rejected-reservation banter was discarded; a later fact-free banter
+    # queued carrying no home_fact metadata.
+    assert state.discard_by_reason.get("operator_purge", 0) >= 1
+    assert calls >= 2
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert "home_fact_id" not in seg.metadata
+
+
+@pytest.mark.asyncio
+async def test_no_llm_banter_does_not_advance_home_fact_rotation(tmp_path):
+    """A demo/no-LLM station must not call director.select() — a canned banter
+    never consumes a fact, so selecting there would burn rotation/cooldown for a
+    cue the listener never hears."""
+    from mammamiradio.home.context_director import DirectorObservation, HomeContextDirector
+
+    state = _make_run_state()
+    state.force_next = SegmentType.BANTER
+    state.canned_clips_streamed = 2  # gold-closer branch -> canned pick
+    director = HomeContextDirector()
+    director.observe(
+        [DirectorObservation("weather.forecast_home", "weather", "sunny", score=9.0, temperature_c=22.0)],
+        policy_revision=0,
+    )
+    state.home_context_director = director
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    canned_clip = tmp_path / "canned_no_llm.mp3"
+    canned_clip.write_bytes(b"canned audio" * 100)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(
+            f"{PRODUCER_MODULE}._synthesize_impossible_moment",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("tts failure"),
+        ),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    assert queue.qsize() >= 1
+    # select() was never called: rotation and the selected counter stay untouched.
+    assert director.admin_status()["session_counters"]["selected"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pending_directive_keeps_legacy_home_context_in_prompt(tmp_path):
+    """A pending home directive must keep the legacy ha_context/events/weather in
+    the prompt: the director is bypassed (no fact), so use_directed_home_context
+    must be False, otherwise the FIRST CONNECTED HOME MOMENT airs with no data."""
+    from mammamiradio.home.context_director import HomeContextDirector
+
+    state = _make_run_state()
+    state.force_next = SegmentType.BANTER
+    state.home_context_director = HomeContextDirector()
+    state.ha_context = "- Coffee machine: on"
+    state.ha_pending_directive = "FIRST CONNECTED HOME MOMENT: use one or two concrete home details."
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter_directive.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    captured: list[dict] = []
+
+    async def _banter(state_arg, config_arg, **kwargs):
+        captured.append(kwargs)
+        return ([(host, "Ciao ragazzi!")], None)
+
+    with (
+        patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_banter),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=1)
+
+    assert captured, "write_banter was never called"
+    # A pending directive must not put the banter in director-owned mode, and no
+    # fact is selected for it.
+    assert captured[0]["use_directed_home_context"] is False
+    assert captured[0].get("prompt_fact") is None
 
 
 @pytest.mark.asyncio
@@ -747,7 +975,9 @@ async def test_humanity_event_fires_only_once(tmp_path):
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
         patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, return_value=(banter_lines, None)),
-        patch(f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...")),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition", new_callable=AsyncMock, return_value=(host, "Allora...", None)
+        ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=lambda **kw: banter_audio),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_audio),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat_files_side_effect),
@@ -790,6 +1020,55 @@ async def test_humanity_event_fires_only_once(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ad_break_without_safe_campaigns_skips_before_rendering(tmp_path):
+    """An all-unsafe cast resets pacing without rendering or queuing an ad."""
+    state = _make_run_state()
+    state.force_next = SegmentType.AD
+    state.songs_since_ad = 5
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    def _no_safe_campaign(*_args, **_kwargs):
+        # Keep the next producer iteration idle so this assertion observes only
+        # the skipped AD branch, not a following music render.
+        state.listeners_active = 0
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=_no_safe_campaign) as select_spot,
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock) as write_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock) as synthesize_ad,
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not state.render_timings and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            if not state.render_timings:
+                raise TimeoutError("Producer did not record the skipped ad break")
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert select_spot.call_count == 1
+    write_ad.assert_not_called()
+    synthesize_ad.assert_not_called()
+    assert queue.empty()
+    assert state.queued_segments == []
+    assert state.songs_since_ad == 0
+    timing = state.render_timings[0]
+    assert timing["kind"] == SegmentType.AD.value
+    assert timing["outcome"] == "discarded"
+    assert timing["reason"] == "no_safe_ad_campaigns"
+
+
+@pytest.mark.asyncio
 async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     """When quality gate rejects an ad break, songs_since_ad is reset to 0."""
     import os
@@ -817,18 +1096,27 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         if seg_type == SegmentType.AD:
             raise AudioQualityError("ad break too short")
 
+    def _slow_bumper(*_args, **_kwargs):
+        time.sleep(0.05)
+
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _slow_bumper
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+    imaging.resolve_ad_recipe.return_value = None
+
     os.environ.pop("MAMMAMIRADIO_SKIP_QUALITY_GATE", None)
 
     with (
         patch(
             f"{SCRIPTWRITER_MODULE}.write_transition",
             new_callable=AsyncMock,
-            return_value=(config.hosts[0], "Pubblicità!"),
+            return_value=(config.hosts[0], "Pubblicità!", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=fake_audio),
-        patch(f"{PRODUCER_MODULE}._make_imaging_lib"),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
@@ -858,6 +1146,8 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     # Fix (#397): the ad reject records its real rendered length (probe mocked to
     # 12.0s), not 0.0.
     assert state.discarded_duration_total_sec >= 12.0
+    timing = next(item for item in state.render_timings if item["kind"] == SegmentType.AD.value)
+    assert timing["stages_ms"]["mix"] > timing["stages_ms"]["script"]
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +1252,8 @@ async def test_error_recovery_recycles_last_known_good_music(tmp_path):
     assert seg.metadata.get("recycled") is True
     assert seg.metadata.get("artist") == "Artista Salvato"
     assert seg.metadata.get("title_only") == "Canzone Salvata"
+    assert len(state.queued_segments) == 1
+    assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
     assert seg.metadata.get("audio_source") == "last_known_good"
 
 
@@ -1079,10 +1371,6 @@ async def test_error_recovery_rejects_quiet_recovery_sweeper_and_uses_tone(tmp_p
         output_path.write_bytes(b"quiet placeholder")
         return output_path
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
     orig_last_music = producer._last_music_file
     producer._last_music_file = None
     try:
@@ -1104,7 +1392,6 @@ async def test_error_recovery_rejects_quiet_recovery_sweeper_and_uses_tone(tmp_p
                 f"{PRODUCER_MODULE}.validate_segment_audio",
                 side_effect=AudioQualityError("sweeper is too quiet"),
             ) as mock_validate,
-            patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
         ):
             await _run_until_n_queued(queue, state, config, n=1)
     finally:
@@ -1113,26 +1400,23 @@ async def test_error_recovery_rejects_quiet_recovery_sweeper_and_uses_tone(tmp_p
     mock_validate.assert_called_once()
     dry_sweeper = mock_validate.call_args.args[0]
     assert mock_validate.call_args.args[1] == SegmentType.SWEEPER
-    mock_tone.assert_called_once()
     assert dry_sweeper.name.startswith("recovery_sweeper_")
     assert not dry_sweeper.exists()
     seg = queue.get_nowait()
     assert seg.metadata.get("error_recovery") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
 
 
 @pytest.mark.asyncio
-async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
-    """Generated error-recovery tone carries the admission bypass and replaces silence."""
+async def test_error_recovery_packaged_emergency_tone_is_rescue(tmp_path):
+    """The pre-bundled error-recovery tone replaces silence without FFmpeg work."""
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
-
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
@@ -1150,7 +1434,6 @@ async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
             new_callable=AsyncMock,
             side_effect=RuntimeError("tts down"),
         ),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
         patch(
             f"{PRODUCER_MODULE}.generate_silence",
             side_effect=AssertionError("silence should never be a producer recovery fallback"),
@@ -1160,12 +1443,12 @@ async def test_error_recovery_emergency_tone_generation_is_rescue(tmp_path):
         await _run_until_n_queued(queue, state, config, n=1)
 
     mock_silence.assert_not_called()
-    mock_tone.assert_called_once()
-    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("error_recovery") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
     assert is_fallback_active(seg.metadata) is True
 
 
@@ -1177,10 +1460,6 @@ async def test_error_recovery_emergency_tone_segment_declares_duration(tmp_path)
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
     with (
         patch(f"{PRODUCER_MODULE}._pick_recovery_clip", return_value=None),
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
@@ -1190,16 +1469,16 @@ async def test_error_recovery_emergency_tone_segment_declares_duration(tmp_path)
             new_callable=AsyncMock,
             side_effect=RuntimeError("tts down"),
         ),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone),
     ):
         seg = await _producer_error_recovery_segment(state, config)
 
     assert seg is not None
     assert seg.type == SegmentType.MUSIC
     assert seg.duration_sec == 2.0
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
     assert seg.metadata["duration_ms"] == 2000
     assert seg.metadata["audio_source"] == "emergency_tone"
-    assert seg.ephemeral is True
 
 
 @pytest.mark.asyncio
@@ -1215,10 +1494,6 @@ async def test_error_recovery_sweeper_timeout_falls_through_to_emergency_tone(tm
         sweeper_started.set()
         await asyncio.Event().wait()
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
         patch(
@@ -1232,7 +1507,6 @@ async def test_error_recovery_sweeper_timeout_falls_through_to_emergency_tone(tm
         patch(f"{PRODUCER_MODULE}._get_last_music_file", return_value=None),
         patch(f"{PRODUCER_MODULE}.RECOVERY_SWEEPER_TIMEOUT_SECONDS", 0.01),
         patch(f"{PRODUCER_MODULE}._build_recovery_sweeper_segment", new_callable=AsyncMock, side_effect=_slow_sweeper),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
         patch(
             f"{PRODUCER_MODULE}.generate_silence",
             side_effect=AssertionError("silence should never be a producer recovery fallback"),
@@ -1243,11 +1517,11 @@ async def test_error_recovery_sweeper_timeout_falls_through_to_emergency_tone(tm
 
     assert sweeper_started.is_set()
     mock_silence.assert_not_called()
-    mock_tone.assert_called_once()
-    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.metadata.get("rescue") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
     assert is_fallback_active(seg.metadata) is True
 
 
@@ -1476,6 +1750,59 @@ async def test_prefetch_next_skips_failed_candidate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prefetch_next_skips_session_rejected_candidate(tmp_path):
+    """A rejected first track must not prevent prefetching a playable sibling."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    rejected, playable = state.playlist
+
+    clear_rejected_cache_keys()
+    try:
+        reject_cached_download(config.cache_dir, rejected.cache_key, "yt-dlp unavailable")
+        with (
+            patch(
+                f"{PRODUCER_MODULE}.download_track",
+                new_callable=AsyncMock,
+                return_value=tmp_path / "fake.mp3",
+            ) as mock_download,
+            patch(f"{PRODUCER_MODULE}.validate_download", return_value=(False, "test")),
+        ):
+            await _prefetch_next(state, config)
+
+        assert mock_download.await_args.args[0] is playable
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_next_returns_when_every_candidate_is_session_rejected(tmp_path):
+    """Prefetch must not try another acquisition when no accepted track remains."""
+    from mammamiradio.playlist.downloader import clear_rejected_cache_keys, reject_cached_download
+    from mammamiradio.scheduling.producer import _prefetch_next
+
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+
+    clear_rejected_cache_keys()
+    try:
+        for track in state.playlist:
+            reject_cached_download(config.cache_dir, track.cache_key, "yt-dlp unavailable")
+        with patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock) as mock_download:
+            await _prefetch_next(state, config)
+
+        mock_download.assert_not_awaited()
+    finally:
+        clear_rejected_cache_keys()
+
+
+@pytest.mark.asyncio
 async def test_prefetch_next_all_candidates_failed_returns_early(tmp_path):
     """_prefetch_next returns early when every playlist track is in _failed_keys."""
     from mammamiradio.scheduling.producer import _prefetch_next
@@ -1608,11 +1935,11 @@ async def test_prewarm_first_segment_renders_in_foreground_not_background(tmp_pa
 
 @pytest.mark.asyncio
 async def test_drain_guard_inserts_canned_clip_on_queue_drain(tmp_path):
-    """When the queue drains to zero after at least one segment is produced,
-    the drain guard inserts a canned banter clip to prevent dead air."""
+    """With an empty norm cache, a drained queue falls back to canned banter."""
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     canned_clip = tmp_path / "canned_banter.mp3"
@@ -1710,7 +2037,9 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
     norm_file.write_bytes(b"fake norm audio" * 100)
     save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -1735,34 +2064,27 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
 
 @pytest.mark.asyncio
 async def test_drain_guard_emergency_tone_when_no_canned_clip_or_norm_cache(tmp_path):
-    """When all bridge sources are missing, queue a generated tone instead of leaving dead air."""
+    """When all bridge sources are missing, queue the packaged tone without a render."""
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
-    def _fake_tone(path: Path, *_args, **_kwargs):
-        path.write_bytes(b"tone")
-        return path
-
-    with (
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_tone) as mock_tone,
-    ):
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
 
     assert queued is True
-    mock_tone.assert_called_once()
-    assert mock_tone.call_args.kwargs["rescue"] is True
     seg = queue.get_nowait()
     assert seg.type == SegmentType.MUSIC
-    assert seg.path.exists()
-    assert seg.ephemeral is True
+    assert seg.path.name == "emergency_tone.mp3"
+    assert seg.ephemeral is False
     assert seg.metadata["queue_drain_recovery"] is True
     assert seg.metadata["audio_source"] == "emergency_tone"
     assert seg.duration_sec == 2.0
@@ -1782,13 +2104,15 @@ async def test_drain_guard_emergency_tone_failure_is_contained(tmp_path):
     config.cache_dir = tmp_path
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=RuntimeError("ffmpeg unavailable")),
+        patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path / "missing-assets"),
     ):
         queued = await _queue_drain_recovery_bridge(_queue_segment, state, config)
 
@@ -1814,7 +2138,9 @@ async def test_drain_guard_records_bridge_fire_for_canned_clip(tmp_path):
     canned_clip.parent.mkdir(parents=True)
     canned_clip.write_bytes(b"canned banter audio" * 50)
 
-    async def _queue_segment(segment: Segment) -> bool:
+    async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         await queue.put(segment)
         return True
 
@@ -1856,7 +2182,9 @@ async def test_drain_guard_does_not_record_bridge_fire_when_enqueue_rejected(tmp
     canned_clip = tmp_path / "canned.mp3"
     canned_clip.write_bytes(b"canned banter audio" * 50)
 
-    async def _reject_segment(segment: Segment) -> bool:
+    async def _reject_segment(segment: Segment, *, stale_check=None) -> bool:
+        if stale_check and stale_check():
+            return False
         return False  # enqueue rejected (e.g. session stopped)
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip):
@@ -1896,7 +2224,7 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
         patch(
             "mammamiradio.hosts.scriptwriter.write_transition",
             new_callable=AsyncMock,
-            return_value=(host, "Bentornati."),
+            return_value=(host, "Tra poco, ancora musica.", None),
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
@@ -1928,3 +2256,264 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
     assert seg.type == SegmentType.BANTER
     # When _try_crossfade produces xfade_out (different from input path), has_music_tail must be True
     assert seg.metadata.get("has_music_tail") is True
+
+
+@pytest.mark.asyncio
+async def test_banter_metadata_includes_transition_track_ref(tmp_path):
+    """The played_track_ref write_transition() returns for its "just finished
+    playing" claim must land on the produced BANTER segment's metadata, so
+    _front_insert_queue_and_shadow can detect a later stale claim (see
+    test_air_next.py's stale-head-drop tests for the consuming side)."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    state.force_next = SegmentType.BANTER
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    xfade_out = tmp_path / "banter_trans_abc.mp3"
+    xfade_out.write_bytes(b"\x00" * 2048)
+    combined = tmp_path / "banter_combined.mp3"
+    combined.write_bytes(b"\x00" * 2048)
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Ciao ragazzi!")], None),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", "youtube|abc123"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda *a, **k: a[2]),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=combined),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 15.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue banter")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert not queue.empty(), "Producer must have queued a banter segment"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("transition_track_ref") == "youtube|abc123"
+
+
+@pytest.mark.asyncio
+async def test_canned_banter_quality_fallback_clears_transition_track_ref(tmp_path):
+    """A canned quality fallback must not inherit the generated transition's
+    played-track claim, because that clip never says it."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = "test-key"
+    state.force_next = SegmentType.BANTER
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    host = config.hosts[0]
+    banter_path = tmp_path / "banter.mp3"
+    banter_path.write_bytes(b"\x00" * 2048)
+    xfade_out = tmp_path / "banter_trans_abc.mp3"
+    xfade_out.write_bytes(b"\x00" * 2048)
+    combined = tmp_path / "banter_combined.mp3"
+    combined.write_bytes(b"\x00" * 2048)
+    canned_clip = tmp_path / "canned_banter.mp3"
+    canned_clip.write_bytes(b"\x00" * 2048)
+
+    validate_calls: list[Path] = []
+
+    def _validate_side_effect(path, seg_type, **_kwargs):
+        validate_calls.append(Path(path))
+        if len(validate_calls) == 1:
+            raise AudioQualityError("generated banter too quiet")
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(host, "Ciao ragazzi!")], None),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Tra poco, ancora musica.", "youtube|abc123"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=banter_path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=xfade_out),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=combined),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 15.0
+            while queue.empty():
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not queue canned fallback banter")
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert not queue.empty(), "Producer must have queued canned fallback banter"
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.BANTER
+    assert seg.metadata.get("canned") is True
+    assert seg.metadata.get("transition_track_ref") is None
+
+
+# ---------------------------------------------------------------------------
+# Render timing diagnostics — real producer boundaries and terminal closure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_music_track_records_distinct_source_and_normalize_stages(tmp_path):
+    """Download/cache lookup and normalization must not collapse into one source timer."""
+    from mammamiradio.scheduling.producer import _render_music_track
+
+    state = StationState()
+    state.begin_render_timing(SegmentType.MUSIC.value)
+    state.set_gen("finding", SegmentType.MUSIC.value, "Finding Timing Song")
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    track = Track(title="Timing Song", artist="Artista", duration_ms=180_000, spotify_id="timing-song")
+    downloaded = tmp_path / "downloaded.mp3"
+    downloaded.write_bytes(b"downloaded")
+
+    def _copy_audio(src, dst):
+        Path(dst).write_bytes(Path(src).read_bytes())
+        return dst
+
+    with (
+        patch(f"{PRODUCER_MODULE}.download_track", new_callable=AsyncMock, return_value=downloaded),
+        patch(f"{PRODUCER_MODULE}.validate_download", return_value=(True, "")),
+        patch(f"{PRODUCER_MODULE}.normalize", side_effect=_fake_normalize),
+        patch(f"{PRODUCER_MODULE}.shutil.copy2", side_effect=_copy_audio),
+    ):
+        rendered = await _render_music_track(
+            track,
+            config,
+            temp_prefix="music",
+            context="music",
+            timing_state=state,
+        )
+
+    assert rendered is not None
+    state.finish_render_timing("produced")
+    timing = state.render_timings[0]
+    assert timing["outcome"] == "produced"
+    assert set(timing["stages_ms"]) >= {"source", "normalize"}
+
+
+@pytest.mark.asyncio
+async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
+    """A real producer attempt attributes voice generation and assembly separately."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _write_voice(_text, _voice, output_path, **_kwargs):
+        Path(output_path).write_bytes(b"voice")
+
+    def _write_tone(output_path, *_args, **_kwargs):
+        time.sleep(0.05)
+        Path(output_path).write_bytes(b"tone")
+        return output_path
+
+    def _write_concat(_parts, output_path, *_args, **_kwargs):
+        Path(output_path).write_bytes(b"mixed")
+        return output_path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 0),
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_write_tone),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
+        patch(
+            f"{PRODUCER_MODULE}._apply_egress",
+            new_callable=AsyncMock,
+            side_effect=lambda segment, _config: segment,
+        ),
+    ):
+        await _run_until_n_queued(queue, state, config)
+
+    timing = next(item for item in state.render_timings if item["kind"] == SegmentType.TIME_CHECK.value)
+    assert timing["outcome"] == "produced"
+    assert set(timing["stages_ms"]) >= {"tts", "mix"}
+    assert timing["stages_ms"]["mix"] > timing["stages_ms"]["tts"]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_music_render_closes_timing_before_idle(tmp_path):
+    """A terminal continue cannot leave an open timer spanning the next idle period."""
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    async def _become_idle(*_args, **_kwargs):
+        state.listeners_active = 0
+        return None
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=_become_idle),
+    ):
+        from mammamiradio.scheduling.producer import run_producer
+
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while not state.render_timings:
+                if asyncio.get_event_loop().time() > deadline:
+                    raise TimeoutError("Producer did not finalize the unavailable render")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    timing = state.render_timings[0]
+    assert timing["outcome"] == "failed"
+    assert timing["reason"] == "render_unavailable"
+    assert state._render_timing_started == 0.0
+    assert not any(item.get("reason") == "abandoned" for item in state.render_timings)

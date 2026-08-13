@@ -12,7 +12,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
+from mammamiradio.core.listener_session import ListenerSession
+from mammamiradio.core.models import (
+    GenerationWasteReason,
+    PlaylistSource,
+    Segment,
+    SegmentType,
+    StationState,
+    Track,
+)
 from mammamiradio.web import status_payload as status_payload_mod
 from mammamiradio.web.streamer import (
     LiveStreamHub,
@@ -77,6 +85,33 @@ async def test_hub_double_unsubscribe():
     hub.unsubscribe(lid)  # should not raise
 
 
+def test_hub_membership_is_the_single_listener_session_authority():
+    clock = [0.0]
+    state = StationState(listener_session=ListenerSession(monotonic=lambda: clock[0]))
+    hub = LiveStreamHub()
+    hub.bind_state(state)
+
+    first, _ = hub.subscribe()
+    second, _ = hub.subscribe()
+    assert state.listeners_active == len(hub._listeners) == 2
+    assert state.listeners_total == 2
+    assert state.listener_session.epoch == 1
+
+    hub.unsubscribe(first)
+    assert state.listeners_active == len(hub._listeners) == 1
+    assert state.listener_session.epoch == 1
+
+    hub.unsubscribe(second)
+    assert state.listeners_active == len(hub._listeners) == 0
+    assert state.listener_session.snapshot(now=clock[0]).phase == "grace"
+
+    clock[0] = 599.999
+    resumed, _ = hub.subscribe()
+    assert state.listeners_active == len(hub._listeners) == 1
+    assert state.listener_session.epoch == 1
+    hub.unsubscribe(resumed)
+
+
 # ---------------------------------------------------------------------------
 # _purge_segment_queue
 # ---------------------------------------------------------------------------
@@ -109,7 +144,7 @@ async def test_purge_queue_and_shadow_drains_and_clears(tmp_path):
     state = StationState()
     state.queued_segments = [{"type": "music", "label": "A"}, {"type": "banter", "label": "B"}]
 
-    purged = _purge_queue_and_shadow(q, state)
+    purged = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
 
     assert purged == 1
     assert q.empty()
@@ -129,7 +164,7 @@ async def test_purge_queue_and_shadow_unlinks_ephemeral_keeps_durable(tmp_path):
     state = StationState()
     state.queued_segments = [{"label": "x"}]
 
-    purged = _purge_queue_and_shadow(q, state)
+    purged = _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE)
 
     assert purged == 2
     assert state.queued_segments == []
@@ -157,7 +192,7 @@ async def test_purge_queue_and_shadow_keeps_packaged_asset_even_if_ephemeral(tmp
     state = StationState()
     state.queued_segments = [{"label": "asset"}, {"label": "tmp"}]
 
-    assert _purge_queue_and_shadow(q, state) == 2
+    assert _purge_queue_and_shadow(q, state, reason=GenerationWasteReason.OPERATOR_PURGE) == 2
     assert packaged.exists()
     assert not tmp_render.exists()
     assert _is_packaged_asset(packaged) is True
@@ -313,8 +348,8 @@ def test_unlink_ephemeral_best_effort_keeps_packaged_asset(tmp_path, monkeypatch
     assert not tmp_render.exists()
 
 
-def test_golden_path_with_local_music(tmp_path, monkeypatch):
-    """When local music/ directory contains MP3s, golden path shows music_available."""
+def test_golden_path_with_admitted_local_music(monkeypatch):
+    """Event evidence, not a status-time directory scan, proves local audio."""
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache_key", None)
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
@@ -323,22 +358,22 @@ def test_golden_path_with_local_music(tmp_path, monkeypatch):
     config.anthropic_api_key = "key"
     config.openai_api_key = ""
     config.allow_ytdlp = False
-    state = MagicMock()
+    track = Track(title="Song", artist="Artist", duration_ms=180_000, source="local")
+    state = StationState(
+        playlist=[track],
+        playlist_source=PlaylistSource(kind="local", label="Local music", track_count=1),
+    )
+    state.source_readiness.mark_playable("local")
 
-    music_dir = tmp_path / "music"
-    music_dir.mkdir()
-    (music_dir / "song.mp3").write_bytes(b"data")
-
-    with (
-        patch("mammamiradio.web.status_payload._has_any_mp3", side_effect=lambda p: "music" in str(p)),
-    ):
+    with patch("mammamiradio.web.status_payload._has_any_mp3", side_effect=AssertionError("must not scan")):
         result = _golden_path_status(config, state)
 
     assert result["stage"] == "music_available"
+    assert "Local music" in result["fallback_sources"]
 
 
-def test_golden_path_with_ytdlp(monkeypatch):
-    """When yt-dlp is enabled in loaded config, it appears in fallback_sources."""
+def test_golden_path_with_ytdlp_configured_but_unproven(monkeypatch):
+    """A configured downloader is not itself playable-source evidence."""
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache_key", None)
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
@@ -347,16 +382,17 @@ def test_golden_path_with_ytdlp(monkeypatch):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     config.allow_ytdlp = True
-    state = MagicMock()
-    state.playlist = []
+    state = StationState()
 
     with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
         result = _golden_path_status(config, state)
 
-    assert "yt-dlp downloads" in result["fallback_sources"]
+    assert result["stage"] == "needs_music_source"
+    assert result["source_readiness"]["sources"]["charts"]["configured"] is True
+    assert result["fallback_sources"] == []
 
 
-def test_golden_path_loaded_playlist_counts_as_music_source(monkeypatch):
+def test_golden_path_loaded_candidates_are_not_yet_playable(monkeypatch):
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache", None)
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache_key", None)
     monkeypatch.setattr(status_payload_mod, "_golden_path_cache_ts", 0.0)
@@ -364,15 +400,14 @@ def test_golden_path_loaded_playlist_counts_as_music_source(monkeypatch):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     config.allow_ytdlp = False
-    state = MagicMock()
-    state.playlist = [object()]
-    state.playlist_source = None
+    state = StationState(playlist=[Track(title="Candidate", artist="Artist", duration_ms=180_000)])
 
     with patch("mammamiradio.web.status_payload._has_any_mp3", return_value=False):
         result = _golden_path_status(config, state)
 
-    assert result["blocking"] is False
-    assert "loaded playlist" in result["fallback_sources"]
+    assert result["stage"] == "music_preparing"
+    assert result["blocking"] is True
+    assert result["fallback_sources"] == []
 
 
 def test_source_options_reason():

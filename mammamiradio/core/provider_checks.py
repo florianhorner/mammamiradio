@@ -55,6 +55,18 @@ def _missing_result(provider: str) -> dict[str, Any]:
     }
 
 
+def _routing_unavailable_result(provider: str) -> dict[str, Any]:
+    """Report a saved key whose model registry cannot supply a safe route."""
+    return {
+        "provider": provider,
+        "configured": True,
+        "ok": False,
+        "status_code": None,
+        "error_type": "model_routing_unavailable",
+        "detail": "",
+    }
+
+
 async def _post_json(
     client: httpx.AsyncClient,
     url: str,
@@ -165,27 +177,30 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
             anth_models: list[str] = []
             for _caller in ("banter", "transition"):
                 _m = resolve_model(config.models, _caller, "anthropic")
-                if _m not in anth_models:
+                if _m and _m not in anth_models:
                     anth_models.append(_m)
-            anth_result = results["anthropic"]
-            for _m in anth_models:
-                status, body = await _post_json(
-                    client,
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": config.anthropic_api_key,
-                        "anthropic-version": "2023-06-01",
-                    },
-                    payload={
-                        "model": _m,
-                        "max_tokens": 1,
-                        "messages": [{"role": "user", "content": "Reply with ok."}],
-                    },
-                )
-                anth_result = _result("anthropic", status, body, secrets=(config.anthropic_api_key,))
-                if not anth_result["ok"]:
-                    break  # surface the first failing model
-            results["anthropic"] = anth_result
+            if not anth_models:
+                results["anthropic"] = _routing_unavailable_result("anthropic")
+            else:
+                anth_result = results["anthropic"]
+                for _m in anth_models:
+                    status, body = await _post_json(
+                        client,
+                        "https://api.anthropic.com/v1/messages",
+                        headers={
+                            "x-api-key": config.anthropic_api_key,
+                            "anthropic-version": "2023-06-01",
+                        },
+                        payload={
+                            "model": _m,
+                            "max_tokens": 1,
+                            "messages": [{"role": "user", "content": "Reply with ok."}],
+                        },
+                    )
+                    anth_result = _result("anthropic", status, body, secrets=(config.anthropic_api_key,))
+                    if not anth_result["ok"]:
+                        break  # surface the first failing model
+                results["anthropic"] = anth_result
 
         if config.openai_api_key:
             openai_headers = {"Authorization": f"Bearer {config.openai_api_key}"}
@@ -194,40 +209,44 @@ async def check_provider_keys(config: StationConfig, *, timeout_s: float = 12.0)
             openai_models: list[str] = []
             for _caller in ("banter", "transition"):
                 _m = resolve_model(config.models, _caller, "openai")
-                if _m not in openai_models:
+                if _m and _m not in openai_models:
                     openai_models.append(_m)
-            openai_result = results["openai_chat"]
-            for _m in openai_models:
+            if not openai_models:
+                results["openai_chat"] = _routing_unavailable_result("openai_chat")
+            else:
+                openai_result = results["openai_chat"]
+                for _m in openai_models:
+                    status, body = await _post_json(
+                        client,
+                        "https://api.openai.com/v1/chat/completions",
+                        headers=openai_headers,
+                        payload={
+                            "model": _m,
+                            "max_completion_tokens": 1,
+                            "messages": [{"role": "user", "content": "Reply ok."}],
+                        },
+                    )
+                    openai_result = _result("openai_chat", status, body, secrets=(config.openai_api_key,))
+                    if not openai_result["ok"]:
+                        break
+                results["openai_chat"] = openai_result
+
+            tts_model = config.models.tts_model("openai")
+            if not tts_model:
+                results["openai_tts"] = _routing_unavailable_result("openai_tts")
+            else:
                 status, body = await _post_json(
                     client,
-                    "https://api.openai.com/v1/chat/completions",
+                    "https://api.openai.com/v1/audio/speech",
                     headers=openai_headers,
                     payload={
-                        "model": _m,
-                        # gpt-5.x rejects `max_tokens` (use `max_completion_tokens`);
-                        # the old name made this probe 400 and falsely report a
-                        # valid OpenAI key as down.
-                        "max_completion_tokens": 1,
-                        "messages": [{"role": "user", "content": "Reply ok."}],
+                        "model": tts_model,
+                        "voice": "onyx",
+                        "input": "ok",
+                        "response_format": "mp3",
                     },
                 )
-                openai_result = _result("openai_chat", status, body, secrets=(config.openai_api_key,))
-                if not openai_result["ok"]:
-                    break
-            results["openai_chat"] = openai_result
-
-            status, body = await _post_json(
-                client,
-                "https://api.openai.com/v1/audio/speech",
-                headers=openai_headers,
-                payload={
-                    "model": "gpt-4o-mini-tts",
-                    "voice": "onyx",
-                    "input": "ok",
-                    "response_format": "mp3",
-                },
-            )
-            results["openai_tts"] = _result("openai_tts", status, body, secrets=(config.openai_api_key,))
+                results["openai_tts"] = _result("openai_tts", status, body, secrets=(config.openai_api_key,))
 
         if config.azure_speech_key and config.azure_speech_region:
             # Token-issuer endpoint: POST with no body, ~400-byte response vs

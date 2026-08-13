@@ -1,0 +1,35 @@
+=== ruff check . ===
+All checks passed!
+
+=== ruff format --check . ===
+277 files already formatted
+
+=== mypy mammamiradio/ tests/ ===
+Success: no issues found in 250 source files
+
+=== python -m pytest tests/ -q (post-merge with origin/main @ c1bc2c04) ===
+5 failed, 4444 passed, 2 skipped, 21 deselected, 1 warning in 92.36s
+
+Failed tests (pre-existing on origin/main, unrelated to this branch — verified
+identical failures with this branch's changes stashed, and confirmed via
+`git diff origin/main -- <file>` that this PR touches none of the failing
+tests' source files: mammamiradio/core/config.py, radio.toml, tests/core/test_config.py,
+mammamiradio/web/streamer.py touched by test_chaos_api.py are unrelated to the
+Scaletta shadow-row fix):
+- tests/web/test_chaos_api.py::test_boot_read_back_does_not_arm_first_strike
+- tests/core/test_config.py::test_load_config_rejects_pacing_out_of_range[...]
+- tests/core/test_config.py::test_pacing_env_override_ignores_non_int
+- tests/core/test_config.py::test_load_config_from_radio_toml
+- tests/core/test_config.py::test_load_config_rejects_nonpositive_pacing_values
+
+=== Touched-file suite (tests/scheduling/test_producer.py, test_producer_unit.py,
+    test_producer_extended.py, test_producer_coverage.py, test_queue_commit_contract.py,
+    tests/web/test_admin_status_invariants.py) ===
+355 passed
+
+=== node sanity check of the admin.html runway JS (sub-minute precision + filter-aware count) ===
+calc(2s, 5 queued, filter=all)   -> "The hosts are 2 seconds ahead" / "The next 5 records are already cued."
+calc(45s, 5 queued, filter=all)  -> "The hosts are 45 seconds ahead" / "The next 5 records are already cued."
+calc(125s, 12 queued, filter=all)-> "The hosts are 2 minutes ahead" / "The next 12 records are already cued."
+calc(125s, 12 queued, filter=ads, 1 of 2 upcoming tagged ads) -> "The hosts are 2 minutes ahead" / "1 of 12 cued."
+calc(125s, 1 queued, filter=all) -> "The hosts are 2 minutes ahead" / "The next record is already cued."

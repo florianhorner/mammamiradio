@@ -53,7 +53,13 @@ assert_image_recovery_assets() {
     local image="$1"
     if docker run --rm -i "$image" python3 - <<'PY'
 from importlib import resources
+from pathlib import Path
 import subprocess
+
+from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
+from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset
+
+REQUIRED_RECOVERY_ASSETS = ("continuity_1.mp3", "emergency_tone.mp3")
 
 try:
     recovery_dir = resources.files("mammamiradio").joinpath("assets", "demo", "recovery")
@@ -61,31 +67,33 @@ except ModuleNotFoundError as exc:
     raise SystemExit(f"cannot import mammamiradio package: {exc}") from exc
 
 try:
-    clips = sorted(
-        (clip for clip in recovery_dir.iterdir() if clip.is_file() and clip.name.endswith(".mp3")),
-        key=lambda clip: clip.name,
-    )
+    clips = {
+        clip.name: clip
+        for clip in recovery_dir.iterdir()
+        if clip.is_file() and clip.name.endswith(".mp3")
+    }
 except (FileNotFoundError, NotADirectoryError, OSError) as exc:
     raise SystemExit(f"missing recovery asset directory in installed image: {exc}") from exc
 
-if not clips:
-    raise SystemExit("no installed recovery MP3s found under mammamiradio/assets/demo/recovery/")
-
-serviceable = []
-for clip in clips:
+failures = []
+for asset_name in REQUIRED_RECOVERY_ASSETS:
+    clip = clips.get(asset_name)
+    if clip is None:
+        failures.append(f"{asset_name}: missing")
+        continue
     try:
         size = len(clip.read_bytes())
     except OSError as exc:
-        raise SystemExit(f"could not read installed recovery MP3 {clip.name}: {exc}") from exc
-    if size > 1024:
-        serviceable.append((clip, size))
+        failures.append(f"{asset_name}: unreadable ({exc})")
+        continue
+    if size <= 1024:
+        failures.append(f"{asset_name}: only {size} bytes")
+        continue
+    asset_path = Path(DEMO_ASSETS_DIR) / "recovery" / asset_name
+    if not is_approved_packaged_audio_asset(asset_path, assets_root=Path(DEMO_ASSETS_DIR)):
+        failures.append(f"{asset_name}: manifest/hash validation failed")
+        continue
 
-if not serviceable:
-    names = ", ".join(clip.name for clip in clips)
-    raise SystemExit(f"installed recovery MP3s are missing or too small: {names}")
-
-failures = []
-for clip, size in serviceable:
     try:
         with resources.as_file(clip) as path:
             result = subprocess.run(
@@ -108,26 +116,24 @@ for clip, size in serviceable:
     except FileNotFoundError as exc:
         raise SystemExit("ffprobe is not installed in the image") from exc
     except subprocess.TimeoutExpired:
-        failures.append(f"{clip.name}: ffprobe timed out")
+        failures.append(f"{asset_name}: ffprobe timed out")
         continue
 
     stdout = result.stdout.strip()
     stderr = result.stderr.strip()
     if result.returncode == 0 and "audio" in stdout.lower():
-        print(f"recovery asset OK: {clip.name} ({size} bytes)")
-        raise SystemExit(0)
-    failures.append(f"{clip.name}: {stderr or stdout or f'ffprobe exit {result.returncode}'}")
+        print(f"recovery asset OK: {asset_name} ({size} bytes)")
+        continue
+    failures.append(f"{asset_name}: {stderr or stdout or f'ffprobe exit {result.returncode}'}")
 
-raise SystemExit(
-    "no ffprobe-playable installed recovery MP3 found; "
-    + "; ".join(failures)
-)
+if failures:
+    raise SystemExit("required recovery asset validation failed: " + "; ".join(failures))
 PY
     then
-        pass "Installed recovery MP3 present and ffprobe-playable"
+        pass "Every required recovery MP3 is installed, manifest-bound, and ffprobe-playable"
         return 0
     else
-        fail "Installed recovery MP3 missing, too small, or unplayable"
+        fail "A required recovery MP3 is missing, too small, unapproved, or unplayable"
         return 1
     fi
 }
@@ -199,6 +205,37 @@ PY
         fail "Installed Night Drive imaging pack missing, incomplete, or unplayable"
         return 1
     fi
+}
+
+assert_image_model_registry() {
+    local image="$1"
+    local expected_hash actual_hash
+
+    if ! expected_hash=$($PY -c "from hashlib import sha256; from pathlib import Path; print(sha256(Path('model_registry.toml').read_bytes()).hexdigest())"); then
+        fail "Could not hash canonical model_registry.toml"
+        return 1
+    fi
+
+    if ! actual_hash=$(docker run --rm -i "$image" python3 -c '
+from hashlib import sha256
+from pathlib import Path
+
+registry = Path("/app/model_registry.toml")
+if not registry.is_file():
+    raise SystemExit("missing /app/model_registry.toml in installed image")
+print(sha256(registry.read_bytes()).hexdigest())
+'); then
+        fail "Installed model_registry.toml missing or unreadable"
+        return 1
+    fi
+
+    if [ "$actual_hash" = "$expected_hash" ]; then
+        pass "Installed model registry matches canonical root registry"
+        return 0
+    fi
+
+    fail "Installed model registry drifted from canonical root registry"
+    return 1
 }
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -310,6 +347,7 @@ fi
 # ---- 4. Critical files exist ----
 echo "4. Critical files"
 for f in mammamiradio/__init__.py radio.toml ha-addon/mammamiradio/Dockerfile \
+         model_registry.toml \
          ha-addon/mammamiradio/rootfs/run.sh ha-addon/mammamiradio/config.yaml \
          ha-addon/mammamiradio/build.yaml ha-addon/mammamiradio/apparmor.txt \
          ha-addon/mammamiradio/translations/en.yaml; do
@@ -348,6 +386,78 @@ if cmp -s radio.toml ha-addon/mammamiradio/radio.toml; then
     pass "ha-addon/mammamiradio/radio.toml matches root radio.toml"
 else
     fail "ha-addon/mammamiradio/radio.toml drifted from root radio.toml"
+fi
+
+echo "6c. Model registry"
+if [ ! -f model_registry.toml ]; then
+    fail "Missing canonical model_registry.toml"
+elif [ -e ha-addon/mammamiradio/model_registry.toml ]; then
+    fail "ha-addon/mammamiradio/model_registry.toml must not be committed; stage the canonical root file at build time"
+elif SCHEMA_ERR="$($PY -c "
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+with open('model_registry.toml', 'rb') as f:
+    raw = tomllib.load(f)
+models = raw.get('models')
+if not isinstance(models, dict):
+    raise SystemExit('model_registry.toml schema invalid: [models] table is required')
+catalog = models.get('catalog')
+profiles = models.get('profiles')
+routing = models.get('routing') or {}
+if not isinstance(catalog, dict) or not catalog:
+    raise SystemExit('model_registry.toml schema invalid: [models.catalog] must be non-empty')
+if not isinstance(profiles, dict) or not profiles:
+    raise SystemExit('model_registry.toml schema invalid: [models.profiles] must be non-empty')
+if routing and not isinstance(routing, dict):
+    raise SystemExit('model_registry.toml schema invalid: [models.routing] must be a table')
+default_routing = {
+    'banter': 'creative',
+    'news_flash': 'creative',
+    'ad': 'creative',
+    'transition': 'fast',
+    'home_mood': 'fast',
+    'memory_extract': 'fast',
+    'direction': 'creative',
+}
+merged_routing = {**default_routing, **{str(task): str(role) for task, role in routing.items()}}
+for provider in ('anthropic', 'openai'):
+    provider_catalog = catalog.get(provider)
+    if not isinstance(provider_catalog, dict) or not provider_catalog:
+        raise SystemExit(f'model_registry.toml schema invalid: models.catalog.{provider} must be non-empty')
+for profile_name, profile_data in profiles.items():
+    if not isinstance(profile_data, dict):
+        raise SystemExit(f'model_registry.toml schema invalid: profile {profile_name!r} must be a table')
+    for provider in ('anthropic', 'openai'):
+        provider_profile = profile_data.get(provider)
+        if not isinstance(provider_profile, dict):
+            raise SystemExit(
+                f'model_registry.toml schema invalid: models.profiles.{profile_name}.{provider} must be a table'
+            )
+        for task, role in merged_routing.items():
+            key = provider_profile.get(role)
+            model_id = catalog[provider].get(key) if key else None
+            if not isinstance(model_id, str) or not model_id.strip():
+                raise SystemExit(
+                    f'model_registry.toml schema invalid: {profile_name}/{provider}/{task} role {role!r} '
+                    'does not resolve to a model id'
+                )
+tts = raw.get('tts')
+openai_tts = tts.get('openai') if isinstance(tts, dict) else None
+if not isinstance(openai_tts, dict) or not str(openai_tts.get('model', '')).strip():
+    raise SystemExit('model_registry.toml schema invalid: [tts.openai].model must be non-empty')
+pricing = raw.get('pricing')
+if not isinstance(pricing, dict):
+    raise SystemExit('model_registry.toml schema invalid: [pricing] table is required')
+fallback_input = float(pricing.get('fallback_input_per_million', 0.0))
+fallback_output = float(pricing.get('fallback_output_per_million', 0.0))
+if fallback_input <= 0 or fallback_output <= 0:
+    raise SystemExit('model_registry.toml schema invalid: pricing fallback rates must be positive')
+" 2>&1)"; then
+    pass "model_registry.toml is valid and remains root-canonical"
+else
+    fail "model_registry.toml parse/schema error: ${SCHEMA_ERR:-unknown}"
 fi
 
 # ---- 7. run.sh syntax check ----
@@ -528,6 +638,37 @@ EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 STABLE_CONFIG="ha-addon/mammamiradio/config.yaml"
 STABLE_TRANS="ha-addon/mammamiradio/translations/en.yaml"
 EDGE_TRANS="ha-addon/mammamiradio-edge/translations/en.yaml"
+EXPECTED_BACKUP_MODE="backup: hot"
+EXPECTED_BACKUP_EXCLUDE_BLOCK=$(cat <<'EOF'
+  - "tmp"
+  - "cache/.ytdlp_tmp"
+  - "cache/restart_handoff"
+  - "cache/clips"
+  - "cache/*.mp3"
+  - "cache/*.mp3.json"
+  - "cache/*.m4a"
+  - "cache/*.webm"
+  - "*.part"
+  - "*.ytdl"
+  - "*.tmp"
+EOF
+)
+
+STABLE_BACKUP_MODE=$(grep '^backup:' "$STABLE_CONFIG" || true)
+STABLE_BACKUP_EXCLUDE_COUNT=$(grep -c '^backup_exclude:$' "$STABLE_CONFIG" || true)
+STABLE_BACKUP_EXCLUDE_BLOCK=$(extract_yaml_block backup_exclude "$STABLE_CONFIG")
+if [ "$STABLE_BACKUP_MODE" = "$EXPECTED_BACKUP_MODE" ]; then
+    pass "stable backup mode: hot"
+else
+    fail "stable backup mode must be hot"
+fi
+if [ "$STABLE_BACKUP_EXCLUDE_COUNT" = "1" ] && \
+   [ "$STABLE_BACKUP_EXCLUDE_BLOCK" = "$EXPECTED_BACKUP_EXCLUDE_BLOCK" ]; then
+    pass "stable backup exclusion contract matches expected paths"
+else
+    fail "stable backup exclusion contract drifted"
+fi
+
 if [ ! -f "$EDGE_CONFIG" ]; then
     echo "  (no edge add-on — skipping)"
 else
@@ -573,6 +714,31 @@ else
         pass "edge stage: experimental"
     else
         fail "edge stage must stay experimental, got: ${EDGE_STAGE:-missing}"
+    fi
+
+    # Hot-backup policy is an exact, ordered contract. Check each manifest
+    # independently so identical (common-mode) drift cannot hide behind parity,
+    # then check parity so unilateral stable/edge changes are explicit.
+    EDGE_BACKUP_MODE=$(grep '^backup:' "$EDGE_CONFIG" || true)
+    EDGE_BACKUP_EXCLUDE_COUNT=$(grep -c '^backup_exclude:$' "$EDGE_CONFIG" || true)
+    EDGE_BACKUP_EXCLUDE_BLOCK=$(extract_yaml_block backup_exclude "$EDGE_CONFIG")
+    if [ "$EDGE_BACKUP_MODE" = "$EXPECTED_BACKUP_MODE" ]; then
+        pass "edge backup mode: hot"
+    else
+        fail "edge backup mode must be hot"
+    fi
+    if [ "$EDGE_BACKUP_EXCLUDE_COUNT" = "1" ] && \
+       [ "$EDGE_BACKUP_EXCLUDE_BLOCK" = "$EXPECTED_BACKUP_EXCLUDE_BLOCK" ]; then
+        pass "edge backup exclusion contract matches expected paths"
+    else
+        fail "edge backup exclusion contract drifted"
+    fi
+    if [ "$STABLE_BACKUP_MODE" = "$EDGE_BACKUP_MODE" ] && \
+       [ "$STABLE_BACKUP_EXCLUDE_COUNT" = "$EDGE_BACKUP_EXCLUDE_COUNT" ] && \
+       [ "$STABLE_BACKUP_EXCLUDE_BLOCK" = "$EDGE_BACKUP_EXCLUDE_BLOCK" ]; then
+        pass "edge backup contract matches stable"
+    else
+        fail "edge backup contract drifted from stable"
     fi
 
     # options + schema parity with stable (edge runs the same image/run.sh).
@@ -653,6 +819,7 @@ if [ "${1:-}" = "--build" ]; then
     cp -r mammamiradio/ "$TMPCTX/mammamiradio/"
     cp pyproject.toml "$TMPCTX/"
     cp radio.toml "$TMPCTX/"
+    cp model_registry.toml "$TMPCTX/"
 
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -674,6 +841,9 @@ if [ "${1:-}" = "--build" ]; then
 
         echo "  Checking installed Night Drive imaging assets..."
         assert_image_imaging_assets "mammamiradio-addon-test:local" || true
+
+        echo "  Checking installed model registry..."
+        assert_image_model_registry "mammamiradio-addon-test:local" || true
 
         echo "  Testing container startup..."
         # Create minimal options.json
