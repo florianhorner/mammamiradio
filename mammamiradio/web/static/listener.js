@@ -556,9 +556,8 @@
       return;
     }
 
-    // Make the polite live region visible before changing its text. Screen
-    // readers commonly ignore mutations made below a display:none ancestor,
-    // which would make the first completed-break receipt arrive silently.
+    // Reveal the visible receipt before populating it. The separate, permanently
+    // exposed status node below owns screen-reader announcements.
     details.hidden = false;
     summary.textContent = summaryText;
     list.replaceChildren();
