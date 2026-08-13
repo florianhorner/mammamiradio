@@ -485,11 +485,18 @@ def test_admin_small_blue_labels_use_accessible_text_tokens() -> None:
     keys_box = re.search(r'<div\b(?=[^>]*\bid="setupKeysConfigured")[^>]*>', _ADMIN_HTML_TEXT)
     assert keys_box, "setupKeysConfigured banner must exist."
     assert "rgba(37,99,235" not in keys_box.group(0)
-    assert "var(--ok)" in keys_box.group(0)
+    assert 'class="setup-key-banner"' in keys_box.group(0)
+    ready_banner = _css_declarations(_css_block(_ADMIN_HTML_TEXT, '.setup-key-banner[data-state="ready"]'))
+    incomplete_banner = _css_declarations(_css_block(_ADMIN_HTML_TEXT, '.setup-key-banner[data-state="incomplete"]'))
+    assert "var(--ok)" in ready_banner["background"]
+    assert "var(--ok)" in ready_banner["border"]
+    assert "var(--warning)" in incomplete_banner["background"]
+    assert "var(--warning)" in incomplete_banner["border"]
 
     keys_label = re.search(r'<span\b(?=[^>]*\bid="setupKeysLabel")[^>]*>', _ADMIN_HTML_TEXT)
     assert keys_label, "setupKeysLabel must exist."
-    assert "color:var(--ok-text)" in keys_label.group(0).replace(" ", "")
+    assert 'class="setup-key-banner-label"' in keys_label.group(0)
+    assert _css_declarations(_css_block(_ADMIN_HTML_TEXT, ".setup-key-banner-label"))["color"] == "var(--ok-text)"
 
 
 def test_design_system_status_ready_docs_match_runtime_text_tokens() -> None:

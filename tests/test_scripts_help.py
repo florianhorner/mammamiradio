@@ -17,6 +17,7 @@ SCRIPTS = [
     "pre-release-check.sh",
     "check-release-cooldown.sh",
     "bootstrap-conductor.sh",
+    "first-listen-lab.sh",
 ]
 
 # User-facing Python CLIs in scripts/ — same --help contract, run via the

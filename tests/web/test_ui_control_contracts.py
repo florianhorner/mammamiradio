@@ -12,7 +12,7 @@ Disconnects targeted (findings from UI audit):
  - Stop: clears queue (both real and shadow), sets session_stopped, writes
    now_streaming type="stopped" — all in one atomic response
  - Resume: clears session_stopped and removes the stopped now_streaming sentinel
-   in the same response so status polls cannot say ON AIR and stopped at once
+   only after immediately playable runway exists; a rejected resume stays stopped
  - Purge: clears both real queue and shadow list, reports count
  - Capabilities: reports BOTH key presence (`anthropic_key`) AND runtime auth
    health (`anthropic_degraded`, `anthropic_retry_after_s`). The admin UI
@@ -43,6 +43,7 @@ TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 WEB_ROOT = Path(__file__).resolve().parents[2] / "mammamiradio" / "web"
 ADMIN_HTML = WEB_ROOT / "templates" / "admin.html"
 LISTENER_HTML = WEB_ROOT / "templates" / "listener.html"
+LISTENER_JS = WEB_ROOT / "static" / "listener.js"
 TOKEN = "test-admin-token"
 AUTH = {"X-Radio-Admin-Token": TOKEN}
 
@@ -67,6 +68,19 @@ def _make_seg(title: str = "Track") -> Segment:
         path=Path(f"/tmp/ui_test_{title}.mp3"),
         metadata={"title": title},
     )
+
+
+def _queue_playable_resume_runway(app: FastAPI, tmp_path: Path) -> Segment:
+    path = tmp_path / "resume-runway.mp3"
+    path.write_bytes(b"ID3")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=path,
+        duration_sec=30.0,
+        metadata={"title": "Resume runway", "audio_source": "norm_cache"},
+    )
+    app.state.queue.put_nowait(segment)
+    return segment
 
 
 def _make_app(
@@ -123,6 +137,7 @@ class TestSkipEndpoint:
     async def test_skip_when_streaming_sets_skip_event(self):
         """skip_event is set synchronously — playback loop picks it up."""
         app = _make_app(now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}})
+        app.state.station_state.current_stream_audible = True
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/skip", headers=AUTH)
@@ -142,6 +157,7 @@ class TestSkipEndpoint:
                 "metadata": {"youtube_id": "yt-a"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         persist_started = asyncio.Event()
         release_persist = asyncio.Event()
 
@@ -149,7 +165,10 @@ class TestSkipEndpoint:
             persist_started.set()
             await release_persist.wait()
 
-        with patch("mammamiradio.web.streamer._persist_skipped_music", new=AsyncMock(side_effect=_slow_persist)):
+        with patch(
+            "mammamiradio.web.streamer._persist_skipped_music",
+            new=AsyncMock(side_effect=_slow_persist),
+        ) as persist:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
                 request_task = asyncio.create_task(c.post("/api/skip", headers=AUTH))
                 try:
@@ -157,6 +176,25 @@ class TestSkipEndpoint:
                     assert app.state.skip_event.is_set()
                     assert app.state.station_state.now_streaming["type"] == "skipping"
                     assert not request_task.done()
+                    # Playback may already have selected the next song while
+                    # history persistence is still in flight. The transport
+                    # ownership flag, not the replaceable sentinel, must keep a
+                    # second rapid click from cutting that next song too.
+                    app.state.station_state.on_stream_segment(
+                        Segment(
+                            type=SegmentType.MUSIC,
+                            path=Path("/tmp/next-song.mp3"),
+                            metadata={"title": "Song B"},
+                        )
+                    )
+                    assert app.state.station_state.now_streaming["type"] == "music"
+                    assert app.state.station_state.skip_in_flight is True
+                    duplicate = await c.post("/api/skip", headers=AUTH)
+                    assert duplicate.json()["ok"] is False
+                    assert "already on its way" in duplicate.json()["error"]
+                    assert app.state.station_state.listener.songs_played == 1
+                    assert app.state.station_state.listener.songs_skipped == 1
+                    persist.assert_awaited_once()
                 finally:
                     # Always unblock the persistence task so a failed assertion
                     # can't leave a pending ASGI task dangling during teardown.
@@ -176,6 +214,7 @@ class TestSkipEndpoint:
         This test documents that gap as intentional behaviour.
         """
         app = _make_app(now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}})
+        app.state.station_state.current_stream_audible = True
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/skip", headers=AUTH)
@@ -204,6 +243,7 @@ class TestSkipEndpoint:
             now_streaming={"type": "music", "label": "Song A", "started": time.time(), "metadata": {}},
             queue_items=0,
         )
+        app.state.station_state.current_stream_audible = True
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/skip", headers=AUTH)
         assert resp.json()["bridged"] is True
@@ -218,6 +258,7 @@ class TestSkipEndpoint:
             shadow=shadow,
             queue_items=1,
         )
+        app.state.station_state.current_stream_audible = True
         queued_path = tmp_path / "next-up.mp3"
         queued_path.write_bytes(b"playable")
         app.state.queue._queue[0].path = queued_path
@@ -229,8 +270,8 @@ class TestSkipEndpoint:
         assert not app.state.queue.empty()
 
     @pytest.mark.asyncio
-    async def test_skip_records_skip_outcome_for_music_segment(self):
-        """Listener profile records the skip so host avoids the track."""
+    async def test_skip_does_not_record_unheard_music_as_listener_outcome(self):
+        """A readable selection is not listener history until a chunk was accepted."""
         app = _make_app(
             now_streaming={
                 "type": "music",
@@ -241,11 +282,78 @@ class TestSkipEndpoint:
         )
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            response = await c.post("/api/skip", headers=AUTH)
+
+        profile = app.state.station_state.listener
+        assert response.json()["ok"] is False
+        assert not app.state.skip_event.is_set()
+        assert profile.songs_skipped == 0
+
+    @pytest.mark.asyncio
+    async def test_skip_records_audible_music_as_listener_outcome(self):
+        """Once a listener accepted audio, Skip becomes durable taste history."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Unwanted Track",
+                "started": time.time() - 10,
+                "metadata": {},
+            }
+        )
+        state = app.state.station_state
+        state.current_stream_audible = True
+        state._last_audible_stream = dict(state.now_streaming)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/skip", headers=AUTH)
 
-        # songs_skipped counter on the listener profile should be incremented
-        profile = app.state.station_state.listener
-        assert profile.songs_skipped >= 1
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=Path("/tmp/after-skip.mp3"),
+                metadata={"title": "After skip"},
+            )
+        )
+        assert state.listener.songs_played == 1
+        assert state.listener.songs_skipped == 1
+
+    @pytest.mark.asyncio
+    async def test_skip_rejects_unheard_selection_and_preserves_previous_audible_completion(self):
+        """A stale selection cannot be cut or erase the prior heard song."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Selected but unheard",
+                "started": time.time(),
+                "metadata": {},
+            }
+        )
+        state = app.state.station_state
+        previous = {
+            "type": "music",
+            "label": "Previous heard song",
+            "started": time.time() - 180,
+            "metadata": {},
+        }
+        state._last_audible_stream = previous
+        state.current_stream_audible = False
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            response = await c.post("/api/skip", headers=AUTH)
+
+        assert response.json()["ok"] is False
+        assert not app.state.skip_event.is_set()
+        assert state.now_streaming["label"] == "Selected but unheard"
+        assert state._last_audible_stream == previous
+        state.on_stream_segment(
+            Segment(
+                type=SegmentType.BANTER,
+                path=Path("/tmp/after-unheard-skip.mp3"),
+                metadata={"title": "After unheard skip"},
+            )
+        )
+        assert state.listener.songs_played == 1
+        assert state.listener.songs_skipped == 0
 
     @pytest.mark.asyncio
     async def test_stop_wins_while_skip_persistence_is_in_flight(self, monkeypatch):
@@ -258,6 +366,7 @@ class TestSkipEndpoint:
                 "metadata": {"youtube_id": "yt-song-a"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         persistence_entered = asyncio.Event()
         release_persistence = asyncio.Event()
 
@@ -287,16 +396,62 @@ class TestSkipEndpoint:
         assert app.state.station_state.force_next is None
 
     @pytest.mark.asyncio
+    async def test_panic_during_skip_persistence_keeps_exactly_once_history(self, monkeypatch):
+        """Panic may supersede transport while Skip persists, never its history."""
+        app = _make_app(
+            now_streaming={
+                "type": "music",
+                "label": "Song A",
+                "started": time.time() - 10,
+                "metadata": {"youtube_id": "yt-song-a"},
+            }
+        )
+        state = app.state.station_state
+        state.current_stream_audible = True
+        state._last_audible_stream = dict(state.now_streaming)
+        persistence_entered = asyncio.Event()
+        release_persistence = asyncio.Event()
+
+        async def delayed_persistence(*_args, **_kwargs):
+            persistence_entered.set()
+            await release_persistence.wait()
+
+        persist = AsyncMock(side_effect=delayed_persistence)
+        monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", persist)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            skip_task = asyncio.create_task(c.post("/api/skip", headers=AUTH))
+            await asyncio.wait_for(persistence_entered.wait(), timeout=2)
+
+            try:
+                panic_response = await c.post("/api/panic", headers=AUTH)
+            finally:
+                release_persistence.set()
+            skip_response = await asyncio.wait_for(skip_task, timeout=2)
+
+        assert skip_response.json()["ok"] is True
+        assert panic_response.json()["ok"] is True
+        assert panic_response.json()["skipped"] is True
+        assert state.force_next is SegmentType.MUSIC
+        assert state.listener.songs_played == 1
+        assert state.listener.songs_skipped == 1
+        assert state._last_audible_stream == {}
+        persist.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_skip_does_not_record_outcome_for_non_music_segment(self):
         """Skip of banter/ad/station_id should not pollute listener music history."""
         app = _make_app(
             now_streaming={"type": "banter", "label": "Sofia talking", "started": time.time(), "metadata": {}}
         )
+        app.state.station_state.current_stream_audible = True
         profile_before = app.state.station_state.listener.songs_skipped
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            await c.post("/api/skip", headers=AUTH)
+            response = await c.post("/api/skip", headers=AUTH)
 
+        assert response.json()["ok"] is True
+        assert app.state.skip_event.is_set()
         assert app.state.station_state.listener.songs_skipped == profile_before
 
 
@@ -318,6 +473,7 @@ class TestBanNowPlayingEndpoint:
                 "metadata": {"artist": "Modugno", "title_only": "Volare"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/track/ban-now-playing", headers=AUTH)
         body = resp.json()
@@ -345,6 +501,7 @@ class TestBanNowPlayingEndpoint:
                 },
             }
         )
+        app.state.station_state.current_stream_audible = True
         app.state.config.cache_dir = tmp_path
         persistence_entered = asyncio.Event()
         release_persistence = asyncio.Event()
@@ -383,6 +540,7 @@ class TestBanNowPlayingEndpoint:
                 },
             }
         )
+        app.state.station_state.current_stream_audible = True
         monkeypatch.setattr("mammamiradio.web.streamer.save_blocklist", lambda *_args, **_kwargs: True)
         persist = AsyncMock(side_effect=OSError("skip history unavailable"))
         monkeypatch.setattr("mammamiradio.web.streamer._persist_skipped_music", persist)
@@ -409,6 +567,33 @@ class TestBanNowPlayingEndpoint:
         assert app.state.station_state.blocklist == {}
 
     @pytest.mark.asyncio
+    async def test_ban_now_rejects_selected_but_unheard_music_without_mutation(self):
+        """Stale music metadata is not an on-air target for Ban or Skip."""
+        now_streaming = {
+            "type": "music",
+            "label": "Artist — Already ended",
+            "started": time.time() - 180,
+            "metadata": {"artist": "Artist", "title_only": "Already ended"},
+        }
+        shadow = [{"type": "music", "label": "Next Up", "metadata": {}}]
+        app = _make_app(
+            now_streaming=now_streaming,
+            shadow=shadow,
+            queue_items=1,
+        )
+        queued_before = list(app.state.queue._queue)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            response = await c.post("/api/track/ban-now-playing", headers=AUTH)
+
+        assert response.json()["ok"] is False
+        assert app.state.station_state.blocklist == {}
+        assert not app.state.skip_event.is_set()
+        assert app.state.station_state.now_streaming == now_streaming
+        assert app.state.station_state.queued_segments == shadow
+        assert list(app.state.queue._queue) == queued_before
+
+    @pytest.mark.asyncio
     async def test_ban_only_long_candidate_reserves_against_post_ban_queue(self, tmp_path: Path):
         """A just-blocklisted cache file cannot be counted or reintroduced as runway."""
         app = _make_app(
@@ -419,6 +604,7 @@ class TestBanNowPlayingEndpoint:
                 "metadata": {"artist": "Blocked Artist", "title_only": "Blocked Song"},
             }
         )
+        app.state.station_state.current_stream_audible = True
         app.state.config.cache_dir = tmp_path
         app.state.queue = asyncio.Queue(maxsize=3)
         banned_path = tmp_path / "norm_blocked_only_128k.mp3"
@@ -578,14 +764,15 @@ class TestStopEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Resume endpoint — documents the "resume gap"
+# Resume endpoint — continuity-gated state transition
 # ---------------------------------------------------------------------------
 
 
 class TestResumeEndpoint:
     @pytest.mark.asyncio
-    async def test_resume_clears_session_stopped(self):
+    async def test_resume_clears_session_stopped(self, tmp_path):
         app = _make_app(session_stopped=True)
+        _queue_playable_resume_runway(app, tmp_path)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/resume", headers=AUTH)
@@ -594,10 +781,11 @@ class TestResumeEndpoint:
         assert app.state.station_state.session_stopped is False
 
     @pytest.mark.asyncio
-    async def test_resume_clears_stopped_now_streaming_sentinel(self):
+    async def test_resume_clears_stopped_now_streaming_sentinel(self, tmp_path):
         """Resume clears the stopped sentinel before the next status poll."""
         stopped_state = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
         app = _make_app(session_stopped=True, now_streaming=stopped_state)
+        _queue_playable_resume_runway(app, tmp_path)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.post("/api/resume", headers=AUTH)
@@ -626,23 +814,23 @@ class TestResumeEndpoint:
         assert app.state.station_state.now_streaming == live_state
 
     @pytest.mark.asyncio
-    async def test_resume_does_not_re_populate_queue(self):
-        """Resume does NOT restore the queue that was cleared by stop.
-
-        The producer loop must restart producing segments organically.
-        If the producer is stuck (e.g., all workers timed out), resume
-        will clear the stopped flag but the queue stays empty and nothing plays.
-        """
+    async def test_resume_without_playable_runway_stays_stopped(self, tmp_path):
+        """Resume fails closed until audio is ready, preserving the paused UI truth."""
         app = _make_app(session_stopped=True, shadow=[], queue_items=0)
+        app.state.config.cache_dir = tmp_path
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            await c.post("/api/resume", headers=AUTH)
+        with patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-assets"):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                resp = await c.post("/api/resume", headers=AUTH)
 
+        assert resp.status_code == 503
+        assert resp.json()["ok"] is False
+        assert app.state.station_state.session_stopped is True
         assert app.state.station_state.queued_segments == []
         assert app.state.queue.empty()
 
     @pytest.mark.asyncio
-    async def test_resume_does_not_clear_force_next(self):
+    async def test_resume_does_not_clear_force_next(self, tmp_path):
         """force_next set before stop survives resume unchanged.
 
         This can cause the wrong segment type to play after resume if a
@@ -650,6 +838,7 @@ class TestResumeEndpoint:
         """
         app = _make_app(session_stopped=True)
         app.state.station_state.force_next = SegmentType.AD
+        _queue_playable_resume_runway(app, tmp_path)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             await c.post("/api/resume", headers=AUTH)
@@ -657,10 +846,11 @@ class TestResumeEndpoint:
         assert app.state.station_state.force_next == SegmentType.AD
 
     @pytest.mark.asyncio
-    async def test_resume_bumps_last_state_change_at(self):
+    async def test_resume_bumps_last_state_change_at(self, tmp_path):
         """Integration-contract ETag invalidation depends on this timestamp moving forward."""
         app = _make_app(session_stopped=True)
         app.state.station_state.last_state_change_at = 0.0
+        _queue_playable_resume_runway(app, tmp_path)
         before = time.time()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
@@ -1451,7 +1641,7 @@ class TestRuntimeProviderTransparencyUI:
         assert isinstance(bridge_health["session_count"], int)
         assert isinstance(bridge_health["window_count"], int)
         assert isinstance(bridge_health["unhealthy"], bool)
-        assert set(bridge_health["by_type"]) == {"drain", "resume", "idle"}
+        assert set(bridge_health["by_type"]) == {"drain", "resume", "idle", "continuity"}
         assert bridge_health["threshold"] >= 1
         assert bridge_health["window_seconds"] > 0
         assert "last_fire" in bridge_health
@@ -1487,6 +1677,18 @@ class TestRuntimeProviderTransparencyUI:
         assert 'aria-label="${esc(safeTitle)}"' in html
         assert 'aria-label="status: working"' in html
         assert "header.setAttribute('aria-label',headerDetail)" in html
+
+
+class TestListenerHeroStats:
+    def test_tracks_stat_uses_live_rotation_count(self):
+        # The rendered output is covered behaviourally by scripts/player-smoke.js;
+        # the public-status contract covers a real in-session playlist mutation.
+        js = LISTENER_JS.read_text()
+        stat_logic = js[js.index("const stat2") : js.index("const stat3")]
+
+        assert "status.rotation_track_count" in stat_logic
+        assert "current_source.track_count" not in stat_logic
+        assert "tracks_played" not in stat_logic
 
 
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
@@ -1576,7 +1778,7 @@ class TestStoppedStateQuietsTheUI:
         blob = (
             LISTENER_HTML.read_text()
             + (base / "static" / "listener.css").read_text()
-            + (base / "static" / "listener.js").read_text()
+            + LISTENER_JS.read_text()
             # Also consult base.css — the unified waveform pause rule lives there.
             + (base / "static" / "base.css").read_text()
         )
@@ -1610,7 +1812,7 @@ class TestStoppedStateQuietsTheUI:
         # Bluetooth / CarPlay) must both sanitize the stopped state. If a
         # future refactor drops either branch, the internal "Session stopped"
         # label flows back through `np.label` and lands in front of listeners.
-        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        js = LISTENER_JS.read_text()
 
         # Both surfaces must explicitly handle np.type === 'stopped' and
         # render the brand-voice paused copy — not fall through to a
@@ -1654,7 +1856,7 @@ class TestStoppedStateQuietsTheUI:
 
     def test_listener_building_schedule_is_single_placeholder(self):
         """An empty rendered queue should not look like four fake future slots."""
-        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        js = LISTENER_JS.read_text()
         css = (WEB_ROOT / "static" / "listener.css").read_text()
 
         assert "status.upcoming_mode === 'building'" in js

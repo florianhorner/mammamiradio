@@ -450,7 +450,7 @@ def test_super_italian_copy_describes_the_actual_default_listener_mix() -> None:
 
 def test_producer_desk_console_is_responsive() -> None:
     """Concept B: the console is two-column on desktop, stacks to one column on
-    narrow screens, and the tab bar wraps instead of exposing a scrollbar."""
+    narrow screens, and the tab bar reflows instead of exposing a scrollbar."""
     css = _admin_css()
 
     # Desktop: two columns (air | triggers+cooking).
@@ -467,9 +467,20 @@ def test_producer_desk_console_is_responsive() -> None:
     assert _declarations_for_selector(css, ".mmr-tabbar").get("overflow") == "visible"
 
     phone_tabbar = _declarations_for_selector(_phone_css(), ".mmr-tabbar")
-    assert phone_tabbar.get("flex-wrap") == "wrap"
-    assert phone_tabbar.get("overflow-x") == "visible"
-    assert phone_tabbar.get("overflow-y") == "visible"
+    assert phone_tabbar.get("display") == "grid"
+    assert phone_tabbar.get("grid-template-columns") == "repeat(2,minmax(0,1fr))"
+    assert phone_tabbar.get("overflow") == "visible"
+    tablet_blocks = [
+        _read_balanced_block(css, match.end() - 1)
+        for match in _MEDIA_START_RE.finditer(css)
+        if int(match.group(1)) == 768
+    ]
+    tablet_css = next(block for block in tablet_blocks if ".mmr-tabbar" in block)
+    tablet_tabbar = _declarations_for_selector(
+        tablet_css,
+        ".mmr-tabbar",
+    )
+    assert tablet_tabbar.get("grid-template-columns") == "repeat(4,minmax(0,1fr))"
 
 
 def test_compact_deck_is_complete() -> None:
@@ -1070,13 +1081,22 @@ def test_admin_tabs_have_44px_touch_targets() -> None:
 
 
 def test_mobile_admin_tabs_read_as_one_segmented_control() -> None:
+    phone_css = _phone_css()
     phone_tabbar = _declarations_for_selector(_phone_css(), ".mmr-tabbar")
-    phone_tab = _declarations_for_selector(_phone_css(), ".mmr-tab")
+    phone_tab = _declarations_for_selector(phone_css, ".mmr-tab")
 
     assert phone_tabbar.get("gap") == "0"
     assert phone_tabbar.get("border-radius") == "8px"
-    assert phone_tab.get("flex") == "1 1 33.333%"
+    assert phone_tabbar.get("display") == "grid"
+    assert phone_tabbar.get("grid-template-columns") == "repeat(2,minmax(0,1fr))"
+    assert phone_tab.get("min-width") == "0"
     assert phone_tab.get("border-right") == "1px solid var(--line-strong)"
+    assert re.search(r"\.mmr-tab:nth-child\(2n\)\{border-right:0\}", phone_css)
+    assert re.search(r"\.mmr-tab:nth-child\(n\+7\)\{border-bottom:0\}", phone_css)
+    assert re.search(
+        r"\.mmr-tab:last-child:nth-child\(2n\+1\)\{grid-column:span 2;border-right:0\}",
+        phone_css,
+    )
 
 
 def test_rotation_grip_and_preset_controls_have_44px_touch_targets() -> None:

@@ -20,9 +20,10 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-# Product contract for Normal Mode.  The target is deliberately separate from
-# the acceptance band: generated copy can vary around the target without
-# causing needless retries, while still preventing Italian-heavy output.
+# Product contract for Normal Mode.  The preferred target band is deliberately
+# separate from the hard acceptance floor: English-heavy copy can vary above
+# the target without causing needless retries, while Italian-heavy output still
+# fails closed.
 NORMAL_MODE_ENGLISH_TARGET = 0.75
 NORMAL_MODE_ENGLISH_MIN = 0.70
 NORMAL_MODE_ENGLISH_MAX = 0.85
@@ -321,8 +322,9 @@ def normal_mode_language_ok(
     accepted for compatibility with schema-level validation elsewhere.  Any
     non-empty copy with no classified language words fails closed, and short
     copy must contain at least one English word; this removes the old short-copy
-    all-Italian bypass.  Long copy targets a 70-85% English band around the 75%
-    product target.
+    all-Italian bypass.  Long copy must be at least 70% English; 75% remains the
+    product target and 85% the upper edge of its preferred band, not a rejection
+    threshold.
     """
 
     if super_italian:
@@ -335,7 +337,7 @@ def normal_mode_language_ok(
         return False
     if assessment.is_short:
         return assessment.english_tokens > 0 and assessment.english_share >= NORMAL_MODE_SHORT_COPY_MIN_ENGLISH
-    return NORMAL_MODE_ENGLISH_MIN <= assessment.english_share <= NORMAL_MODE_ENGLISH_MAX
+    return assessment.english_share >= NORMAL_MODE_ENGLISH_MIN
 
 
 __all__ = [

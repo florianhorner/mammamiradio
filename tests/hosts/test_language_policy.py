@@ -49,11 +49,43 @@ def test_long_copy_rejects_italian_heavy_text():
     assert not normal_mode_language_ok(text)
 
 
-def test_long_copy_rejects_english_heavy_text_outside_band():
+def test_long_copy_accepts_exact_english_floor():
+    text = "The music is back and we stay, ciao amici grazie"
+
+    assert assess_language(text).english_share == NORMAL_MODE_ENGLISH_MIN
+    assert normal_mode_language_ok(text)
+
+
+def test_long_copy_rejects_text_just_below_the_english_floor():
+    text = "The music is back and we stay here, ciao amici grazie bene"
+    assessment = assess_language(text)
+
+    assert assessment.is_short is False
+    assert assessment.english_share < NORMAL_MODE_ENGLISH_MIN
+    assert not normal_mode_language_ok(text)
+
+
+def test_long_copy_accepts_english_heavy_text_above_target_band():
     text = "The music is back and we stay with the song tonight, ciao"
 
     assert assess_language(text).english_share > NORMAL_MODE_ENGLISH_MAX
-    assert not normal_mode_language_ok(text)
+    assert normal_mode_language_ok(text)
+
+
+def test_long_copy_accepts_english_only_text():
+    """The guard is one-sided by design: it turns back Italian-heavy copy only.
+
+    Keeping Italian present is the prompt's job (and is reported separately as
+    ``within_preferred_band`` telemetry), not this guard's — rejecting valid
+    English-led dialogue is what collapsed live host exchanges into stock copy.
+    """
+    text = "The music is back and we stay with the song tonight"
+    assessment = assess_language(text)
+
+    assert assessment.is_short is False
+    assert assessment.italian_tokens == 0
+    assert assessment.english_share == 1.0
+    assert normal_mode_language_ok(text)
 
 
 def test_short_copy_cannot_bypass_all_italian_output():

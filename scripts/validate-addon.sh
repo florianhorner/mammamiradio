@@ -53,7 +53,13 @@ assert_image_recovery_assets() {
     local image="$1"
     if docker run --rm -i "$image" python3 - <<'PY'
 from importlib import resources
+from pathlib import Path
 import subprocess
+
+from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
+from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset
+
+REQUIRED_RECOVERY_ASSETS = ("continuity_1.mp3", "emergency_tone.mp3")
 
 try:
     recovery_dir = resources.files("mammamiradio").joinpath("assets", "demo", "recovery")
@@ -61,31 +67,33 @@ except ModuleNotFoundError as exc:
     raise SystemExit(f"cannot import mammamiradio package: {exc}") from exc
 
 try:
-    clips = sorted(
-        (clip for clip in recovery_dir.iterdir() if clip.is_file() and clip.name.endswith(".mp3")),
-        key=lambda clip: clip.name,
-    )
+    clips = {
+        clip.name: clip
+        for clip in recovery_dir.iterdir()
+        if clip.is_file() and clip.name.endswith(".mp3")
+    }
 except (FileNotFoundError, NotADirectoryError, OSError) as exc:
     raise SystemExit(f"missing recovery asset directory in installed image: {exc}") from exc
 
-if not clips:
-    raise SystemExit("no installed recovery MP3s found under mammamiradio/assets/demo/recovery/")
-
-serviceable = []
-for clip in clips:
+failures = []
+for asset_name in REQUIRED_RECOVERY_ASSETS:
+    clip = clips.get(asset_name)
+    if clip is None:
+        failures.append(f"{asset_name}: missing")
+        continue
     try:
         size = len(clip.read_bytes())
     except OSError as exc:
-        raise SystemExit(f"could not read installed recovery MP3 {clip.name}: {exc}") from exc
-    if size > 1024:
-        serviceable.append((clip, size))
+        failures.append(f"{asset_name}: unreadable ({exc})")
+        continue
+    if size <= 1024:
+        failures.append(f"{asset_name}: only {size} bytes")
+        continue
+    asset_path = Path(DEMO_ASSETS_DIR) / "recovery" / asset_name
+    if not is_approved_packaged_audio_asset(asset_path, assets_root=Path(DEMO_ASSETS_DIR)):
+        failures.append(f"{asset_name}: manifest/hash validation failed")
+        continue
 
-if not serviceable:
-    names = ", ".join(clip.name for clip in clips)
-    raise SystemExit(f"installed recovery MP3s are missing or too small: {names}")
-
-failures = []
-for clip, size in serviceable:
     try:
         with resources.as_file(clip) as path:
             result = subprocess.run(
@@ -108,26 +116,24 @@ for clip, size in serviceable:
     except FileNotFoundError as exc:
         raise SystemExit("ffprobe is not installed in the image") from exc
     except subprocess.TimeoutExpired:
-        failures.append(f"{clip.name}: ffprobe timed out")
+        failures.append(f"{asset_name}: ffprobe timed out")
         continue
 
     stdout = result.stdout.strip()
     stderr = result.stderr.strip()
     if result.returncode == 0 and "audio" in stdout.lower():
-        print(f"recovery asset OK: {clip.name} ({size} bytes)")
-        raise SystemExit(0)
-    failures.append(f"{clip.name}: {stderr or stdout or f'ffprobe exit {result.returncode}'}")
+        print(f"recovery asset OK: {asset_name} ({size} bytes)")
+        continue
+    failures.append(f"{asset_name}: {stderr or stdout or f'ffprobe exit {result.returncode}'}")
 
-raise SystemExit(
-    "no ffprobe-playable installed recovery MP3 found; "
-    + "; ".join(failures)
-)
+if failures:
+    raise SystemExit("required recovery asset validation failed: " + "; ".join(failures))
 PY
     then
-        pass "Installed recovery MP3 present and ffprobe-playable"
+        pass "Every required recovery MP3 is installed, manifest-bound, and ffprobe-playable"
         return 0
     else
-        fail "Installed recovery MP3 missing, too small, or unplayable"
+        fail "A required recovery MP3 is missing, too small, unapproved, or unplayable"
         return 1
     fi
 }
@@ -563,6 +569,37 @@ EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
 STABLE_CONFIG="ha-addon/mammamiradio/config.yaml"
 STABLE_TRANS="ha-addon/mammamiradio/translations/en.yaml"
 EDGE_TRANS="ha-addon/mammamiradio-edge/translations/en.yaml"
+EXPECTED_BACKUP_MODE="backup: hot"
+EXPECTED_BACKUP_EXCLUDE_BLOCK=$(cat <<'EOF'
+  - "tmp"
+  - "cache/.ytdlp_tmp"
+  - "cache/restart_handoff"
+  - "cache/clips"
+  - "cache/*.mp3"
+  - "cache/*.mp3.json"
+  - "cache/*.m4a"
+  - "cache/*.webm"
+  - "*.part"
+  - "*.ytdl"
+  - "*.tmp"
+EOF
+)
+
+STABLE_BACKUP_MODE=$(grep '^backup:' "$STABLE_CONFIG" || true)
+STABLE_BACKUP_EXCLUDE_COUNT=$(grep -c '^backup_exclude:$' "$STABLE_CONFIG" || true)
+STABLE_BACKUP_EXCLUDE_BLOCK=$(extract_yaml_block backup_exclude "$STABLE_CONFIG")
+if [ "$STABLE_BACKUP_MODE" = "$EXPECTED_BACKUP_MODE" ]; then
+    pass "stable backup mode: hot"
+else
+    fail "stable backup mode must be hot"
+fi
+if [ "$STABLE_BACKUP_EXCLUDE_COUNT" = "1" ] && \
+   [ "$STABLE_BACKUP_EXCLUDE_BLOCK" = "$EXPECTED_BACKUP_EXCLUDE_BLOCK" ]; then
+    pass "stable backup exclusion contract matches expected paths"
+else
+    fail "stable backup exclusion contract drifted"
+fi
+
 if [ ! -f "$EDGE_CONFIG" ]; then
     echo "  (no edge add-on — skipping)"
 else
@@ -608,6 +645,31 @@ else
         pass "edge stage: experimental"
     else
         fail "edge stage must stay experimental, got: ${EDGE_STAGE:-missing}"
+    fi
+
+    # Hot-backup policy is an exact, ordered contract. Check each manifest
+    # independently so identical (common-mode) drift cannot hide behind parity,
+    # then check parity so unilateral stable/edge changes are explicit.
+    EDGE_BACKUP_MODE=$(grep '^backup:' "$EDGE_CONFIG" || true)
+    EDGE_BACKUP_EXCLUDE_COUNT=$(grep -c '^backup_exclude:$' "$EDGE_CONFIG" || true)
+    EDGE_BACKUP_EXCLUDE_BLOCK=$(extract_yaml_block backup_exclude "$EDGE_CONFIG")
+    if [ "$EDGE_BACKUP_MODE" = "$EXPECTED_BACKUP_MODE" ]; then
+        pass "edge backup mode: hot"
+    else
+        fail "edge backup mode must be hot"
+    fi
+    if [ "$EDGE_BACKUP_EXCLUDE_COUNT" = "1" ] && \
+       [ "$EDGE_BACKUP_EXCLUDE_BLOCK" = "$EXPECTED_BACKUP_EXCLUDE_BLOCK" ]; then
+        pass "edge backup exclusion contract matches expected paths"
+    else
+        fail "edge backup exclusion contract drifted"
+    fi
+    if [ "$STABLE_BACKUP_MODE" = "$EDGE_BACKUP_MODE" ] && \
+       [ "$STABLE_BACKUP_EXCLUDE_COUNT" = "$EDGE_BACKUP_EXCLUDE_COUNT" ] && \
+       [ "$STABLE_BACKUP_EXCLUDE_BLOCK" = "$EDGE_BACKUP_EXCLUDE_BLOCK" ]; then
+        pass "edge backup contract matches stable"
+    else
+        fail "edge backup contract drifted from stable"
     fi
 
     # options + schema parity with stable (edge runs the same image/run.sh).

@@ -103,7 +103,15 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 @keyframes live-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
 
 /* Live chip */
-.mmr-live { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 999px; background: rgba(160,32,24,0.18); color: var(--brand-accent, var(--lancia2)); font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; border: 1px solid rgba(184,44,32,0.35); }
+/* Cream label, not --brand-accent: the accent IS the Lancia red this chip is
+   already tinted with, so the label was red-on-red at 2.8:1. The design system
+   specifies the Lancia ground and says nothing about the label colour; the
+   sibling .mmr-live-pill above already uses cream, so this matches it. Cream on
+   this ground measures 14.8:1. --brand-accent stays on the dot, which is where a
+   decorative colour belongs — core/config.py validates accent_color for hex
+   validity only and explicitly does not contrast-check it, on the grounds that
+   it never carries body text. */
+.mmr-live { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 999px; background: rgba(160,32,24,0.18); color: var(--cream); font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; border: 1px solid rgba(184,44,32,0.35); }
 .mmr-live .dot { width: 6px; height: 6px; background: var(--brand-accent, var(--lancia2)); border-radius: 50%; box-shadow: 0 0 8px var(--brand-accent, var(--lancia2)); animation: live-pulse 1.4s ease-in-out infinite; }
 
 /* Wave equalizer */
@@ -372,7 +380,9 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-dedica-form .eyebrow { position: relative; z-index: 2; font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--lancia); margin: 8px 0 12px; padding-right: 80px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--font-body); }
 .mmr-dedica-postmark { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 11px; letter-spacing: 0.02em; text-transform: none; color: rgba(26,20,16,0.5); border: 1px dashed rgba(26,20,16,0.35); border-radius: 999px; padding: 2px 10px; transform: rotate(-3deg); background: rgba(245,237,216,0.5); }
 .mmr-dedica-form textarea, .mmr-dedica-form button, .mmr-dedica-form .hint, .mmr-dedica-form-input { position: relative; z-index: 2; }
-.mmr-dedica-form-input { width: 100%; background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.1); border-radius: 8px; padding: 8px 12px; font-family: var(--font-body); font-size: 16px; color: #1A1410; outline: none; margin-bottom: 8px; box-sizing: border-box; }
+/* min-height 44px: 16px text + 8px padding left this at ~38px, the one control
+   in this form below the touch floor — the submit button below already sets 44. */
+.mmr-dedica-form-input { width: 100%; background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.1); border-radius: 8px; padding: 8px 12px; min-height: 44px; font-family: var(--font-body); font-size: 16px; color: #1A1410; outline: none; margin-bottom: 8px; box-sizing: border-box; }
 .mmr-dedica-form-input::placeholder { color: #5A4A3D; }
 .mmr-dedica-form-input:focus { border-color: var(--lancia); box-shadow: 0 0 0 3px rgba(160,32,24,0.30); }
 .mmr-dedica-form textarea { width: 100%; background: rgba(26,20,16,0.05); border: 1px solid rgba(26,20,16,0.1); border-radius: 8px; padding: 10px 12px; font-family: var(--font-body); font-size: 16px; color: #1A1410; resize: vertical; outline: none; margin-bottom: 10px; box-sizing: border-box; }
@@ -432,9 +442,19 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-footer .fine { font-size: 12px; color: rgba(26,20,16,0.65); line-height: 1.5; max-width: 320px; margin: 14px 0 0; }
 .mmr-footer .foot-col { display: flex; flex-direction: column; gap: 8px; }
 .mmr-footer .foot-head { font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--lancia); margin-bottom: 4px; }
-.mmr-footer .foot-col a { font-size: 13px; color: rgba(26,20,16,0.78); text-decoration: none; transition: color 180ms; }
+/* Footer links carry the same 44px target treatment as the header nav links
+   above: inline-flex + vertical padding + min-height. As bare inline text at
+   13px they were ~20px tall, the smallest tap targets on the page. */
+.mmr-footer .foot-col a { font-size: 13px; color: rgba(26,20,16,0.78); text-decoration: none; transition: color 180ms; padding: 11px 0; min-height: 44px; display: inline-flex; align-items: center; }
 .mmr-footer .foot-col a:hover { color: var(--ink); }
-.mmr-footer .foot-link-btn { font-family: var(--font-body); font-size: 13px; color: rgba(26,20,16,0.78); background: none; border: none; padding: 0; text-align: left; cursor: pointer; transition: color 180ms; }
+.mmr-footer .foot-link-btn { font-family: var(--font-body); font-size: 13px; color: rgba(26,20,16,0.78); background: none; border: none; padding: 11px 0; min-height: 44px; display: inline-flex; align-items: center; text-align: left; cursor: pointer; transition: color 180ms; }
+/* Required because the rule above declares `display`. #pwa-install-btn ships
+   with the `hidden` attribute and is only unhidden when beforeinstallprompt
+   fires, which never happens on iOS Safari, on Firefox, or once the app is
+   installed. `hidden` is UA-origin `display:none`, so any author `display`
+   beats it and would strand a dead "Install app" button in the footer. Same
+   reset, same reason, as .mmr-share-btn[hidden] below. */
+.mmr-footer .foot-link-btn[hidden] { display: none; }
 .mmr-footer .foot-link-btn:hover { color: var(--ink); }
 
 /* Responsive */
@@ -476,6 +496,15 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
      unaffected. */
   .mmr-stage-header .mmr-np-meta .title.tt-track-roll { overflow: hidden; }
   .mmr-wave { display: none; }
+}
+@media (max-width: 360px) {
+  /* Keep the brand and the primary station-status action fully visible on
+     the smallest supported phone width. The anchor links are already hidden
+     above 600px, so this space belongs to the two remaining header items. */
+  .mmr-nav-inner { gap: 10px; padding-left: 12px; padding-right: 12px; }
+  .mmr-brand { min-width: 0; flex: 0 1 auto; gap: 7px; }
+  .mmr-brand > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 15px; letter-spacing: -0.02em; }
+  .mmr-live-pill { width: 120px; min-width: 120px; flex: 0 0 120px; justify-content: center; overflow: hidden; white-space: normal; gap: 4px; padding: 7px; font-size: 8px; letter-spacing: 0.06em; line-height: 1.15; }
 }
 @media (prefers-reduced-motion: reduce) {
   .mmr-live-pill .dot, .mmr-live .dot { animation: none; }

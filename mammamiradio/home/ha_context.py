@@ -14,12 +14,15 @@ import copy
 import datetime
 import json
 import logging
+import multiprocessing
 import os
 import re
+import threading
 import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Mapping
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -69,18 +72,132 @@ from mammamiradio.home.ritual_recipes import (
     match_ritual_recipes,
     public_family_labels,
 )
+from mammamiradio.home.temperature import (
+    format_celsius,
+    is_plausible_celsius,
+    normalize_temperature,
+    temperature_unit_of,
+)
 from mammamiradio.hosts.station_name_guard import strip_foreign_station_name
 
 logger = logging.getLogger(__name__)
 
 # JSON decoding and the full entity projection are deliberately isolated from
-# the asyncio loop that paces the live stream. One named worker keeps abandoned
-# calculations bounded and ordered without sharing the default executor.
-_ha_projection_executor = concurrent.futures.ThreadPoolExecutor(
+# the process that owns the asyncio loop and paces the live stream. One spawned
+# worker keeps abandoned calculations bounded and ordered without sharing the
+# event loop's GIL or relying on unsafe forking from a multi-threaded server.
+_HA_PROJECTION_MP_CONTEXT = multiprocessing.get_context("spawn")
+_ha_projection_executor: concurrent.futures.ProcessPoolExecutor | None = None
+_ha_projection_executor_lock = threading.Lock()
+_ha_projection_start_failure_logged = False
+
+# Nothing in the projection's call graph reads the environment — it is a pure
+# function over the values it is handed. Spawning re-imports this module in the
+# worker, which re-runs ``core.config``'s module-scope ``load_dotenv()``, so the
+# worker would otherwise hold every provider credential it can never need.
+# Scrubbing by shape rather than by a hand-kept list keeps a newly added
+# provider covered on the day it lands instead of the day someone remembers.
+_CREDENTIAL_ENV_SUFFIXES = ("_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
+
+
+def _init_ha_projection_worker() -> None:
+    """Drop inherited credentials and mute logging inside the projection worker."""
+    for name in [name for name in os.environ if name.endswith(_CREDENTIAL_ENV_SUFFIXES)]:
+        os.environ.pop(name, None)
+    # The worker never runs the station's logging setup, so a stray WARNING+
+    # would skip LOG_LEVEL and land raw in the add-on log. The projection is
+    # silent today; this keeps a future log line from carrying HA values there.
+    worker_logger = logging.getLogger("mammamiradio")
+    worker_logger.handlers.clear()
+    worker_logger.addHandler(logging.NullHandler())
+    worker_logger.propagate = False
+
+
+def _create_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
+    """Build one spawned, credential-free projection worker.
+
+    Single worker on purpose: it serializes an abandoned calculation and the next
+    one so they can never run concurrently, which is what keeps a slow refresh
+    from stacking up behind itself.
+    """
+    return concurrent.futures.ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=_HA_PROJECTION_MP_CONTEXT,
+        initializer=_init_ha_projection_worker,
+    )
+
+
+def _get_ha_projection_executor() -> concurrent.futures.ProcessPoolExecutor:
+    """Return the module's projection pool, creating it on first use.
+
+    Lazy so a station with Home Assistant off never pays for a second
+    interpreter, and so a pool retired after a worker death is rebuilt by the
+    next scheduled refresh rather than in the failing one.
+    """
+    global _ha_projection_executor
+    with _ha_projection_executor_lock:
+        if _ha_projection_executor is None:
+            _ha_projection_executor = _create_ha_projection_executor()
+        return _ha_projection_executor
+
+
+# The worker can fail to come up in three shapes, and only one of them is an
+# OSError. CPython's ``_check_system_limits`` raises **NotImplementedError** when
+# named semaphores are unavailable (the /dev/shm case) or when the system offers
+# too few of them — and it latches that verdict process-wide, so the outage is
+# permanent. A spawn context also defers process creation to the first
+# ``submit()``, so running out of process slots or memory surfaces as an OSError
+# from the submit, not from construction. All three deserve the same one line.
+_PROJECTION_START_FAILURE_ERRORS = (OSError, NotImplementedError)
+
+
+def _note_ha_projection_start_failure() -> None:
+    """Name a worker that cannot come up, once per outage rather than once per poll.
+
+    Cleared by a completed projection, never by a constructed pool: a spawn
+    context builds no process until the first submit, so a pool that constructs
+    cleanly every poll and then fails to spawn is one continuous outage, not a
+    new one each time.
+    """
+    global _ha_projection_start_failure_logged
+    with _ha_projection_executor_lock:
+        if _ha_projection_start_failure_logged:
+            return
+        _ha_projection_start_failure_logged = True
+    logger.warning(
+        "Home context projection worker could not start; Home Assistant colour is paused "
+        "until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's "
+        "process limit, and available memory.",
+        exc_info=True,
+    )
+
+
+def _retire_ha_projection_executor(
+    expected: concurrent.futures.ProcessPoolExecutor | None = None,
+) -> bool:
+    """Detach and stop the current projection pool without racing a replacement."""
+    global _ha_projection_executor
+    with _ha_projection_executor_lock:
+        executor = _ha_projection_executor
+        if executor is None or (expected is not None and executor is not expected):
+            return False
+        _ha_projection_executor = None
+    executor.shutdown(wait=False, cancel_futures=True)
+    return True
+
+
+atexit.register(_retire_ha_projection_executor)
+
+# First-listen privacy previews are operator-triggered and deliberately do not
+# share the producer's projection lane.  A slow preview must never queue ahead
+# of live-radio context work (or vice versa), and neither worker may publish
+# process-owned context state.
+_ha_preview_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=1,
-    thread_name_prefix="ha-projection",
+    thread_name_prefix="ha-preview",
 )
-atexit.register(_ha_projection_executor.shutdown, wait=False, cancel_futures=True)
+atexit.register(_ha_preview_executor.shutdown, wait=False, cancel_futures=True)
+_HA_PREVIEW_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 
 # Entities curated for maximum radio entertainment value
 GOLD_ENTITIES = [
@@ -454,6 +571,26 @@ class HomeContext:
 
 
 @dataclass(frozen=True)
+class HomeContextPreviewResult:
+    """One detached, freshly fetched privacy-preview result.
+
+    The preview is intentionally not a ``_HomeContextFetchOutcome``: it cannot
+    be published by the producer coordinator or used as a stale fallback.
+    ``error_code`` is a fixed, UI-safe value; raw Home Assistant response data
+    and exception text never cross this boundary.
+    """
+
+    kind: Literal["fresh", "failed"]
+    context: HomeContext
+    duration_seconds: float
+    error_code: Literal["ha_auth_failed", "ha_unreachable", "preview_unavailable"] | None = None
+
+    @property
+    def is_fresh(self) -> bool:
+        return self.kind == "fresh"
+
+
+@dataclass(frozen=True)
 class _HomeContextFetchOutcome:
     """Private fetch result for the producer's single-flight refresh mailbox.
 
@@ -701,6 +838,8 @@ def _format_state(
     """
     state = _sanitize_state_value(state_data.get("state", "unknown"))
     attrs = state_data.get("attributes", {})
+    # A malformed payload ("attributes": null) must not raise into the poll.
+    attrs = attrs if isinstance(attrs, Mapping) else {}
     resolved = resolved or _resolve_label(entity_id, state_data, cache_dir=cache_dir, catalog=catalog)
     if resolved is None:
         # Anti-illusion guard: raw entity IDs never reach the host. If no curated,
@@ -711,21 +850,41 @@ def _format_state(
     if state in ("unavailable", "unknown"):
         return None
 
-    # Weather gets special treatment — include temperature and condition
+    # Weather gets special treatment — include temperature and condition.
+    # ``weather.*`` publishes ``temperature_unit``, so the unit is required here
+    # exactly as it is for the forecast arcs: a temperature we cannot convert is
+    # dropped rather than narrated, because the raw unit is entity-controlled
+    # text and an unconverted number read aloud as Celsius is worse than none.
     if entity_id.startswith("weather."):
         condition = STATE_TRANSLATIONS.get(state, state)
-        temp = attrs.get("temperature")
-        if temp not in (None, "") and not isinstance(temp, bool):
-            unit = attrs.get("temperature_unit", "°C")
-            return f"{label}: {condition}, {_sanitize_state_value(temp)}{unit}"
+        temperature_c = _celsius_for_prompt(attrs.get("temperature"), temperature_unit_of(attrs), require_unit=True)
+        if temperature_c is not None:
+            return f"{label}: {condition}, {format_celsius(temperature_c)}°C"
         return f"{label}: {condition}"
 
     # Climate — include current and target temperature
     if entity_id.startswith("climate."):
-        current = attrs.get("current_temperature", "?")
-        target = attrs.get("temperature", "?")
         mode = STATE_TRANSLATIONS.get(state, state)
-        return f"{label}: {mode}, {current}°C (target: {target}°C)"
+        unit = temperature_unit_of(attrs)
+        current_c = _celsius_for_prompt(attrs.get("current_temperature"), unit)
+        target_c = _celsius_for_prompt(attrs.get("temperature"), unit)
+        if current_c is not None and target_c is not None:
+            return f"{label}: {mode}, {format_celsius(current_c)}°C (target: {format_celsius(target_c)}°C)"
+        if current_c is not None:
+            return f"{label}: {mode}, {format_celsius(current_c)}°C"
+        if target_c is not None:
+            return f"{label}: {mode} (target: {format_celsius(target_c)}°C)"
+        return f"{label}: {mode}"
+
+    # Explicit temperature sensors — normalize before the summary crosses into
+    # the host prompt, just like weather and climate entities.  The unit is
+    # mandatory here: Home Assistant always publishes one for a classified
+    # temperature sensor, so a missing unit means the reading is untrustworthy.
+    if entity_id.startswith("sensor.") and attrs.get("device_class") == "temperature":
+        temperature_c = _celsius_for_prompt(state_data.get("state"), temperature_unit_of(attrs), require_unit=True)
+        if temperature_c is None:
+            return None
+        return f"{label}: {format_celsius(temperature_c)}°C"
 
     # Media players — include what's playing
     if entity_id.startswith("media_player."):
@@ -785,6 +944,17 @@ def _format_state(
     # Default: translate the state
     translated = STATE_TRANSLATIONS.get(state, state)
     return f"{label}: {translated}"
+
+
+def _celsius_for_prompt(value: object, unit: object, *, require_unit: bool = False) -> float | None:
+    """Convert one Home Assistant temperature for human-facing copy.
+
+    Returns ``None`` when the value cannot be trusted — unknown unit, malformed
+    number, or a reading so far outside household range that airing it would
+    expose a broken integration rather than describe the home.
+    """
+    celsius = normalize_temperature(value, unit, require_unit=require_unit)
+    return celsius if is_plausible_celsius(celsius) else None
 
 
 def _build_summary(states: dict[str, dict]) -> str:
@@ -1147,6 +1317,50 @@ def invalidate_home_context_entity_baselines(entity_ids: set[str]) -> None:
     _ritual_recipe_state_cache = _filter_matcher_baseline(_ritual_recipe_state_cache, effective_entity_ids)
 
 
+def invalidate_all_home_context(cache_dir: Path | None = None) -> int:
+    """Blank all retained Home-context process state after global revocation.
+
+    This is intentionally broader than an entity hard mute.  It leaves the
+    operator's policy file intact, but forgets every fetched snapshot,
+    transition baseline, enrichment cache, and reactive cooldown that could
+    otherwise survive a global disable.  The caller owns clearing StationState
+    and cancelling producer work before allowing another context fetch.
+    """
+    global _ha_cache
+    global _ha_registry_fetched_at
+    global _ha_registry_snapshot_cache
+    global _home_context_invalidation_generation
+    global _radio_event_state_cache
+    global _ritual_recipe_state_cache
+    global _weather_forecast_cache
+    global _weather_forecast_cache_en
+    global _weather_forecast_fetched_at
+
+    _home_context_invalidation_generation += 1
+    _ha_cache = None
+    _radio_event_state_cache = {}
+    _ritual_recipe_state_cache = {}
+    _home_context_entity_invalidation_generations.clear()
+    _ha_registry_snapshot_cache = None
+    _ha_registry_fetched_at = 0.0
+    _weather_forecast_cache = ""
+    _weather_forecast_cache_en = ""
+    _weather_forecast_fetched_at = 0.0
+    _reactive_cooldowns.clear()
+    _DIRECTIVE_COOLDOWNS.clear()
+    _RITUAL_COOLDOWNS.clear()
+
+    if cache_dir is not None:
+        try:
+            (Path(cache_dir) / _HA_REGISTRY_FILENAME).unlink(missing_ok=True)
+        except OSError:
+            # Runtime privacy is already revoked in memory.  The route reports
+            # persistence separately; a stale local enrichment cache is never
+            # consulted while context remains disabled.
+            logger.warning("Could not remove the local Home Assistant registry cache")
+    return _home_context_invalidation_generation
+
+
 def _label_stats(scored: list[ScoredEntity]) -> dict[str, int | float]:
     eligible = len(scored)
     curated = sum(1 for entity in scored if entity.label_tier == "curated")
@@ -1351,18 +1565,34 @@ _weather_forecast_cache: str = ""
 _weather_forecast_cache_en: str = ""
 _weather_forecast_fetched_at: float = 0.0
 _WEATHER_CACHE_TTL = 3600.0
+# How long the current cached arc stays valid. Normally the full hour; shortened
+# when the arc had to air without its temperature.
+_weather_forecast_ttl: float = _WEATHER_CACHE_TTL
+_weather_degraded_warned: bool = False
+# A failed unit lookup costs the arc its temperature, so it retries on the next
+# poll instead of pinning a degraded narrative for the full hour.
+_WEATHER_DEGRADED_CACHE_TTL = 300.0
+_WEATHER_FORECAST_ENTITY_ID = "weather.forecast_home"
+# Kept well under _HA_CONTEXT_OPTIONAL_ENRICHMENT_TIMEOUT so the unit lookup can
+# never be the reason the whole enrichment misses its deadline.
+_WEATHER_UNIT_TIMEOUT = 2.0
 _SIGNIFICANT_CONDITIONS = {"rainy", "snowy", "lightning", "windy", "fog"}
 
 
-def _build_weather_arc(forecast: list[dict]) -> str:
-    """Build a day-arc weather narrative from hourly forecast items."""
+def _build_weather_arc(forecast: list[dict], *, temperature_unit: object = "°C") -> str:
+    """Build a day-arc weather narrative from hourly forecast items.
+
+    ``temperature_unit`` is mandatory in effect: passing ``None`` (the shape
+    ``fetch_weather_forecast`` produces when Home Assistant would not tell us
+    the unit) withholds the temperature instead of guessing Celsius.
+    """
     if not forecast:
         return ""
 
     now_hour = datetime.datetime.now().hour
     current = forecast[0]
     current_cond = _sanitize_state_value(str(current.get("condition", "")), max_len=30)
-    current_temp = current.get("temperature")
+    current_temp = _celsius_for_prompt(current.get("temperature"), temperature_unit, require_unit=True)
 
     # Look 6 hours ahead for upcoming significant weather
     upcoming_sig: str | None = None
@@ -1379,16 +1609,16 @@ def _build_weather_arc(forecast: list[dict]) -> str:
         italian = STATE_TRANSLATIONS.get(upcoming_sig, upcoming_sig)
         return f"Attenzione: {italian} in arrivo questo pomeriggio."
     if current_is_sig and 12 <= now_hour < 18:
-        temp_str = f", {current_temp}°C" if current_temp is not None else ""
+        temp_str = f", {format_celsius(current_temp)}°C" if current_temp is not None else ""
         return f"Fuori c'è {current_italian}{temp_str} — come previsto."
     if current_is_sig and now_hour >= 18:
         return f"Siete sopravvissuti alla {current_italian} di oggi?"
     if current_italian and current_temp is not None:
-        return f"Meteo: {current_italian}, {current_temp}°C."
+        return f"Meteo: {current_italian}, {format_celsius(current_temp)}°C."
     return ""
 
 
-def _build_weather_arc_en(forecast: list[dict]) -> str:
+def _build_weather_arc_en(forecast: list[dict], *, temperature_unit: object = "°C") -> str:
     """English version of _build_weather_arc for admin UI display."""
     if not forecast:
         return ""
@@ -1396,7 +1626,7 @@ def _build_weather_arc_en(forecast: list[dict]) -> str:
     now_hour = datetime.datetime.now().hour
     current = forecast[0]
     current_cond = _sanitize_state_value(str(current.get("condition", "")), max_len=30)
-    current_temp = current.get("temperature")
+    current_temp = _celsius_for_prompt(current.get("temperature"), temperature_unit, require_unit=True)
 
     upcoming_sig: str | None = None
     for fc in forecast[1:7]:
@@ -1412,45 +1642,148 @@ def _build_weather_arc_en(forecast: list[dict]) -> str:
         en = STATE_TRANSLATIONS_EN.get(upcoming_sig, upcoming_sig)
         return f"Heads up: {en} expected this afternoon."
     if current_is_sig and 12 <= now_hour < 18:
-        temp_str = f", {current_temp}°C" if current_temp is not None else ""
+        temp_str = f", {format_celsius(current_temp)}°C" if current_temp is not None else ""
         return f"Outside: {current_en}{temp_str} — as forecast."
     if current_is_sig and now_hour >= 18:
         return f"Did you survive the {current_en} today?"
     if current_en and current_temp is not None:
-        return f"Weather: {current_en}, {current_temp}°C."
+        return f"Weather: {current_en}, {format_celsius(current_temp)}°C."
     return ""
+
+
+async def _fetch_weather_temperature_unit(
+    client: httpx.AsyncClient,
+    ha_url: str,
+    ha_token: str,
+) -> object | None:
+    """Read the configured unit for the forecast entity.
+
+    Home Assistant's ``weather/get_forecasts`` response carries no unit, so this
+    is the load-bearing source rather than a rare fallback.  It stays
+    exception-tolerant, but a failure is not free: the caller withholds the
+    temperature and retries sooner instead of caching a degraded arc for an hour.
+    """
+    try:
+        response = await client.get(
+            f"{ha_url.rstrip('/')}/api/states/{_WEATHER_FORECAST_ENTITY_ID}",
+            headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=_WEATHER_UNIT_TIMEOUT,
+        )
+        response.raise_for_status()
+        state_data = response.json()
+        if not isinstance(state_data, Mapping):
+            return None
+        return temperature_unit_of(state_data.get("attributes"))
+    except Exception as exc:
+        logger.debug("Weather temperature unit unavailable: %s", exc)
+        return None
+
+
+def _warn_once_on_weather_degraded(degraded: bool) -> None:
+    """Say once, at WARNING, that the weather arc lost its temperature.
+
+    A permanently mis-scoped token or a renamed forecast entity would otherwise
+    strip the temperature from every break forever with nothing above DEBUG to
+    explain it. Logged on transition only, so a persistent fault does not spam.
+
+    Callers reach here for more than one cause — an unreadable unit, a failed
+    unit lookup, or a forecast request that failed outright — so the message
+    names the symptom and points at the checks rather than asserting one cause.
+    """
+    global _weather_degraded_warned
+    if degraded and not _weather_degraded_warned:
+        logger.warning(
+            "Weather arc is airing without a temperature: could not read a usable "
+            "temperature and unit for %s. Check that the entity exists, that the token "
+            "can read it, and that it reports a unit Home Assistant recognizes.",
+            _WEATHER_FORECAST_ENTITY_ID,
+        )
+    elif not degraded and _weather_degraded_warned:
+        logger.info("Weather arc temperature recovered.")
+    _weather_degraded_warned = degraded
+
+
+def _forecast_unit_was_the_problem(forecast: list[dict], temperature_unit: object) -> bool:
+    """Whether a retry could recover a temperature the arcs had to withhold.
+
+    Only an unresolvable *unit* is worth retrying sooner.  An empty forecast, or
+    entries with no temperature at all, are stable properties of the
+    integration: retrying those every five minutes would put a permanent
+    double-request treadmill on the Pi to re-derive the same empty string.
+    """
+    if not forecast:
+        return False
+    current = forecast[0]
+    if not isinstance(current, Mapping):
+        return False
+    if current.get("temperature") is None:
+        return False
+    return _celsius_for_prompt(current.get("temperature"), temperature_unit, require_unit=True) is None
 
 
 async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
     """Fetch hourly weather forecast from HA and return a narrative arc string (Italian).
 
-    Cached for 1 hour. Returns "" if HA does not support get_forecasts or on error.
+    Cached for 1 hour, or 5 minutes when Home Assistant would not tell us which
+    unit the forecast is in. Returns "" if HA does not support get_forecasts or
+    on error.
     """
-    global _weather_forecast_cache, _weather_forecast_cache_en, _weather_forecast_fetched_at
-    if time.time() - _weather_forecast_fetched_at < _WEATHER_CACHE_TTL:
+    global _weather_forecast_cache, _weather_forecast_cache_en, _weather_forecast_fetched_at, _weather_forecast_ttl
+    if time.time() - _weather_forecast_fetched_at < _weather_forecast_ttl:
         return _weather_forecast_cache
 
     try:
         client = _get_ha_client()
-        resp = await client.post(
+        # The forecast and its unit are independent reads, so they overlap
+        # rather than stacking two round trips inside one enrichment deadline.
+        forecast_task = client.post(
             f"{ha_url.rstrip('/')}/api/services/weather/get_forecasts",
             headers={
                 "Authorization": f"Bearer {ha_token}",
                 "Content-Type": "application/json",
             },
-            json={"entity_id": "weather.forecast_home", "type": "hourly"},
+            json={"entity_id": _WEATHER_FORECAST_ENTITY_ID, "type": "hourly"},
             params={"return_response": "true"},
         )
+        unit_task = _fetch_weather_temperature_unit(client, ha_url, ha_token)
+        # return_exceptions keeps a failing forecast from orphaning the in-flight
+        # unit request: gather waits for both, then we surface the real failure.
+        resp, entity_unit = await asyncio.gather(forecast_task, unit_task, return_exceptions=True)
+        # A cancellation outranks a sibling failure regardless of arrival order.
+        # If the forecast merely errored while the unit task was cancelled,
+        # raising the forecast error first would let `except Exception` swallow
+        # it, mutate the cache globals, and lose the deadline's cancellation.
+        for outcome in (resp, entity_unit):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+        if isinstance(resp, BaseException):
+            raise resp
+        if isinstance(entity_unit, BaseException):
+            # The unit helper swallows Exception itself, so anything else
+            # surfacing here is a BaseException worth propagating untouched.
+            raise entity_unit
         resp.raise_for_status()
         data = resp.json()
         response_data = data.get("response", {}) or data
         first_entry: dict = next(iter(response_data.values()), {})
         forecast_list: list[dict] = first_entry.get("forecast", [])
-        arc = _build_weather_arc(forecast_list)
-        arc_en = _build_weather_arc_en(forecast_list)
+        # An inline unit is authoritative when a custom integration supplies one;
+        # otherwise the entity's own configured unit decides.
+        forecast_unit = temperature_unit_of(first_entry) or entity_unit
+        arc = _build_weather_arc(forecast_list, temperature_unit=forecast_unit)
+        arc_en = _build_weather_arc_en(forecast_list, temperature_unit=forecast_unit)
         _weather_forecast_cache = arc
         _weather_forecast_cache_en = arc_en
+        # A present-but-unreadable unit ("%") is the same outage for a listener
+        # as a missing one, so both retry sooner. An empty forecast does not:
+        # see _forecast_unit_was_the_problem.
+        degraded = _forecast_unit_was_the_problem(forecast_list, forecast_unit)
+        _weather_forecast_ttl = _WEATHER_DEGRADED_CACHE_TTL if degraded else _WEATHER_CACHE_TTL
         _weather_forecast_fetched_at = time.time()
+        _warn_once_on_weather_degraded(degraded)
         logger.debug("Weather arc: %s", arc or "(none)")
         return arc
     except Exception as e:
@@ -1458,6 +1791,9 @@ async def fetch_weather_forecast(ha_url: str, ha_token: str) -> str:
         _weather_forecast_cache = ""
         _weather_forecast_cache_en = ""
         _weather_forecast_fetched_at = time.time()
+        # A transient blip must not cost the station a full hour of weather.
+        _weather_forecast_ttl = _WEATHER_DEGRADED_CACHE_TTL
+        _warn_once_on_weather_degraded(True)
         return ""
 
 
@@ -2060,6 +2396,156 @@ def _project_home_context(projection_input: _HomeContextProjectionInput) -> _Hom
     )
 
 
+async def fetch_home_context_preview(
+    ha_url: str,
+    ha_token: str,
+    *,
+    cache_dir: Path | None,
+    authorization: HomeAuthorization | None = None,
+    timeout_seconds: float = 10.0,
+) -> HomeContextPreviewResult:
+    """Fetch a fresh, narrow and non-publishing Home-context preview.
+
+    This path deliberately skips registry/weather enrichment, prior snapshots,
+    event baselines, directive cooldowns, and every module cache.  The result is
+    suitable only for showing the operator what the current authorization and
+    hard-mute policy would retain.  Callers must never promote it into producer
+    state.
+    """
+    active_authorization = authorization or HomeAuthorization.narrow()
+    started = time.monotonic()
+
+    def failed(code: Literal["ha_auth_failed", "ha_unreachable", "preview_unavailable"]):
+        return HomeContextPreviewResult(
+            kind="failed",
+            context=HomeContext(authorization_mode=active_authorization.mode.value),
+            duration_seconds=max(0.0, time.monotonic() - started),
+            error_code=code,
+        )
+
+    try:
+        client = _get_ha_client()
+        async with client.stream(
+            "GET",
+            f"{ha_url.rstrip('/')}/api/states",
+            headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=max(0.1, min(float(timeout_seconds), 15.0)),
+        ) as response:
+            response.raise_for_status()
+            content_length = response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    parsed_content_length = int(content_length)
+                except ValueError as exc:
+                    raise ValueError("Home Assistant preview response has an invalid size") from exc
+                if parsed_content_length < 0:
+                    raise ValueError("Home Assistant preview response has an invalid size")
+                if parsed_content_length > _HA_PREVIEW_RESPONSE_MAX_BYTES:
+                    raise ValueError("Home Assistant preview response is too large")
+            chunks: list[bytes] = []
+            total_bytes = 0
+            async for chunk in response.aiter_bytes():
+                total_bytes += len(chunk)
+                if total_bytes > _HA_PREVIEW_RESPONSE_MAX_BYTES:
+                    raise ValueError("Home Assistant preview response is too large")
+                chunks.append(chunk)
+            response_bytes = b"".join(chunks)
+        preview_input = _HomeContextProjectionInput(
+            response_bytes=response_bytes,
+            registry_snapshot=HomeRegistrySnapshot(
+                fetched_at=time.time(),
+                source="preview_not_loaded",
+            ),
+            weather_arc="",
+            weather_arc_en="",
+            authorization_mode=active_authorization.mode.value,
+            muted_ids=frozenset(muted_entity_ids(Path(cache_dir)) if cache_dir is not None else set()),
+            effective_cache=None,
+            radio_event_rules=(),
+            radio_event_state_baseline={},
+            ritual_recipe_state_baseline={},
+            radio_event_cooldowns={},
+            ritual_recipe_cooldowns={},
+            cache_dir=Path(cache_dir) if cache_dir is not None else None,
+            timestamp=time.time(),
+        )
+        candidate = await asyncio.get_running_loop().run_in_executor(
+            _ha_preview_executor,
+            _project_home_context,
+            preview_input,
+        )
+        return HomeContextPreviewResult(
+            kind="fresh",
+            context=candidate.context,
+            duration_seconds=max(0.0, time.monotonic() - started),
+        )
+    except asyncio.CancelledError:
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        code: Literal["ha_auth_failed", "ha_unreachable"] = (
+            "ha_auth_failed" if status_code in {401, 403} else "ha_unreachable"
+        )
+        logger.info("Home-context preview failed with Home Assistant HTTP status %d", status_code)
+        return failed(code)
+    except (httpx.TimeoutException, httpx.RequestError):
+        logger.info("Home-context preview could not reach Home Assistant")
+        return failed("ha_unreachable")
+    except Exception:
+        logger.warning("Home-context preview could not be projected")
+        return failed("preview_unavailable")
+
+
+async def _run_home_context_projection(
+    projection_input: _HomeContextProjectionInput,
+) -> _HomeContextProjectionCandidate:
+    """Run one pure projection outside the stream-owning Python process."""
+    global _ha_projection_start_failure_logged
+    try:
+        executor = _get_ha_projection_executor()
+    except _PROJECTION_START_FAILURE_ERRORS:
+        # Without its own line this is indistinguishable from a transient Home
+        # Assistant fetch failure in the outer handler, and the home colour would
+        # stay off for good with nothing to grep for. The caller's stale/empty
+        # fallback still keeps the show on air.
+        _note_ha_projection_start_failure()
+        raise
+    try:
+        candidate = await asyncio.get_running_loop().run_in_executor(
+            executor,
+            _project_home_context,
+            projection_input,
+        )
+    except BrokenProcessPool:
+        # A dead worker poisons its ProcessPoolExecutor permanently. Preserve
+        # the outer stale/empty fallback for this attempt, then let the next
+        # scheduled refresh create one fresh worker instead of retrying here.
+        # The retire result tells us whether this attempt owned the teardown or
+        # a concurrent one already replaced the pool — only the owner logs.
+        if _retire_ha_projection_executor(executor):
+            logger.warning("Home context projection worker exited; the next refresh starts a fresh one.")
+        raise
+    except _PROJECTION_START_FAILURE_ERRORS:
+        # A spawn context defers process creation to the first submit, so an
+        # exhausted process table or out-of-memory kernel lands here rather than
+        # at construction. The pool is unusable either way: retire it so the next
+        # refresh gets a clean attempt instead of reusing a pool with no worker.
+        _retire_ha_projection_executor(executor)
+        _note_ha_projection_start_failure()
+        raise
+    # Only a completed projection proves the worker is healthy. Re-arming on a
+    # constructed pool instead would make a persistent submit-time outage log on
+    # every poll, because each poll constructs a fresh pool that then fails to
+    # spawn — the outage never looks like the same one twice.
+    if _ha_projection_start_failure_logged:
+        with _ha_projection_executor_lock:
+            _ha_projection_start_failure_logged = False
+    return candidate
+
+
 async def _fetch_home_context_outcome(
     ha_url: str,
     ha_token: str,
@@ -2238,11 +2724,7 @@ async def _fetch_home_context_outcome(
         )
         if stage_callback is not None:
             stage_callback("projection")
-        candidate = await asyncio.get_running_loop().run_in_executor(
-            _ha_projection_executor,
-            _project_home_context,
-            projection_input,
-        )
+        candidate = await _run_home_context_projection(projection_input)
         if observed_entity_ids_callback is not None:
             try:
                 observed_entity_ids_callback(candidate.observed_entity_ids)

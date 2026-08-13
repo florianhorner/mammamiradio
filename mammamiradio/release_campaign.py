@@ -81,8 +81,18 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _delivered(*, bytes_sent: int, was_skipped: bool, listeners: int) -> bool:
-    return not was_skipped and bytes_sent > 0 and listeners > 0
+def _delivered(
+    *,
+    bytes_sent: int,
+    was_skipped: bool,
+    listeners: int,
+    accepted_listeners: int | None = None,
+) -> bool:
+    if was_skipped or bytes_sent <= 0:
+        return False
+    if accepted_listeners is not None:
+        return accepted_listeners > 0
+    return listeners > 0
 
 
 @dataclass(frozen=True)
@@ -447,6 +457,7 @@ class ReleaseCampaign:
         bytes_sent: int,
         was_skipped: bool,
         listeners: int,
+        accepted_listeners: int | None = None,
         now: float | None = None,
     ) -> bool:
         """Record stream evidence. Returns True when this counted an airing."""
@@ -464,7 +475,10 @@ class ReleaseCampaign:
             # and synchronously saving the ledger on every delivered segment for
             # the rest of the session — pure disk churn on the audio hot path.
             if self.ledger.status == ACTIVE and _delivered(
-                bytes_sent=bytes_sent, was_skipped=was_skipped, listeners=listeners
+                bytes_sent=bytes_sent,
+                was_skipped=was_skipped,
+                listeners=listeners,
+                accepted_listeners=accepted_listeners,
             ):
                 self.ledger.non_release_segments_since_last_airing += 1
                 self.ledger._dirty = True
@@ -479,7 +493,12 @@ class ReleaseCampaign:
         if attempt_id and self.ledger.attempt_id and attempt_id != self.ledger.attempt_id:
             logger.debug("Ignoring release beat stream result for stale attempt %s", attempt_id)
             return False
-        if not _delivered(bytes_sent=bytes_sent, was_skipped=was_skipped, listeners=listeners):
+        if not _delivered(
+            bytes_sent=bytes_sent,
+            was_skipped=was_skipped,
+            listeners=listeners,
+            accepted_listeners=accepted_listeners,
+        ):
             self._activate()
             return False
         self.ledger.aired_count += 1

@@ -1,0 +1,85 @@
+PR #914 local validation receipt
+
+branch: florianhorner/fix/ha-stream-failure
+tested_code_sha: 16c78caa1318848a8071d5ec09b8a815ca614d96
+base_sha: 385c2e34a016d027e47adb4c3d85290f2db3aeb2
+captured_at_utc: 2026-07-31T03:26:51Z
+python: 3.11.15
+cache/tmp policy: isolated temporary directories for focused and normal-order full runs
+
+FOCUSED RUNTIME
+  streamer/control/status/Moment Receipt/release campaign families:
+    974 passed in 12.98s
+  exact in-flight controls and metadata-only races:
+    7 passed in 0.53s
+  healthy, assetless, forced Resume, and readiness contracts:
+    7 passed in 0.92s
+  final rejected-partial-read and TTS render-scope repros:
+    adversarial rerun CLEAN; 293 adjacent tests passed
+
+FOCUSED SOURCE, SETUP, ADMIN, AND RELEASE CONTRACTS
+  TTS/models/producer/queue/setup/admin/add-on/repo families:
+    836 passed, 1 skipped in 62.80s
+  release workflow and recovery-asset Python contracts:
+    133 passed in 9.16s
+  cut-edge release shell self-test:
+    13 cases passed
+
+NORMAL-ORDER FULL SUITE
+  isolated full run:
+    5894 passed, 3 skipped, 23 deselected in 194.57s
+  path-precedence tests, with path overrides intentionally unset:
+    2 passed in 1.53s
+  aggregate:
+    5896 passed, 3 skipped, 21 marker-deselected
+
+MAKE CHECK
+  Ruff: clean
+  Ruff format: 328 files formatted
+  mypy: 299 source files, no issues
+  vulture: clean
+  coverage suite: 5896 passed, 3 skipped, 21 deselected
+  total coverage: 92.54% (required floor 92.0%)
+  result: PASS
+
+FFMPEG
+  pytest -m requires_ffmpeg:
+    21 passed, 5899 deselected in 7.78s
+
+RELEASE AND ADD-ON
+  actionlint: PASS
+  shellcheck scripts/*.sh: PASS
+  documentation safety lint: PASS
+  documentation audit invariants: 4 passed
+  release invariants: 16 passed, 0 failed
+  pre-release check: 17 passed, 0 failed
+  spoken-asset manifest/hash/transcript validation: PASS
+  validate-addon.sh --build: PASS on aarch64 via isolated Colima
+    note: container was running after 3s; uvicorn had not yet logged startup at that sampling instant
+  source launch smoke: warm 0.96s, cold packaged 0.97s
+  exact-image launch smoke: warm 0.84s, cold packaged 0.84s
+  persisted-stop restart: marker preserved; Resume 0.003s; listener byte 0.00s
+
+FROZEN V1 CONTRACT
+  serializer golden byte comparison: PASS
+  integration family: 80 passed
+  CONTRACT.md and golden fixture unchanged from origin/main
+
+BROWSER
+  Player executable smoke: 15 checks; stream intent 22ms
+  Admin executable smoke: 1 passed; healthy Resume, assetless refusal/cancel,
+    confirmed force Resume, status failure/retry, stop-state, responsive geometry
+  unexpected page/console errors: none
+
+PRESHIP EVIDENCE
+  proof/preship-review.json:
+    clean adversarial-review receipt pinned to
+    092943792acdbd9c1905a9fe9bae01077f4a5235
+  check-preship-evidence.sh loaded from origin/main: PASS
+  branch-local check-preship-evidence.sh: PASS
+  preship evidence self-test: all assertions passed
+  ancestry contract: the reviewed commit is an ancestor of final HEAD
+
+BOUNDARY
+  Local validation only. Remote PR checks still describe the old remote head.
+  No push, PR mutation, deploy, Home Assistant restart, or live add-on update occurred.

@@ -171,6 +171,20 @@ async def test_public_status_hides_persisted_receipts_when_ha_is_disabled():
 
 
 @pytest.mark.asyncio
+async def test_public_status_hides_persisted_receipts_when_home_context_is_off():
+    app = _make_test_app()
+    _enable_ha(app)
+    app.state.config.homeassistant.context_enabled = False
+    store, _ = _store_with_aired_row()
+    app.state.station_state.moment_store = store
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        body = (await client.get("/public-status")).json()
+
+    assert body["ha_moments"] is None
+
+
+@pytest.mark.asyncio
 async def test_narrow_authorization_hides_persisted_receipts_from_public_and_admin_status():
     app = _make_test_app()
     app.state.config.homeassistant.enabled = True
@@ -262,6 +276,23 @@ def test_finalize_records_aired_on_clean_send():
     segment = _banter_segment(ritual_moment_id=moment_id)
     _finalize_moment_receipts(state, segment, bytes_sent=4096, was_skipped=False, listeners=2)
     assert state.moment_store.rows[0].status == "aired"
+
+
+def test_finalize_rejects_bytes_that_no_listener_accepted():
+    state = StationState()
+    state.moment_store, moment_id = _airing_store()
+    segment = _banter_segment(ritual_moment_id=moment_id)
+
+    _finalize_moment_receipts(
+        state,
+        segment,
+        bytes_sent=4096,
+        was_skipped=False,
+        listeners=1,
+        accepted_listeners=0,
+    )
+
+    assert state.moment_store.rows[0].status == "not_streamed"
 
 
 @pytest.mark.parametrize(

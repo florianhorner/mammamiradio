@@ -1174,6 +1174,7 @@ def test_addon_mode_overrides_paths(monkeypatch):
     assert config.is_addon is True
     assert config.cache_dir == Path("/data/cache")
     assert config.tmp_dir == Path("/data/tmp")
+    assert config.music_dir == Path("/data/music")
 
 
 def test_load_config_does_not_force_addon_paths_from_options_file(monkeypatch):
@@ -1187,6 +1188,7 @@ def test_load_config_does_not_force_addon_paths_from_options_file(monkeypatch):
     assert config.is_addon is False
     assert config.cache_dir == Path("cache")
     assert config.tmp_dir == Path("tmp")
+    assert config.music_dir == Path("music")
 
 
 def test_addon_mode_respects_env_path_overrides(monkeypatch):
@@ -1194,12 +1196,14 @@ def test_addon_mode_respects_env_path_overrides(monkeypatch):
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test_token")
     monkeypatch.setenv("MAMMAMIRADIO_CACHE_DIR", "/tmp/mammamiradio-data/cache")
     monkeypatch.setenv("MAMMAMIRADIO_TMP_DIR", "/tmp/mammamiradio-data/tmp")
+    monkeypatch.setenv("MAMMAMIRADIO_MUSIC_DIR", "/tmp/mammamiradio-data/music")
 
     config = load_config(str(toml_path))
 
     assert config.is_addon is True
     assert config.cache_dir == Path("/tmp/mammamiradio-data/cache")
     assert config.tmp_dir == Path("/tmp/mammamiradio-data/tmp")
+    assert config.music_dir == Path("/tmp/mammamiradio-data/music")
 
 
 def test_addon_mode_auto_enables_ha(monkeypatch):
@@ -1542,3 +1546,85 @@ def test_validate_aggregates_multiple_errors_each_with_hint():
     assert "(set in radio.toml [pacing])" in msg
     assert "(set in radio.toml [persona])" in msg
     assert "(set in radio.toml [playlist])" in msg
+
+
+def test_apply_addon_options_maps_cache_mb(monkeypatch, tmp_path):
+    """Verify that the non-run.sh add-on boot path exports norm_cache_mb.
+
+    The run.sh path is covered in tests/repo/test_run_sh_options_parser.py.
+    """
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"norm_cache_mb": 2200}))
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] == "2200"
+    finally:
+        os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)
+
+
+def test_apply_addon_options_cache_mb_absent_leaves_env_unset(monkeypatch, tmp_path):
+    """An older options file can omit norm_cache_mb.
+
+    load_config then uses the add-on default without an exported value.
+    """
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"songs_between_banter": 5}))
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert "MAMMAMIRADIO_MAX_CACHE_MB" not in os.environ
+    finally:
+        # The options file also carries songs_between_banter, so _apply_addon_options
+        # exports that too. Clear both, or the pacing value leaks into later tests.
+        os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)
+        os.environ.pop("MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER", None)
+
+
+def test_apply_addon_options_cache_mb_rejects_bool(monkeypatch, tmp_path):
+    """Reject JSON booleans so true cannot become a 1 MB cache."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"norm_cache_mb": True}))
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    try:
+        with patch("mammamiradio.core.config.Path") as mock_path_cls:
+            mock_path_cls.return_value = options_file
+            _apply_addon_options()
+        assert "MAMMAMIRADIO_MAX_CACHE_MB" not in os.environ
+    finally:
+        os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)
+
+
+@pytest.mark.parametrize("cache_mb", [0, -5, -1])
+def test_apply_addon_options_cache_mb_rejects_non_positive(monkeypatch, tmp_path, cache_mb):
+    """Treat non-positive add-on cache input as malformed."""
+    import os
+
+    options_file = tmp_path / "options.json"
+    options_file.write_text(json.dumps({"norm_cache_mb": cache_mb}))
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("")
+    path_fixtures = {
+        "/data/options.json": options_file,
+        "/config/secrets.env": secrets_file,
+    }
+    monkeypatch.delenv("MAMMAMIRADIO_MAX_CACHE_MB", raising=False)
+    try:
+        monkeypatch.setattr(
+            "mammamiradio.core.config.Path",
+            lambda path: path_fixtures[str(path)],
+        )
+        _apply_addon_options()
+        assert "MAMMAMIRADIO_MAX_CACHE_MB" not in os.environ
+    finally:
+        os.environ.pop("MAMMAMIRADIO_MAX_CACHE_MB", None)

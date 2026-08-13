@@ -3,15 +3,16 @@
 # This is a pinned prompt mirror of the repository's current GitHub writing
 # contract. GitHub workflows and branch protection remain authoritative.
 #
-# Sources checked 2026-07-14:
+# Sources checked 2026-07-26:
 # - .config/commit-rules.json, vendored from engineering-standards SHA
 #   1fe9a730a3779349ddcea67974f10050a7548a47 (schema 1.1.0)
 # - .github/workflows/commit-lint.yml, reusable workflow SHA
 #   502b48e0521350509f06cd3c6ad65a7c848f23af
-# - local PR-body sources at repository commit
-#   469caa61543573064106a93c44b6e11d31c3a489: scripts/lint-patterns.sh,
-#   scripts/check-pr-body-lint.sh, .github/workflows/pr-body-lint.yml, and
-#   .github/pull_request_template.md
+# - local editorial-lint sources at repository commit
+#   94507d4cff9bd6d3f21dc6cdff38416857baa779: scripts/lint-patterns.sh,
+#   scripts/check-pr-body-lint.sh, scripts/check-issue-body-lint.sh,
+#   .github/workflows/pr-body-lint.yml, .github/workflows/issue-body-lint.yml,
+#   and .github/pull_request_template.md
 # - .github/workflows/verify-claims.yml, gh-workflows@v1.3
 #
 # Refresh this block deliberately when any of those sources change. Do not
@@ -88,7 +89,7 @@ BODY
 EDITORIAL LINT
 - Do not include internal sprint/workstream labels (`PR-A`, `WS2`, `Phase 1`,
   `Approach B`, `Concept A`, `finding #N`, `Item N`, `P0-1`, `H2/H3`,
-  `phase A`, `Track A`, or `leadership principle`), planning archaeology
+  `phase A`, `Track A`, or `leadership principle(s)`), planning archaeology
   (`soak window`, `live session`, dated planning files), or contributor
   archaeology (`first outside contribution`, `work was superseded`,
   `red tests ride green`, `informed the later`, `superseded`,
@@ -100,6 +101,12 @@ EDITORIAL LINT
   `operator-honesty`.
 - Do not use PR process narration such as `N commits ahead`, `picked up
   cleanly`, `auto-decided`, `soak verification`, or `dual-voice review`.
+- Do not include workspace archaeology: git stash references (`stash@{0}`),
+  `local-only`, possessive references to the maintainer's machine,
+  `abandoned attempt/stash/design/branch`, `adversarial verification`,
+  `findings raised/confirmed/refuted`, or `untracked code/files`.
+- The same editorial bans apply to maintainer-authored GitHub issue bodies,
+  enforced by the issue-body lint workflow and a local pre-submit hook.
 - Make claims only when the listed evidence proves the current PR head. Do not
   claim runtime, deployment, release, or QA work that did not happen.
 
@@ -120,8 +127,8 @@ as well as the code:
    Standards, and a terminal `## Proof` block with real artifacts or explicit
    n/a reasons. Keep proof syntax conservative and plain.
 3. Check the body for the repository's editorial bans: internal sprint labels,
-   planning/contributor archaeology, agent/tool provenance, architectural
-   process vocabulary, and PR-process narration.
+   planning/contributor/workspace archaeology, agent/tool provenance,
+   architectural process vocabulary, and PR-process narration.
 4. Separate verified local/CI evidence from live runtime, deployment, release,
    and merge claims. Query current GitHub checks and review state when landing.
 

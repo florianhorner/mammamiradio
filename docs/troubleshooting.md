@@ -5,7 +5,7 @@ Start with the way you run Mamma Mi Radio. Home Assistant app operators and loca
 ## Home Assistant app
 
 1. Go to **Settings → Apps → Mamma Mi Radio → Log** and keep the lines around the first warning or error. A healthy start reaches `Producer started`.
-2. Open the Web UI. If you expose port 8000, check `/healthz` and `/readyz`; a station ready for listeners returns `"ready": true`.
+2. Open the Web UI and start listening. If you expose port 8000, check `/healthz` and `/readyz`; after a listener accepts audio, a ready station returns HTTP `200` with `"ready": true`.
 3. Follow the matching symptom below. If the problem needs a code change or add-on recovery, use the [supported add-on workflow](../ha-addon/mammamiradio/DOCS.md#failure-modes-and-recovery). Do not use the Python virtual-environment commands in the next section against a running Home Assistant app.
 
 ## Local source or Docker
@@ -39,7 +39,37 @@ curl http://127.0.0.1:8000/healthz
 curl http://127.0.0.1:8000/readyz
 ```
 
-`/healthz` answers "is the process alive?". `/readyz` answers "is the station actually ready to play audio right now?" and returns `starting` while startup is still warming the queue or when active listeners have hit prolonged silence.
+`/healthz` answers "is the process and listener-facing runtime healthy?"; it normally stays HTTP `200` during an intentional Stop but returns `503` for prolonged silence with active listeners. `/readyz` answers "has this running session actually delivered audio to a listener?". Every fresh or Resumed session returns HTTP `503` with `status: "starting"` until at least one listener queue accepts audio; `Producer started`, queued work, and elapsed startup time are not sufficient. Listener acceptance changes the probe to HTTP `200` with `status: "ready"`. A confirmed Force Start remains `starting` while it rebuilds that proof, and prolonged listener silence can return an active session to `starting`. An intentional operator pause is distinct: `/readyz` returns HTTP `503` with `status: "stopped"` until explicit Resume.
+
+## The page loads but the stream itself never plays
+
+If the listener page renders normally, the dashboard looks healthy, `/healthz` returns `200`, and yet every attempt to play returns an error, check what the station is called. `/stream` announces the station to players through its `icy-name` and `icy-genre` response headers, and HTTP headers can only carry latin-1 characters. Two things put a non-latin-1 character into a station name without you noticing:
+
+- **Smart quotes.** Typing a name on a Mac or iPhone silently substitutes a typographic apostrophe (U+2019) for the straight one.
+- **Decomposed accents.** macOS often stores `à` as a plain `a` followed by a separate combining accent (U+0300). The combining mark is not latin-1 either, so a perfectly ordinary `Radio Città` could fail while the same name typed elsewhere worked.
+
+Older builds passed both straight through, so building the response failed before a single audio byte was sent and every listener got a `500` while the rest of the app kept behaving normally. Grep the add-on log for the exact text Python emits, which uses the escaped form rather than the character itself:
+
+```text
+UnicodeEncodeError: 'latin-1' codec can't encode character '\u2019' in position 3: ordinal not in range(256)
+```
+
+Emoji and CJK characters in a station name or theme did the same thing.
+
+A third trigger has nothing to do with punctuation: **any letter outside latin-1**. `Radio Łódź`, `Radio Čačak`, `Rádió Ő` and `Radyo İstanbul` all returned `500` on older builds for the same reason.
+
+Current builds compose the value to NFC and then fold it at the header boundary:
+
+- Accents survive, so `Radio Città` stays `Radio Città`.
+- Curly quotes, dashes and ellipses become plain ASCII.
+- Letters outside latin-1 degrade to their base letter rather than disappearing. Most reduce by decomposition (`Škoda` becomes `Skoda`). Letters built from a stroke, bar or hook decompose to nothing, so the base letter is read out of the Unicode character name instead: `Radio Łódź` becomes `Radio Lódz` and `Radyo Kırmızı` becomes `Radyo Kirmizi`. Without that step the latin-1 pass deletes the letter outright and the name reads as a typo (`Radio ódz`, `Radyo Krmz`). This is deliberately not a hand-written list of letters. 314 Latin letters fall outside latin-1, and enumerating them is exactly how the first ones got missed. Only the few whose Unicode name contains no base letter at all (`Ŋ ŋ Ə ə Œ œ ẞ ĸ`) are mapped by hand.
+- Emoji and CJK, which have no Latin equivalent at all, are dropped.
+- Control characters are removed. CR and LF are the header-injection vector; the rest of the C0 range and DEL are illegal field content that a strict server rejects outright. This matters most for `station.theme` / `STATION_THEME`, which (unlike the station name) never passes through the load-time sanitizer.
+- The result is stripped at both ends. Folding an emoji off the edge of a name leaves its space behind, and a header value with leading or trailing whitespace is illegal. Some HTTP implementations (h11) refuse the entire response for it, which would reproduce the original outage by a different route.
+
+A name that folds away to nothing falls back to the default station name instead of sending a blank `icy-name`. `icy-genre` is folded first and truncated to 64 characters afterwards, so the cap always applies to the text that actually ships. Non-string values are coerced, so a `theme = 42` typo in `radio.toml` no longer takes the stream down either.
+
+Nothing about this reaches the listener UI: `/public-status` and the page still carry the full original name, emoji and all. Only the header is folded. If you are on an older add-on and see that error in the log, retype the apostrophe as a straight `'` in the add-on configuration as an immediate workaround; the stream recovers on the next listener connect with no restart.
 
 ## The app starts but there is no real music
 
@@ -47,13 +77,18 @@ The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP
 
 - Check that `ffmpeg` is installed
 - Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
+- For the supplied Docker image or Home Assistant app, local MP3s belong in the
+  deployment's persistent `/data/music` directory. Populate that data area
+  through the deployment's supported storage tooling; do not patch files into
+  a running Home Assistant app container. A source checkout instead reads
+  repo-local `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
 - A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means nothing started airing at all: a station bridging an empty queue on its packaged continuity clip is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that avoids the current/recent song when alternatives exist, then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat as the last audio source; after 60 seconds without any bridge asset it requests a forced banter segment from the producer so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth so Home Assistant Supervisor and external load balancers do not route fresh listeners to a deliberately paused station. Reconnecting a listener auto-resumes the session and clears `session_stopped` before audio begins.
+When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means no listener queue accepted audio, not merely that a file was selected. A station bridging an empty queue on `continuity_1.mp3` is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that prefers a song the listener has not just heard, and only re-serves a recent one when the cache holds nothing else (a song from twenty minutes ago beats the station ident on a loop), then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat; the neutral two-second `emergency_tone.mp3` remains the final packaged rung when ordinary recovery cannot supply audio. After 60 seconds without any bridge asset the station requests forced banter so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth. Connecting or reconnecting to `/stream` does not clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds cap packaged recovery clips to one per empty-queue gap when cached music exists: Resume, idle wake-up, and an active-playback drain queue the short clip, then immediately queue one normalized cached song as runway. In logs, the fixed path looks like one `serving packaged recovery clip` entry followed by `rescuing with norm cache` or a queued `norm-cache bridge`, not the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. The packaged clip appears only when the cache has nothing eligible, and when it does queue with runway still expected but no cache music behind it, the miss reads `no cache music queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
 If the clip still repeats, check whether `cache/` has any `norm_*.mp3` files, and whether the ones that exist are eligible to air: files rejected by the audio quality gate and songs on the operator ban list are skipped by the rescue picker even though they sit on disk (a missing or corrupt metadata sidecar does NOT disqualify a file — it airs with a cleaned-up filename as the title). A fresh install with no cache and no bundled demo music may legitimately repeat the packaged clip because repeated station audio is still better than dead air.
 
@@ -62,6 +97,46 @@ The app persists the last selected source to `cache/playlist_source.json` and re
 ## Air Next or Next track says the station is paused
 
 Air Next only queues an operator pick, and Next track only cuts the current programme, while the station is running. Press **Start** or **Resume** first, then use the control again; a paused station does not keep a hidden pick or skip waiting for later.
+
+## Stop or Resume returns 503
+
+Stop writes `cache_dir/session_stopped.flag` before touching live playback. If
+that write fails, the response says nothing changed; fix cache-directory
+permissions or free disk space and try Stop again. Do not assume the station
+paused merely because the button was pressed.
+
+Resume first reserves readable immediate audio, preferring a warm norm-cache
+song, then `continuity_1.mp3`, then `emergency_tone.mp3`. It stays paused if no
+runway is readable or if the persisted marker cannot be removed. When every
+recovery asset is missing, the response offers **Force Start**. Confirming it is
+an explicit corrupt-install escape: it removes the stop marker, requests host
+banter, and reports `recovering` while `/readyz` remains `503 starting` until a
+listener accepts the rebuilt audio. It is never automatic. Check:
+
+```bash
+ls -l cache/session_stopped.flag
+ls -lh mammamiradio/assets/demo/recovery/continuity_1.mp3 \
+  mammamiradio/assets/demo/recovery/emergency_tone.mp3
+bash scripts/check-release-invariants.sh
+```
+
+For the add-on, inspect the equivalent paths read-only in the installed image;
+do not patch or restart the live container as a test. A healthy Resume log names
+`runway_source` and the current `continuity_epoch`. Stop advances that epoch
+before it purges, so a later `stale_continuity` discard is expected proof that
+pre-Stop work was fenced, not a new audio failure.
+
+Setup can remain **Ready** while playback is paused. That is intentional:
+`/api/setup/status` reports configuration/source readiness, while `/readyz` and
+authenticated runtime status report transport state. Setup recheck, key repair,
+and Home context preview remain available during the pause.
+
+If status appears to name a segment but the control room does not say **On Air**,
+look for the two log boundaries. `Selected readable ...` means the file opened
+and yielded bytes; it is not listener proof. `Listener-audible segment committed
+... accepted_listeners=N` means at least one listener queue accepted the first
+chunk. Provider, rescue-rotation, and continuity-air receipts update only at the
+second boundary.
 
 ## A chart entry sounded like a podcast or audiobook
 
@@ -115,6 +190,34 @@ Song-end transitions are validated before they reach TTS. Missing, malformed, sh
 
 Generated banter keeps lively interruptions only when the next emitted line belongs to a different host and answers or counters the cut-in. A terminal cut-off, same-speaker continuation, or stray one/two-word fragment rejects the generated exchange and uses the existing stock banter instead. This is script validation only: it does not change TTS, FFmpeg, streaming, or Home Assistant runtime behavior.
 
+## A host answered themselves, or a break sounded shorter than it should
+
+Individual written lines can be unusable and get dropped before air: a line that
+is only a stage direction (`[ride]`, `[applausi]`) sanitizes to nothing, a model
+sometimes repeats a line verbatim, and a guest-host cameo is dropped when the
+guest was not invited to that break. Dropping one used to shorten the exchange
+silently, and if the dropped line sat between the two hosts their surrounding
+lines welded onto one speaker.
+
+A drop is now only allowed to air when what remains still reads as a
+conversation. Fewer than two surviving lines, or a drop that removed the other
+host's line from between two lines by the same host, rejects the generated
+exchange and uses the complete stock banter instead. A model that simply wrote
+two lines for one host is left alone — that is a taste problem, not a hole, and
+trading it for stock copy would lose a serviceable break. The hosts are also
+asked in every banter prompt to keep stage directions out of spoken copy, so the
+sanitizer has less to remove.
+
+Check: grep the log for `Dropped empty banter line`, `Dropped duplicate banter
+line`, `Dropped gated guest-host banter line`, `Dropped malformed banter line`,
+and the summary line `Banter lost lines before air`. With Show Memory (the
+provenance ledger) enabled, the same counts land on the segment's Tier-2 row as
+`line_accounting` (`authored`, `aired`, and a per-reason breakdown); the field is
+present only when lines were actually lost, so its absence means a full exchange.
+Persistent losses usually mean the model is writing stage directions or repeating
+itself — worth checking before assuming a TTS or audio fault, since a per-line
+voice failure fails the whole segment rather than airing it short.
+
 The app tries Anthropic first, then falls back to OpenAI through the active
 quality profile if `OPENAI_API_KEY` is set (the role-specific catalog entry in
 `model_registry.toml`), then to stock lines. Check the registry—not Python or
@@ -133,10 +236,14 @@ If generated banter airs but listener memory or song callbacks are not growing,
 check the post-air extractor path separately:
 
 - The extractor runs only after generated banter sends cleanly. Canned clips,
-  stock/impossible fallback copy, skipped segments, source switches, and partial
-  sends intentionally do not write memory.
+  stock/impossible fallback copy, skipped segments, source switches, partial
+  sends, and banter that no listener accepted intentionally do not write memory.
 - The segment metadata must include `memory_extraction`, and the streamer must
-  reach EOF with bytes sent before scheduling `memory_extract`.
+  reach EOF with bytes sent AND at least one listener queue accepting a chunk
+  before scheduling `memory_extract`. Bytes sent alone is not enough: an empty
+  room still accumulates written bytes, and durable listener memory follows the
+  audible boundary. If memory stops growing on a station nobody is tuned into,
+  that is the gate working, not a failure.
 - `memory_extract` uses the fast script role and appears in `/status`
   consumption as the Memory row (`script_memory`). Missing provider keys make it
   a warning-only no-op/fallback path, not a stream failure.
@@ -184,6 +291,32 @@ Check:
 - the admin Home context preview has at least one prompt-safe entity available
 
 Even when configured correctly, HA references are opportunistic. A saved token alone stays Full AI Radio until a prompt-safe context slice exists, and the prompt only encourages one casual reference when it fits.
+
+## Home Assistant colour is paused
+
+Home context is projected in a separate worker process so the CPU work cannot
+stall audio. Audio never depends on it: if the worker cannot run, the station
+keeps playing and simply stops mentioning the house.
+
+Two log signatures tell the two causes apart:
+
+```
+WARNING Home context projection worker could not start; Home Assistant colour is paused until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's process limit, and available memory.
+WARNING Home context projection worker exited; the next refresh starts a fresh one.
+```
+
+The first means the worker could not come up. It prints once per outage rather
+than on every poll, and it covers three causes that surface differently
+underneath: a missing, read-only, or zero-sized `/dev/shm` (Python reports this
+as "named semaphores being unavailable", and it stays broken for the life of the
+process once seen); a system offering too few semaphores; and an exhausted
+process table or out-of-memory kernel, which fails a step later when the worker
+is actually spawned. Check with `docker exec <container> df -h /dev/shm`, and
+confirm the container was not started with `--shm-size=0` or an unusually low PID
+limit. The second line is a worker that died mid-refresh, most often the
+out-of-memory killer on a small appliance; that refresh falls back to the last
+prompt-safe snapshot and the next scheduled refresh starts a new worker on its
+own. A single occurrence needs no action.
 
 ## A host repeated a home detail
 

@@ -23,7 +23,7 @@ CodeRabbit review on #741 flagged three findings, all fixed:
 - Minor: the Supervisor recovery call was not actually one-time — it retried
   on every boot for any install still missing one or more provider keys
   (common: most installs don't configure all 5 providers). Added
-  RECOVERY_MARKER_FILE (/data/.provider_recovery_checked, overridable via
+  RECOVERY_MARKER_FILE (/data/.provider_recovery_checked_v2, overridable via
   $RECOVERY_MARKER_FILE for tests), written only after a *successful*
   Supervisor response — a network failure/timeout does NOT set it, so a
   transient failure keeps retrying on later boots instead of permanently
@@ -62,3 +62,53 @@ Passed: 8  Failed: 0
 
 $ bash scripts/check-changelog-lint.sh
 Changelog lint clean.
+
+## /code-review follow-up (2026-07-28) — 5 confirmed findings, all fixed
+
+/code-review (high effort, 8 finder angles + 1-vote verification) on the
+Supervisor-persistence rework surfaced 5 CONFIRMED findings (1 REFUTED with a
+working repro, dropped):
+
+1. `_prepare_complete_options` blocked EVERY admin toggle save (500) on any
+   install with a legacy `claude_model` Supervisor option and no
+   `quality_profile` saved yet — the exact compatibility state this repo's
+   own docs describe as normal. Fixed: `claude_model` is now tolerated
+   unconditionally, like the credential fields.
+2. `_persist_and_apply_credentials` discarded the `_SecretWriteOutcome` from
+   a credential save, silently treating a crash-durability-unconfirmed write
+   as success. Fixed: the outcome is now checked and raises, matching
+   `_migrate_retired_credentials`'s existing contract.
+3. `_save_addon_options` dropped the old cross-cutting migration of stray
+   legacy credential values on every credential-only save (now only happens
+   on a toggle save). Documented as an accepted, self-healing narrowing
+   rather than restoring a Supervisor round-trip to a save path that should
+   stay local-only.
+4. Every admin toggle save serialized behind a single-worker executor and a
+   lock held across a full Supervisor HTTP round-trip (worst case ~30s).
+   Tightened the read/write timeout from 5s to 3s to bound the worst case.
+5. secrets.env parsing grammar was duplicated between `persistence.py` and
+   `core/config.py`. Extracted the shared grammar into
+   `core.config._parse_secret_env_lines`.
+
+Pre-ship review squad (adversarial + test-coverage + docs/config-consistency,
+3 parallel agents against the full shipping diff) additionally found:
+`/api/setup/save-keys` and `/api/credentials` had no exception handling
+around the new durability-check raise, unlike every sibling toggle route.
+Fixed: both now catch `_AddonPersistenceError` and return a structured
+`{"ok": false, "error": ...}` 500, matching `set_chaos`/`set_super_italian`/
+etc. New regression test:
+`test_setup_save_keys_reports_structured_500_on_addon_persistence_failure`.
+Also fixed a test/contract-drift nit: two route tests hardcoded the raw
+string `"durable"` instead of importing `persistence._SECRET_WRITE_DURABLE`.
+
+$ .venv/bin/python -m pytest tests/ -q --timeout=600
+5757 passed, 3 skipped, 23 deselected in 130.61s
+(2 tests deselected — tests/repo/test_ci_supply_chain.py::test_addon_server_drops_to_non_root_before_serving
+and tests/addon/test_addon_local_build_script.py::test_addon_run_sh_uses_guarded_file_backed_provider_secrets_parser —
+assert on unrelated, unstaged local working-tree changes not part of this diff)
+
+$ .venv/bin/ruff check mammamiradio/web/persistence.py mammamiradio/web/streamer.py mammamiradio/core/config.py && .venv/bin/ruff format --check mammamiradio/web/persistence.py mammamiradio/web/streamer.py mammamiradio/core/config.py
+All checks passed! / 3 files already formatted
+
+$ .venv/bin/mypy mammamiradio/ tests/
+Success: no issues found in 299 source files

@@ -7,7 +7,7 @@ configuration:
     description: "Allow the add-on to talk to Home Assistant for entity publishing, optional host context, and timer interrupts. Turn this Off only if the station should run without Home Assistant access."
   ha_context_enabled:
     name: Host home context
-    description: "On (default): hosts may mention filtered Home Assistant state in banter, ads, and news. Off: the station still publishes its own HA entities, but it stops the full home-state polling used for host prompts."
+    description: "Fresh installs keep this Off until first audio is confirmed, Setup shows a filtered preview, and you explicitly enable it. On: future host scripts may use that filtered Home Assistant state. Off: the station still publishes its own HA entities, but Home-state polling, timer reads/interrupts, and Home-derived host work stay suspended."
   ha_context_poll_interval:
     name: Host context refresh interval
     description: "How often the station refreshes the full filtered Home Assistant state snapshot for host prompts. The default 300 seconds is gentler on Home Assistant Green than once-a-minute polling."
@@ -44,6 +44,9 @@ configuration:
   ad_spots_per_break:
     name: Ads per break
     description: "How many advert spots run back to back in a single ad break. Also adjustable live from the admin panel; the value survives a restart."
+  norm_cache_mb:
+    name: Music cache size (MB)
+    description: "Disk space reserved for ready-to-play songs. Each song uses about 5 MB, so 1500 MB holds roughly 300 songs. Cached songs start almost instantly; uncached songs take about a minute to prepare. If a few songs repeat while others rarely play, increase this value. Reduce it when the add-on data disk is low on space. On-Air Sound roughly doubles the space used by each song. The setting takes effect after the add-on restarts."
   jamendo_client_id:
     name: Jamendo Client ID (Advanced)
     description: Enables CC-licensed music from Jamendo from the add-on Configuration tab. Get a free client ID at developer.jamendo.com. Leave empty to disable the Jamendo source.
