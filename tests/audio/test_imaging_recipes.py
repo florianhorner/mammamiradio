@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from mammamiradio.audio.imaging import ImagingLibrary
-from mammamiradio.audio.normalizer import generate_tone, mix_oneshot_layers
+from mammamiradio.audio.normalizer import generate_tone, loop_audio_bed, mix_oneshot_layers
 
 
 def _asset(asset_id: str, path: str, *, kind: str = "cue") -> dict[str, object]:
@@ -221,6 +221,47 @@ def test_mix_oneshot_layers_refuses_more_than_two_cues(tmp_path: Path) -> None:
             ],
             tmp_path / "output.mp3",
         )
+
+
+def test_mix_oneshot_layers_rejects_same_path_and_invalid_layer_values(tmp_path: Path) -> None:
+    base = tmp_path / "base.mp3"
+    base.write_bytes(b"base")
+    cue = tmp_path / "cue.mp3"
+    cue.write_bytes(b"cue")
+
+    with pytest.raises(ValueError, match="distinct output path"):
+        mix_oneshot_layers(base, [(cue, 0.0, -8.0, 0.2)], base)
+    with pytest.raises(ValueError, match="must be numeric"):
+        mix_oneshot_layers(base, [(cue, "late", -8.0, 0.2)], tmp_path / "out.mp3")  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="must be finite"):
+        mix_oneshot_layers(base, [(cue, float("nan"), -8.0, 0.2)], tmp_path / "out.mp3")
+    with pytest.raises(ValueError, match="non-negative"):
+        mix_oneshot_layers(base, [(cue, -0.1, -8.0, 0.2)], tmp_path / "out.mp3")
+
+
+def test_mix_oneshot_layers_copies_base_when_no_cues(tmp_path: Path) -> None:
+    base = tmp_path / "base.mp3"
+    output = tmp_path / "out.mp3"
+    base.write_bytes(b"night-drive-base")
+
+    assert mix_oneshot_layers(base, (), output) == output
+    assert output.read_bytes() == b"night-drive-base"
+
+
+def test_loop_audio_bed_uses_stream_loop_and_loudnorm(tmp_path: Path) -> None:
+    source = tmp_path / "casa_notte.mp3"
+    output = tmp_path / "looped.mp3"
+    source.write_bytes(b"night-drive-bed")
+
+    with patch("mammamiradio.audio.normalizer._run_ffmpeg") as run_ffmpeg:
+        assert loop_audio_bed(source, output, 4.0, fade_out_sec=0.4) == output
+
+    run_ffmpeg.assert_called_once()
+    command = run_ffmpeg.call_args.args[0]
+    assert command[command.index("-stream_loop") + 1] == "-1"
+    audio_filter = command[command.index("-af") + 1]
+    assert "loudnorm=I=-18" in audio_filter
+    assert "afade=t=out" in audio_filter
 
 
 @pytest.mark.requires_ffmpeg
