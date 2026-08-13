@@ -553,6 +553,10 @@
       return;
     }
 
+    // Make the polite live region visible before changing its text. Screen
+    // readers commonly ignore mutations made below a display:none ancestor,
+    // which would make the first completed-break receipt arrive silently.
+    details.hidden = false;
     summary.textContent = summaryText;
     list.replaceChildren();
     rows.forEach((entry) => {
@@ -568,7 +572,6 @@
     });
 
     details.dataset.receiptKey = receiptKey;
-    details.hidden = false;
   }
 
   // A second or two past the end is normal — the server reports elapsed as

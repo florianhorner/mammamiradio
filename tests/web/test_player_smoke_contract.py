@@ -194,6 +194,24 @@ def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
         assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
 
 
+def test_player_smoke_executes_carosello_listener_contract() -> None:
+    """The real listener DOM executes receipt, roster, and Media Session paths."""
+    code = RUN_CODE.read_text(encoding="utf-8")
+    for needle in (
+        "adExperimentScenario = 'one'",
+        "adExperimentScenario = 'many'",
+        "adExperimentScenario = 'empty'",
+        "first completed ad receipt did not reveal with singular copy",
+        "status refresh collapsed the expanded ad receipt",
+        "wire brand text executed as markup",
+        "live ad roster did not replace generic sponsored copy",
+        "Media Session ad roster disagreed with the visible roster",
+        "brandless ad did not retain generic sponsored copy",
+        "runtime reset did not hide, collapse, and clear the stale ad receipt",
+    ):
+        assert needle in code, f"player smoke lost Carosello browser guard: {needle}"
+
+
 def test_default_listener_identity_fixture_is_canonical() -> None:
     config = tomllib.loads(RADIO_CONFIG.read_text(encoding="utf-8"))
     assert DEFAULT_STATION_NAME == "Mamma Mi Radio"

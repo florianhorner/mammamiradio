@@ -10,6 +10,8 @@ async (page) => {
   let streamScenario = 'audio';
   let sessionStopped = false;
   let casaScenario = 'recent';
+  let adExperimentScenario = 'empty';
+  let nowStreamingScenario = 'music';
   let tracksPlayed = 5;
   let rotationTrackCount = 84;
   // Deliberately stale: the hero must render the live rotation count instead.
@@ -38,6 +40,30 @@ async (page) => {
       { label: 'Live ritual', ago_min: 3000, status: 'airing' },
       { label: 'Private dropped ritual', ago_min: 2, status: 'dropped' },
     ],
+  };
+  const hostileBrand = '<img src=x onerror="window.__adRosterXss=1">';
+  const adExperiments = {
+    empty: {
+      scope: 'runtime',
+      completed_breaks: 0,
+      completed_spots: 0,
+      brands: [],
+    },
+    one: {
+      scope: 'runtime',
+      completed_breaks: 1,
+      completed_spots: 1,
+      brands: [{ brand: 'Prezzoforte', completed_airings: 1 }],
+    },
+    many: {
+      scope: 'runtime',
+      completed_breaks: 2,
+      completed_spots: 3,
+      brands: [
+        { brand: hostileBrand, completed_airings: 2 },
+        { brand: 'TeleCuore', completed_airings: 1 },
+      ],
+    },
   };
 
   function assert(condition, message) {
@@ -99,7 +125,11 @@ async (page) => {
         current_source: currentSource,
         now_streaming: sessionStopped
           ? { type: 'stopped', label: 'Session stopped', metadata: {} }
-          : { type: 'music', label: 'Mina — Città vuota', metadata: {} },
+          : nowStreamingScenario === 'ad-roster'
+            ? { type: 'ad', label: 'Ad break', metadata: { brands: ['Prezzoforte', 'TeleCuore'] } }
+            : nowStreamingScenario === 'ad-generic'
+              ? { type: 'ad', label: 'Ad break', metadata: {} }
+              : { type: 'music', label: 'Mina — Città vuota', metadata: {} },
         upcoming: [],
         upcoming_mode: 'building',
         current_progress_sec: 3,
@@ -110,6 +140,7 @@ async (page) => {
           last_event_label: '',
           recent: casaReceipts[casaScenario],
         },
+        ad_experiment: adExperiments[adExperimentScenario],
       }),
     });
   });
@@ -245,6 +276,127 @@ async (page) => {
     const el = document.getElementById('mmr-copy-bootstrap');
     return el ? JSON.parse(el.textContent) : {};
   });
+
+  async function waitForStatusRender(predicate, argument, message) {
+    const before = statusPolls.length;
+    await waitForRouteCount(
+      () => statusPolls.length,
+      before + 1,
+      10000,
+      `${message} (the page never refetched)`,
+    );
+    await page.waitForFunction(predicate, argument, { timeout: 5000, polling: 50 })
+      .catch(() => assert(false, message));
+  }
+
+  const emptyAdReceipt = await page.evaluate(() => {
+    const details = document.getElementById('ad-session-receipt');
+    return {
+      hidden: details?.hidden,
+      summary: document.getElementById('ad-session-summary')?.textContent || '',
+      rows: document.querySelectorAll('#ad-session-brands li').length,
+    };
+  });
+  assert(emptyAdReceipt.hidden, 'empty runtime ad receipt was visible');
+  assert(emptyAdReceipt.summary === '' && emptyAdReceipt.rows === 0, 'empty runtime ad receipt kept stale content');
+
+  adExperimentScenario = 'one';
+  await waitForStatusRender(
+    (expected) => {
+      const details = document.getElementById('ad-session-receipt');
+      return details && !details.hidden && document.getElementById('ad-session-summary')?.textContent === expected;
+    },
+    copy.ad_session_summary_one,
+    'first completed ad receipt did not reveal with singular copy',
+  );
+  const singularAdReceipt = await page.evaluate(() => ({
+    open: document.getElementById('ad-session-receipt')?.open,
+    rows: Array.from(document.querySelectorAll('#ad-session-brands li')).map((row) => ({
+      brand: row.querySelector('.mmr-ad-session-brand')?.textContent,
+      airings: row.querySelector('.mmr-ad-session-count')?.textContent,
+    })),
+  }));
+  assert(!singularAdReceipt.open, 'first completed ad receipt expanded itself');
+  assert(
+    singularAdReceipt.rows.length === 1 &&
+      singularAdReceipt.rows[0].brand === 'Prezzoforte' &&
+      singularAdReceipt.rows[0].airings === copy.ad_session_airings_one,
+    `singular ad receipt rendered the wrong row: ${JSON.stringify(singularAdReceipt.rows)}`,
+  );
+
+  await page.locator('#ad-session-summary').click();
+  assert(await page.locator('#ad-session-receipt').getAttribute('open') !== null, 'ad receipt did not expand');
+  adExperimentScenario = 'many';
+  const manySummary = copy.ad_session_summary.replace('{n}', '3');
+  await waitForStatusRender(
+    (expected) => document.getElementById('ad-session-summary')?.textContent === expected,
+    manySummary,
+    'updated ad receipt did not use plural copy',
+  );
+  const manyAdReceipt = await page.evaluate(() => ({
+    open: document.getElementById('ad-session-receipt')?.open,
+    rows: Array.from(document.querySelectorAll('#ad-session-brands li')).map((row) => ({
+      brand: row.querySelector('.mmr-ad-session-brand')?.textContent,
+      airings: row.querySelector('.mmr-ad-session-count')?.textContent,
+    })),
+    injectedImageCount: document.querySelectorAll('#ad-session-brands img').length,
+    xssMarker: window.__adRosterXss || 0,
+  }));
+  assert(manyAdReceipt.open, 'status refresh collapsed the expanded ad receipt');
+  assert(manyAdReceipt.rows.length === 2, `plural ad receipt rendered the wrong rows: ${JSON.stringify(manyAdReceipt.rows)}`);
+  assert(manyAdReceipt.rows[0].brand === hostileBrand, 'wire brand text was changed or dropped');
+  assert(
+    manyAdReceipt.rows[0].airings === copy.ad_session_airings.replace('{n}', '2'),
+    'plural completed-airing copy was wrong',
+  );
+  assert(manyAdReceipt.rows[1].airings === copy.ad_session_airings_one, 'singular row copy regressed inside plural receipt');
+  assert(manyAdReceipt.injectedImageCount === 0 && manyAdReceipt.xssMarker === 0, 'wire brand text executed as markup');
+
+  nowStreamingScenario = 'ad-roster';
+  await waitForStatusRender(
+    (expected) => document.getElementById('np-track')?.textContent === expected,
+    'Prezzoforte · TeleCuore',
+    'live ad roster did not replace generic sponsored copy',
+  );
+  const rosterSurfaces = await page.evaluate(() => ({
+    title: document.getElementById('np-track')?.textContent,
+    secondary: document.getElementById('np-artist')?.textContent,
+    mediaTitle: navigator.mediaSession?.metadata?.title || '',
+    mediaArtist: navigator.mediaSession?.metadata?.artist || '',
+  }));
+  assert(rosterSurfaces.title === 'Prezzoforte · TeleCuore', 'visible live ad roster lost source order');
+  assert(rosterSurfaces.secondary === copy.np_ad_break, 'visible live ad roster used the wrong secondary copy');
+  assert(rosterSurfaces.mediaTitle === rosterSurfaces.title, 'Media Session ad roster disagreed with the visible roster');
+  assert(rosterSurfaces.mediaArtist === rosterSurfaces.secondary, 'Media Session ad label disagreed with the visible roster');
+
+  nowStreamingScenario = 'ad-generic';
+  await waitForStatusRender(
+    (expected) => document.getElementById('np-track')?.textContent === expected,
+    copy.np_ad_message,
+    'brandless ad did not retain generic sponsored copy',
+  );
+  const genericAdSurfaces = await page.evaluate(() => ({
+    title: document.getElementById('np-track')?.textContent,
+    secondary: document.getElementById('np-artist')?.textContent,
+    mediaTitle: navigator.mediaSession?.metadata?.title || '',
+    mediaArtist: navigator.mediaSession?.metadata?.artist || '',
+  }));
+  assert(genericAdSurfaces.secondary === copy.seg_ad, 'brandless ad used the wrong generic label');
+  assert(genericAdSurfaces.mediaTitle === genericAdSurfaces.title, 'generic Media Session title disagreed with the visible title');
+  assert(genericAdSurfaces.mediaArtist === genericAdSurfaces.secondary, 'generic Media Session label disagreed with the visible label');
+
+  adExperimentScenario = 'empty';
+  await waitForStatusRender(
+    () => {
+      const details = document.getElementById('ad-session-receipt');
+      return details && details.hidden && !details.open &&
+        document.getElementById('ad-session-summary')?.textContent === '' &&
+        document.querySelectorAll('#ad-session-brands li').length === 0;
+    },
+    null,
+    'runtime reset did not hide, collapse, and clear the stale ad receipt',
+  );
+  nowStreamingScenario = 'music';
 
   async function casaState() {
     await page.waitForFunction(
@@ -531,7 +683,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 23,
+    checks: 31,
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),

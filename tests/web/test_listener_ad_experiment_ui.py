@@ -119,6 +119,7 @@ def test_session_receipt_is_collapsed_bounded_and_clears_on_empty_poll() -> None
     assert render.count("list.replaceChildren();") == 2
     assert render.index("details.dataset.receiptKey === receiptKey") < render.rindex("list.replaceChildren();")
     assert "details.hidden = false;" in render
+    assert render.index("details.hidden = false;") < render.index("summary.textContent = summaryText;")
     assert "renderAdExperiment(status);" in fetch
     assert fetch.index("renderAdExperiment(status);") > fetch.index("if (status.now_streaming)")
 
