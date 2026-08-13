@@ -104,22 +104,43 @@ def test_session_receipt_is_collapsed_bounded_and_clears_on_empty_poll() -> None
     assert details
     assert "hidden" in details.group(1)
     assert "open" not in details.group(1)
-    assert 'id="ad-session-summary"' in html
-    assert 'aria-live="polite"' in html
-    assert 'aria-atomic="true"' in html
+    announcement = re.search(
+        r'<div class="sr-only" id="ad-session-announcement"([^>]*)></div>',
+        html,
+    )
+    assert announcement
+    assert 'role="status"' in announcement.group(1)
+    assert 'aria-live="polite"' in announcement.group(1)
+    assert 'aria-atomic="true"' in announcement.group(1)
+    assert "hidden" not in announcement.group(1)
+    summary_tag = re.search(r'<summary id="ad-session-summary"([^>]*)></summary>', html)
+    assert summary_tag
+    assert "aria-live" not in summary_tag.group(1)
+    assert "aria-atomic" not in summary_tag.group(1)
+    assert html.index('id="ad-session-announcement"') < html.index('id="ad-session-receipt"')
     assert 'id="ad-session-brands"' in html
 
+    assert "const announcement = $('ad-session-announcement');" in render
     assert "details.hidden = true;" in render
     assert "list.replaceChildren();" in render
     assert "details.open = false;" in render
     assert "summary.textContent = '';" in render
     assert "completedSpots <= 0" in render
     assert "delete details.dataset.receiptKey;" in render
+    assert "if (hadReceipt) announcement.textContent = '';" in render
     assert "details.dataset.receiptKey === receiptKey" in render
     assert render.count("list.replaceChildren();") == 2
     assert render.index("details.dataset.receiptKey === receiptKey") < render.rindex("list.replaceChildren();")
     assert "details.hidden = false;" in render
-    assert render.index("details.hidden = false;") < render.index("summary.textContent = summaryText;")
+    unchanged_branch = render.index("if (details.dataset.receiptKey === receiptKey)")
+    unchanged_return = render.index("return;", unchanged_branch)
+    first_reveal_unhide = render.index("details.hidden = false;", unchanged_return)
+    first_reveal_summary = render.index("summary.textContent = summaryText;", unchanged_return)
+    assert first_reveal_unhide < first_reveal_summary
+    unchanged_block = render[unchanged_branch:unchanged_return]
+    assert "announcement.textContent" not in unchanged_block
+    announcement_update = render.index("announcement.textContent = summaryText;", unchanged_return)
+    assert announcement_update > first_reveal_summary
     assert "renderAdExperiment(status);" in fetch
     assert fetch.index("renderAdExperiment(status);") > fetch.index("if (status.now_streaming)")
 

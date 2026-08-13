@@ -202,12 +202,16 @@ def test_player_smoke_executes_carosello_listener_contract() -> None:
         "adExperimentScenario = 'many'",
         "adExperimentScenario = 'empty'",
         "first completed ad receipt did not reveal with singular copy",
+        "first completed ad receipt was not announced",
+        "unchanged status refresh collapsed or rewrote the expanded ad receipt",
         "status refresh collapsed the expanded ad receipt",
+        "updated ad receipt was not announced with plural copy",
         "wire brand text executed as markup",
         "live ad roster did not replace generic sponsored copy",
         "Media Session ad roster disagreed with the visible roster",
         "brandless ad did not retain generic sponsored copy",
         "runtime reset did not hide, collapse, and clear the stale ad receipt",
+        "runtime reset did not clear the ad receipt announcement",
     ):
         assert needle in code, f"player smoke lost Carosello browser guard: {needle}"
 

@@ -499,16 +499,19 @@
     const details = $('ad-session-receipt');
     const summary = $('ad-session-summary');
     const list = $('ad-session-brands');
-    if (!details || !summary || !list) return;
+    const announcement = $('ad-session-announcement');
+    if (!details || !summary || !list || !announcement) return;
 
     const experiment = status && status.ad_experiment;
     const completedSpots = Number(experiment && experiment.completed_spots);
     if (!Number.isFinite(completedSpots) || completedSpots <= 0) {
       // Clear stale runtime state after a restart or payload withdrawal.
+      const hadReceipt = details.dataset.receiptKey !== undefined;
       details.hidden = true;
       details.open = false;
       summary.textContent = '';
       list.replaceChildren();
+      if (hadReceipt) announcement.textContent = '';
       delete details.dataset.receiptKey;
       return;
     }
@@ -546,7 +549,7 @@
     });
 
     // Preserve the user's expanded/collapsed state and avoid re-announcing an
-    // unchanged aria-live summary on every three-second status poll.
+    // unchanged receipt on every three-second status poll.
     const receiptKey = JSON.stringify([summaryText, rows]);
     if (details.dataset.receiptKey === receiptKey) {
       details.hidden = false;
@@ -571,6 +574,10 @@
       list.appendChild(row);
     });
 
+    // This status node is permanently present in the accessibility tree, so
+    // its changed text reliably announces the receipt even while details stays
+    // collapsed. The receipt-key return above prevents poll-time repetition.
+    announcement.textContent = summaryText;
     details.dataset.receiptKey = receiptKey;
   }
 

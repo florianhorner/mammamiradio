@@ -294,29 +294,35 @@ async (page) => {
     return {
       hidden: details?.hidden,
       summary: document.getElementById('ad-session-summary')?.textContent || '',
+      announcement: document.getElementById('ad-session-announcement')?.textContent || '',
       rows: document.querySelectorAll('#ad-session-brands li').length,
     };
   });
   assert(emptyAdReceipt.hidden, 'empty runtime ad receipt was visible');
   assert(emptyAdReceipt.summary === '' && emptyAdReceipt.rows === 0, 'empty runtime ad receipt kept stale content');
+  assert(emptyAdReceipt.announcement === '', 'empty runtime ad announcement kept stale content');
 
   adExperimentScenario = 'one';
   await waitForStatusRender(
     (expected) => {
       const details = document.getElementById('ad-session-receipt');
-      return details && !details.hidden && document.getElementById('ad-session-summary')?.textContent === expected;
+      return details && !details.hidden &&
+        document.getElementById('ad-session-summary')?.textContent === expected &&
+        document.getElementById('ad-session-announcement')?.textContent === expected;
     },
     copy.ad_session_summary_one,
     'first completed ad receipt did not reveal with singular copy',
   );
   const singularAdReceipt = await page.evaluate(() => ({
     open: document.getElementById('ad-session-receipt')?.open,
+    announcement: document.getElementById('ad-session-announcement')?.textContent || '',
     rows: Array.from(document.querySelectorAll('#ad-session-brands li')).map((row) => ({
       brand: row.querySelector('.mmr-ad-session-brand')?.textContent,
       airings: row.querySelector('.mmr-ad-session-count')?.textContent,
     })),
   }));
   assert(!singularAdReceipt.open, 'first completed ad receipt expanded itself');
+  assert(singularAdReceipt.announcement === copy.ad_session_summary_one, 'first completed ad receipt was not announced');
   assert(
     singularAdReceipt.rows.length === 1 &&
       singularAdReceipt.rows[0].brand === 'Prezzoforte' &&
@@ -326,15 +332,46 @@ async (page) => {
 
   await page.locator('#ad-session-summary').click();
   assert(await page.locator('#ad-session-receipt').getAttribute('open') !== null, 'ad receipt did not expand');
+
+  // Prove the unchanged-receipt early return ran, rather than merely checking
+  // the DOM before the next poll rendered. The separate rotation-count change
+  // is our receipt that this exact status payload reached listener.js.
+  rotationTrackCount = 26;
+  await waitForStatusRender(
+    (expected) => {
+      const details = document.getElementById('ad-session-receipt');
+      const rows = Array.from(document.querySelectorAll('#ad-session-brands li')).map((row) => ({
+        brand: row.querySelector('.mmr-ad-session-brand')?.textContent,
+        airings: row.querySelector('.mmr-ad-session-count')?.textContent,
+      }));
+      return document.getElementById('stat-tracks')?.textContent === expected.rotation &&
+        details?.open &&
+        document.getElementById('ad-session-summary')?.textContent === expected.summary &&
+        document.getElementById('ad-session-announcement')?.textContent === expected.announcement &&
+        rows.length === 1 &&
+        rows[0].brand === 'Prezzoforte' &&
+        rows[0].airings === expected.airings;
+    },
+    {
+      rotation: '26',
+      summary: copy.ad_session_summary_one,
+      announcement: copy.ad_session_summary_one,
+      airings: copy.ad_session_airings_one,
+    },
+    'unchanged status refresh collapsed or rewrote the expanded ad receipt',
+  );
+
   adExperimentScenario = 'many';
   const manySummary = copy.ad_session_summary.replace('{n}', '3');
   await waitForStatusRender(
-    (expected) => document.getElementById('ad-session-summary')?.textContent === expected,
+    (expected) => document.getElementById('ad-session-summary')?.textContent === expected &&
+      document.getElementById('ad-session-announcement')?.textContent === expected,
     manySummary,
     'updated ad receipt did not use plural copy',
   );
   const manyAdReceipt = await page.evaluate(() => ({
     open: document.getElementById('ad-session-receipt')?.open,
+    announcement: document.getElementById('ad-session-announcement')?.textContent || '',
     rows: Array.from(document.querySelectorAll('#ad-session-brands li')).map((row) => ({
       brand: row.querySelector('.mmr-ad-session-brand')?.textContent,
       airings: row.querySelector('.mmr-ad-session-count')?.textContent,
@@ -343,6 +380,7 @@ async (page) => {
     xssMarker: window.__adRosterXss || 0,
   }));
   assert(manyAdReceipt.open, 'status refresh collapsed the expanded ad receipt');
+  assert(manyAdReceipt.announcement === manySummary, 'updated ad receipt was not announced with plural copy');
   assert(manyAdReceipt.rows.length === 2, `plural ad receipt rendered the wrong rows: ${JSON.stringify(manyAdReceipt.rows)}`);
   assert(manyAdReceipt.rows[0].brand === hostileBrand, 'wire brand text was changed or dropped');
   assert(
@@ -391,10 +429,15 @@ async (page) => {
       const details = document.getElementById('ad-session-receipt');
       return details && details.hidden && !details.open &&
         document.getElementById('ad-session-summary')?.textContent === '' &&
+        document.getElementById('ad-session-announcement')?.textContent === '' &&
         document.querySelectorAll('#ad-session-brands li').length === 0;
     },
     null,
     'runtime reset did not hide, collapse, and clear the stale ad receipt',
+  );
+  assert(
+    await page.locator('#ad-session-announcement').textContent() === '',
+    'runtime reset did not clear the ad receipt announcement',
   );
   nowStreamingScenario = 'music';
 
