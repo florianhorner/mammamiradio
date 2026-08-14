@@ -772,12 +772,19 @@ def _norm_cache_bridge_payload(
     artist = strip_foreign_station_name(str(_meta.get("artist") or ""), station_name)
     duration_sec = norm_cache_duration_sec(norm_path, bitrate_kbps=bitrate_kbps)
     duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
+    # Origin guard: the restart-handoff spool and its boot-time admission both
+    # gate on a known source_kind. Rescue selection already vetted this file's
+    # origin sidecar, so the fact must ride the segment metadata — dropping it
+    # here would silently exclude every cache bridge from restart continuity.
+    source_kind = str(_meta.get("source_kind") or "").strip()
+    origin_fields = {"source_kind": source_kind} if source_kind else {}
     detail = f"{artist} - {title}" if artist else title
     return (
         {
             "title": title,
             "artist": artist,
             **duration_fields,
+            **origin_fields,
             bridge_flag: True,
             "rescue": True,
             "audio_source": "norm_cache",

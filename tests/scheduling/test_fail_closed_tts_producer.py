@@ -982,7 +982,7 @@ async def test_tts_failure_norm_cache_music_recovery_schedules_restart_handoff(t
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_path),
         patch(
             f"{PRODUCER_MODULE}.load_track_metadata",
-            return_value={"title": "Song", "artist": "Artist"},
+            return_value={"title": "Song", "artist": "Artist", "source_kind": "local"},
         ),
         patch(f"{PRODUCER_MODULE}.norm_cache_duration_sec", return_value=120.0),
         patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=_identity_egress),
@@ -1011,6 +1011,9 @@ async def test_tts_failure_norm_cache_music_recovery_schedules_restart_handoff(t
     assert cache_dir == config.cache_dir
     assert len(candidates) == 1
     assert candidates[0].path == norm_path
+    # The vetted origin must ride into the spool entry, or the boot-time
+    # admission gate would reject the candidate as unknown_source.
+    assert candidates[0].metadata.get("source_kind") == "local"
 
 
 @pytest.mark.asyncio
