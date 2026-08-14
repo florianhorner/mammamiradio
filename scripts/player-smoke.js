@@ -790,7 +790,6 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 32,
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),
