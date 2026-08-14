@@ -338,7 +338,7 @@ pass "release-beat validation failure blocks edge cut before commit/push/PR"
 # Case 14: media proof failure is REPORT-ONLY on the edge cut while the starter
 # content is absent by design: the gate still runs and its missing-content
 # notice prints, but the cut proceeds to commit, push, and PR. The hard gate
-# stays in scripts/pre-release-check.sh and scripts/check-release-invariants.sh.
+# stays in scripts/pre-release-check.sh section 10 on the release path.
 run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" PYTHON_MEDIA_RC=8
 [ "$RUN_RC" -eq 0 ]  || fail "media proof failure must stay report-only (got $RUN_RC): $RUN_OUT"
 media_gate_called     || fail "report-only media case should still run the gate"

@@ -230,13 +230,13 @@ fi
 git checkout -B "$BRANCH" origin/main
 # Report-only while the twelve starter tracks are absent by design: run the
 # proof and print its verdict, but do not block the edge cut on the missing
-# content. The hard gate stays in scripts/pre-release-check.sh and
-# scripts/check-release-invariants.sh, so stable-release paths remain blocked.
+# content. The hard gate stays in scripts/pre-release-check.sh (section 10),
+# so stable-release paths remain blocked.
 if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
   echo "media-proof: PASS"
 else
   echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence) have not landed yet."
-  echo "NOTICE: the edge cut proceeds report-only; scripts/pre-release-check.sh and scripts/check-release-invariants.sh still fail hard on this proof."
+  echo "NOTICE: the edge cut proceeds report-only; scripts/pre-release-check.sh still fails hard on this proof on the release path."
 fi
 python3 scripts/validate-release-beat.py --channel edge --target-sha "$SHA"
 sed -i.bak "s/^version: .*/version: $SHA/" "$EDGE_CONFIG"

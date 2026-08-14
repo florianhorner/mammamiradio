@@ -185,14 +185,20 @@ else
     fail "release beat manifest validation failed"
 fi
 
-# ── 7. Strict media-rights gate ───────────────────────────────────────────────
+# ── 7. Media-rights report (report-only) ──────────────────────────────────────
+# Report-only while the twelve starter tracks are absent by design: the proof
+# runs on every PR and its verdict prints, but a missing-content failure does
+# not fail this script. Only this section is report-only — every other
+# invariant above stays hard. The release path keeps its own hard gate:
+# scripts/pre-release-check.sh section 10 fails hard on the same proof.
 echo ""
-echo "7. Strict media-rights gate"
+echo "7. Media-rights report (report-only)"
 
 if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
     ok "starter catalog evidence, bytes, audio, and packaging are release-ready"
 else
-    fail "strict media proof failed — release/publish paths must remain blocked"
+    echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence) have not landed yet."
+    echo "NOTICE: report-only here; scripts/pre-release-check.sh keeps the hard media gate on the release path."
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

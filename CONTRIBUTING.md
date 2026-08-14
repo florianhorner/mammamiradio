@@ -191,7 +191,10 @@ make media-check
 make media-proof
 ```
 
-`media-check` is the fast offline manifest, evidence, byte, and audio gate.
+`media-check` is the fast offline manifest, evidence, byte, and audio check;
+until the starter content lands it reports missing content without failing,
+while `scripts/pre-release-check.sh` enforces the same proof hard on the
+release path.
 `media-proof` additionally proves wheel, sdist, amd64/aarch64 add-on image,
 FFprobe, extractor-containment, and Jamendo-transience parity. A release remains
 blocked until all twelve exact derivatives total at least 45 minutes, remain at

@@ -19,32 +19,46 @@ def _job(text: str, name: str) -> str:
     return match.group(1)
 
 
-def test_local_merge_and_pre_release_paths_are_strict() -> None:
-    makefile = _read("Makefile")
-    invariants = _read("scripts/check-release-invariants.sh")
+def test_release_path_keeps_strict_media_gate() -> None:
+    """scripts/pre-release-check.sh section 10 is the hard media gate on the
+    release path. Every per-PR/build/local lane asserted report-only below
+    depends on this gate staying hard; a media-proof failure here fails the
+    script, never a notice."""
+
     pre_release = _read("scripts/pre-release-check.sh")
 
-    assert re.search(r"(?m)^check:\s+media-check\b", makefile)
-    assert '"$MEDIA_PYTHON" scripts/media-proof.py --quick' in invariants
-    assert '"$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py"' in invariants
-    assert '"$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py"' in invariants
-    assert '"$MEDIA_PYTHON" - "$QUEUE_FALLBACK_WAIT"' in invariants
     assert '"$MEDIA_PYTHON" scripts/media-proof.py --quick' in pre_release
-    # Both stay hard: a media-proof failure fails the script, never a notice.
-    assert 'fail "strict media proof failed' in invariants
     assert 'fail "strict media proof failed' in pre_release
-    assert "NOTICE: media-proof reported missing content" not in invariants
     assert "NOTICE: media-proof reported missing content" not in pre_release
 
 
-def test_pr_lanes_run_media_proof_report_only() -> None:
-    """While the starter tracks are absent by design, the PR quality lane and
-    the add-on validate job run the proof report-only: the proof and its
-    uploaded report remain, but the missing content no longer fails the lane.
-    The release paths asserted strict above and below keep release blocked."""
+def test_per_pr_invariants_keep_non_media_sections_strict() -> None:
+    """Only the media section of the per-PR invariants script is report-only;
+    the recovery-audio, spoken-assets, release-beat, and fallback-wait
+    invariants keep failing hard."""
+
+    makefile = _read("Makefile")
+    invariants = _read("scripts/check-release-invariants.sh")
+
+    assert re.search(r"(?m)^check:\s+media-check\b", makefile)
+    assert '"$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py"' in invariants
+    assert '"$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py"' in invariants
+    assert '"$MEDIA_PYTHON" - "$QUEUE_FALLBACK_WAIT"' in invariants
+    assert 'fail "packaged spoken asset manifest validation failed"' in invariants
+    assert 'fail "release beat manifest validation failed"' in invariants
+
+
+def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
+    """While the starter tracks are absent by design, the PR quality lane, the
+    add-on validate job, the per-PR invariants media section, and local
+    make media-check run the proof report-only: the proof and its report
+    remain, but the missing content no longer fails the lane. The release
+    path asserted strict above keeps release blocked."""
 
     quality = _job(_read(".github/workflows/quality.yml"), "quality")
     validate = _job(_read(".github/workflows/addon-build.yml"), "validate")
+    invariants = _read("scripts/check-release-invariants.sh")
+    makefile = _read("Makefile")
     notice = "NOTICE: media-proof reported missing content"
 
     assert "if python scripts/media-proof.py --quick --output media-proof.json; then" in quality
@@ -53,6 +67,11 @@ def test_pr_lanes_run_media_proof_report_only() -> None:
     assert "if python scripts/media-proof.py --quick --output media-proof.json; then" in validate
     assert notice in validate
     assert "name: media-proof-quick-${{ github.sha }}" in validate
+    assert 'if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then' in invariants
+    assert notice in invariants
+    assert 'fail "strict media proof failed' not in invariants
+    assert "if $(PYTHON) scripts/media-proof.py --quick; then" in makefile
+    assert notice in makefile
 
 
 def test_addon_publish_and_stable_promotion_require_both_image_proof() -> None:
