@@ -4414,7 +4414,7 @@ async def test_listener_page_includes_casa_card_and_public_status_binding():
     assert 'id="casa-card"' in resp.text
     assert 'id="casa-mood"' in resp.text
     assert "updateCasa(status.ha_moments);" in js_resp.text  # PR-F: ha_moments now part of /public-status payload
-    assert "fetch(_base + '/public-status')" in js_resp.text
+    assert "fetch(_base + '/public-status', { signal: controller.signal })" in js_resp.text
 
 
 @pytest.mark.asyncio
