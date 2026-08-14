@@ -281,6 +281,44 @@ Voice validation now runs at config load, not at synthesis time:
 - When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
+## First Listen cannot find any speakers
+
+Speaker discovery asks Home Assistant for its `media_player` entities, so it
+finds nothing when the station has no Home Assistant connection. Check
+`/api/capabilities`: `ha: false` and `homeassistant_access: false` mean there is
+nothing to search.
+
+On a standalone station (anything not run as the Home Assistant add-on), set
+`HA_URL` and `HA_TOKEN` in `.env` and restart. `HA_TOKEN` is a long-lived access
+token from your Home Assistant profile page. The add-on receives both from the
+Supervisor and needs neither set by hand.
+
+This step is optional. The station is a working radio without a home connection;
+skipping it leaves you on the Full AI Radio tier rather than Connected Home.
+
+For branch work, `scripts/first-listen-lab.sh start` brings up a disposable local
+Home Assistant with a real speaker, so First Listen can be exercised end to end
+without touching a live home. See
+[docs/runbooks/first-listen-local-ha.md](runbooks/first-listen-local-ha.md).
+
+## The station sounds soft or flat through Music Assistant
+
+The station levels every finished segment itself, so music, hosts, beds, and ads
+all reach you at one volume (`audio.lufs_target`, default `-16.0` LUFS, with ads
+1 LU hotter). Music Assistant can then level the same audio a second time on its
+way to a speaker.
+
+Open the playing speaker in Music Assistant and look at the audio path. If
+**Volume normalization** reads **Dynamic**, two levellers are stacked. Set it to
+**fixed gain** or **disabled** for that player and play the same song again.
+Dynamic levelling evens out loud and quiet moments as it goes, so drums and
+plucked notes lose some of their snap and steady bass sits further forward. On
+audio that arrives already levelled, there is nothing left for it to fix.
+
+This is a Music Assistant player setting; nothing changes on the station side.
+The station's own **On-Air Sound** dial is a separate FM colouring, off by
+default, so it is not what you are hearing.
+
 ## Home Assistant references never show up
 
 Check:

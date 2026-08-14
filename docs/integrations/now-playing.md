@@ -90,9 +90,14 @@ The stable bucket your UI branches on. Three classes, plus a sentinel:
 | `segment_class` | Meaning | Use case |
 | --- | --- | --- |
 | `music` | A track. `artist`, `artwork`, `external_ids`, `album`, `year` populated when known. | Render a music card. |
-| `voice` | A host segment (banter, news flash). `host` populated. | Render a host card with the host's name. |
+| `voice` | A host segment (banter, news flash). `host` populated with the hosts who speak in that segment, comma-separated when more than one. | Render a host card with the host's name. |
 | `interstitial` | Ad, station ID, time check, sweeper. Title-only. | Render a station card (no track shape). |
 | `unavailable` | Transient: skipping, unknown future segment type. | Render a generic "on air" state without trying to populate music fields. |
+
+A `voice` segment with `host` absent is a pre-recorded clip that claims no
+speaker. Do not fill that gap from `station.hosts`. The roster lists everyone
+configured, including hosts who were not in the exchange, so the substitution
+credits people who never spoke. Fall back to the station name.
 
 ### `segment_type` — raw internal subtype (diagnostic)
 
