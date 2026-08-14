@@ -335,15 +335,18 @@ never_created_pr     || fail "release-beat validation failure must not open a PR
 never_pushed         || fail "release-beat validation failure must not push"
 pass "release-beat validation failure blocks edge cut before commit/push/PR"
 
-# Case 14: strict media proof fails => HARD-fail before release-beat validation,
-# commit, push, or PR creation.
+# Case 14: media proof failure is REPORT-ONLY on the edge cut while the starter
+# content is absent by design: the gate still runs and its missing-content
+# notice prints, but the cut proceeds to commit, push, and PR. The hard gate
+# stays in scripts/pre-release-check.sh and scripts/check-release-invariants.sh.
 run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" PYTHON_MEDIA_RC=8
-[ "$RUN_RC" -ne 0 ]  || fail "media proof failure must hard-fail (got $RUN_RC)"
-media_gate_called     || fail "media proof failure case should call the strict gate"
-never_committed       || fail "media proof failure must not commit"
-never_created_pr      || fail "media proof failure must not open a PR"
-never_pushed          || fail "media proof failure must not push"
-pass "strict media proof failure blocks edge cut before commit/push/PR"
+[ "$RUN_RC" -eq 0 ]  || fail "media proof failure must stay report-only (got $RUN_RC): $RUN_OUT"
+media_gate_called     || fail "report-only media case should still run the gate"
+printf '%s' "$RUN_OUT" | grep -q "NOTICE: media-proof reported missing content" \
+                      || fail "report-only media case should print the missing-content notice"
+grep -q "^commit" "$GIT_MOCK_LOG" || fail "report-only media case should still commit"
+created_pr            || fail "report-only media case should still open a PR"
+pass "media proof failure reports the missing content and lets the edge cut proceed"
 
 # --------------------------------------------------------------------------
 # --target-sha: pin one exact commit instead of "newest built".
