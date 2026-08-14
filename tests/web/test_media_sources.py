@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -664,54 +663,64 @@ def test_owner_only_writer_closes_raw_fd_when_stream_open_fails(tmp_path: Path) 
     close.assert_called_once_with(raw_fd)
 
 
-def test_addon_option_read_error_fails_closed(tmp_path: Path) -> None:
-    options = tmp_path / "options.json"
-    original = json.dumps({"station_name": "Keep"})
-    options.write_text(original, encoding="utf-8")
-    real_read_text = Path.read_text
+def test_addon_option_read_error_fails_closed(monkeypatch) -> None:
+    """A failed current-state read must abort the save before any option write.
 
-    def fail_target_read(path: Path, *args, **kwargs) -> str:
-        if path == options:
-            raise PermissionError("options temporarily unreadable")
-        return real_read_text(path, *args, **kwargs)
+    Add-on options live in Supervisor's store now, not in a locally rewritten
+    ``/data/options.json`` — so the fail-closed shape is: the state read raises,
+    the sanitized persistence error surfaces, and no replacement POST fires.
+    """
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-secret-token")
+    monkeypatch.delenv("HASSIO_TOKEN", raising=False)
+    posts: list[httpx.Request] = []
 
-    with (
-        patch("mammamiradio.web.persistence.Path", return_value=options),
-        patch.object(Path, "read_text", fail_target_read),
-        pytest.raises(PermissionError, match="options temporarily unreadable"),
-    ):
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            return httpx.Response(200, json={"result": "ok"})
+        raise PermissionError("options temporarily unreadable")
+
+    real_client = httpx.Client
+
+    def client_factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(persistence.httpx, "Client", client_factory)
+
+    with pytest.raises(persistence._AddonPersistenceError) as exc_info:
         persistence._save_addon_option_batch({"jamendo_enabled": False})
 
-    assert options.read_text(encoding="utf-8") == original
-    assert not options.with_suffix(options.suffix + ".tmp").exists()
+    assert posts == []
+    assert "temporarily unreadable" not in str(exc_info.value)
 
 
-@pytest.mark.parametrize("unreadable", ["secrets", "options"])
-def test_credential_migration_read_error_preserves_both_stores(tmp_path: Path, unreadable: str) -> None:
-    options = tmp_path / "options.json"
+def test_credential_save_read_error_preserves_secret_store(tmp_path: Path, monkeypatch) -> None:
+    """An unreadable secrets.env must fail closed, never be rebuilt from scratch.
+
+    Credential saves touch only ``/config/secrets.env`` now; legacy option-store
+    values migrate through the Supervisor toggle path, which carries its own
+    fail-closed coverage. This pins the direct save: the read error surfaces as
+    the sanitized persistence error and the store stays byte-identical.
+    """
     secrets = tmp_path / "secrets.env"
-    options_original = json.dumps({"anthropic_api_key": "legacy", "station_name": "Keep"})
     secrets_original = "OPENAI_API_KEY=keep-me\n"
-    options.write_text(options_original, encoding="utf-8")
     secrets.write_text(secrets_original, encoding="utf-8")
-    target = secrets if unreadable == "secrets" else options
+    monkeypatch.setattr(persistence, "_ADDON_SECRETS_PATH", secrets)
     real_read_text = Path.read_text
 
     def fail_target_read(path: Path, *args, **kwargs) -> str:
-        if path == target:
-            raise PermissionError(f"{unreadable} temporarily unreadable")
+        if path == secrets:
+            raise PermissionError("secrets temporarily unreadable")
         return real_read_text(path, *args, **kwargs)
 
     with (
-        patch("mammamiradio.web.persistence.Path", side_effect=[options, secrets]),
         patch.object(Path, "read_text", fail_target_read),
-        pytest.raises(PermissionError, match="temporarily unreadable"),
+        pytest.raises(persistence._AddonPersistenceError) as exc_info,
     ):
         persistence._save_addon_options({"ANTHROPIC_API_KEY": "new-value"})
 
-    assert options.read_text(encoding="utf-8") == options_original
+    assert "temporarily unreadable" not in str(exc_info.value)
     assert secrets.read_text(encoding="utf-8") == secrets_original
-    assert not options.with_suffix(options.suffix + ".tmp").exists()
     assert not secrets.with_suffix(secrets.suffix + ".tmp").exists()
 
 

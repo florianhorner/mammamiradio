@@ -399,6 +399,7 @@ def test_strict_norm_cache_gate_preserves_unknown_but_never_selects_it(tmp_path)
         select_norm_cache_rescue(
             tmp_path,
             StationState(),
+            allow_recent_repeat=False,
             require_known_origin=True,
             allow_external_media=False,
         )

@@ -5563,7 +5563,13 @@ async def test_bridge_never_repeats_the_on_air_song_back_to_back(tmp_path):
     canned_clip.write_bytes(b"fake audio" * 256)
     on_air = tmp_path / "norm_on_air_192k.mp3"
     on_air.write_bytes(b"the song currently playing")
-    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    save_track_metadata(
+        on_air,
+        title="Dont Lose Your Way",
+        artist="Fleece",
+        duration_ms=211_000,
+        source_kind="local",
+    )
     state.now_streaming = {
         "type": "music",
         "label": "Fleece – Dont Lose Your Way",
@@ -5610,7 +5616,13 @@ async def test_bridge_repeats_the_on_air_song_rather_than_airing_the_tone(tmp_pa
     config.tmp_dir = tmp_path
     on_air = tmp_path / "norm_on_air_192k.mp3"
     on_air.write_bytes(b"the song currently playing")
-    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    save_track_metadata(
+        on_air,
+        title="Dont Lose Your Way",
+        artist="Fleece",
+        duration_ms=211_000,
+        source_kind="local",
+    )
     state.now_streaming = {
         "type": "music",
         "label": "Fleece – Dont Lose Your Way",
