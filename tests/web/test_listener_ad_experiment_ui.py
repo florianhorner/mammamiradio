@@ -50,6 +50,34 @@ def test_visible_and_media_session_ad_copy_share_one_formatter() -> None:
     assert js.count("const adText = adNowPlayingText(np);") == 2
 
 
+def test_listener_status_poll_is_bounded_and_rejects_stale_responses() -> None:
+    """A late public-status response must not roll back listener state or DOM."""
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    fetch = _function_block(js, "fetchStatus", "fetchRequests")
+
+    interval_match = re.search(r"const STATUS_POLL_INTERVAL_MS = (\d+);", js)
+    deadline_match = re.search(r"const STATUS_POLL_DEADLINE_MS = (\d+);", js)
+    assert interval_match and deadline_match
+    assert int(deadline_match.group(1)) < int(interval_match.group(1))
+
+    for needle in (
+        "const generation = ++_statusPollGeneration;",
+        "const controller = new AbortController();",
+        "setTimeout(() => controller.abort(), STATUS_POLL_DEADLINE_MS)",
+        "{ signal: controller.signal }",
+        "if (generation !== _statusPollGeneration) return;",
+        "generation === _statusPollGeneration && e?.name !== 'AbortError'",
+        "clearTimeout(deadline);",
+    ):
+        assert needle in fetch, f"listener status poll lost freshness/deadline guard: {needle}"
+
+    parsed = fetch.index("const status = await r.json();")
+    freshness_guard = fetch.index("if (generation !== _statusPollGeneration) return;")
+    first_mutation = fetch.index("syncStationName(status);")
+    assert parsed < freshness_guard < first_mutation
+    assert "setInterval(fetchStatus, STATUS_POLL_INTERVAL_MS);" in js
+
+
 def test_carosello_copy_exists_in_both_listener_modes() -> None:
     assert COPY["en"]["np_ad_break"] == "This ad break"
     assert COPY["it"]["np_ad_break"] == "Carosello in onda"

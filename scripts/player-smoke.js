@@ -180,6 +180,28 @@ async (page) => {
 
   await page.addInitScript(() => {
     try { localStorage.setItem('stationName', '__stale_station_identity__'); } catch (_) {}
+
+    const nativeSetInterval = window.setInterval;
+    window.setInterval = (callback, delay, ...args) => {
+      const id = Reflect.apply(nativeSetInterval, window, [callback, delay, ...args]);
+      if (delay === 3000 && callback?.name === 'fetchStatus') {
+        window.__playerSmokeFetchStatus = callback;
+        window.__playerSmokeStatusInterval = id;
+      }
+      return id;
+    };
+
+    const nativeJson = Response.prototype.json;
+    Response.prototype.json = async function (...args) {
+      const value = await Reflect.apply(nativeJson, this, args);
+      const gate = window.__playerSmokeStatusJsonGate;
+      if (gate && !gate.claimed && this.url && new URL(this.url).pathname.endsWith('/public-status')) {
+        gate.claimed = true;
+        gate.seen = true;
+        await gate.promise;
+      }
+      return value;
+    };
   });
 
   async function waitForLivePage() {
@@ -423,17 +445,62 @@ async (page) => {
   assert(genericAdSurfaces.mediaTitle === genericAdSurfaces.title, 'generic Media Session title disagreed with the visible title');
   assert(genericAdSurfaces.mediaArtist === genericAdSurfaces.secondary, 'generic Media Session label disagreed with the visible label');
 
+  // Hold poll N after its body has been parsed, let poll N+1 clear the runtime
+  // receipt, then release N. Cancellation is deliberately too late here: only
+  // a generation guard can stop N from resurrecting stale DOM and announcing it.
+  await page.evaluate(() => {
+    if (typeof window.__playerSmokeFetchStatus !== 'function') {
+      throw new Error('player-smoke: status poll callback was not captured');
+    }
+    clearInterval(window.__playerSmokeStatusInterval);
+    let release;
+    const gate = { claimed: false, seen: false };
+    gate.promise = new Promise((resolve) => { release = resolve; });
+    gate.release = release;
+    window.__playerSmokeStatusJsonGate = gate;
+    window.__playerSmokeOldStatusPoll = window.__playerSmokeFetchStatus();
+  });
+  await page.waitForFunction(
+    () => window.__playerSmokeStatusJsonGate?.seen,
+    null,
+    { timeout: 5000, polling: 20 },
+  ).catch(() => assert(false, 'stale status race never held poll N after JSON parsing'));
+
   adExperimentScenario = 'empty';
-  await waitForStatusRender(
+  rotationTrackCount = 28;
+  await page.evaluate(() => window.__playerSmokeFetchStatus());
+  await page.waitForFunction(
     () => {
       const details = document.getElementById('ad-session-receipt');
-      return details && details.hidden && !details.open &&
+      return document.getElementById('stat-tracks')?.textContent === '28' &&
+        details && details.hidden && !details.open &&
         document.getElementById('ad-session-summary')?.textContent === '' &&
         document.getElementById('ad-session-announcement')?.textContent === '' &&
         document.querySelectorAll('#ad-session-brands li').length === 0;
     },
     null,
-    'runtime reset did not hide, collapse, and clear the stale ad receipt',
+    { timeout: 5000, polling: 50 },
+  ).catch(() => assert(false, 'runtime reset did not hide, collapse, and clear the stale ad receipt'));
+
+  await page.evaluate(async () => {
+    window.__playerSmokeStatusJsonGate.release();
+    await window.__playerSmokeOldStatusPoll;
+  });
+  const postRaceReceipt = await page.evaluate(() => {
+    const details = document.getElementById('ad-session-receipt');
+    return {
+      rotation: document.getElementById('stat-tracks')?.textContent || '',
+      hidden: details?.hidden,
+      open: details?.open,
+      summary: document.getElementById('ad-session-summary')?.textContent || '',
+      announcement: document.getElementById('ad-session-announcement')?.textContent || '',
+      rows: document.querySelectorAll('#ad-session-brands li').length,
+    };
+  });
+  assert(
+    postRaceReceipt.rotation === '28' && postRaceReceipt.hidden && !postRaceReceipt.open &&
+      postRaceReceipt.summary === '' && postRaceReceipt.announcement === '' && postRaceReceipt.rows === 0,
+    `stale status poll resurrected the cleared Carosello receipt: ${JSON.stringify(postRaceReceipt)}`,
   );
   assert(
     await page.locator('#ad-session-announcement').textContent() === '',
@@ -726,7 +793,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 31,
+    checks: 32,
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),

@@ -212,6 +212,9 @@ def test_player_smoke_executes_carosello_listener_contract() -> None:
         "brandless ad did not retain generic sponsored copy",
         "runtime reset did not hide, collapse, and clear the stale ad receipt",
         "runtime reset did not clear the ad receipt announcement",
+        "stale status poll resurrected the cleared Carosello receipt",
+        "stale status race never held poll N after JSON parsing",
+        "window.__playerSmokeOldStatusPoll = window.__playerSmokeFetchStatus()",
     ):
         assert needle in code, f"player smoke lost Carosello browser guard: {needle}"
 

@@ -962,11 +962,18 @@
    * /public-status returns brand + capabilities + facts in one shape — single fetch
    * replaces the old /status + /api/capabilities pair. Works on any deploy (loopback,
    * LAN, public) without the 401 risk of admin-only routes. */
+  const STATUS_POLL_INTERVAL_MS = 3000;
+  const STATUS_POLL_DEADLINE_MS = 2400;
+  let _statusPollGeneration = 0;
   async function fetchStatus() {
+    const generation = ++_statusPollGeneration;
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), STATUS_POLL_DEADLINE_MS);
     try {
-      const r = await fetch(_base + '/public-status');
+      const r = await fetch(_base + '/public-status', { signal: controller.signal });
       if (!r.ok) return;
       const status = await r.json();
+      if (generation !== _statusPollGeneration) return;
       syncStationName(status);
       // Capabilities live inside the public payload (PR-B). Wrap to match the
       // legacy { capabilities: {...} } shape the rest of listener.js expects.
@@ -1000,7 +1007,11 @@
         renderProgress(status.current_progress_sec, status.current_duration_sec);
       }
     } catch (e) {
-      console.warn('fetchStatus failed', e);
+      if (generation === _statusPollGeneration && e?.name !== 'AbortError') {
+        console.warn('fetchStatus failed', e);
+      }
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
@@ -1288,7 +1299,7 @@
     fetchStatus();
     fetchRequests();
     /* fetchPublicStatus removed in PR-F */
-    setInterval(fetchStatus, 3000);
+    setInterval(fetchStatus, STATUS_POLL_INTERVAL_MS);
     setInterval(fetchRequests, 60000);
   });
 })();
