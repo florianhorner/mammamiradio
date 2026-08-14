@@ -14,10 +14,11 @@ this projection and remain the independent subtractive authority.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+
+from mammamiradio.home.temperature import normalize_temperature, temperature_unit_of
 
 NARROW_WEATHER_ENTITY_ID = "weather.ambient"
 NARROW_DAYLIGHT_ENTITY_ID = "sun.ambient"
@@ -159,7 +160,7 @@ def _normalize_weather(state_data: object) -> dict | None:
         return None
     attrs = state_data.get("attributes")
     attrs = attrs if isinstance(attrs, dict) else {}
-    temperature_c = _temperature_c(attrs.get("temperature"), attrs.get("temperature_unit"))
+    temperature_c = _temperature_c(attrs.get("temperature"), temperature_unit_of(attrs))
     if temperature_c is None:
         return None
     return {
@@ -170,19 +171,9 @@ def _normalize_weather(state_data: object) -> dict | None:
 
 
 def _temperature_c(value: object, unit: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
+    temperature = normalize_temperature(value, unit, require_unit=True)
+    if temperature is None:
         return None
-    try:
-        temperature = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(temperature):
-        return None
-    normalized_unit = str(unit or "").strip().upper().replace("°", "")
-    if normalized_unit not in {"C", "F"}:
-        return None
-    if normalized_unit == "F":
-        temperature = (temperature - 32.0) * 5.0 / 9.0
     if temperature < -80.0 or temperature > 60.0:
         return None
     # Coarse five-degree buckets preserve weather usefulness without retaining

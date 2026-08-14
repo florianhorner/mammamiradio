@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mammamiradio.core.config import JAMENDO_ACK_REVISION, load_config
-from mammamiradio.core.models import PlaylistSource, Track
+from mammamiradio.core.models import PlaylistSource, SourceReadinessEvidence, Track
 
 
 @pytest.fixture()
@@ -192,9 +192,11 @@ def test_classic_loader_is_empty_when_external_media_is_disabled():
 
 
 def test_explicit_classic_url_resolves_when_capability_is_enabled(config):
+    """Normal: a resolved classic source retains explicit attempted evidence."""
     from mammamiradio.playlist.playlist import load_explicit_source
 
     config.playlist.shuffle = False
+    readiness = SourceReadinessEvidence()
     classic_track = Track(
         title="Vita spericolata",
         artist="Vasco Rossi",
@@ -211,17 +213,24 @@ def test_explicit_classic_url_resolves_when_capability_is_enabled(config):
         tracks, source = load_explicit_source(
             config,
             PlaylistSource(kind="url", source_id="", label="Anni 80", url="classic://italian/80s"),
+            readiness=readiness,
         )
 
     assert tracks == [classic_track]
     assert source.kind == "classic"
     assert source.source_id == "80s"
     assert source.url == "classic://italian/80s"
+    assert source.readiness_evidence is readiness
+    assert readiness.advanced is not None
+    assert readiness.advanced.kind == "classic"
+    assert readiness.advanced.attempted is True
 
 
 def test_explicit_classic_is_actionably_blocked_without_capability(config):
+    """Empty fallback: a blocked classic load retains explicit attempted evidence."""
     from mammamiradio.playlist.playlist import ExternalMediaUnavailableError, load_explicit_source
 
+    readiness = SourceReadinessEvidence()
     with (
         patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=False),
         patch("mammamiradio.playlist.playlist._load_classic_italian_tracks") as loader,
@@ -230,9 +239,36 @@ def test_explicit_classic_is_actionably_blocked_without_capability(config):
         load_explicit_source(
             config,
             PlaylistSource(kind="classic", source_id="80s", label="Anni 80", url="classic://italian/80s"),
+            readiness=readiness,
         )
 
     loader.assert_not_called()
+    assert readiness.advanced is not None
+    assert readiness.advanced.kind == "classic"
+    assert readiness.advanced.attempted is True
+    assert readiness.advanced.failure == "External media support is not installed"
+
+
+def test_explicit_classic_empty_candidates_retain_failure_evidence(config):
+    """Empty fallback: a failed classic load retains explicit attempted evidence."""
+    from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
+
+    readiness = SourceReadinessEvidence()
+    with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        patch("mammamiradio.playlist.playlist._load_classic_italian_tracks", return_value=[]),
+        pytest.raises(ExplicitSourceError, match="temporarily unavailable"),
+    ):
+        load_explicit_source(
+            config,
+            PlaylistSource(kind="classic", source_id="80s", label="Anni 80", url="classic://italian/80s"),
+            readiness=readiness,
+        )
+
+    assert readiness.advanced is not None
+    assert readiness.advanced.kind == "classic"
+    assert readiness.advanced.attempted is True
+    assert readiness.advanced.failure == "Classic Italian returned no playable candidates"
 
 
 def test_explicit_classic_rejects_unsupported_era(config):

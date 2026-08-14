@@ -256,8 +256,8 @@ def test_ha_docs_no_longer_defer_media_source() -> None:
     assert "`media_source.py` (casting the stream to other HA speakers)" not in doc
 
 
-def test_first_listen_funnel_documents_the_hacs_speaker_proof() -> None:
-    """The README must lead a first listener to the actual speaker test."""
+def test_first_listen_funnel_documents_speaker_proof_then_privacy_choice() -> None:
+    """The README must lead from real-speaker proof to the explicit privacy gate."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     doc = DOC.read_text(encoding="utf-8")
     rendered_readme = " ".join(readme.split())
@@ -267,13 +267,15 @@ def test_first_listen_funnel_documents_the_hacs_speaker_proof() -> None:
     assert "## First listen: one real speaker" in readme
     assert "Italian radio for Home Assistant" in readme
     assert "with no AI key required" in readme
-    assert "mute individual\nentities locally" in readme
-    assert "turn **Host home context** off to stop full-state polling" in readme
-    assert "optional HACS speaker" in readme
-    assert "No AI key, provider account, or network music source is required for your first" in readme
+    assert "Select **Keep private and continue** without reading Home state, or" in rendered_readme
+    assert "**Let future hosts use this**" in readme
+    assert "optional HACS speaker" not in readme
+    assert "No AI key is required for your first listen" in readme
     assert "offline, attributed twelve-track Incompetech" in readme
-    assert "Host home context** is on by default" in rendered_readme
-    assert "not sent to an AI provider" in readme
+    assert "no provider account or network music source is required" in rendered_readme
+    assert "Host home context** choice is omitted and remains off" in rendered_readme
+    assert "send it to an AI provider" in rendered_readme
+    assert "Home Assistant accepting the request is only delivery confirmation" in rendered_readme
     assert "## Check the app (operators)" in readme
     assert readme.index("## First listen: one real speaker") < readme.index("### Home Assistant OS app")
     assert readme.index("## First listen: one real speaker") < readme.index("## When you want the house in the show")
@@ -293,10 +295,10 @@ def test_first_listen_funnel_documents_the_hacs_speaker_proof() -> None:
     ownership_choice = doc.index("## Let the HACS integration own the media player (optional)")
     developer_tools = doc.index("Developer tools → Actions")
     physical_speaker = doc.index("one physical speaker")
-    live_media = doc.index("Mamma Mi Radio → Mamma Mi Radio Live")
     success = doc.index("**Success:**")
     recovery = doc.index("../troubleshooting.md#home-assistant-app")
-    assert ownership_choice < developer_tools < physical_speaker < live_media < success < recovery
+    assert "Media → Mamma Mi Radio → Mamma Mi Radio Live" in rendered_doc
+    assert ownership_choice < physical_speaker < success < developer_tools < recovery
 
 
 # --- Stream-proxy view (MammaRadioStreamView.get) -------------------------------

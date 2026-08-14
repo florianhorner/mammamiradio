@@ -252,6 +252,22 @@ def test_purge_entity_no_match_returns_false_and_stays_clean():
     assert led._dirty is False
 
 
+def test_purge_all_buckets_drops_everything_and_marks_dirty():
+    led = _ledger_with_hot_gag()
+    led.buckets["other"] = GagBucket(WASHER, "Lavatrice", "spento", "acceso", count=3, last_ts=BASE)
+    led._dirty = False
+    assert led.purge_all_buckets() is True
+    assert led.buckets == {}
+    assert led._dirty is True
+
+
+def test_purge_all_buckets_on_empty_ledger_returns_false_and_stays_clean():
+    led = EveningLedger()
+    led._dirty = False
+    assert led.purge_all_buckets() is False
+    assert led._dirty is False
+
+
 def test_muted_entity_cannot_still_fire_a_gag_after_purge(monkeypatch):
     """A gag observed before a mute must not still be offerable after it."""
     monkeypatch.setattr("mammamiradio.home.evening_memory.GAG_INJECT_PROBABILITY", 1.0)

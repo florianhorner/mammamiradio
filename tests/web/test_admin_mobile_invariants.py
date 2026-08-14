@@ -450,7 +450,7 @@ def test_super_italian_copy_describes_the_actual_default_listener_mix() -> None:
 
 def test_producer_desk_console_is_responsive() -> None:
     """Concept B: the console is two-column on desktop, stacks to one column on
-    narrow screens, and the tab bar wraps instead of exposing a scrollbar."""
+    narrow screens, and the tab bar reflows instead of exposing a scrollbar."""
     css = _admin_css()
 
     # Desktop: two columns (air | triggers+cooking).
@@ -467,9 +467,20 @@ def test_producer_desk_console_is_responsive() -> None:
     assert _declarations_for_selector(css, ".mmr-tabbar").get("overflow") == "visible"
 
     phone_tabbar = _declarations_for_selector(_phone_css(), ".mmr-tabbar")
-    assert phone_tabbar.get("flex-wrap") == "wrap"
-    assert phone_tabbar.get("overflow-x") == "visible"
-    assert phone_tabbar.get("overflow-y") == "visible"
+    assert phone_tabbar.get("display") == "grid"
+    assert phone_tabbar.get("grid-template-columns") == "repeat(2,minmax(0,1fr))"
+    assert phone_tabbar.get("overflow") == "visible"
+    tablet_blocks = [
+        _read_balanced_block(css, match.end() - 1)
+        for match in _MEDIA_START_RE.finditer(css)
+        if int(match.group(1)) == 768
+    ]
+    tablet_css = next(block for block in tablet_blocks if ".mmr-tabbar" in block)
+    tablet_tabbar = _declarations_for_selector(
+        tablet_css,
+        ".mmr-tabbar",
+    )
+    assert tablet_tabbar.get("grid-template-columns") == "repeat(4,minmax(0,1fr))"
 
 
 def test_compact_deck_is_complete() -> None:
@@ -486,30 +497,38 @@ def test_compact_deck_is_complete() -> None:
     assert 'class="mmr-tabbar"' in deck
 
 
-def test_record_hunt_controls_and_banner_are_mobile_safe() -> None:
-    """Record Hunt's two-line desk and chips must not create horizontal overflow."""
+def test_record_hunt_card_and_library_tools_are_mobile_safe() -> None:
+    """The Hunt card and its quieter supporting tools cannot overflow on phones."""
     css = _admin_css()
     phone_css = _phone_css()
 
-    direction_phone = _declarations_for_selector(phone_css, ".direction-row")
-    banner = _declarations_for_selector(css, ".course-banner")
+    hunt_form = _declarations_for_selector(css, ".record-hunt-form")
+    hunt_form_phone = _declarations_for_selector(phone_css, ".record-hunt-form")
+    banner = _declarations_for_selector(css, ".record-hunt-status-copy")
     truth = _declarations_for_selector(css, ".record-hunt-truth")
     stage = _declarations_for_selector(css, ".record-hunt-stage")
     phone_row = _declarations_for_selector(phone_css, ".pl-row")
     phone_meta = _declarations_for_selector(phone_css, ".pl-meta")
+    tools_phone = _declarations_for_selector(phone_css, ".library-tools-body")
+    recovery_phone = _declarations_for_selector(phone_css, ".empty-pool-recovery")
     chips = _declarations_for_selector(css, ".pl-chips")
     phone_chips = _declarations_for_selector(phone_css, ".pl-chips")
     phone_actions = _declarations_for_selector(phone_css, ".pl-a")
     phone_ban = _declarations_for_selector(phone_css, ".pl-ban")
 
-    assert direction_phone.get("flex-direction") == "column"
-    assert direction_phone.get("align-items") == "stretch"
+    assert hunt_form.get("display") == "grid"
+    assert hunt_form.get("grid-template-columns") == "minmax(0,1fr) auto"
+    assert hunt_form_phone.get("grid-template-columns") == "1fr"
     assert banner.get("display") == "grid"
     assert banner.get("width") == "100%"
     assert banner.get("min-width") == "0"
     assert "break-word" in banner.get("overflow-wrap", "")
     assert truth.get("min-width") == "0"
     assert stage.get("min-width") == "0"
+    assert tools_phone.get("grid-template-columns") == "1fr"
+    assert recovery_phone.get("flex-direction") == "column"
+    assert recovery_phone.get("align-items") == "stretch"
+    assert css.rfind(".library-tools-body { grid-template-columns: 1fr; }") > css.index(".library-tools-body {")
     assert chips.get("min-width") == "0"
     assert phone_row.get("display") == "grid"
     assert phone_row.get("grid-template-columns") == "44px 44px 32px minmax(0, 1fr)"
@@ -527,6 +546,35 @@ def test_record_hunt_controls_and_banner_are_mobile_safe() -> None:
     assert "grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto" not in phone_css
     assert "white-space: nowrap" in css[css.index(".hunt-pick") : css.index(".pl-a {")]
 
+    _assert_touch_target(".record-hunt-button")
+    _assert_touch_target(".record-hunt-reset")
+
+
+def test_rotation_uses_hunt_first_markup_with_capability_safe_library_recovery() -> None:
+    """The markup has one creative Hunt action; tools stay in a disclosure."""
+    text = _read_admin_html()
+    rotation = text[text.index('id="rotation-pool"') : text.index("<!-- Diretta zone -->")]
+    tools = rotation[rotation.index('id="libraryTools"') :]
+
+    assert rotation.index('class="record-hunt"') < rotation.index('class="rotation-library"')
+    assert rotation.index('class="rotation-library"') < rotation.index('id="libraryTools"')
+    assert 'id="directionBtn"' in rotation
+    assert "Hunt records" in rotation
+    assert "headingControls" not in rotation
+    assert "data-heading-kind" not in rotation
+    assert "enrichPlaylistSource('classic_" not in rotation
+    assert 'id="sourceChartsBtn"' in tools
+    assert 'id="sourceJamendoBtn"' in tools
+    assert 'id="purgePoolBtn"' in tools
+    assert 'id="emptyPoolRecovery"' in rotation
+    assert 'id="emptyPoolLibraryBtn"' in rotation
+    assert 'id="emptyPoolSetupBtn"' in rotation
+    assert 'id="emptyPoolLibraryBtn" data-stopped-exempt onclick="openLibraryTools()"' in rotation
+    assert 'id="emptyPoolSetupBtn" data-stopped-exempt onclick="openSetupPanel()"' in rotation
+    assert "function emptyPoolRecoveryState(st,caps,capsState)" in text
+    assert "Checking available music sources" in text
+    assert "No library source is available in this setup." not in text
+
 
 def test_rotation_rows_group_metadata_without_dropping_actions() -> None:
     """Responsive rows must keep metadata and preference/action controls in one card."""
@@ -536,7 +584,7 @@ def test_rotation_rows_group_metadata_without_dropping_actions() -> None:
     assert '<div class="pl-meta"><div class="pl-chips">' in update_block
     assert '${prefControls}</div><div class="pl-a">' in update_block
     assert "pl-ban" in update_block
-    assert "renderPreferenceControls(idx,Number(t.preference||0))" in update_block
+    assert "renderPreferenceControls(t.artist,t.title,Number(t.preference||0))" in update_block
 
 
 def test_on_air_idle_state_compacts_dead_space() -> None:
@@ -831,8 +879,10 @@ def test_playlist_pagination_keeps_accessible_absolute_index_rows() -> None:
     assert 'aria-label="Move to next"' in update_block
     # The ✕ is now a durable ban (persisted blocklist), not an in-memory remove.
     assert 'aria-label="Ban from rotation"' in update_block
-    assert "moveNext(${idx})" in update_block
-    assert "removeTr(${idx})" in update_block
+    assert 'data-playlist-action="next"' in update_block
+    assert 'data-playlist-action="ban"' in update_block
+    assert "data-id=\"${esc(t.id||'')}\"" in update_block
+    assert "data-revision=\"${esc(String(_plPage.revision??''))}\"" in update_block
 
 
 def test_search_external_queue_posts_album_art() -> None:
@@ -858,9 +908,120 @@ def test_load_more_buttons_reset_on_error_paths() -> None:
     assert "btn.classList.remove('loading')" in playlist_block
     assert "btn.textContent='Load more tracks'" in playlist_block
     assert "include_external:String(!isAppend||_sExtPage.has_more)" in search_block
-    assert "prevR=_sR.slice()" in search_block
+    assert "_searchAppendInFlight" in search_block
+    assert "searchRequestStillOwned(generation,q)" in search_block
+    assert "responseRevision!==expectedRevision" in search_block
+    assert "responseRevision!==currentRevision" in search_block
+    assert "revision:responseRevision" in search_block
     assert "renderSearchResults(q)" in search_block
     assert "btn.textContent='Load more results'" in search_block
+
+
+def test_playlist_mutations_send_revision_bound_opaque_targets() -> None:
+    """Next, Ban, and drag-reorder must never certify a stale index with fresh state."""
+    text = _read_admin_html()
+    target_block = text[text.index("function playlistTargetFromElement") : text.index("// The per-row")]
+    remove_block = text[text.index("async function removeTr") : text.index("// --- Bulk select")]
+    drag_block = text[text.index("// ── Drag & Drop") : text.index("// ── Pacing slider")]
+
+    assert "row.dataset.revision" in target_block
+    assert "row.dataset.i" in target_block
+    assert "row.dataset.id" in target_block
+    assert "{revision:target.revision,index:target.index,id:target.id}" in target_block
+    assert "{revision:target.revision,index:target.index,id:target.id}" in remove_block
+    assert "playlist_revision" in target_block
+    assert "mappingUnchanged:true" in target_block
+    assert "updatePl(_plRows,_plPage,true)" in target_block
+    assert "mappingUnchanged:true" not in remove_block
+    assert "revision:src.revision" in drag_block
+    assert "from:src.index" in drag_block and "from_id:src.id" in drag_block
+    assert "to:dst.index" in drag_block and "to_id:dst.id" in drag_block
+    assert "mappingUnchanged:true" not in drag_block
+    assert "await refreshFast()" in drag_block
+
+
+def test_stale_target_errors_are_recoverable_and_never_claim_success() -> None:
+    """Both Next paths surface backend copy and refresh stale search ownership."""
+    text = _read_admin_html()
+    recovery = text[
+        text.index("async function recoverStalePlaylistTarget") : text.index("function adoptPlaylistMutationRevision")
+    ]
+    row_next = text[text.index("async function moveNext") : text.index("// The per-row")]
+    search_next_start = text.index("async function addTr")
+    search_next = text[search_next_start : text.index("document.addEventListener('click',event=>", search_next_start)]
+
+    assert "response&&response.error" in recovery
+    assert "response?.reason==='stale_playlist'" in recovery
+    assert "invalidateSearchResults(message)" in recovery
+    assert "await refreshFast()" in recovery
+    for block in (row_next, search_next):
+        assert "recoverStalePlaylistTarget(r,'move that')" in block
+        assert "adoptPlaylistMutationRevision(r,{mappingUnchanged:true})" in block
+        assert "catch(_){toast(offlineMsg());}" in block
+        assert block.index("recoverStalePlaylistTarget") < block.index("Queued next:")
+
+
+def test_search_cache_has_generation_query_and_revision_ownership() -> None:
+    """A late response or cross-revision page cannot repopulate actionable rows."""
+    text = _read_admin_html()
+    state = text[text.index("let _sR=[]") : text.index("function renderSearchResults")]
+    search = text[text.index("async function doSearch") : text.index("async function addTr")]
+    refresh = text[text.index("async function refreshFast()") : text.index("async function refreshSlow()")]
+
+    assert "let _searchGeneration=0" in state
+    assert "let _searchQuery=''" in state
+    assert "let _searchAppendInFlight=false" in state
+    assert "generation===_searchGeneration" in state
+    assert "query===_searchQuery" in state
+    assert "query===si.value.trim()" in state
+    assert "generation=++_searchGeneration" in search
+    assert "_searchAppendInFlight=true" in search
+    assert "responseRevision!==expectedRevision" in search
+    assert "responseRevision!==currentRevision" in search
+    assert "invalidateSearchResults('Rotation changed — search again.')" in search
+    assert "adoptAuthoritativePlaylistRevision(nextStatus?.playlist_page?.revision)" in refresh
+
+
+def test_playlist_load_more_cannot_recertify_an_old_tail() -> None:
+    """A poll that advances while load-more is pending must win before cache mutation."""
+    text = _read_admin_html()
+    start = text.index("async function loadMorePlaylist")
+    end = text.index("function focusPlaylistTrack")
+    block = text[start:end]
+
+    assert "authoritativeRevision=currentPlaylistRevision()" in block
+    assert "authoritativeRevision!==expectedRevision" in block
+    assert block.index("authoritativeRevision!==expectedRevision") < block.index("_plRows=_plRows.concat")
+
+
+def test_authoritative_status_can_reset_playlist_revision_after_restart() -> None:
+    """The in-memory server counter may decrease after restart without freezing an open tab."""
+    text = _read_admin_html()
+    start = text.index("function adoptAuthoritativePlaylistRevision")
+    end = text.index("function playlistPreferenceRevision")
+    block = text[start:end]
+
+    assert "revision<previous" not in block
+    assert "revision!==previous" in block
+    assert "_playlistRevision=revision" in block
+    assert "invalidateSearchResults('Rotation changed — search again.')" in block
+
+
+def test_playlist_preferences_use_song_key_not_mutable_index() -> None:
+    """Preference rows already have a canonical artist/title key; send it directly."""
+    text = _read_admin_html()
+    renderer = text[
+        text.index("function renderPreferenceControls") : text.index("function preferencePayloadFromButton")
+    ]
+    resolver = text[
+        text.index("function preferencePayloadFromButton") : text.index("function applyPreferenceToCachedRows")
+    ]
+
+    assert 'data-preference-target="key"' in renderer
+    assert "data-preference-artist=\"${esc(artist||'')}\"" in renderer
+    assert "data-preference-title=\"${esc(title||'')}\"" in renderer
+    assert "key:[el.dataset.preferenceArtist||'',el.dataset.preferenceTitle||'']" in resolver
+    assert "preferenceIndex" not in resolver
 
 
 def test_empty_playlist_art_is_compact_placeholder() -> None:
@@ -923,13 +1084,22 @@ def test_admin_tabs_have_44px_touch_targets() -> None:
 
 
 def test_mobile_admin_tabs_read_as_one_segmented_control() -> None:
+    phone_css = _phone_css()
     phone_tabbar = _declarations_for_selector(_phone_css(), ".mmr-tabbar")
-    phone_tab = _declarations_for_selector(_phone_css(), ".mmr-tab")
+    phone_tab = _declarations_for_selector(phone_css, ".mmr-tab")
 
     assert phone_tabbar.get("gap") == "0"
     assert phone_tabbar.get("border-radius") == "8px"
-    assert phone_tab.get("flex") == "1 1 33.333%"
+    assert phone_tabbar.get("display") == "grid"
+    assert phone_tabbar.get("grid-template-columns") == "repeat(2,minmax(0,1fr))"
+    assert phone_tab.get("min-width") == "0"
     assert phone_tab.get("border-right") == "1px solid var(--line-strong)"
+    assert re.search(r"\.mmr-tab:nth-child\(2n\)\{border-right:0\}", phone_css)
+    assert re.search(r"\.mmr-tab:nth-child\(n\+7\)\{border-bottom:0\}", phone_css)
+    assert re.search(
+        r"\.mmr-tab:last-child:nth-child\(2n\+1\)\{grid-column:span 2;border-right:0\}",
+        phone_css,
+    )
 
 
 def test_rotation_grip_and_preset_controls_have_44px_touch_targets() -> None:

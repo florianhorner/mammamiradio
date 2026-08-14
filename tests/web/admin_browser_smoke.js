@@ -46,6 +46,11 @@ async (page) => {
       .filter(({ delay }) => delay === 3000 || delay === 30000)
       .forEach(({ id }) => clearInterval(id));
   });
+  // A fresh install lands on the First Listen setup tab and keeps the producer
+  // console hidden until the operator picks a surface. This smoke exercises the
+  // producer desk, so open it the way the operator does — through the page's
+  // own tab navigation (render-free, exactly like initTabs' landing call).
+  await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
 
   const seededStoppedFirstPaint = await page.evaluate(() => {
     document.body.setAttribute('data-stopped', 'true');
@@ -93,6 +98,18 @@ async (page) => {
   const liveStatusResponse = await page.request.get(`${baseUrl}/status`);
   assert(liveStatusResponse.ok(), 'local /status was unavailable');
   const liveStatus = await liveStatusResponse.json();
+  // /api/setup/status is an active-setup surface: it rejects bare fetches, so
+  // send the per-process CSRF token exactly like the dashboard's api() helper
+  // reads it from the admin page's meta tag.
+  const csrfToken = await page.evaluate(
+    () => document.querySelector('meta[name="mammamiradio-csrf-token"]')?.content || '',
+  );
+  assert(csrfToken.length > 0, 'admin page did not embed the CSRF token meta tag');
+  const liveSetupResponse = await page.request.get(`${baseUrl}/api/setup/status`, {
+    headers: { 'X-Radio-CSRF-Token': csrfToken },
+  });
+  assert(liveSetupResponse.ok(), 'local /api/setup/status was unavailable');
+  const liveSetup = await liveSetupResponse.json();
   let statusScenario = 'network';
   const statusResponseQueue = [];
   const makeQueuedStatus = (body, { status = 200, held = false } = {}) => {
@@ -113,6 +130,9 @@ async (page) => {
   let failListenerRequests = false;
   let failHosts = false;
   let skipScenario = 'declined';
+  let resumeScenario = 'healthy';
+  let normalResumeRequests = 0;
+  let forceResumeRequests = 0;
   const restoredStatus = {
     ...liveStatus,
     session_stopped: false,
@@ -187,6 +207,38 @@ async (page) => {
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"bridged":false}' });
   });
+  await page.route('**/api/resume*', async (route) => {
+    const request = route.request();
+    const [requestPath, requestQuery = ''] = request.url().split('?', 2);
+    if (request.method() !== 'POST' || !requestPath.endsWith('/api/resume')) {
+      await route.fallback();
+      return;
+    }
+    const forced = requestQuery.split('&').includes('force=true');
+    if (forced) forceResumeRequests += 1;
+    else normalResumeRequests += 1;
+    if (resumeScenario === 'assetless' && !forced) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: false,
+          force_available: true,
+          error: 'No recovery audio is ready. Add a source or explicitly force-start a host break.',
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        forced
+          ? { ok: true, recovering: true, runway_source: 'none' }
+          : { ok: true, recovering: false },
+      ),
+    });
+  });
   await page.evaluate(() => {
     const nativeFetch = window.fetch.bind(window);
     window.__adminSmokeHangPath = '';
@@ -207,6 +259,83 @@ async (page) => {
       return nativeFetch(input, init);
     };
   });
+
+  // Exercise the real Resume controller against intercepted same-origin
+  // requests. A healthy resume must never pre-emptively force; the assetless
+  // escape is available only after the operator sees and accepts the browser
+  // confirmation.
+  statusScenario = 'success';
+  resumeScenario = 'healthy';
+  normalResumeRequests = 0;
+  forceResumeRequests = 0;
+  const healthyResumeToast = await page.evaluate(async () => {
+    updateStopState(true);
+    await doResume(document.getElementById('resumeBtn'));
+    return document.getElementById('toast').textContent;
+  });
+  assert(
+    normalResumeRequests === 1 && forceResumeRequests === 0,
+    'healthy Resume sent anything other than one normal /api/resume request',
+  );
+  assert(healthyResumeToast === 'Station resumed', 'healthy Resume did not report success');
+
+  resumeScenario = 'assetless';
+  normalResumeRequests = 0;
+  forceResumeRequests = 0;
+  const cancelledResume = await page.evaluate(async () => {
+    const nativeConfirm = window.confirm;
+    const confirmationCopy = [];
+    window.confirm = (message) => {
+      confirmationCopy.push(message);
+      return false;
+    };
+    try {
+      updateStopState(true);
+      await doResume(document.getElementById('resumeBtn'));
+      return { confirmationCopy, toast: document.getElementById('toast').textContent };
+    } finally {
+      window.confirm = nativeConfirm;
+    }
+  });
+  assert(
+    cancelledResume.confirmationCopy.length === 1
+      && cancelledResume.confirmationCopy[0].includes('Force-start with a host break anyway?'),
+    'assetless Resume lost its force confirmation',
+  );
+  assert(
+    normalResumeRequests === 1 && forceResumeRequests === 0,
+    'cancelling assetless Resume sent a force request',
+  );
+  assert(cancelledResume.toast === 'Station remains paused.', 'cancelled assetless Resume did not stay paused');
+
+  normalResumeRequests = 0;
+  forceResumeRequests = 0;
+  const confirmedResume = await page.evaluate(async () => {
+    const nativeConfirm = window.confirm;
+    const confirmationCopy = [];
+    window.confirm = (message) => {
+      confirmationCopy.push(message);
+      return true;
+    };
+    try {
+      updateStopState(true);
+      await doResume(document.getElementById('resumeBtn'));
+      return { confirmationCopy, toast: document.getElementById('toast').textContent };
+    } finally {
+      window.confirm = nativeConfirm;
+    }
+  });
+  assert(
+    confirmedResume.confirmationCopy.length === 1
+      && normalResumeRequests === 1 && forceResumeRequests === 1,
+    'confirmed assetless Resume did not send exactly one /api/resume?force=true request',
+  );
+  assert(
+    confirmedResume.toast === 'Station is recovering. A host break is being prepared.',
+    'confirmed force Resume did not report recovery',
+  );
+  statusScenario = 'network';
+
   await page.evaluate(() => renderProduction({
     session_stopped: false,
     listeners: { active: 1 },
@@ -577,6 +706,350 @@ async (page) => {
     'successful skip lost its confirmation',
   );
 
+  const searchResponseQueue = [];
+  const makeQueuedSearch = (body, { held = false } = {}) => {
+    let markSeen;
+    let release;
+    let markDone;
+    return {
+      body,
+      seen: new Promise((resolve) => { markSeen = resolve; }),
+      releaseGate: held ? new Promise((resolve) => { release = resolve; }) : Promise.resolve(),
+      done: new Promise((resolve) => { markDone = resolve; }),
+      markSeen: () => markSeen(),
+      release: () => { if (release) release(); },
+      markDone: () => markDone(),
+    };
+  };
+  await page.route('**/api/search?*', async (route) => {
+    const response = searchResponseQueue.shift();
+    assert(response, 'search response queue was empty');
+    response.markSeen();
+    await response.releaseGate;
+    try {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response.body) });
+    } finally {
+      response.markDone();
+    }
+  });
+  const playlistSearchPage = (revision, title, hasMore = false) => ({
+    revision,
+    results: [{ id: `id-${title}`, index: 0, artist: 'Search Artist', title, display: title }],
+    external: [],
+    total: 1,
+    offset: 0,
+    limit: 5,
+    has_more: hasMore,
+    external_known_count: 0,
+    external_offset: 0,
+    external_limit: 5,
+    external_has_more: false,
+  });
+
+  const lateSearch = makeQueuedSearch(playlistSearchPage(70, 'Late stale result'), { held: true });
+  searchResponseQueue.push(lateSearch);
+  await page.evaluate(() => {
+    _playlistRevision = 70;
+    _plPage = { ..._plPage, revision: 70 };
+    si.value = 'vecchia';
+    si.dispatchEvent(new Event('input', { bubbles: true }));
+    clearTimeout(_searchTo);
+    window.__adminSmokeLateSearch = doSearch();
+  });
+  await lateSearch.seen;
+  await page.evaluate(() => adoptPlaylistRevision(71));
+  lateSearch.release();
+  await lateSearch.done;
+  await page.evaluate(() => window.__adminSmokeLateSearch);
+  const lateSearchState = await page.evaluate(() => ({
+    query: si.value,
+    text: searchResults.innerText,
+    cached: _sR.map((row) => row.title),
+  }));
+  assert(lateSearchState.query === 'vecchia', 'playlist revision invalidation erased the typed search query');
+  assert(lateSearchState.text.includes('Rotation changed') && lateSearchState.cached.length === 0,
+    'late search response repopulated results after playlist revision invalidation');
+  assert(!lateSearchState.text.includes('Late stale result'), 'late stale search result became actionable');
+
+  const olderQuery = makeQueuedSearch(playlistSearchPage(71, 'Older query result'), { held: true });
+  const newerQuery = makeQueuedSearch(playlistSearchPage(71, 'Newest query result'));
+  searchResponseQueue.push(olderQuery, newerQuery);
+  await page.evaluate(() => {
+    si.value = 'prima';
+    si.dispatchEvent(new Event('input', { bubbles: true }));
+    clearTimeout(_searchTo);
+    window.__adminSmokeOlderQuery = doSearch();
+  });
+  await olderQuery.seen;
+  await page.evaluate(() => {
+    si.value = 'nuova';
+    si.dispatchEvent(new Event('input', { bubbles: true }));
+    clearTimeout(_searchTo);
+    window.__adminSmokeNewerQuery = doSearch();
+  });
+  await newerQuery.done;
+  await page.evaluate(() => window.__adminSmokeNewerQuery);
+  olderQuery.release();
+  await olderQuery.done;
+  await page.evaluate(() => window.__adminSmokeOlderQuery);
+  const overlappingSearchState = await page.evaluate(() => ({
+    query: si.value,
+    text: searchResults.innerText,
+    cached: _sR.map((row) => row.title),
+  }));
+  assert(overlappingSearchState.query === 'nuova' && overlappingSearchState.cached.join('|') === 'Newest query result',
+    'older overlapping query overwrote the newest search ownership');
+  assert(!overlappingSearchState.text.includes('Older query result'), 'older query remained visible after newer results');
+
+  const firstPage = makeQueuedSearch(playlistSearchPage(71, 'First page result', true));
+  const crossedPage = makeQueuedSearch(playlistSearchPage(72, 'Wrong revision page'));
+  searchResponseQueue.push(firstPage, crossedPage);
+  await page.evaluate(() => {
+    si.value = 'pagina';
+    si.dispatchEvent(new Event('input', { bubbles: true }));
+    clearTimeout(_searchTo);
+    return doSearch();
+  });
+  await firstPage.done;
+  await page.evaluate(() => searchMore());
+  await crossedPage.done;
+  const crossedPageState = await page.evaluate(() => ({
+    query: si.value,
+    text: searchResults.innerText,
+    cached: _sR.map((row) => row.title),
+  }));
+  assert(crossedPageState.query === 'pagina' && crossedPageState.cached.length === 0,
+    'cross-revision pagination retained mixed search rows');
+  assert(crossedPageState.text.includes('Rotation changed'), 'cross-revision pagination gave no search-again recovery');
+  assert(!crossedPageState.text.includes('Wrong revision page'), 'cross-revision page became actionable');
+  await page.unroute('**/api/search?*');
+
+  let nextTargetScenario = 'success';
+  const nextTargetRequests = [];
+  await page.route('**/api/playlist/move_to_next', async (route) => {
+    const submittedTarget = route.request().postDataJSON();
+    nextTargetRequests.push(submittedTarget);
+    if (nextTargetScenario === 'stale') {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: false, reason: 'stale_playlist', error: 'Rotation changed — search again.' }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, moved: 'Fresh target', playlist_revision: submittedTarget.revision + 1 }),
+    });
+  });
+  const freshTargetState = await page.evaluate(() => {
+    window.__adminSmokeOriginalRefreshFast = refreshFast;
+    refreshFast = async () => {};
+    window.__adminSmokeToasts = [];
+    _playlistRevision = 80;
+    _plFilter = '';
+    updatePl([
+      { id: 'fresh-target-id', artist: 'Fresh Artist', title: 'Fresh target', display: 'Fresh target', source: 'local' },
+    ], { total: 1, offset: 0, limit: 1, has_more: false, revision: 80 }, true);
+    const button = document.querySelector('[data-playlist-action="next"]');
+    const target = playlistTargetFromElement(button);
+    window.__adminSmokeFreshNext = moveNext(button);
+    return {
+      hasButton: Boolean(button),
+      row: button?.closest('.pl-row')?.dataset || null,
+      target: target ? { revision: target.revision, index: target.index, id: target.id } : null,
+    };
+  });
+  assert(freshTargetState.target?.id === 'fresh-target-id',
+    `fresh playlist row did not expose a complete guarded target: ${JSON.stringify(freshTargetState)}`);
+  await page.evaluate(() => window.__adminSmokeFreshNext);
+  assert(
+    JSON.stringify(nextTargetRequests[0]) === JSON.stringify({ revision: 80, index: 0, id: 'fresh-target-id' }),
+    `fresh playlist Next posted the wrong target contract: ${JSON.stringify(nextTargetRequests[0])}`,
+  );
+  assert(
+    await page.evaluate(() => window.__adminSmokeToasts.at(-1)) === 'Queued next: Fresh target',
+    'fresh playlist Next lost its success confirmation',
+  );
+  assert(
+    await page.locator('.pl-row').getAttribute('data-revision') === '81',
+    'successful playlist Next left actionable rows on the submitted revision',
+  );
+  await page.evaluate(() => moveNext(document.querySelector('[data-playlist-action="next"]')));
+  assert(
+    JSON.stringify(nextTargetRequests[1]) === JSON.stringify({ revision: 81, index: 0, id: 'fresh-target-id' }),
+    `immediate second playlist Next did not adopt the success revision: ${JSON.stringify(nextTargetRequests[1])}`,
+  );
+  assert(await page.locator('.pl-row').getAttribute('data-revision') === '82',
+    'second playlist Next did not advance the rendered row revision');
+
+  nextTargetScenario = 'stale';
+  await page.evaluate(() => {
+    window.__adminSmokeToasts = [];
+    si.value = 'keep this query';
+    _plFilter = '';
+    _searchQuery = si.value;
+    _sR = [{ id: 'cached-result-id', index: 0, artist: 'Cached Artist', title: 'Cached target', display: 'Cached target' }];
+    _sPage = { revision: 82, total: 1, offset: 0, limit: 5, has_more: false };
+    renderSearchResults(si.value);
+    updatePl([
+      { id: 'stale-row-id', artist: 'Stale Artist', title: 'Stale row', display: 'Stale row', source: 'local' },
+    ], { total: 1, offset: 0, limit: 1, has_more: false, revision: 82 }, true);
+    return moveNext(document.querySelector('[data-playlist-action="next"]'));
+  });
+  const staleRowAction = await page.evaluate(() => ({
+    query: si.value,
+    searchText: searchResults.innerText,
+    cachedResults: _sR.length,
+    toasts: [...window.__adminSmokeToasts],
+  }));
+  assert(
+    JSON.stringify(nextTargetRequests[2]) === JSON.stringify({ revision: 82, index: 0, id: 'stale-row-id' }),
+    `stale playlist Next posted the wrong target contract: ${JSON.stringify(nextTargetRequests[2])}`,
+  );
+  assert(staleRowAction.toasts.at(-1) === 'Rotation changed — search again.',
+    'stale playlist Next hid the backend recovery message');
+  assert(!staleRowAction.toasts.some((message) => message.startsWith('Queued next:')),
+    'stale playlist Next showed a false success toast');
+  assert(staleRowAction.query === 'keep this query' && staleRowAction.cachedResults === 0
+      && staleRowAction.searchText.includes('Rotation changed'),
+    'stale playlist Next left a cached action or erased the typed query');
+
+  await page.evaluate(() => {
+    window.__adminSmokeToasts = [];
+    _sR = [{ id: 'stale-search-id', index: 4, artist: 'Search Artist', title: 'Stale search', display: 'Stale search' }];
+    _sPage = { revision: 82, total: 5, offset: 0, limit: 5, has_more: false };
+    renderSearchResults(si.value);
+    return addTr(0);
+  });
+  const staleSearchAction = await page.evaluate(() => ({
+    query: si.value,
+    searchText: searchResults.innerText,
+    cachedResults: _sR.length,
+    toasts: [...window.__adminSmokeToasts],
+  }));
+  assert(
+    JSON.stringify(nextTargetRequests[3]) === JSON.stringify({ revision: 82, index: 4, id: 'stale-search-id' }),
+    `stale search Next posted the wrong target contract: ${JSON.stringify(nextTargetRequests[3])}`,
+  );
+  assert(staleSearchAction.toasts.at(-1) === 'Rotation changed — search again.',
+    'stale search Next hid the backend recovery message');
+  assert(!staleSearchAction.toasts.some((message) => message.startsWith('Queued next:')),
+    'stale search Next showed a false success toast');
+  assert(staleSearchAction.query === 'keep this query' && staleSearchAction.cachedResults === 0
+      && staleSearchAction.searchText.includes('Rotation changed'),
+    'stale search Next left a cached action or erased the typed query');
+  await page.evaluate(() => {
+    refreshFast = window.__adminSmokeOriginalRefreshFast;
+    delete window.__adminSmokeOriginalRefreshFast;
+  });
+  await page.unroute('**/api/playlist/move_to_next');
+
+  const playlistPageQueue = [];
+  const makeQueuedPlaylistPage = (body, { held = false } = {}) => {
+    let markSeen;
+    let release;
+    let markDone;
+    return {
+      body,
+      seen: new Promise((resolve) => { markSeen = resolve; }),
+      releaseGate: held ? new Promise((resolve) => { release = resolve; }) : Promise.resolve(),
+      done: new Promise((resolve) => { markDone = resolve; }),
+      markSeen: () => markSeen(),
+      release: () => { if (release) release(); },
+      markDone: () => markDone(),
+    };
+  };
+  await page.route('**/api/playlist?*', async (route) => {
+    const response = playlistPageQueue.shift();
+    assert(response, 'playlist-page response queue was empty');
+    response.markSeen();
+    await response.releaseGate;
+    try {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response.body) });
+    } finally {
+      response.markDone();
+    }
+  });
+  const staleTailPage = makeQueuedPlaylistPage({
+    revision: 90,
+    tracks: [{ id: 'stale-tail', artist: 'Old', title: 'Stale tail', display: 'Stale tail', source: 'local' }],
+    total: 3,
+    offset: 2,
+    limit: 80,
+    has_more: false,
+  }, { held: true });
+  const freshFirstPage = makeQueuedPlaylistPage({
+    revision: 91,
+    tracks: [{ id: 'fresh-page', artist: 'New', title: 'Fresh page', display: 'Fresh page', source: 'local' }],
+    total: 1,
+    offset: 0,
+    limit: 80,
+    has_more: false,
+  });
+  playlistPageQueue.push(staleTailPage, freshFirstPage);
+  await page.evaluate(() => {
+    adoptAuthoritativePlaylistRevision(90);
+    updatePl([
+      { id: 'old-0', artist: 'Old', title: 'Old zero', display: 'Old zero', source: 'local' },
+      { id: 'old-1', artist: 'Old', title: 'Old one', display: 'Old one', source: 'local' },
+    ], { total: 3, offset: 0, limit: 2, has_more: true, revision: 90 }, true);
+    window.__adminSmokeLoadMore = loadMorePlaylist();
+  });
+  await staleTailPage.seen;
+  await page.evaluate(() => {
+    adoptAuthoritativePlaylistRevision(91);
+    updatePl([
+      { id: 'fresh-page', artist: 'New', title: 'Fresh page', display: 'Fresh page', source: 'local' },
+    ], { total: 1, offset: 0, limit: 1, has_more: false, revision: 91 }, true);
+  });
+  staleTailPage.release();
+  await staleTailPage.done;
+  await freshFirstPage.done;
+  await page.evaluate(() => window.__adminSmokeLoadMore);
+  const loadMoreRaceState = await page.evaluate(() => ({
+    revision: _plPage.revision,
+    titles: _plRows.map((row) => row.title),
+  }));
+  assert(loadMoreRaceState.revision === 91 && loadMoreRaceState.titles.join('|') === 'Fresh page',
+    `stale playlist page contaminated the authoritative cache: ${JSON.stringify(loadMoreRaceState)}`);
+  await page.unroute('**/api/playlist?*');
+
+  const priorActiveTab = await page.evaluate(() => _activeTab);
+  statusScenario = 'success';
+  statusPayload = {
+    ...restoredStatus,
+    playlist: [{ id: 'restart-row', artist: 'Restart', title: 'Fresh process', display: 'Fresh process', source: 'local' }],
+    playlist_page: { total: 1, offset: 0, limit: 1, has_more: false, revision: 1 },
+  };
+  await page.evaluate(() => {
+    _activeTab = 'rotazione';
+    _playlistRevision = 300;
+    _plPage = { total: 1, offset: 0, limit: 1, has_more: false, revision: 300 };
+    si.value = 'keep restart query';
+    _searchQuery = si.value;
+    _sR = [{ id: 'pre-restart', index: 0, artist: 'Old', title: 'Before restart', display: 'Before restart' }];
+    _sPage = { revision: 300, total: 1, offset: 0, limit: 5, has_more: false };
+    renderSearchResults(si.value);
+    return refreshFast();
+  });
+  const restartRevisionState = await page.evaluate(() => ({
+    revision: currentPlaylistRevision(),
+    pageRevision: _plPage.revision,
+    titles: _plRows.map((row) => row.title),
+    query: si.value,
+    cachedResults: _sR.length,
+    searchText: searchResults.innerText,
+  }));
+  assert(restartRevisionState.revision === 1 && restartRevisionState.pageRevision === 1
+      && restartRevisionState.titles.join('|') === 'Fresh process',
+    `authoritative post-restart status was rejected as a lower revision: ${JSON.stringify(restartRevisionState)}`);
+  assert(restartRevisionState.query === 'keep restart query' && restartRevisionState.cachedResults === 0
+      && restartRevisionState.searchText.includes('Rotation changed'),
+    'post-restart revision reset did not invalidate stale search actions while preserving the query');
+  await page.evaluate((activeTab) => { _activeTab = activeTab; }, priorActiveTab);
+
   const sessionEstimateStates = await page.evaluate(() => {
     const render = (consumption) => {
       updateEngineRoom({ listeners: { active: 0, peak: 0 }, consumption, produced_log: [] }, {});
@@ -605,6 +1078,146 @@ async (page) => {
   await page.unroute('**/api/listener-requests');
   await page.unroute('**/api/hosts');
   await page.unroute('**/api/skip');
+
+  let recoveryCapabilities = 'available';
+  let recoverySetup = 'available';
+  await page.route('**/api/capabilities', async (route) => {
+    if (recoveryCapabilities === 'failure') {
+      await route.abort();
+      return;
+    }
+    const capabilities = recoveryCapabilities === 'available'
+      ? { charts_reload: true, jamendo: false }
+      : { charts_reload: false, jamendo: false };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ capabilities }) });
+  });
+  await page.route('**/api/setup/status', async (route) => {
+    if (recoverySetup === 'failure') {
+      await route.abort();
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(liveSetup) });
+  });
+
+  await page.evaluate((status) => {
+    _plRows = [];
+    _caps = null;
+    _capsState = 'checking';
+    _st = {
+      ...status,
+      golden_path: { stage: 'needs_music_source', detail: 'Set a music source from setup.' },
+    };
+    updateEmptyPoolRecovery();
+  }, restoredStatus);
+  const checkingRecovery = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+  }));
+  assert(checkingRecovery.text.includes('Checking available music sources'), 'empty pool claimed no source before capabilities arrived');
+  assert(checkingRecovery.libraryHidden && !checkingRecovery.setupHidden, 'checking recovery did not offer setup without a false import action');
+
+  recoveryCapabilities = 'available';
+  recoverySetup = 'failure';
+  await page.evaluate(() => refreshSlow());
+  const availableRecovery = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+    sourceGroupHidden: sourceImportGroup.hidden,
+  }));
+  assert(!availableRecovery.libraryHidden && availableRecovery.setupHidden && !availableRecovery.sourceGroupHidden,
+    'capability success waited for setup status before exposing recovery');
+  assert(availableRecovery.text.includes('Library tools'), 'available source recovery lost its Library tools guidance');
+
+  recoveryCapabilities = 'none';
+  recoverySetup = 'available';
+  await page.evaluate((status) => {
+    _caps = null;
+    _capsState = 'checking';
+    _st = {
+      ...status,
+      golden_path: { stage: 'needs_music_source', detail: 'Set a music source from setup.' },
+    };
+    return refreshSlow();
+  }, restoredStatus);
+  const noSourceRecovery = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+  }));
+  assert(noSourceRecovery.text.includes('Set a music source from setup.'), 'no-source recovery lost actionable golden-path guidance');
+  assert(noSourceRecovery.libraryHidden && !noSourceRecovery.setupHidden, 'no-source recovery exposed the wrong action');
+
+  recoveryCapabilities = 'failure';
+  await page.evaluate((status) => {
+    _caps = null;
+    _capsState = 'checking';
+    _st = status;
+    return refreshSlow();
+  }, restoredStatus);
+  const firstCapabilityFailure = await page.evaluate(() => ({
+    text: emptyPoolRecoveryText.textContent,
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+  }));
+  assert(firstCapabilityFailure.text.includes('Could not check available music sources'), 'first capability failure claimed no source');
+  assert(firstCapabilityFailure.libraryHidden && !firstCapabilityFailure.setupHidden, 'capability failure hid every recovery route');
+
+  recoveryCapabilities = 'available';
+  await page.evaluate((status) => {
+    _caps = null;
+    _capsState = 'checking';
+    _st = status;
+    return refreshSlow();
+  }, restoredStatus);
+  recoveryCapabilities = 'failure';
+  await page.evaluate(() => refreshSlow());
+  const retainedCapabilityRecovery = await page.evaluate(() => ({
+    libraryHidden: emptyPoolLibraryBtn.hidden,
+    setupHidden: emptyPoolSetupBtn.hidden,
+    sourceGroupHidden: sourceImportGroup.hidden,
+  }));
+  assert(!retainedCapabilityRecovery.libraryHidden && retainedCapabilityRecovery.setupHidden && !retainedCapabilityRecovery.sourceGroupHidden,
+    'later capability failure discarded the last known recovery action');
+
+  const stoppedRecovery = await page.evaluate((status) => {
+    _plRows = [];
+    _caps = { capabilities: { charts_reload: true, jamendo: false } };
+    _capsState = 'ready';
+    _st = status;
+    updateEmptyPoolRecovery();
+    updateStopState(true);
+    const libraryButton = document.getElementById('emptyPoolLibraryBtn');
+    libraryButton.click();
+    const library = {
+      inert: libraryButton.inert,
+      aria: libraryButton.getAttribute('aria-disabled'),
+      opened: document.getElementById('libraryTools').open,
+    };
+    _caps = { capabilities: { charts_reload: false, jamendo: false } };
+    _st = {
+      ...status,
+      golden_path: { stage: 'needs_music_source', detail: 'Set a music source from setup.' },
+    };
+    updateEmptyPoolRecovery();
+    const setupButton = document.getElementById('emptyPoolSetupBtn');
+    setupButton.click();
+    const setup = {
+      inert: setupButton.inert,
+      aria: setupButton.getAttribute('aria-disabled'),
+      opened: document.getElementById('setupGroup').open,
+    };
+    updateStopState(false);
+    return { library, setup };
+  }, restoredStatus);
+  assert(!stoppedRecovery.library.inert && stoppedRecovery.library.aria === null && stoppedRecovery.library.opened,
+    'empty-pool Library tools recovery was inert while stopped');
+  assert(!stoppedRecovery.setup.inert && stoppedRecovery.setup.aria === null && stoppedRecovery.setup.opened,
+    'empty-pool setup recovery was inert while stopped');
+
+  await page.unroute('**/api/capabilities');
+  await page.unroute('**/api/setup/status');
 
   const stoppedControls = await page.evaluate(() => {
     updateStopState(true);
@@ -909,7 +1522,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 30,
+    checks: 53,
     viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

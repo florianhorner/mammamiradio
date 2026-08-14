@@ -4,21 +4,45 @@
 
 # Mamma Mi Radio
 
-Italian radio for Home Assistant: music, stock host copy, and fallback voices
-with no AI key required. Start by hearing it on one real speaker. When you add
-an AI host key, review the filtered home-context preview first; mute individual
-entities locally, or turn **Host home context** off to stop full-state polling.
+Italian radio for Home Assistant, with no AI key required. A fresh station
+opens with an authored 27-second mini-show ready to send to one real speaker:
+an original music bed and a privacy-aware Marco/Giulia opening, followed by a
+source-aware handoff to the live stream. Add more music, Home context, and
+generated host conversations only when you want them.
 
 ## First listen: one real speaker
 
-**Hear it before you choose what the hosts may use.** Install the Home
-Assistant OS app below, then take the [optional HACS speaker
-path](docs/integrations/ha-integration.md#play-it-on-one-speaker). It puts
-**Mamma Mi Radio Live** on one physical speaker through
-`media-source://mammamiradio/live`, not browser playback. HACS needs one Home
-Assistant restart; the guide covers speaker recovery and the optional
-media-player ownership choice. That choice is not needed for first speaker
-playback.
+**Hear it before you choose what the hosts may use.** Install and start the Home
+Assistant OS app below. If HACS is not already installed, follow its [official
+installation guide](https://www.hacs.xyz/docs/use/download/download/). Then
+install the [HACS
+integration](docs/integrations/ha-integration.md#install-the-hacs-integration-for-speaker-playback)
+and restart Home Assistant once. Open the app's Web UI and follow the
+[first-listen speaker path](docs/integrations/ha-integration.md#play-it-on-one-speaker)
+in **First Listen**. A fresh unfinished install opens there automatically;
+completed installs return to the control room, while the same tab remains
+available to review progress or repair an unfinished step:
+
+1. The opening card explains the authored 27-second mini-show: an original
+   music bed, Marco and Giulia's privacy-aware welcome, then a handoff to the
+   live stream. It needs no AI key and reads no Home context. Source readiness
+   for live charts, Jamendo, local music, bundled demo music, and recovery cover
+   sits underneath as supporting detail. It says whether primary music,
+   recovery cover, or a music repair is what follows; bundled demo music is not
+   presented as a song library.
+2. Select **Find my speakers**, choose one physical Home Assistant speaker,
+   then select **Start Mamma Mi Radio**. The request always uses
+   `media-source://mammamiradio/live`; browser playback is not counted.
+3. Home Assistant accepting the request is only delivery confirmation. Select
+   **Yes — that’s Mamma Mi Radio** only after the opening reaches the room, or
+   **Not yet** for
+   [warm repair steps](docs/integrations/ha-integration.md#first-listen-repair).
+4. Select **Keep private and continue** without reading Home state, or review
+   the fresh, filtered preview before selecting **Let future hosts use this**.
+   If the preview contains only generic daylight, the UI discloses it as
+   ambient-only and not meaningful personalization, and recommends keeping it
+   private. Add an AI key later if you want generated hosts; it is not part of
+   first audio.
 
 ### Home Assistant OS app
 
@@ -30,29 +54,47 @@ Or by hand: **Settings → Apps → App store → ⋮ → Repositories**, paste 
 
 ### What first audio needs
 
-No AI key, provider account, or network music source is required for your first
-listen. The app starts with an offline, attributed twelve-track Incompetech
-starter collection; without an AI key, the hosts use stock copy and fallback
-voices. Open the listener and use **Music credits** to see the exact source,
-license, and modification notice for what is playing.
+No AI key is required for your first listen: without one, the hosts use stock
+copy and fallback voices. The packaged 27-second First Listen mini-show makes
+the original music bed, station identity, and Marco/Giulia opening audible
+immediately, but it is not the song library. Normal rotation starts with the
+offline, attributed twelve-track Incompetech starter collection, so no provider
+account or network music source is required. Open the listener and use **Music
+credits** to see the exact source, license, and modification notice for what is
+playing. Operator-supplied MP3s can also live in `/data/music` in the add-on;
+standalone/Docker installs can point elsewhere with `MAMMAMIRADIO_MUSIC_DIR`.
 
 Jamendo is an optional, default-off transient expansion for acknowledged
 non-commercial API use while provider confirmation is pending. Configure it
 later in **Motore -> Setup -> Music sources**; starter music keeps playing while
-it prepares one track at a time. See [Music sources and rights
-boundaries](docs/music-sources.md).
+it prepares one track at a time. Packaged recovery audio can still prove the
+speaker transport without pretending that a damaged music source is healthy.
+See [Music sources and rights boundaries](docs/music-sources.md).
 
-First audio is separate from home context. **Host home context** is on by
-default and, when the add-on has Home Assistant access, refreshes a filtered
-state slice for host segments. Turn it off in the app configuration before you
-start if you do not want full-state prompt-context polling. Without
-script-provider credentials, that state is not sent to an AI provider.
+First audio is separate from home context. On every fresh install, the
+**Host home context** choice is omitted and remains off until you hear the
+speaker, request a fresh filtered preview, and explicitly choose **Let future
+hosts use this**.
+Previewing does not publish the snapshot into host scripts or send it to an AI
+provider. If that preview contains only generic daylight, it is shown for
+transparency but classified as ambient-only—not meaningful personalization—and
+**Keep private and continue** is recommended. That private choice preserves
+Home Assistant entity publishing while suspending Home-state polling, timer
+reads/interrupts, and Home-derived host work.
 
 ### Check the app (operators)
 
-`Producer started` in the app log and `"ready": true` from `/readyz` show that
-the app is healthy. They are operator checks, not the first-listen proof: for
-that, hear **Mamma Mi Radio Live** on the selected speaker.
+`Producer started` in the app log means the engine came up. `/readyz` answers a
+stricter question: it stays `503 starting` until a listener has actually accepted
+audio (`503 stopped` while the station is deliberately paused), so
+`"ready": true` is already proof that someone heard the station, not just that
+the process booted. Neither replaces the first-listen check: hear
+**Mamma Mi Radio Live** on the selected speaker.
+
+For branch development or repeatable manual QA, use the [disposable local Home
+Assistant lab](docs/runbooks/first-listen-local-ha.md). It preserves the local
+HA/VLC speaker setup between radio-only resets and keeps branch code and test
+state away from the live home.
 
 ### Docker alternative
 
@@ -69,8 +111,10 @@ Open `http://localhost:8000`. The bundled starter collection works offline and
 needs no AI or music-provider key; add an AI key when you want generated hosts.
 The stock Docker quickstart keeps external extraction off. A standalone install
 may deliberately add the `external-media` extra, but technical access is not a
-rights claim. (Also: macOS one-click `./setup-mac.sh`, or `./start.sh` in a
-venv. Conductor users get `scripts/conductor-*.sh` lifecycle hooks for free.)
+rights claim. Its persistent music path is `/data/music`; set
+`MAMMAMIRADIO_MUSIC_DIR` when running outside the supplied container layout.
+(Also: macOS one-click `./setup-mac.sh`, or `./start.sh` in a venv. Conductor
+users get `scripts/conductor-*.sh` lifecycle hooks for free.)
 
 </details>
 
@@ -116,7 +160,7 @@ It starts in layers, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | Nothing | Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. |
+| **Hear it first** | Nothing | The First Listen mini-show proves the speaker path, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
 | **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
 | **Give your home a voice** | AI host key plus prompt-safe Home Assistant context | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 
@@ -128,7 +172,7 @@ The starter collection is the dependable first-run rotation. Recovery clips
 and eligible local cache can still bridge thin-queue moments, but Jamendo is
 never a recovery or restart source.
 
-It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. In the add-on, saved keys live in `/config/secrets.env`; the UI never echoes them. When Host home context is on and an AI host key is ready, the admin preview shows the filtered context that may go to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly. Mute any entity there to keep it out of future host/context use. Already-rendered audio is not purged. The Home Assistant integration and Host home context are separate: turn Host home context off to stop full-state prompt polling while keeping entity publishing and timer interrupts, or run without script-provider credentials so the hosts never send home context to an AI provider.
+It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. In the add-on, saved keys live in `/config/secrets.env`; the UI never echoes them. When Host home context is on and an AI host key is ready, the admin preview shows the filtered context that may go to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly. Mute any entity there to keep it out of future host/context use. Turning Host home context off cancels Home-derived generation and post-air extraction, removes unstarted Home-derived breaks, clears public Home moments, and stops Home/timer polling. Audio already on air may finish so privacy revocation does not create dead air, but it cannot publish post-air Home memory afterward. The Home Assistant integration remains separate, so entity publishing can stay on while Host home context is off; running without script-provider credentials also prevents host context from reaching an AI provider.
 
 ## Make it yours
 

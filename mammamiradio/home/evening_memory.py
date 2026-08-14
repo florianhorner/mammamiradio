@@ -422,6 +422,19 @@ class EveningLedger:
             self._dirty = True
         return bool(to_drop)
 
+    def purge_all_buckets(self) -> bool:
+        """Drop every Home-derived bucket and mark the ledger for persistence.
+
+        Owns the dirty flag so an explicit privacy purge cannot silently turn
+        into a no-op if the dirty-tracking implementation changes. Returns
+        whether anything was dropped.
+        """
+        if not self.buckets:
+            return False
+        self.buckets.clear()
+        self._dirty = True
+        return True
+
     def select_and_render(self, *, now: float, rng: random.Random | None = None) -> str:
         """Pick one eligible gag and immediately spend its cooldown."""
         offer = self.offer_gag(now=now, rng=rng)

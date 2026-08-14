@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import StationState
+from mammamiradio.home.context_value import HomeContextValue, classify_home_context_entity_ids
 
 RUN_MODES = [
     {
@@ -71,13 +72,23 @@ def _playlist_is_demo(state: StationState) -> bool:
     return all(track.spotify_id.startswith("demo") for track in state.playlist[:5])
 
 
+def home_context_value(state: StationState) -> HomeContextValue:
+    """Classify prompt-safe context by radio value, preserving legacy fallback."""
+    scored_ids = [row.get("entity_id") for row in state.ha_scored_entities if isinstance(row, dict)]
+    scored_value = classify_home_context_entity_ids(scored_ids)
+    if scored_value != "empty":
+        return scored_value
+    # Older/injected state may carry only the already-sanitized summary and
+    # count, without entity ids. Preserve that compatibility instead of
+    # guessing that an unidentified prompt slice is merely daylight.
+    if (state.ha_context or "").strip() or (state.ha_context_last_updated and state.ha_context_entity_count > 0):
+        return "useful"
+    return "empty"
+
+
 def has_safe_home_context(state: StationState) -> bool:
-    """Return True when a prompt-safe HA context slice is actually available."""
-    return bool(
-        (state.ha_context or "").strip()
-        or state.ha_scored_entities
-        or (state.ha_context_last_updated and state.ha_context_entity_count > 0)
-    )
+    """Return True when prompt-safe context has meaningful radio value."""
+    return home_context_value(state) == "useful"
 
 
 HomeContextReadiness = Literal["disabled", "access_missing", "collecting", "empty", "prompt_ready"]
@@ -95,7 +106,8 @@ class HomeContextAvailability:
 def home_context_availability(config: StationConfig, state: StationState) -> HomeContextAvailability:
     """Project Home Assistant context into typed setup-ready states."""
     has_access = bool(config.homeassistant.enabled and config.ha_token)
-    home_ready = has_safe_home_context(state)
+    context_value = home_context_value(state)
+    home_ready = context_value == "useful"
     readiness: HomeContextReadiness
     if not config.homeassistant.enabled:
         readiness = "disabled"
@@ -105,7 +117,7 @@ def home_context_availability(config: StationConfig, state: StationState) -> Hom
         readiness = "disabled"
     elif home_ready:
         readiness = "prompt_ready"
-    elif state.ha_context_last_updated:
+    elif context_value == "ambient_only" or state.ha_context_last_updated:
         readiness = "empty"
     else:
         readiness = "collecting"
@@ -137,14 +149,15 @@ def _llm_key_status(config: StationConfig, provider_health: dict | None = None) 
 
 
 def _stream_status(config: StationConfig, state: StationState, golden_path: dict | None = None) -> str:
-    if state.session_stopped:
-        return "stopped"
-    if state.now_streaming or state.queued_segments or state.playlist or state.last_music_file:
-        return "ready"
+    # Setup is configuration truth, not a projection of transient playback.
+    # The golden-path source probe is authoritative when available; runtime
+    # pause/queue/selection state is surfaced separately by /status.
     if golden_path is not None:
         return "blocked" if golden_path.get("blocking") else "ready"
     from mammamiradio.playlist.downloader import external_media_enabled
 
+    if state.playlist_source is not None or state.playlist:
+        return "ready"
     return "checking" if external_media_enabled(config.allow_ytdlp) else "blocked"
 
 
@@ -165,7 +178,7 @@ def _setup_status_shape(status: str) -> dict[str, str]:
         return {"tone": "ok", "shape": "ok", "display_status": "Ready"}
     if status == "not_configured":
         return {"tone": "info", "shape": "info", "display_status": "Optional"}
-    if status in {"blocked", "rejected", "stopped"}:
+    if status in {"blocked", "rejected"}:
         return {"tone": "error", "shape": "error", "display_status": "Needs setup"}
     display = {
         "missing": "Missing",
@@ -190,7 +203,14 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     primary_action = {"kind": "open_listener", "label": "Open listener", "target": "listen"}
-    for stage in stages:
+    # Display remains in the canonical stage order, while fresh-install stages
+    # can explicitly keep recovery repair behind the first-audio and privacy
+    # milestones. Legacy stages omit this field and retain their input order.
+    action_stages = sorted(
+        enumerate(stages),
+        key=lambda indexed: (int(indexed[1].get("primary_priority", indexed[0])), indexed[0]),
+    )
+    for _index, stage in action_stages:
         status = str(stage.get("status") or "checking")
         action = str(stage.get("action") or "")
         if action == "review_home_context":
@@ -201,6 +221,8 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
         primary_action = {
             "fix_stream": {"kind": "fix_stream", "label": "Fix stream", "target": "setup"},
             "add_ai_key": {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"},
+            "find_speaker": {"kind": "find_speaker", "label": "Find speaker", "target": "setup"},
+            "verify_audio": {"kind": "verify_audio", "label": "Did you hear it?", "target": "setup"},
         }.get(action, {"kind": "review_setup", "label": "Review setup", "target": "setup"})
         break
     attention_required = primary_action["kind"] != "open_listener"
@@ -302,14 +324,38 @@ def _homeassistant_essential_status(
     )
 
 
+def first_listen_onboarding_active(
+    install_origin: str,
+    *,
+    audio_complete: bool,
+    privacy_complete: bool,
+    ha_access_available: bool = True,
+) -> bool:
+    """Return whether the operator still needs the speaker-check onboarding sequence."""
+    # Without Home Assistant access the speaker check can never complete, so a
+    # standalone install must not be held in a mandatory sequence (or lose the
+    # AI-key step hidden behind it). The guided path stays offered, not owed.
+    if not ha_access_available:
+        return False
+    if install_origin == "existing":
+        return False
+    # Only a proven pre-feature install gets the compatibility bypass. Treat
+    # malformed or future origin values like ``unknown`` so privacy and audible
+    # proof cannot fail open when origin evidence drifts.
+    return not (audio_complete and privacy_complete)
+
+
 def build_guided_setup(
     config: StationConfig,
     state: StationState,
     *,
     golden_path: dict | None = None,
     provider_health: dict | None = None,
+    first_listen_receipt: object | None = None,
+    install_origin: str = "existing",
+    context_choice_explicit: bool = True,
 ) -> dict:
-    """Canonical three-stage onboarding projection shared by admin APIs."""
+    """Canonical setup projection shared by admin and capability APIs."""
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
     home_availability = home_context_availability(config, state)
     has_ha_access = home_availability.homeassistant_access
@@ -360,11 +406,145 @@ def build_guided_setup(
         "homeassistant_access": has_ha_access,
         "home_context_ready": home_ready,
     }
+
+    audio_complete = bool(getattr(first_listen_receipt, "audio_complete", False))
+    privacy_complete = bool(getattr(first_listen_receipt, "privacy_complete", False))
+    accepted_attempt_id = str(getattr(first_listen_receipt, "accepted_attempt_id", "") or "")
+    selected_entity_id = str(getattr(first_listen_receipt, "selected_entity_id", "") or "")
+    fresh_install = install_origin == "fresh"
+    onboarding_active = first_listen_onboarding_active(
+        install_origin,
+        audio_complete=audio_complete,
+        privacy_complete=privacy_complete,
+        ha_access_available=has_ha_access,
+    )
+    source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
+    source_map = source_readiness.get("sources") if isinstance(source_readiness.get("sources"), dict) else {}
+    source_rows = []
+    for kind, fallback_label in (
+        ("charts", "Live charts"),
+        ("jamendo", "Jamendo"),
+        ("local", "Local music"),
+        ("demo", "Bundled demo music"),
+        ("recovery", "Recovery cover"),
+    ):
+        source = source_map.get(kind) if isinstance(source_map, dict) else None
+        source = source if isinstance(source, dict) else {}
+        source_rows.append(
+            {
+                "kind": kind,
+                "label": str(source.get("label") or fallback_label),
+                "status": str(source.get("status") or "not_configured"),
+                "detail": str(source.get("detail") or "Readiness has not been checked yet."),
+                "configured": bool(source.get("configured", False)),
+                "attempted": bool(source.get("attempted", False)),
+                "candidates": int(source.get("candidates", 0) or 0),
+                "playable": int(source.get("playable", 0) or 0),
+                "on_air": bool(source.get("on_air", False)),
+                "failure": str(source.get("failure") or ""),
+            }
+        )
+    source_readiness = {
+        **source_readiness,
+        "rows": source_rows,
+        "healthy": bool(source_readiness.get("programming_ready", False)),
+        # Recovery transport truth comes only from on-air source evidence.
+        # Human confirmation proves the selected speaker path, not that the
+        # recovery ladder is currently carrying audio.
+        "transport_audible": bool(source_readiness.get("recovery_on_air", False)),
+    }
+    first_listen = {
+        "install_origin": install_origin,
+        "fresh_install": fresh_install,
+        "audio_complete": audio_complete,
+        "privacy_complete": privacy_complete,
+        "setup_reviewed": privacy_complete,
+        "accepted_attempt_id": accepted_attempt_id,
+        "selected_entity_id": selected_entity_id,
+        "accepted_at": getattr(first_listen_receipt, "accepted_at", None),
+        "heard_at": getattr(first_listen_receipt, "heard_at", None),
+        "privacy_reviewed_at": getattr(first_listen_receipt, "privacy_reviewed_at", None),
+        "show_ai": bool(not onboarding_active or (audio_complete and privacy_complete)),
+    }
+    speaker = {
+        "status": "verified"
+        if audio_complete
+        else "accepted"
+        if accepted_attempt_id
+        else "ready"
+        if has_ha_access
+        else "blocked",
+        "label": "Home Assistant speaker",
+        "selected_entity_id": selected_entity_id,
+        "media_source_uri": "media-source://mammamiradio/live",
+        "homeassistant_access": has_ha_access,
+    }
+    verification = {
+        "status": "heard" if audio_complete else "waiting" if accepted_attempt_id else "not_started",
+        "attempt_id": accepted_attempt_id,
+        "heard": audio_complete,
+        "milestone": "First listen achieved" if audio_complete else "Did you hear it?",
+    }
+    privacy = {
+        "status": "reviewed"
+        if privacy_complete
+        else "ready"
+        if audio_complete or not onboarding_active
+        else "after_first_listen",
+        "enabled": bool(config.homeassistant.context_enabled),
+        "reviewed": privacy_complete,
+        "preview_required": not privacy_complete,
+        "homeassistant_access": has_ha_access,
+        "choice_explicit": context_choice_explicit,
+        "copy": (
+            "Enabled locally; no Home context reaches an AI provider unless one is configured."
+            if config.homeassistant.context_enabled
+            else "Off until you review a fresh filtered preview and choose Enable."
+        ),
+    }
+
+    if onboarding_active:
+        source_stage = {
+            "id": "source_readiness",
+            "label": "Music sources",
+            "status": "ready" if source_readiness["healthy"] else "blocked",
+            "action": "fix_stream" if not source_readiness["healthy"] else "review",
+            "primary_priority": 40,
+        }
+        speaker_stage = {
+            "id": "speaker",
+            "label": "Speaker",
+            "status": "ready" if accepted_attempt_id or audio_complete else "checking" if has_ha_access else "blocked",
+            "action": "find_speaker",
+            "primary_priority": 10,
+        }
+        verification_stage = {
+            "id": "verification",
+            "label": "First listen",
+            "status": "ready" if audio_complete else "checking",
+            "action": "verify_audio",
+            "primary_priority": 20,
+        }
+        privacy_stage = {
+            "id": "privacy",
+            "label": "Privacy",
+            "status": "ready" if privacy_complete else "checking",
+            "action": "" if privacy_complete else "review_home_context",
+            "primary_priority": 30,
+        }
+        strip = _build_setup_strip([source_stage, speaker_stage, verification_stage, privacy_stage])
+    else:
+        strip = _build_setup_strip([stream, ai_hosts, home_context])
     return {
-        "strip": _build_setup_strip([stream, ai_hosts, home_context]),
+        "strip": strip,
         "stream": {key: value for key, value in stream.items() if key != "id"},
         "ai_hosts": {key: value for key, value in ai_hosts.items() if key != "id"},
         "home_context": {key: value for key, value in home_context.items() if key != "id"},
+        "first_listen": first_listen,
+        "source_readiness": source_readiness,
+        "speaker": speaker,
+        "verification": verification,
+        "privacy": privacy,
     }
 
 
@@ -453,6 +633,9 @@ def build_setup_status(
     *,
     golden_path: dict | None = None,
     provider_health: dict | None = None,
+    first_listen_receipt: object | None = None,
+    install_origin: str = "existing",
+    context_choice_explicit: bool = True,
 ) -> dict:
     """Produce the full onboarding payload used by the dashboard gate."""
     mode = detect_run_mode(config)
@@ -468,7 +651,15 @@ def build_setup_status(
     has_llm = bool(config.anthropic_api_key or config.openai_api_key)
     has_azure_tts = bool(config.azure_speech_key and config.azure_speech_region)
     has_cloud_tts = bool(config.openai_api_key or has_azure_tts or config.elevenlabs_api_key)
-    guided_setup = build_guided_setup(config, state, golden_path=golden_path, provider_health=provider_health)
+    guided_setup = build_guided_setup(
+        config,
+        state,
+        golden_path=golden_path,
+        provider_health=provider_health,
+        first_listen_receipt=first_listen_receipt,
+        install_origin=install_origin,
+        context_choice_explicit=context_choice_explicit,
+    )
     stream_ready = guided_setup["stream"]["status"] == "ready"
     ha_status, ha_summary, ha_next_action = _homeassistant_essential_status(config, guided_setup["home_context"])
 
@@ -670,7 +861,13 @@ def build_setup_status(
         ),
     }
 
-    onboarding_required = not stream_ready
+    first_listen_active = first_listen_onboarding_active(
+        guided_setup["first_listen"]["install_origin"],
+        audio_complete=guided_setup["first_listen"]["audio_complete"],
+        privacy_complete=guided_setup["first_listen"]["privacy_complete"],
+        ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
+    )
+    onboarding_required = not stream_ready or first_listen_active
 
     signature_data = {
         "mode": mode["detected"],
@@ -679,6 +876,12 @@ def build_setup_status(
         "identity_source": identity["source"],
         "essentials": [(item["key"], item["status"]) for item in essentials],
         "checks": [(item["key"], item["status"]) for item in preflight_checks],
+        "first_listen": (
+            guided_setup["first_listen"]["install_origin"],
+            guided_setup["first_listen"]["audio_complete"],
+            guided_setup["first_listen"]["privacy_complete"],
+            guided_setup["first_listen"]["selected_entity_id"],
+        ),
     }
     signature = hashlib.sha256(json.dumps(signature_data, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -689,11 +892,22 @@ def build_setup_status(
         "identity": identity,
         "onboarding_required": onboarding_required,
         "guided_setup": guided_setup,
+        "first_listen": guided_setup["first_listen"],
+        "source_readiness": guided_setup["source_readiness"],
+        "speaker": guided_setup["speaker"],
+        "verification": guided_setup["verification"],
+        "privacy": guided_setup["privacy"],
         "essentials": essentials,
         "preflight_checks": preflight_checks,
         "onboarding_steps": onboarding_steps,
         "recommended_next_action": (
-            "Fix stream readiness before setup continues."
+            "Find a Home Assistant speaker and start the live media source."
+            if first_listen_active and not guided_setup["first_listen"]["accepted_attempt_id"]
+            else "Confirm whether you hear Mamma Mi Radio on the selected speaker."
+            if first_listen_active and not guided_setup["first_listen"]["audio_complete"]
+            else "Review the filtered Home context preview, then enable it or keep it off."
+            if first_listen_active and not guided_setup["first_listen"]["privacy_complete"]
+            else "Fix stream readiness before setup continues."
             if not stream_ready
             else "Add an AI key to unlock full station behavior."
             if not has_llm

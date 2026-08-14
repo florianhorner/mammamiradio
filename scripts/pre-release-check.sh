@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Pre-release sanity check. Run before bumping the version number.
+# Pre-release sanity check. Run as part of the release cut — it validates the version
+# files and changelog heads AFTER they are bumped, which is what quality.yml does on the
+# `chore(release): cut X.Y.Z` PR. (Deliberately does NOT check whether the advertised
+# image exists: that is scripts/check-advertised-version.sh, and asking it here would
+# deadlock every cut PR, since the cut names a version whose image is not built yet.)
 # Catches the class of bugs that have caused production silence incidents.
 #
 # Usage: scripts/pre-release-check.sh
@@ -74,19 +78,35 @@ else
     fail "manifest.json version is '${MANIFEST_VER:-unreadable}' but config.yaml is $ADDON_VER — bump custom_components/mammamiradio/manifest.json with the release (or fix malformed JSON)"
 fi
 
-# ── 2. ha-addon CHANGELOG covers the current version ─────────────────────────
+# ── 2. Both CHANGELOGs cover the current version ─────────────────────────────
 echo ""
-echo "2. ha-addon CHANGELOG"
+echo "2. CHANGELOGs"
 
 # Take the FIRST whitespace-delimited token of the header, then strip brackets, so a dated
 # header ("## 2.14.1 - 2026-06-21") or a bracketed one ("## [2.14.1]") both reduce to the
 # bare version. Comparing the whole header string falsely failed whenever it carried a date.
-CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
+# The trailing-whitespace/CR trim matters: without it "## Unreleased " (one stray
+# space, or a CRLF line ending) stops matching the skip and gets reported as the
+# newest *versioned* heading, blocking the release with a nonsense message.
+CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); gsub(/[[:space:]\r]+$/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' ha-addon/mammamiradio/CHANGELOG.md)
 
 if [ "$CHANGELOG_VER" = "$ADDON_VER" ]; then
-    ok "CHANGELOG latest version (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
+    ok "ha-addon CHANGELOG latest version (## $CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
 else
-    fail "CHANGELOG latest version is ## ${CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — update ha-addon/mammamiradio/CHANGELOG.md"
+    fail "ha-addon CHANGELOG latest version is ## ${CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — update ha-addon/mammamiradio/CHANGELOG.md"
+fi
+
+# The root CHANGELOG is checked here for the same reason, using the same extractor.
+# addon-release.yml's tag pre-flight already validates it, but that fires INSIDE the
+# open cut window: a typo in "## [X.Y.Z]" passes every pre-merge gate, merges, opens
+# the window where main advertises an unpublished image, and only then fails. Catching
+# it here moves the failure to the cut PR, where the fix is an edit instead of a revert.
+ROOT_CHANGELOG_VER=$(awk '/^## / {version=$0; sub(/^##[[:space:]]+/, "", version); gsub(/[[:space:]\r]+$/, "", version); if (version != "Unreleased" && version != "[Unreleased]") {split(version, a, /[[:space:]]+/); v=a[1]; gsub(/^\[|\]$/, "", v); print v; exit}}' CHANGELOG.md)
+
+if [ "$ROOT_CHANGELOG_VER" = "$ADDON_VER" ]; then
+    ok "root CHANGELOG latest version (## $ROOT_CHANGELOG_VER) matches config.yaml ($ADDON_VER)"
+else
+    fail "root CHANGELOG latest version is ## ${ROOT_CHANGELOG_VER:-missing} but config.yaml is $ADDON_VER — fold the changelog in the cut commit, before tagging"
 fi
 
 # ── 3. Stable release beat target ─────────────────────────────────────────────
@@ -118,22 +138,56 @@ fi
 echo ""
 echo "5. Packaged recovery audio"
 
-if [ -d mammamiradio/assets/demo/recovery ]; then
-    RECOVERY_MP3_COUNT=$(find mammamiradio/assets/demo/recovery -maxdepth 1 -type f -name '*.mp3' -size +1024c | wc -l | tr -d ' ')
-else
-    RECOVERY_MP3_COUNT=0
-fi
+RECOVERY_DIR="mammamiradio/assets/demo/recovery"
+REQUIRED_RECOVERY_ASSETS=(
+    "continuity_1.mp3"
+    "emergency_tone.mp3"
+)
 
-if [ "$RECOVERY_MP3_COUNT" -gt 0 ]; then
-    ok "packaged recovery clip is present ($RECOVERY_MP3_COUNT mp3 file(s))"
-else
-    fail "No packaged recovery MP3 under mammamiradio/assets/demo/recovery/ — image can fall through to technical fallback audio"
-fi
+for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
+    asset_path="$RECOVERY_DIR/$asset_name"
+    if [ ! -f "$asset_path" ]; then
+        fail "Required recovery asset is missing: $asset_path"
+        continue
+    fi
+
+    asset_size=$(wc -c < "$asset_path" | tr -d '[:space:]')
+    if [ "$asset_size" -gt 1024 ]; then
+        ok "$asset_name is present and nontrivial ($asset_size bytes)"
+    else
+        fail "$asset_name is too small ($asset_size bytes; must be > 1024)"
+    fi
+done
 
 if grep -q 'generate_silence' mammamiradio/scheduling/producer.py; then
     fail "producer.py must not call generate_silence in recovery paths — use recovery clip, norm cache, or emergency tone"
 else
     ok "producer recovery paths do not call generate_silence"
+fi
+
+if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+    --assets-root "$PWD/mammamiradio/assets/demo"; then
+    ok "packaged spoken assets are manifest/hash/transcript approved"
+else
+    fail "packaged spoken-asset manifest/hash/transcript validation failed"
+fi
+
+if command -v ffprobe >/dev/null 2>&1; then
+    for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
+        asset_path="$RECOVERY_DIR/$asset_name"
+        if probe_output=$(ffprobe \
+            -v error \
+            -select_streams a:0 \
+            -show_entries stream=codec_type \
+            -of csv=p=0 \
+            "$asset_path" 2>&1) && grep -qi 'audio' <<<"$probe_output"; then
+            ok "$asset_name contains an ffprobe-readable audio stream"
+        else
+            fail "$asset_name is not ffprobe-readable audio (${probe_output:-no audio stream})"
+        fi
+    done
+else
+    fail "ffprobe is required to validate every packaged recovery asset"
 fi
 
 # ── 6. Test: _pick_canned_clip returns None (missing packaged clip scenario) ──
@@ -222,9 +276,9 @@ echo "======================================="
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then
-    echo "Fix the failures above before bumping the version."
+    echo "Fix the failures above before tagging this cut."
     exit 1
 else
-    echo "All checks passed. Safe to bump the version."
+    echo "All checks passed."
     exit 0
 fi

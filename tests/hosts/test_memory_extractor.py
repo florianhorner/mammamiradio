@@ -16,7 +16,9 @@ from mammamiradio.hosts.memory_extractor import (
     MEMORY_EXTRACT_CALLER,
     MEMORY_EXTRACT_MAX_TOKENS,
     MemoryExtractionCommit,
+    drain_revoked_home_memory_extractions,
     extract_banter_memory,
+    revoke_home_memory_extractions,
     schedule_banter_memory_extraction,
 )
 from mammamiradio.hosts.persona import PersonaStore
@@ -259,6 +261,140 @@ async def test_schedule_banter_memory_extraction_creates_task_and_cleans_up(conf
             await asyncio.gather(task, return_exceptions=True)
         if task is not None:
             memory_extractor._active_tasks.discard(task)
+
+
+@pytest.mark.asyncio
+async def test_home_memory_revoked_before_provider_submission_makes_no_call(config, state):
+    state.home_context_policy_generation = 3
+    config.homeassistant.context_enabled = True
+    entered_generation_layer = asyncio.Event()
+    provider_call = AsyncMock()
+
+    async def _guarded_generate(**kwargs):
+        entered_generation_layer.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # Model a client layer that needs to consult its last-moment guard
+            # after task cancellation rather than exiting immediately.
+            pass
+        if kwargs["submission_guard"]():
+            await provider_call()
+        return {}
+
+    task = None
+    try:
+        with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_guarded_generate):
+            task = schedule_banter_memory_extraction(
+                config=config,
+                state=state,
+                metadata={
+                    "home_context_generation": 3,
+                    "memory_extraction": _commit().to_metadata(),
+                },
+            )
+            assert task is not None
+            await asyncio.wait_for(entered_generation_layer.wait(), timeout=1)
+
+            revoked = revoke_home_memory_extractions()
+            assert task in revoked
+            assert task.cancelling()
+            await drain_revoked_home_memory_extractions(revoked)
+
+        provider_call.assert_not_awaited()
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_resistant_home_result_cannot_write_after_revocation(config, state):
+    state.home_context_policy_generation = 8
+    config.homeassistant.context_enabled = True
+    provider_started = asyncio.Event()
+
+    async def _cancellation_resistant_generate(**_kwargs):
+        provider_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return {
+                "persona_updates": {"new_theories": ["private late theory"]},
+                "song_cues": [{"cue_type": "reaction", "cue_text": "private late cue"}],
+            }
+
+    task = None
+    try:
+        with patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new=_cancellation_resistant_generate,
+        ):
+            task = schedule_banter_memory_extraction(
+                config=config,
+                state=state,
+                metadata={
+                    "home_context_generation": 8,
+                    "memory_extraction": _commit().to_metadata(),
+                },
+            )
+            assert task is not None
+            await asyncio.wait_for(provider_started.wait(), timeout=1)
+            revoked = revoke_home_memory_extractions()
+            await drain_revoked_home_memory_extractions(revoked)
+
+        persona = await state.persona_store.get_persona()
+        assert "private late theory" not in persona.theories
+        assert await get_cues(config.cache_dir / "mammamiradio.db", "yt_memory_1") == []
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_home_memory_revocation_drain_is_bounded_for_stubborn_task(config, state, monkeypatch):
+    state.home_context_policy_generation = 13
+    config.homeassistant.context_enabled = True
+    provider_started = asyncio.Event()
+    release = asyncio.Event()
+    monkeypatch.setattr(memory_extractor, "_HOME_MEMORY_REVOCATION_DRAIN_SECONDS", 0.01)
+
+    async def _stubborn_generate(**_kwargs):
+        provider_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        return {}
+
+    task = None
+    try:
+        with patch("mammamiradio.hosts.scriptwriter._generate_json_response", new=_stubborn_generate):
+            task = schedule_banter_memory_extraction(
+                config=config,
+                state=state,
+                metadata={
+                    "home_context_generation": 13,
+                    "memory_extraction": _commit().to_metadata(),
+                },
+            )
+            assert task is not None
+            await asyncio.wait_for(provider_started.wait(), timeout=1)
+            revoked = revoke_home_memory_extractions()
+            started = asyncio.get_running_loop().time()
+            await drain_revoked_home_memory_extractions(revoked)
+            elapsed = asyncio.get_running_loop().time() - started
+
+            assert elapsed < 0.25
+            assert not task.done()
+            release.set()
+            await asyncio.wait_for(task, timeout=1)
+    finally:
+        release.set()
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def test_memory_extraction_commit_rejects_empty_metadata():

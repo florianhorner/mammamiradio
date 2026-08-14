@@ -46,8 +46,9 @@ STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
 STATUS_PLANNED = "planned"
 
-# Pure digital silence (the TTS silence fallback) measures near the floor
-# (~-91 dBFS peak); real speech peaks far above this, so -80 cleanly splits them.
+# Pure digital silence measures near the floor (~-91 dBFS peak); real speech
+# peaks far above this, so -80 cleanly splits them. Runtime TTS now raises when
+# every route fails, but this remains a defense against stale or malformed output.
 SILENCE_PEAK_DBFS = -80.0
 MIN_CLIP_BYTES = 1024
 MIN_CLIP_DURATION_SEC = 0.5
@@ -130,14 +131,12 @@ def _discard(path: Path) -> str:
 
 
 def _looks_like_silence(path: Path) -> bool:
-    """True if a rendered clip is effectively silent (the TTS silence fallback).
+    """True if a rendered clip is effectively silent.
 
-    ``synthesize()`` never raises: when every Edge attempt fails (network blocked,
-    Edge down) it returns 2s of ``generate_silence()`` rather than erroring.
-    Measuring the peak level lets us reject that instead of committing a silent
-    greeting. Best-effort — if the level can't be measured we do NOT claim silence
-    (avoid false failures); ``synthesize`` already needed ffmpeg to produce the
-    file at all.
+    ``synthesize()`` raises when every configured route fails. Measuring peak
+    level remains a defense-in-depth check for stale, malformed, or unexpectedly
+    silent output before a greeting is committed. Best-effort: if the level
+    cannot be measured, do not claim silence and risk a false failure.
     """
     try:
         _mean_db, peak_db = _probe_volume(path)
@@ -196,9 +195,9 @@ async def generate_clips(
     Always renders through Edge. If a configured host uses a cloud engine, its
     explicit Edge fallback is selected before rendering. Returns one ClipResult
     per clip. Best-effort per clip:
-    a single failure (a flaky voice, an unwritable output dir, a silent fallback,
-    or a substituted voice) is recorded as STATUS_FAILED and does not abort the
-    remaining clips.
+    a single failure (a flaky voice, an unwritable output dir, an unexpectedly
+    silent render, or a substituted voice) is recorded as STATUS_FAILED and
+    does not abort the remaining clips.
     """
     if config is not None:
         clips = resolve_welcome_clips(config, clips)
@@ -238,15 +237,15 @@ async def generate_clips(
                 results.append(ClipResult(clip, dest, STATUS_FAILED, error=f"{render_error}; clip discarded{note}"))
                 continue
             if _looks_like_silence(staging):
-                # The TTS backend was unreachable and fell back to silence. Discard
-                # the file so an operator can't unknowingly commit a silent greeting.
+                # Defense in depth: active TTS failures raise, but never let an
+                # unexpectedly silent artifact become a packaged greeting.
                 note = _discard(staging)
                 results.append(
                     ClipResult(
                         clip,
                         dest,
                         STATUS_FAILED,
-                        error=f"voice backend unreachable — TTS returned silence; clip discarded{note}",
+                        error=f"rendered audio was effectively silent; clip discarded{note}",
                     )
                 )
                 continue

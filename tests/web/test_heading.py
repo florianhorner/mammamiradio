@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -87,6 +88,43 @@ async def test_heading_set_adds_tags_and_persists(tmp_path):
     assert status.json()["heading"]["active"] is True
     assert status.json()["heading"]["label"] == "Anni '80"
     assert status.json()["heading"]["phase"] == "steering"
+
+
+@pytest.mark.asyncio
+async def test_heading_load_crossing_stop_resume_updates_metadata_without_runway(tmp_path):
+    app = _make_app(tmp_path)
+    state = app.state.station_state
+    heading_tracks = [_track("Blue Jeans", "Franco", "h1")]
+    load_started = threading.Event()
+    release_load = threading.Event()
+
+    def _slow_load(*_args, **_kwargs):
+        load_started.set()
+        assert release_load.wait(timeout=2.0)
+        return heading_tracks, _source()
+
+    with patch("mammamiradio.web.streamer.load_explicit_source", side_effect=_slow_load):
+        async with _client(app) as client:
+            request_task = asyncio.create_task(client.post("/api/heading", json={"seed": "classic://italian/80s"}))
+            deadline = time.monotonic() + 1.0
+            while not load_started.is_set():
+                if time.monotonic() > deadline:
+                    raise AssertionError("heading source load did not start")
+                await asyncio.sleep(0)
+            state.session_stopped = True
+            state.continuity_epoch += 1
+            state.session_stopped = False
+            release_load.set()
+            response = await asyncio.wait_for(request_task, timeout=2.0)
+
+    assert response.json()["ok"] is True
+    assert response.json()["metadata_only"] is True
+    assert response.json()["resume_required"] is False
+    assert [track.title for track in state.playlist] == ["Base", "Blue Jeans"]
+    assert state.heading is not None
+    assert app.state.queue.empty()
+    assert state.continuity_slot is None
+    assert not app.state.skip_event.is_set()
 
 
 @pytest.mark.asyncio
@@ -406,6 +444,45 @@ async def test_slow_direction_does_not_override_later_back_to_auto(tmp_path):
     assert direction.json()["stale"] is True
     assert app.state.station_state.heading is None
     assert read_persisted_heading(tmp_path) is None
+
+
+@pytest.mark.asyncio
+async def test_direction_crossing_stop_resume_uses_commit_boundary_runtime_state(tmp_path):
+    """Pre-lock work does not inherit an unrelated, already-finished control epoch."""
+
+    existing = _track("Toxic", "Britney Spears", "base")
+    app = _make_app(tmp_path, tracks=[existing])
+    app.state.config.allow_ytdlp = False
+    state = app.state.station_state
+    expansion = DirectionExpansion(
+        label="2000s female vocals",
+        targets=[DirectionTarget("Britney Spears", "Toxic")],
+        source="llm",
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_expand_direction(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return expansion
+
+    with patch("mammamiradio.web.streamer.expand_direction", side_effect=slow_expand_direction):
+        async with _client(app) as client:
+            pending = asyncio.create_task(client.post("/api/direction", json={"text": "2000s female vocals"}))
+            await started.wait()
+            state.session_stopped = True
+            state.continuity_epoch += 1
+            state.session_stopped = False
+            release.set()
+            response = await pending
+
+    body = response.json()
+    assert body["ok"] is True
+    assert body["metadata_only"] is False
+    assert body["retagged_existing"] == 1
+    assert state.heading is not None
+    assert existing.heading_id == state.heading.id
 
 
 @pytest.mark.asyncio

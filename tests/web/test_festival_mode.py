@@ -9,7 +9,6 @@ Three mandatory scenarios per the audio delivery test coverage rule:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 from pathlib import Path
@@ -118,6 +117,43 @@ async def test_post_party_enable_sets_festival_mode_purges_queue_and_arms_banter
     assert app.state.queue._queue[0].metadata["continuity_reservation"] is True
     assert os.environ["MAMMAMIRADIO_FESTIVAL_MODE"] == "true"
     save_dotenv.assert_called_once_with({"MAMMAMIRADIO_FESTIVAL_MODE": "true"})
+
+
+@pytest.mark.asyncio
+async def test_post_party_enable_preserves_ready_head_when_replacement_is_unavailable(tmp_path, monkeypatch):
+    app = _make_test_app()
+    monkeypatch.delenv("MAMMAMIRADIO_FESTIVAL_MODE", raising=False)
+    state = app.state.station_state
+    head_path = tmp_path / "festival-head.mp3"
+    tail_path = tmp_path / "festival-tail.mp3"
+    head_path.write_bytes(b"head")
+    tail_path.write_bytes(b"tail")
+    head = Segment(type=SegmentType.MUSIC, path=head_path, duration_sec=180.0, metadata={"title": "Head"})
+    tail = Segment(type=SegmentType.BANTER, path=tail_path, duration_sec=10.0, metadata={"title": "Tail"})
+    app.state.queue.put_nowait(head)
+    app.state.queue.put_nowait(tail)
+    state.queued_segments = [{"type": "music", "label": "Head"}, {"type": "banter", "label": "Tail"}]
+    state.continuity_epoch = 6
+
+    with (
+        patch("mammamiradio.web.streamer._save_dotenv"),
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://testserver",
+        ) as client:
+            resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
+
+    assert resp.status_code == 200
+    assert resp.json()["active"] is True
+    assert app.state.config.party_mode == "festival"
+    assert state.force_next is SegmentType.BANTER
+    assert list(app.state.queue._queue) == [head]
+    assert len(state.queued_segments) == 1
+    assert state.continuity_epoch == 7
+    assert head_path.exists()
+    assert not tail_path.exists()
 
 
 @pytest.mark.asyncio
@@ -382,6 +418,71 @@ async def test_double_disable_is_idempotent(monkeypatch):
     save_dotenv.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "party_mode", "expected_value"),
+    [
+        ({"action": "enable", "mode": "festival"}, "festival", True),
+        ({"action": "disable"}, None, False),
+    ],
+)
+async def test_addon_noop_confirms_supervisor_without_live_side_effects(
+    payload,
+    party_mode,
+    expected_value,
+    monkeypatch,
+):
+    app = _make_test_app(is_addon=True)
+    app.state.config.party_mode = party_mode
+    monkeypatch.delenv("MAMMAMIRADIO_FESTIVAL_MODE", raising=False)
+    before_revision = app.state.station_state.playlist_revision
+
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+        patch("mammamiradio.web.streamer._reserve_continuity_runway") as reserve_runway,
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://testserver",
+        ) as client:
+            resp = await client.post("/api/party", json=payload)
+
+    assert resp.status_code == 200
+    save_addon_option.assert_called_once_with("festival_mode", expected_value)
+    save_dotenv.assert_not_called()
+    reserve_runway.assert_not_called()
+    assert app.state.config.party_mode == party_mode
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.playlist_revision == before_revision
+    assert "MAMMAMIRADIO_FESTIVAL_MODE" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_addon_noop_supervisor_failure_returns_500_without_live_side_effects(monkeypatch):
+    app = _make_test_app(is_addon=True)
+    app.state.config.party_mode = "festival"
+    monkeypatch.delenv("MAMMAMIRADIO_FESTIVAL_MODE", raising=False)
+    before_revision = app.state.station_state.playlist_revision
+
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option", side_effect=OSError("unavailable")),
+        patch("mammamiradio.web.streamer._reserve_continuity_runway") as reserve_runway,
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://testserver",
+        ) as client:
+            resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
+
+    assert resp.status_code == 500
+    reserve_runway.assert_not_called()
+    assert app.state.config.party_mode == "festival"
+    assert app.state.station_state.force_next is None
+    assert app.state.station_state.playlist_revision == before_revision
+    assert "MAMMAMIRADIO_FESTIVAL_MODE" not in os.environ
+
+
 # ---------------------------------------------------------------------------
 # Validation errors
 # ---------------------------------------------------------------------------
@@ -450,13 +551,14 @@ async def test_party_endpoints_require_admin_for_public_ip():
 
 
 @pytest.mark.asyncio
-async def test_party_addon_mode_writes_options_json(tmp_path, monkeypatch):
+async def test_party_addon_mode_uses_supervisor_persistence(monkeypatch):
     app = _make_test_app(is_addon=True)
     monkeypatch.delenv("MAMMAMIRADIO_FESTIVAL_MODE", raising=False)
-    options_file = tmp_path / "options.json"
-    options_file.write_text(json.dumps({"existing": "value"}))
 
-    with patch("mammamiradio.web.persistence.Path", return_value=options_file):
+    with (
+        patch("mammamiradio.web.streamer._save_addon_option") as save_addon_option,
+        patch("mammamiradio.web.streamer._save_dotenv") as save_dotenv,
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)),
             base_url="http://testserver",
@@ -464,9 +566,8 @@ async def test_party_addon_mode_writes_options_json(tmp_path, monkeypatch):
             resp = await client.post("/api/party", json={"action": "enable", "mode": "festival"})
 
     assert resp.status_code == 200
-    options = json.loads(options_file.read_text())
-    assert options["festival_mode"] is True
-    assert options["existing"] == "value"
+    save_addon_option.assert_called_once_with("festival_mode", True)
+    save_dotenv.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 
-from mammamiradio.core.models import Heading, MediaAttribution, SegmentLogEntry, StationState, Track
+import pytest
+
+from mammamiradio.core.models import (
+    SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    Heading,
+    MediaAttribution,
+    PlaylistSource,
+    Segment,
+    SegmentLogEntry,
+    SegmentType,
+    SourceReadinessEvidence,
+    StationState,
+    Track,
+)
 from mammamiradio.web import status_payload, streamer
 
 _MOVED_HELPERS = (
+    "_admin_track_id",
     "_page_bounds",
     "_has_any_mp3",
     "_cached_cache_size_mb",
@@ -60,6 +76,7 @@ def test_paginated_tracks_serializes_page_and_revision():
     assert payload == {
         "tracks": [
             {
+                "id": "id-1",
                 "title": "Song 1",
                 "artist": "Artist",
                 "display": "Artist – Song 1",
@@ -142,6 +159,17 @@ def test_public_starter_catalog_serializes_only_listener_credit_facts(monkeypatc
             "modification_notice": "Pre-normalized for direct playback.",
         }
     ]
+
+
+def test_admin_track_id_prefers_trimmed_spotify_id_and_falls_back_to_cache_key():
+    spotify_track = Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="  id-1  ")
+    numeric_track = Track(title="Numeric", artist="Artist", duration_ms=180_000, spotify_id=123)  # type: ignore[arg-type]
+    cache_track = Track(title="Fallback", artist="Artist", duration_ms=180_000, spotify_id="   ")
+
+    assert status_payload._admin_track_id(spotify_track) == "id-1"
+    assert status_payload._admin_track_id(numeric_track) == "123"
+    assert status_payload._admin_track_id(cache_track) == cache_track.cache_key
+    assert status_payload._serialize_track(cache_track)["id"] == cache_track.cache_key
 
 
 def test_status_now_playback_redacts_internal_metadata_and_reports_progress():
@@ -272,6 +300,17 @@ def test_public_segment_metadata_redacts_transition_track_ref():
     assert payload == {"source": "banter"}
 
 
+def test_public_segment_metadata_redacts_render_bound_playlist_source():
+    metadata = {
+        "source": "youtube",
+        SEGMENT_PLAYLIST_SOURCE_KIND_KEY: "charts",
+    }
+
+    payload = status_payload._public_segment_metadata(metadata)
+
+    assert payload == {"source": "youtube"}
+
+
 def test_ha_details_payload_absent_without_ha_observability():
     assert status_payload._ha_details_payload(StationState()) is None
 
@@ -337,13 +376,199 @@ def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeyp
     class Config:
         anthropic_api_key = ""
         openai_api_key = ""
+        allow_ytdlp = True
+        playlist = SimpleNamespace(jamendo_client_id="")
 
     monkeypatch.setattr(status_payload, "_golden_path_cache", None)
     monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
-    monkeypatch.setattr(status_payload, "_has_any_mp3", lambda _path: False)
-    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
-
     payload = status_payload._golden_path_status(Config(), StationState())
 
     assert payload["stage"] == "needs_music_source"
     assert "yt-dlp downloads" not in payload["fallback_sources"]
+    assert payload["source_readiness"]["sources"]["charts"]["configured"] is True
+    assert payload["source_readiness"]["sources"]["charts"]["status"] == "configured_unchecked"
+
+
+def _source_config(*, allow_ytdlp: bool = False, jamendo_client_id: str = ""):
+    return SimpleNamespace(
+        allow_ytdlp=allow_ytdlp,
+        playlist=SimpleNamespace(jamendo_client_id=jamendo_client_id),
+        anthropic_api_key="",
+        openai_api_key="",
+    )
+
+
+def test_source_readiness_moves_candidates_to_playable_to_on_air_without_scanning(monkeypatch):
+    track = Track(title="Song", artist="Artist", duration_ms=180_000, source="youtube")
+    state = StationState(
+        playlist=[track],
+        playlist_source=PlaylistSource(kind="charts", label="Current Italian charts", track_count=1),
+    )
+    monkeypatch.setattr(status_payload, "_has_any_mp3", lambda _path: (_ for _ in ()).throw(AssertionError))
+
+    candidates = status_payload._source_readiness_status(_source_config(allow_ytdlp=True), state)
+    assert candidates["sources"]["charts"]["status"] == "candidates_only"
+    assert candidates["programming_ready"] is False
+
+    state.source_readiness.mark_playable("youtube")
+    playable = status_payload._source_readiness_status(_source_config(allow_ytdlp=True), state)
+    assert playable["sources"]["charts"]["status"] == "playable"
+    assert playable["programming_ready"] is True
+
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("song.mp3"),
+            duration_sec=180,
+            metadata={"title": "Song", "source_kind": "youtube", "duration_ms": 180_000},
+        )
+    )
+    on_air = status_payload._source_readiness_status(_source_config(allow_ytdlp=True), state)
+    assert on_air["sources"]["charts"]["status"] == "on_air"
+
+
+def test_source_readiness_reports_only_terminal_candidate_exhaustion_as_unavailable(monkeypatch):
+    evidence = SourceReadinessEvidence()
+    evidence.mark_candidates("charts", 2)
+    evidence.mark_failure("charts", "One candidate could not be prepared")
+    state = StationState(source_readiness=evidence)
+
+    partial = status_payload._source_readiness_status(_source_config(allow_ytdlp=True), state)
+    assert partial["sources"]["charts"]["status"] == "candidates_only"
+    assert partial["sources"]["charts"]["exhausted"] is False
+
+    state.source_readiness.mark_exhausted(
+        "charts",
+        "No found track could be prepared as playable audio.",
+    )
+    state.source_readiness.configure("recovery", True, bundled=True)
+    state.source_readiness.mark_on_air("recovery", recovery=True)
+    exhausted = status_payload._source_readiness_status(_source_config(allow_ytdlp=True), state)
+
+    charts = exhausted["sources"]["charts"]
+    assert charts["status"] == "unavailable"
+    assert charts["exhausted"] is True
+    assert charts["candidates"] == 2
+    assert charts["detail"] == "No found track could be prepared as playable audio."
+    assert exhausted["sources"]["recovery"]["status"] == "on_air"
+    assert exhausted["programming_ready"] is False
+    assert exhausted["transport_only"] is True
+
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_key", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
+    golden_path = status_payload._golden_path_status(_source_config(allow_ytdlp=True), state)
+    assert golden_path["stage"] == "needs_music_source"
+
+
+def test_recovery_on_air_proves_transport_but_not_source_health():
+    evidence = SourceReadinessEvidence()
+    evidence.configure("recovery", True, bundled=True)
+    state = StationState(source_readiness=evidence)
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.BANTER,
+            path=Path("continuity.mp3"),
+            metadata={"title": "Station continuity", "rescue": True, "canned": True},
+        )
+    )
+
+    payload = status_payload._source_readiness_status(_source_config(), state)
+
+    assert payload["sources"]["recovery"]["status"] == "on_air"
+    assert payload["programming_ready"] is False
+    assert payload["transport_only"] is True
+
+
+def test_configured_source_not_reached_does_not_claim_it_was_checked():
+    payload = status_payload._source_readiness_status(
+        _source_config(jamendo_client_id="configured"),
+        StationState(),
+    )
+
+    jamendo = payload["sources"]["jamendo"]
+    assert jamendo["status"] == "configured_unchecked"
+    assert jamendo["attempted"] is False
+    assert jamendo["detail"] == "Configured, but not checked because another source was selected."
+
+
+def test_source_switch_resets_stale_playable_and_on_air_evidence():
+    chart = Track(title="Chart", artist="Artist", duration_ms=180_000, source="youtube")
+    state = StationState(
+        playlist=[chart],
+        playlist_source=PlaylistSource(kind="charts", label="Charts", track_count=1),
+    )
+    state.source_readiness.mark_playable("charts")
+    state.source_readiness.mark_on_air("charts")
+    state.source_readiness.mark_exhausted("charts", "stale terminal evidence")
+
+    jamendo = Track(title="CC", artist="Artist", duration_ms=180_000, source="jamendo")
+    state.switch_playlist(
+        [jamendo],
+        PlaylistSource(kind="jamendo", label="Jamendo", track_count=1),
+    )
+
+    assert state.source_readiness.source_revision == 1
+    assert state.source_readiness.entries["charts"].playable == 0
+    assert state.source_readiness.entries["charts"].on_air is False
+    assert state.source_readiness.entries["charts"].exhausted is False
+    assert state.source_readiness.entries["jamendo"].candidates == 1
+
+
+def test_demo_without_assets_and_classic_rotation_stay_truthful():
+    evidence = SourceReadinessEvidence()
+    evidence.configure("demo", True, bundled=False)
+    evidence.mark_candidates("demo", 10)
+    evidence.mark_exhausted("demo", "Demo candidates could not be prepared")
+    demo_state = StationState(source_readiness=evidence)
+
+    demo = status_payload._source_readiness_status(_source_config(), demo_state)
+    assert demo["sources"]["demo"]["status"] == "not_bundled"
+    assert demo["sources"]["demo"]["exhausted"] is True
+    assert demo["programming_ready"] is False
+
+    classic = Track(title="Classic", artist="Artist", duration_ms=180_000, source="classic")
+    classic_state = StationState(
+        playlist=[classic],
+        playlist_source=PlaylistSource(kind="classic", label="Classici anni '80", track_count=1),
+    )
+    classic_state.source_readiness.mark_playable("classic")
+    advanced = status_payload._source_readiness_status(_source_config(), classic_state)
+    assert advanced["advanced"]["kind"] == "classic"
+    assert advanced["advanced"]["status"] == "playable"
+
+
+@pytest.mark.parametrize(
+    ("track_kind", "rotation_kind", "projected_kind"),
+    [
+        ("jamendo", "jamendo", "jamendo"),
+        ("local", "local", "local"),
+        ("demo", "demo", "demo"),
+        ("classic", "classic", "advanced"),
+    ],
+)
+def test_music_stream_start_maps_each_runtime_source_to_on_air(
+    track_kind: Literal["jamendo", "local", "demo", "classic"],
+    rotation_kind: str,
+    projected_kind: str,
+):
+    track = Track(title="Song", artist="Artist", duration_ms=180_000, source=track_kind)
+    state = StationState(
+        playlist=[track],
+        playlist_source=PlaylistSource(kind=rotation_kind, label=rotation_kind.title(), track_count=1),
+    )
+    state.on_stream_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("song.mp3"),
+            duration_sec=180,
+            metadata={"title": "Song", "source_kind": track_kind, "duration_ms": 180_000},
+        )
+    )
+
+    payload = status_payload._source_readiness_status(_source_config(), state)
+
+    if projected_kind == "advanced":
+        assert payload["advanced"]["status"] == "on_air"
+    else:
+        assert payload["sources"][projected_kind]["status"] == "on_air"

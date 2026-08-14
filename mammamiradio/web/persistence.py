@@ -1,19 +1,23 @@
-"""Credential persistence for the admin setup flow.
+"""Persistence transactions for admin credentials and add-on controls.
 
-Extracted verbatim from ``web/streamer.py`` (god-module split). Writes operator
-credentials to ``.env`` (standalone) or ``/config/secrets.env`` (HA add-on)
-and applies them to the live env/config/state. Persistence I/O and live
-application plus the credential field maps; the request-body parsing and the
-route handlers stay in ``streamer``.
+Writes operator credentials to ``.env`` (standalone) or
+``/config/secrets.env`` (HA add-on), applies them to live state, and persists
+add-on control changes through Home Assistant Supervisor. Request parsing and
+route handlers stay in ``web.streamer``.
 """
 
 from __future__ import annotations
 
 import os
 import shlex
+import stat
 import threading
 from pathlib import Path
+from typing import Literal
 
+import httpx
+
+from mammamiradio.core.config import _parse_secret_env_lines
 from mammamiradio.core.models import StationState
 
 _CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
@@ -32,19 +36,35 @@ _JAMENDO_SETTING_ENV_KEYS = frozenset(
         "MAMMAMIRADIO_JAMENDO_ACK_REVISION",
     }
 )
-_ADDON_OPTIONS_LOCK = threading.Lock()
+_ADDON_OPTIONS_LOCK = threading.RLock()
+_ADDON_SECRETS_PATH = Path("/config/secrets.env")
+_SUPERVISOR_API_DEFAULT = "http://supervisor"
 # Serializes the .env read-modify-write. Without it, two admin saves of DIFFERENT
 # settings (each guarded by its own asyncio lock in web/streamer.py, and each run
 # in an executor thread) race on the shared .env.tmp path and one can silently lose
-# the other's update. Mirrors _ADDON_OPTIONS_LOCK on the /data/options.json side; a
-# given process only writes one store (.env standalone, options.json add-on), so the
-# two locks never contend.
+# the other's update. Add-on writes use Supervisor's option store under the separate
+# _ADDON_OPTIONS_LOCK, so the two locks never contend.
 _DOTENV_LOCK = threading.Lock()
 
 
+class _AddonPersistenceError(RuntimeError):
+    """A deliberately detail-free add-on persistence failure."""
+
+
+_SecretWriteOutcome = Literal["durable", "committed_unconfirmed"]
+_SECRET_WRITE_DURABLE: _SecretWriteOutcome = "durable"
+_SECRET_WRITE_COMMITTED_UNCONFIRMED: _SecretWriteOutcome = "committed_unconfirmed"
+
+
 def _sanitize_credential_value(value: str) -> str:
-    """Strip env-breaking characters before persistence or live application."""
-    return value.replace("\n", "").replace("\r", "")
+    """Strip env-breaking characters before persistence or live application.
+
+    Also strips surrounding whitespace: the read-back parser (`_read_secret_file`
+    / `_parse_secret_env_lines`) always strips a parsed value, so a write that
+    didn't normalize to that same fixed point could write the requested bytes
+    correctly and still fail its own post-write verification.
+    """
+    return value.replace("\n", "").replace("\r", "").strip()
 
 
 def _env_assignment(key: str, value: str) -> str:
@@ -56,6 +76,8 @@ def _write_owner_only_text(path: Path, text: str) -> None:
     """Write a local operator-owned credential file with owner-only permissions."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
+        # mode is ignored when O_CREAT opens an existing stale temp file.
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             # Local HA add-on credentials are intentionally stored on the
@@ -64,9 +86,21 @@ def _write_owner_only_text(path: Path, text: str) -> None:
             # lgtm[py/clear-text-storage-sensitive-data]
             # codeql[py/clear-text-storage-sensitive-data]
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
     finally:
         if fd != -1:
             os.close(fd)
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    """Make an atomic replacement durable across a host crash."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _apply_live_credentials(state: StationState, config, updates: dict[str, str]) -> None:
@@ -176,95 +210,275 @@ def _save_media_source_settings(
 
 
 def _save_addon_option(key: str, value) -> None:
-    """Persist a single option into /data/options.json atomically."""
+    """Persist a single add-on option through Home Assistant Supervisor."""
     _save_addon_option_batch({key: value})
 
 
-def _save_addon_option_batch(updates: dict) -> None:
-    """Persist several options into /data/options.json in ONE atomic write.
+def _read_secret_file(path: Path) -> tuple[list[str], dict[str, str]]:
+    """Read provider assignments without evaluating shell expansions."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    except (OSError, UnicodeError):
+        raise _AddonPersistenceError("Unable to persist add-on credentials") from None
 
-    Read-modify-write under the shared lock: load the current options, apply
-    every key in ``updates`` at once, then atomically replace the file. Writing
-    the whole set in a single pass is what keeps a multi-field save (e.g. the
-    three pacing keys) from leaving /data/options.json half-updated the way
-    three separate single-key writes would if one failed midway — a failed save
-    then can never leave durable config disagreeing with live config after a
-    restart.
+    # Shared with mammamiradio.core.config._read_addon_provider_secrets, which parses the
+    # same secrets.env grammar for the direct add-on config-loading path; this caller
+    # additionally needs the raw `lines` back (to rewrite the file) and stays silent on
+    # skipped lines (run.sh already warns about malformed secrets.env content at boot).
+    assignments, _skipped = _parse_secret_env_lines(lines, _CREDENTIAL_ENV_TO_FIELD)
+    return lines, assignments
+
+
+def _write_and_verify_addon_secrets(updates: dict[str, str], *, existing_nonempty_wins: bool) -> _SecretWriteOutcome:
+    """Atomically upsert provider secrets and report the replacement's durability."""
+    if not updates:
+        return _SECRET_WRITE_DURABLE
+
+    path = _ADDON_SECRETS_PATH
+    lines, existing = _read_secret_file(path)
+    chosen: dict[str, str] = {}
+    preserve_existing: set[str] = set()
+    for key, value in updates.items():
+        if key not in _CREDENTIAL_ENV_TO_FIELD:
+            continue
+        if existing_nonempty_wins and existing.get(key):
+            chosen[key] = existing[key]
+            preserve_existing.add(key)
+        else:
+            chosen[key] = _sanitize_credential_value(value)
+    if not chosen:
+        return _SECRET_WRITE_DURABLE
+
+    written: set[str] = set()
+    new_lines: list[str] = []
+    for line_number, raw_line in enumerate(lines, 1):
+        line = raw_line.lstrip("\ufeff") if line_number == 1 else raw_line
+        stripped = line.strip()
+        candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
+        key = candidate.split("=", 1)[0].strip() if "=" in candidate else ""
+        if key in chosen:
+            if key in preserve_existing:
+                new_lines.append(raw_line)
+                written.add(key)
+                continue
+            if key not in written:
+                new_lines.append(_env_assignment(key, chosen[key]))
+                written.add(key)
+            continue
+        new_lines.append(raw_line)
+    for key in _CREDENTIAL_ENV_TO_FIELD:
+        if key in chosen and key not in written:
+            new_lines.append(_env_assignment(key, chosen[key]))
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        try:
+            _write_owner_only_text(tmp_path, "\n".join(new_lines) + "\n")
+            _lines, verified = _read_secret_file(tmp_path)
+            if any(verified.get(key, "") != value for key, value in chosen.items()):
+                raise _AddonPersistenceError("Unable to verify add-on credentials")
+            if stat.S_IMODE(tmp_path.stat().st_mode) != 0o600:
+                raise _AddonPersistenceError("Unable to verify add-on credentials")
+            os.replace(tmp_path, path)
+        except _AddonPersistenceError:
+            raise
+        except OSError:
+            raise _AddonPersistenceError("Unable to persist add-on credentials") from None
+
+        try:
+            _fsync_parent_directory(path)
+        except OSError:
+            return _SECRET_WRITE_COMMITTED_UNCONFIRMED
+        return _SECRET_WRITE_DURABLE
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _save_addon_options(updates: dict[str, str]) -> _SecretWriteOutcome:
+    """Update only /config/secrets.env with provider credential values.
+
+    Deliberately local-only: unlike `_save_addon_option_batch`, this does not talk to
+    Supervisor, so it does not migrate other stray legacy credential values that might
+    still be sitting in Supervisor's option store (`_migrate_retired_credentials` only
+    runs from `_prepare_complete_options`, reached via a toggle save). That migration
+    is self-healing on the next toggle save; trading a network round-trip on every plain
+    credential save for closing that narrow window was judged not worth it.
     """
-    import json as _json
-    import os as _os
+    safe_updates: dict[str, str] = {}
+    for key, value in updates.items():
+        if key not in _CREDENTIAL_ENV_TO_FIELD:
+            continue
+        if not isinstance(value, str):
+            raise _AddonPersistenceError("Unable to persist add-on credentials")
+        safe_updates[key] = _sanitize_credential_value(value)
+    with _ADDON_OPTIONS_LOCK:
+        return _write_and_verify_addon_secrets(safe_updates, existing_nonempty_wins=False)
+
+
+def _parse_supervisor_info(response: httpx.Response) -> tuple[dict, set[str]]:
+    """Validate the Supervisor info envelope and return options plus UI-schema names."""
+    if not 200 <= response.status_code < 300:
+        raise _AddonPersistenceError("Supervisor rejected the add-on option request")
+    try:
+        payload = response.json()
+    except (TypeError, ValueError):
+        raise _AddonPersistenceError("Supervisor returned an invalid add-on option response") from None
+    if not isinstance(payload, dict) or payload.get("result") != "ok":
+        raise _AddonPersistenceError("Supervisor returned an invalid add-on option response")
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("options"), dict):
+        raise _AddonPersistenceError("Supervisor returned an invalid add-on option response")
+    schema = data.get("schema")
+    if not isinstance(schema, list):
+        raise _AddonPersistenceError("Supervisor returned an invalid add-on option schema")
+
+    schema_names: set[str] = set()
+    for entry in schema:
+        if not isinstance(entry, dict):
+            raise _AddonPersistenceError("Supervisor returned an invalid add-on option schema")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip() or name in schema_names:
+            raise _AddonPersistenceError("Supervisor returned an invalid add-on option schema")
+        schema_names.add(name)
+    return dict(data["options"]), schema_names
+
+
+def _get_supervisor_info(client: httpx.Client, *, reconciliation: bool = False) -> tuple[dict, set[str]]:
+    try:
+        response = client.get("/addons/self/info")
+    except httpx.TransportError:
+        message = (
+            "Unable to confirm the Supervisor add-on option save"
+            if reconciliation
+            else "Unable to read Supervisor add-on options"
+        )
+        raise _AddonPersistenceError(message) from None
+    try:
+        return _parse_supervisor_info(response)
+    except _AddonPersistenceError:
+        if reconciliation:
+            raise _AddonPersistenceError("Unable to confirm the Supervisor add-on option save") from None
+        raise
+
+
+def _post_was_acknowledged(response: httpx.Response) -> bool:
+    try:
+        payload = response.json()
+    except (TypeError, ValueError):
+        return False
+    return isinstance(payload, dict) and payload.get("result") == "ok"
+
+
+def _matches_requested(options: dict, requested: dict) -> bool:
+    return all(
+        key in options and type(options[key]) is type(value) and options[key] == value
+        for key, value in requested.items()
+    )
+
+
+def _matches_complete_options(options: dict, expected: dict) -> bool:
+    return options.keys() == expected.keys() and _matches_requested(options, expected)
+
+
+def _migrate_retired_credentials(options: dict, schema_names: set[str]) -> None:
+    retired: list[tuple[str, object]] = []
+    for option_key, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items():
+        if option_key in schema_names or option_key not in options:
+            continue
+        value = options[option_key]
+        if value in ("", None):
+            continue
+        retired.append((env_key, value))
+    if not retired:
+        return
+
+    _lines, existing = _read_secret_file(_ADDON_SECRETS_PATH)
+    legacy_updates: dict[str, str] = {}
+    for env_key, value in retired:
+        if existing.get(env_key):
+            legacy_updates[env_key] = existing[env_key]
+            continue
+        if not isinstance(value, str):
+            raise _AddonPersistenceError("Supervisor contains unsupported retired add-on options")
+        sanitized = _sanitize_credential_value(value)
+        if sanitized != value:
+            raise _AddonPersistenceError("Supervisor contains unsupported retired add-on options")
+        legacy_updates[env_key] = sanitized
+    outcome = _write_and_verify_addon_secrets(legacy_updates, existing_nonempty_wins=True)
+    if outcome != _SECRET_WRITE_DURABLE:
+        raise _AddonPersistenceError("Unable to confirm migrated add-on credential durability")
+
+
+def _prepare_complete_options(current: dict, schema_names: set[str], updates: dict) -> dict:
+    if any(not isinstance(key, str) or key not in schema_names for key in updates):
+        raise _AddonPersistenceError("Requested add-on option is not in the active schema")
+
+    # claude_model is tolerated unconditionally, like the credential fields, not just when
+    # quality_profile happens to be present. `merged` below already drops any key outside
+    # schema_names on every successful save regardless of that condition, so gating
+    # tolerance on quality_profile never actually preserved claude_model — it only decided
+    # whether an unrelated toggle save was allowed to proceed at all, which used to block
+    # every admin save on an install that had claude_model but had never touched the
+    # Quality dial.
+    unknown = set(current) - schema_names
+    allowed_retired = set(_CREDENTIAL_FIELDS) | {"claude_model"}
+    if unknown - allowed_retired:
+        raise _AddonPersistenceError("Supervisor contains unsupported retired add-on options")
+
+    _migrate_retired_credentials(current, schema_names)
+    merged = {key: value for key, value in current.items() if key in schema_names}
+    merged.update(updates)
+    return merged
+
+
+def _save_addon_option_batch(updates: dict) -> None:
+    """Persist several add-on options as one Supervisor-owned replacement."""
+    if not updates:
+        return
+
+    token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN")
+    if not token:
+        raise _AddonPersistenceError("Supervisor credentials are unavailable")
+    base_url = os.getenv("SUPERVISOR_API") or _SUPERVISOR_API_DEFAULT
+    # _ADDON_OPTIONS_LOCK (below) and the single-worker _addon_persistence_executor
+    # (streamer.py) both stay held for this call's full duration, so a slow/stuck
+    # Supervisor can queue every other admin toggle save behind it. Supervisor is
+    # same-host/same-LAN traffic, so a tight timeout bounds that worst case without
+    # weakening the atomic read-modify-write this lock exists to protect; a deeper fix
+    # (decoupling the read phase from the lock) is a bigger change left for later.
+    timeout = httpx.Timeout(connect=1.0, pool=1.0, read=3.0, write=3.0)
 
     with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        options: dict = {}
         try:
-            loaded = _json.loads(options_path.read_text())
-            if isinstance(loaded, dict):
-                options = loaded
-        except (FileNotFoundError, ValueError):
-            options = {}
-        options.update(updates)
-        tmp_path = options_path.with_suffix(options_path.suffix + ".tmp")
-        tmp_path.write_text(_json.dumps(options, indent=2))
-        _os.replace(tmp_path, options_path)
+            with httpx.Client(
+                base_url=base_url.rstrip("/"),
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=timeout,
+                trust_env=False,
+                follow_redirects=False,
+            ) as client:
+                current, schema_names = _get_supervisor_info(client)
+                merged = _prepare_complete_options(current, schema_names, updates)
+                if _matches_complete_options(current, merged):
+                    return
+                try:
+                    response = client.post("/addons/self/options", json={"options": merged})
+                except httpx.TransportError:
+                    response = None
 
+                if response is not None and not 200 <= response.status_code < 300:
+                    raise _AddonPersistenceError("Supervisor rejected the add-on option save")
+                if response is not None and _post_was_acknowledged(response):
+                    return
 
-def _save_addon_options(updates: dict[str, str]) -> None:
-    """Update /config/secrets.env with new provider credential values."""
-    import json as _json
-    import os as _os
-
-    with _ADDON_OPTIONS_LOCK:
-        options_path = Path("/data/options.json")
-        secrets_path = Path("/config/secrets.env")
-        try:
-            lines = secrets_path.read_text().splitlines()
-        except FileNotFoundError:
-            lines = []
-
-        options: dict = {}
-        try:
-            loaded_options = _json.loads(options_path.read_text())
-            if isinstance(loaded_options, dict):
-                options = loaded_options
-        except (FileNotFoundError, ValueError):
-            options = {}
-
-        safe_updates = {k: _sanitize_credential_value(v) for k, v in updates.items() if k in _CREDENTIAL_ENV_TO_FIELD}
-        legacy_updates = {}
-        for opt_key, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items():
-            value = options.get(opt_key)
-            if value and env_key not in safe_updates:
-                legacy_updates[env_key] = _sanitize_credential_value(str(value))
-
-        secret_updates = {**legacy_updates, **safe_updates}
-        if not secret_updates:
-            return
-
-        written = set()
-        new_lines = []
-        for line in lines:
-            stripped = line.strip()
-            candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
-            if candidate and not candidate.startswith("#") and "=" in candidate:
-                key = candidate.split("=", 1)[0].strip()
-                if key in secret_updates:
-                    new_lines.append(_env_assignment(key, secret_updates[key]))
-                    written.add(key)
-                    continue
-            new_lines.append(line)
-        for _opt_key, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items():
-            if env_key in secret_updates and env_key not in written:
-                new_lines.append(_env_assignment(env_key, secret_updates[env_key]))
-
-        tmp_path = secrets_path.with_suffix(secrets_path.suffix + ".tmp")
-        _write_owner_only_text(tmp_path, "\n".join(new_lines) + "\n")
-        _os.replace(tmp_path, secrets_path)
-
-        pruned_options = dict(options)
-        for opt_key in _CREDENTIAL_FIELDS:
-            pruned_options.pop(opt_key, None)
-        if pruned_options != options:
-            tmp_options_path = options_path.with_suffix(options_path.suffix + ".tmp")
-            tmp_options_path.write_text(_json.dumps(pruned_options, indent=2) + "\n")
-            _os.replace(tmp_options_path, options_path)
+                reconciled, _schema_names = _get_supervisor_info(client, reconciliation=True)
+                if _matches_requested(reconciled, updates):
+                    return
+                raise _AddonPersistenceError("Unable to confirm the Supervisor add-on option save")
+        except _AddonPersistenceError:
+            raise
+        except (httpx.HTTPError, OSError, TypeError, ValueError):
+            raise _AddonPersistenceError("Unable to persist Supervisor add-on options") from None

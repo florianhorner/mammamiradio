@@ -23,8 +23,13 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-from mammamiradio.audio.tts import _EDGE_DEFAULT_FALLBACK_VOICE, _looks_like_openai_voice
+# Voice validation reads the catalog leaf directly rather than the aliases
+# re-exported by ``audio.tts``. ``tts`` pulls in openai, edge_tts, and aiohttp,
+# and config sits in the import graph of the spawned HA projection worker
+# (``home/ha_context.py``), which needs none of them. Same values either way.
+from mammamiradio.audio.voice_catalog import EDGE_DEFAULT_FALLBACK_VOICE as _EDGE_DEFAULT_FALLBACK_VOICE
 from mammamiradio.audio.voice_catalog import is_known_azure_voice, is_known_edge_voice
+from mammamiradio.audio.voice_catalog import is_openai_voice as _looks_like_openai_voice
 from mammamiradio.core.models import HostPersonality, PartyMode, PersonalityAxes
 from mammamiradio.hosts.ad_creative import AdBrand, AdCastReport, AdVoice, CampaignSpine, compile_ad_cast
 
@@ -71,6 +76,13 @@ _ELEVENLABS_V2_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
     "style": (0.0, 1.0),
 }
 _ELEVENLABS_V2_BOOL_SETTINGS = frozenset({"use_speaker_boost"})
+_ELEVENLABS_V2_MODEL = "eleven_multilingual_v2"
+_ELEVENLABS_V3_MODEL = "eleven_v3"
+_ELEVENLABS_SUPPORTED_MODELS = frozenset({_ELEVENLABS_V2_MODEL, _ELEVENLABS_V3_MODEL})
+_ELEVENLABS_DELIVERY_PROFILES = frozenset({"none", "marco", "giulia"})
+_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
+    "stability": (0.0, 1.0),
+}
 
 # Canonical user-facing station name — the single source of truth. Every
 # user-visible surface (HA entities, FastAPI/OpenAPI title, clip sidecar, config
@@ -79,6 +91,14 @@ _ELEVENLABS_V2_BOOL_SETTINGS = frozenset({"use_speaker_boost"})
 # identifiers (package name, env vars, entity IDs, slugs) stay "mammamiradio".
 DEFAULT_STATION_NAME = "Mamma Mi Radio"
 _MAX_STATION_NAME_LEN = 80
+
+# Normalization-cache ceiling in MB. A normalized track uses about 5 MB, so the
+# add-on default covers roughly 200 tracks. Bounds keep malformed values within a
+# usable range instead of failing config load.
+DEFAULT_MAX_CACHE_SIZE_MB = 500
+ADDON_MAX_CACHE_SIZE_MB = 1500
+MIN_MAX_CACHE_SIZE_MB = 200
+MAX_MAX_CACHE_SIZE_MB = 8000
 
 _DEFAULT_SONIC_TAGLINE = "Da Windor a Vergen, la voce che non si spegne mai!"
 _DEFAULT_SONIC_GEOGRAPHY = "Windor, Vergen"
@@ -760,6 +780,7 @@ class StationConfig:
     brand_warnings: list[str] = field(default_factory=list)
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
+    music_dir: Path = Path("music")
     max_cache_size_mb: int = 500
 
     # Secrets from env
@@ -1132,11 +1153,12 @@ def _apply_addon_options() -> None:
     if isinstance(legacy_claude_model, str) and legacy_claude_model and not os.getenv("CLAUDE_MODEL"):
         os.environ["CLAUDE_MODEL"] = legacy_claude_model
 
-    # Pacing (mirrors the toggles above): map persisted /data/options.json values
-    # to env for the non-run.sh add-on boot path. run.sh normally exports these
-    # first, and the `not os.getenv` guard keeps that export authoritative; the
-    # load-time override loop clamps to range, so no clamp is needed here. bool is
-    # excluded because it is an int subclass.
+    # Pacing (mirrors the toggles above): map Supervisor's generated
+    # /data/options.json startup projection to env for the non-run.sh add-on boot
+    # path. run.sh normally exports these first, and the `not os.getenv` guard
+    # keeps that export authoritative; the load-time override loop clamps to
+    # range, so no clamp is needed here. bool is excluded because it is an int
+    # subclass.
     for opt_key, env_key in (
         ("songs_between_banter", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER"),
         ("songs_between_ads", "MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS"),
@@ -1145,6 +1167,59 @@ def _apply_addon_options() -> None:
         pv = options.get(opt_key)
         if isinstance(pv, int) and not isinstance(pv, bool) and not os.getenv(env_key):
             os.environ[env_key] = str(pv)
+
+    # The direct add-on fallback treats non-positive cache input as malformed
+    # before clamping, matching the run.sh contract. The parser matrix test keeps
+    # both ingestion paths aligned for supported add-on input.
+    cache_mb = options.get("norm_cache_mb")
+    if (
+        isinstance(cache_mb, int)
+        and not isinstance(cache_mb, bool)
+        and cache_mb > 0
+        and not os.getenv("MAMMAMIRADIO_MAX_CACHE_MB")
+    ):
+        os.environ["MAMMAMIRADIO_MAX_CACHE_MB"] = str(cache_mb)
+
+
+def _parse_secret_env_lines(lines: list[str], known_keys) -> tuple[dict[str, str], list[tuple[int, str]]]:
+    """Parse KEY=VALUE env-file lines shared by the add-on secrets.env readers.
+
+    Grammar: optional BOM on line 1, `#`-comment/blank skip, optional `export ` prefix,
+    split on the first `=`, and `shlex`-aware quote handling requiring exactly one token.
+    Returns the recognized {key: value} assignments plus (line_no, reason) for every
+    skipped line, so callers can decide whether/how to warn about them.
+    """
+    values: dict[str, str] = {}
+    skipped: list[tuple[int, str]] = []
+    for line_no, raw_line in enumerate(lines, 1):
+        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].lstrip()
+        if "=" not in stripped:
+            skipped.append((line_no, "missing KEY=VALUE"))
+            continue
+        key, raw_value = stripped.split("=", 1)
+        key = key.strip()
+        if key not in known_keys:
+            skipped.append((line_no, "unsupported key"))
+            continue
+        value = raw_value.strip()
+        if value[:1] in ('"', "'"):
+            try:
+                parts = shlex.split(value, comments=False, posix=True)
+            except ValueError:
+                skipped.append((line_no, "invalid quoting"))
+                continue
+            if len(parts) != 1:
+                skipped.append((line_no, "invalid quoted value"))
+                continue
+            value = parts[0].strip()
+        if value:
+            values[key] = value
+    return values, skipped
 
 
 def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
@@ -1157,39 +1232,13 @@ def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
     log = logging.getLogger(__name__)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         log.warning("Could not read /config/secrets.env")
         return {}
 
-    values: dict[str, str] = {}
-    for line_no, raw_line in enumerate(lines, 1):
-        line = raw_line.lstrip("\ufeff") if line_no == 1 else raw_line
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("export "):
-            stripped = stripped[7:].lstrip()
-        if "=" not in stripped:
-            log.warning("Ignoring /config/secrets.env line %s: missing KEY=VALUE", line_no)
-            continue
-        key, raw_value = stripped.split("=", 1)
-        key = key.strip()
-        if key not in _ADDON_SECRET_ENV_KEYS:
-            log.warning("Ignoring /config/secrets.env line %s: unsupported key", line_no)
-            continue
-        value = raw_value.strip()
-        if value[:1] in ('"', "'"):
-            try:
-                parts = shlex.split(value, comments=False, posix=True)
-            except ValueError:
-                log.warning("Ignoring /config/secrets.env line %s: invalid quoting", line_no)
-                continue
-            if len(parts) != 1:
-                log.warning("Ignoring /config/secrets.env line %s: invalid quoted value", line_no)
-                continue
-            value = parts[0].strip()
-        if value:
-            values[key] = value
+    values, skipped = _parse_secret_env_lines(lines, _ADDON_SECRET_ENV_KEYS)
+    for line_no, reason in skipped:
+        log.warning("Ignoring /config/secrets.env line %s: %s", line_no, reason)
     return values
 
 
@@ -1374,6 +1423,8 @@ def _validate(config: StationConfig) -> None:
 
     if not config.hosts:
         errors.append("No hosts configured — banter requires at least one host (set in radio.toml [[hosts]])")
+    for index, host in enumerate(config.hosts):
+        errors.extend(_validate_host_elevenlabs_config(host, index=index))
     # Bounds are shared with env-load clamping and PATCH /api/pacing so the
     # accepted range cannot drift between boot and live admin changes.
     for _pacing_attr, (_lo, _hi) in PACING_BOUNDS.items():
@@ -1512,8 +1563,164 @@ def _env_positive_int(name: str) -> int | None:
     return None
 
 
+def _env_clamped_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    """Parse an integer env var, clamp it to range, and use a default for invalid input.
+
+    Unlike :func:`_env_positive_int`, this always returns a concrete number.
+    Config loading uses this helper so malformed input logs a warning and does not
+    abort startup.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Ignoring %s=%r (not an integer), using %d", name, raw, default)
+        return default
+    if value < minimum:
+        log.warning("Raising %s=%d to the %d minimum", name, value, minimum)
+        return minimum
+    if value > maximum:
+        log.warning("Capping %s=%d at the %d maximum", name, value, maximum)
+        return maximum
+    return value
+
+
 def _clean_str(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _parse_host_elevenlabs_model(value: object, *, index: int) -> str:
+    """Parse the explicit ElevenLabs model without silently changing voice behavior."""
+
+    field_name = f"hosts[{index}].elevenlabs_model"
+    if value is None:
+        return _ELEVENLABS_V2_MODEL
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(_err(field_name, "must be a non-empty string"))
+    model = value.strip()
+    if model not in _ELEVENLABS_SUPPORTED_MODELS:
+        raise ValueError(_err(field_name, f"must be one of {sorted(_ELEVENLABS_SUPPORTED_MODELS)}"))
+    return model
+
+
+def _parse_host_delivery_profile(value: object, *, index: int) -> str:
+    """Parse the constrained semantic performance profile for a host."""
+
+    field_name = f"hosts[{index}].delivery_profile"
+    if value is None:
+        return "none"
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(_err(field_name, "must be a non-empty string"))
+    profile = value.strip().lower()
+    if profile not in _ELEVENLABS_DELIVERY_PROFILES:
+        raise ValueError(_err(field_name, f"must be one of {sorted(_ELEVENLABS_DELIVERY_PROFILES)}"))
+    return profile
+
+
+def _parse_host_voice_settings(
+    value: object,
+    *,
+    index: int,
+    engine: object,
+    elevenlabs_model: str,
+) -> dict[str, float | bool]:
+    """Validate host ElevenLabs tuning against the selected model's contract.
+
+    V2 retains its historic pass-through override surface. V3 accepts only
+    stability, because similarity/style/Speaker Boost are incompatible there.
+    """
+
+    field_name = f"hosts[{index}].voice_settings"
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(_err(field_name, "must be a TOML table"))
+    if not value:
+        return {}
+    if elevenlabs_model != _ELEVENLABS_V3_MODEL:
+        # Host V2 settings historically passed straight through to the exact V2
+        # payload. Keep that compatibility boundary intact for existing voices.
+        return dict(value)
+
+    engine_name = _clean_str(engine).lower() or "edge"
+    if engine_name != "elevenlabs":
+        raise ValueError(_err(field_name, "is supported only for engine = 'elevenlabs'"))
+
+    parsed: dict[str, float | bool] = {}
+    for key, raw_value in value.items():
+        if key in _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int | float) or not math.isfinite(raw_value):
+                raise ValueError(_err(f"{field_name}.{key}", "must be a finite number between 0 and 1"))
+            lower, upper = _ELEVENLABS_V3_FLOAT_SETTING_BOUNDS[key]
+            if not lower <= raw_value <= upper:
+                raise ValueError(_err(f"{field_name}.{key}", "must be between 0 and 1"))
+            parsed[key] = float(raw_value)
+        else:
+            allowed = sorted(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)
+            raise ValueError(_err(f"{field_name}.{key}", f"must be one of {allowed}"))
+    return parsed
+
+
+def _validate_host_elevenlabs_config(host: HostPersonality, *, index: int) -> list[str]:
+    """Return validation errors for direct ``HostPersonality`` construction too."""
+
+    errors: list[str] = []
+    model = host.elevenlabs_model
+    profile = host.delivery_profile
+    field_prefix = f"hosts[{index}]"
+
+    if not isinstance(model, str) or model not in _ELEVENLABS_SUPPORTED_MODELS:
+        errors.append(
+            _err(f"{field_prefix}.elevenlabs_model", f"must be one of {sorted(_ELEVENLABS_SUPPORTED_MODELS)}")
+        )
+        return errors
+    if not isinstance(profile, str) or profile not in _ELEVENLABS_DELIVERY_PROFILES:
+        errors.append(
+            _err(f"{field_prefix}.delivery_profile", f"must be one of {sorted(_ELEVENLABS_DELIVERY_PROFILES)}")
+        )
+        return errors
+    if profile != "none" and host.name.strip().casefold() != profile:
+        errors.append(
+            _err(
+                f"{field_prefix}.delivery_profile",
+                f"'{profile}' is reserved for the host named '{profile.title()}'",
+            )
+        )
+    if model == _ELEVENLABS_V3_MODEL:
+        if (host.engine or "edge").strip().lower() != "elevenlabs":
+            errors.append(_err(f"{field_prefix}.elevenlabs_model", "'eleven_v3' requires engine = 'elevenlabs'"))
+        if profile == "none":
+            errors.append(
+                _err(
+                    f"{field_prefix}.delivery_profile",
+                    "'eleven_v3' requires the matching audited host delivery profile",
+                )
+            )
+        if not isinstance(host.voice_settings, dict):
+            errors.append(_err(f"{field_prefix}.voice_settings", "must be a TOML table"))
+        elif sorted(set(host.voice_settings) - set(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)):
+            errors.append(
+                _err(
+                    f"{field_prefix}.voice_settings",
+                    f"for eleven_v3 must use only {sorted(_ELEVENLABS_V3_FLOAT_SETTING_BOUNDS)}",
+                )
+            )
+        elif "stability" in host.voice_settings:
+            stability = host.voice_settings["stability"]
+            if isinstance(stability, bool) or not isinstance(stability, int | float) or not math.isfinite(stability):
+                errors.append(
+                    _err(f"{field_prefix}.voice_settings.stability", "must be a finite number between 0 and 1")
+                )
+            elif not 0 <= stability <= 1:
+                errors.append(_err(f"{field_prefix}.voice_settings.stability", "must be between 0 and 1"))
+    elif profile != "none":
+        errors.append(_err(f"{field_prefix}.delivery_profile", "requires elevenlabs_model = 'eleven_v3'"))
+    return errors
 
 
 def _parse_ad_voice_settings(value: object, *, index: int, engine: object) -> dict[str, float | bool]:
@@ -1829,18 +2036,30 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
-    hosts = [
-        HostPersonality(
-            name=h["name"],
-            voice=h["voice"],
-            style=h["style"],
-            personality=PersonalityAxes.from_dict(h.get("personality", {})),
-            engine=h.get("engine", "edge"),
-            edge_fallback_voice=h.get("edge_fallback_voice", ""),
-            voice_settings=dict(h.get("voice_settings", {})),
+    hosts: list[HostPersonality] = []
+    for index, raw_host in enumerate(raw.get("hosts", [])):
+        elevenlabs_model = _parse_host_elevenlabs_model(raw_host.get("elevenlabs_model"), index=index)
+        engine = raw_host.get("engine", "edge")
+        if elevenlabs_model == _ELEVENLABS_V3_MODEL and _clean_str(engine).lower() != "elevenlabs":
+            raise ValueError(_err(f"hosts[{index}].elevenlabs_model", "'eleven_v3' requires engine = 'elevenlabs'"))
+        hosts.append(
+            HostPersonality(
+                name=raw_host["name"],
+                voice=raw_host["voice"],
+                style=raw_host["style"],
+                personality=PersonalityAxes.from_dict(raw_host.get("personality", {})),
+                engine=engine,
+                edge_fallback_voice=raw_host.get("edge_fallback_voice", ""),
+                voice_settings=_parse_host_voice_settings(
+                    raw_host.get("voice_settings", {}),
+                    index=index,
+                    engine=engine,
+                    elevenlabs_model=elevenlabs_model,
+                ),
+                elevenlabs_model=elevenlabs_model,
+                delivery_profile=_parse_host_delivery_profile(raw_host.get("delivery_profile"), index=index),
+            )
         )
-        for h in raw.get("hosts", [])
-    ]
 
     # Parse ads section with structured brands and voices
     ads_raw = raw.get("ads", {})
@@ -2074,9 +2293,12 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         except ValueError:
             playlist_raw["jamendo_limit"] = jamendo_limit_env.strip()
 
-    # Env-var overrides for cache/tmp directories (for Docker volume mounts)
+    # Env-var overrides for runtime data directories (for Docker volume mounts).
+    # Keep the music location explicit so every ingest/download path observes
+    # the same operator-owned directory.
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
     tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "tmp"))
+    music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
 
     # Parse sonic brand section
     sonic_brand_raw = raw.get("sonic_brand", {})
@@ -2130,7 +2352,15 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         brand_warnings=brand_warnings,
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
-        max_cache_size_mb=int(os.getenv("MAMMAMIRADIO_MAX_CACHE_MB", "500")),
+        music_dir=music_dir,
+        max_cache_size_mb=_env_clamped_int(
+            "MAMMAMIRADIO_MAX_CACHE_MB",
+            # The add-on default covers a whole rotation of about 200 tracks at
+            # roughly 5 MB each. Standalone keeps the smaller 500 MB default.
+            default=ADDON_MAX_CACHE_SIZE_MB if addon_mode else DEFAULT_MAX_CACHE_SIZE_MB,
+            minimum=MIN_MAX_CACHE_SIZE_MB,
+            maximum=MAX_MAX_CACHE_SIZE_MB,
+        ),
         bind_host=os.getenv("MAMMAMIRADIO_BIND_HOST", "127.0.0.1"),
         port=int(os.getenv("MAMMAMIRADIO_PORT", "8000")),
         admin_username=os.getenv("ADMIN_USERNAME", "admin"),
@@ -2224,6 +2454,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         _log.getLogger(__name__).info("Running as Home Assistant addon")
         config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
         config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
+        config.music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "/data/music"))
         # Auto-enable HA context via Supervisor API unless explicitly disabled.
         supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
         if supervisor_token and not ha_force_disabled:

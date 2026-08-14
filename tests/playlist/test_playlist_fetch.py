@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
@@ -11,13 +12,14 @@ from urllib.error import URLError
 import pytest
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import PlaylistSource, Track
+from mammamiradio.core.models import PlaylistSource, StationState, Track
 from mammamiradio.media.starter import StarterCatalogError
 from mammamiradio.playlist.playlist import (
     DEMO_TRACKS,
     ExplicitSourceError,
     ExternalMediaUnavailableError,
     LegacyJamendoSourceRetiredError,
+    _load_local_music_tracks,
     fetch_chart_refresh,
     fetch_startup_playlist,
     load_explicit_source,
@@ -549,3 +551,119 @@ def test_local_loader_ignores_non_mp3_files(tmp_path):
     (tmp_path / "README.md").write_text("not music")
 
     assert _load_local_music_tracks(Path(tmp_path)) == []
+
+
+# ---------------------------------------------------------------------------
+# Local-loader bounds and source-readiness evidence
+# ---------------------------------------------------------------------------
+
+
+def test_load_local_music_tracks_unreadable_dir_returns_empty(tmp_path):
+    with patch("mammamiradio.playlist.playlist.os.scandir", side_effect=PermissionError("denied")):
+        result = _load_local_music_tracks(tmp_path)
+
+    assert result == []
+
+
+def test_local_directory_enumeration_bounds_raw_entries_before_mp3_filtering(tmp_path):
+    yielded = 0
+
+    class CountingScandir:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def __iter__(self):
+            nonlocal yielded
+            for index in range(10_000):
+                yielded += 1
+                yield SimpleNamespace(
+                    name=f"not-music-{index}.txt",
+                    path=str(tmp_path / f"not-music-{index}.txt"),
+                    is_file=lambda: True,
+                )
+
+    with (
+        patch("mammamiradio.playlist.playlist.os.scandir", return_value=CountingScandir()),
+        patch("mammamiradio.playlist.playlist._MAX_LOCAL_DIRECTORY_ENTRIES", 8),
+    ):
+        tracks = _load_local_music_tracks(tmp_path)
+
+    assert tracks == []
+    assert yielded == 9
+
+
+def test_music_dir_override_drives_chart_local_blend(config, tmp_path):
+    music_dir = tmp_path / "operator-music"
+    music_dir.mkdir()
+    (music_dir / "Local Artist - Local Song.mp3").touch()
+    config.music_dir = music_dir
+    config.allow_ytdlp = True
+    chart = _track("Chart Song", "Chart Artist")
+
+    with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[chart]),
+    ):
+        tracks, source = load_explicit_source(
+            config,
+            PlaylistSource(kind="charts", source_id="apple_music_it_top_100", label="Current Italian charts"),
+        )
+
+    assert {track.source for track in tracks} == {"youtube", "local"}
+    evidence = source.readiness_evidence
+    assert evidence is not None
+    assert evidence.entries["local"].candidates == 1
+    assert evidence.entries["charts"].candidates == 1
+
+
+def test_source_evidence_records_chart_local_blend_and_recovery(config, tmp_path):
+    config.allow_ytdlp = True
+    config.music_dir = tmp_path / "music"
+    config.music_dir.mkdir()
+    (config.music_dir / "Local Artist - Local Song.mp3").touch()
+    chart = _track("Chart Song", "Chart Artist")
+
+    with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[chart]),
+    ):
+        tracks, source = load_explicit_source(
+            config,
+            PlaylistSource(kind="charts", source_id="apple_music_it_top_100", label="Current Italian charts"),
+        )
+
+    assert len(tracks) == 2
+    evidence = source.readiness_evidence
+    assert evidence is not None
+    assert evidence.entries["charts"].candidates == 1
+    assert evidence.entries["local"].candidates == 1
+    assert evidence.entries["recovery"].bundled is True
+    state = StationState(playlist=tracks, playlist_source=source)
+    assert state.source_readiness.entries["charts"].candidates == 1
+    assert state.source_readiness.entries["local"].candidates == 1
+
+
+def test_source_evidence_keeps_failed_chart_restore_separate_from_starter(config):
+    starter_tracks = [_track("Carefree", source="starter"), _track("Cipher", source="starter")]
+    persisted = PlaylistSource(kind="charts", source_id="apple_music_it_top_100", label="Current Italian charts")
+    config.allow_ytdlp = True
+
+    with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=[]),
+        patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
+        patch("mammamiradio.media.starter.load_starter_rotation_tracks", return_value=starter_tracks),
+    ):
+        _tracks, source, error = fetch_startup_playlist(config, persisted)
+
+    evidence = source.readiness_evidence
+    assert evidence is not None
+    assert evidence.entries["charts"].attempted is True
+    assert evidence.entries["charts"].failure == "The saved source could not be restored"
+    assert evidence.entries["demo"].failure == ""
+    assert evidence.entries["demo"].bundled is True
+    assert evidence.entries["demo"].candidates == len(starter_tracks)
+    assert error

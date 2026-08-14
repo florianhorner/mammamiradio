@@ -31,11 +31,14 @@ def _entry(path, payload, *, transcript="The station stays on air.", kind="speec
     }
 
 
-def test_shipped_manifest_is_valid_and_only_continuity_is_spoken():
+def test_shipped_manifest_is_valid_and_declares_reviewed_spoken_assets():
     assert validate_spoken_asset_manifest() == []
-    approved = approved_spoken_assets("recovery")
-    assert [path.name for path in approved] == ["continuity_1.mp3"]
-    assert is_approved_spoken_asset(approved[0]) is True
+    recovery = approved_spoken_assets("recovery")
+    first_listen = approved_spoken_assets("first_listen")
+    assert [path.name for path in recovery] == ["continuity_1.mp3"]
+    assert [path.name for path in first_listen] == ["first_listen_show.mp3"]
+    assert is_approved_spoken_asset(recovery[0]) is True
+    assert is_approved_spoken_asset(first_listen[0]) is True
 
 
 def test_missing_manifest_and_unlisted_audio_fail_closed(tmp_path):

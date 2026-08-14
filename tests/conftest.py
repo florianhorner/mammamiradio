@@ -74,6 +74,35 @@ def _reset_broadcast_chain():
 
 
 @pytest.fixture(autouse=True)
+def _reset_ha_projection_executor():
+    """Keep the HA projection worker pool out of cross-test state.
+
+    The pool is a module-level singleton holding a real spawned process. Without
+    this, one test that breaks its worker cascades BrokenProcessPool into every
+    later test that reaches a projection, and the order is randomised. Retiring
+    after each test also makes the worker exit cleanly, which is what lets it
+    write its coverage data (see concurrency/parallel in pyproject.toml).
+
+    A test that never touched the pool leaves the global at None, so this is a
+    no-op for all but the handful of tests that project for real.
+
+    Teardown-only on purpose. Retiring on setup too would forbid any two tests
+    from sharing a worker, paying a full cold spawn each time for no isolation
+    the teardown does not already give.
+    """
+    import mammamiradio.home.ha_context as ha_context
+
+    yield
+    # shutdown(wait=True): the worker must finish exiting before the next test
+    # runs, because coverage data for the child is written during that exit.
+    # The module's own retire uses wait=False (it must never block the audio
+    # loop); here the race would silently cost coverage and trip the ratchet.
+    executor = ha_context._ha_projection_executor
+    if executor is not None and ha_context._retire_ha_projection_executor(executor):
+        executor.shutdown(wait=True)
+
+
+@pytest.fixture(autouse=True)
 def _disable_runway_governor_by_default():
     """Keep legacy producer tests focused unless they explicitly opt into runway gating."""
     from mammamiradio.scheduling import producer

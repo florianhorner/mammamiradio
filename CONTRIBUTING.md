@@ -268,6 +268,12 @@ existing receipt. `--overwrite-selection-receipt` deliberately replaces that
 chosen receipt; use it only to correct the same review, never to start a new
 audit history.
 
+Two proof/ conventions coexist, on purpose: append-only dated receipts like the
+one above (audit history — never overwritten), and fixed-name current-state
+files that ARE overwritten each run (`proof/preship-review.json`,
+`proof/checks.txt`, `proof/review-findings.json`) where git history is the
+audit trail. New proof artifacts should say which convention they follow.
+
 The redacted tracked proof stores the candidate ID and name, selected profile,
 text and audio hashes, provider result, duration, approval status, and human
 rationale code only. It never stores raw audition copy, audio, local paths, or
@@ -313,6 +319,11 @@ After starting the app:
 6. Restart the app and verify the last selected source restores automatically.
 
 If you are binding to `0.0.0.0`, set `ADMIN_PASSWORD` or `ADMIN_TOKEN` first or config validation will reject startup. Non-loopback admin requests with basic auth also require CSRF validation (the dashboard handles this automatically via injected tokens).
+
+For First Listen or any Home Assistant-facing manual QA, use the
+[disposable local Home Assistant lab](docs/runbooks/first-listen-local-ha.md).
+It exercises a real HA Media Source and Mac VLC `media_player` without exposing
+branch code, test credentials, or synthetic state to the live home.
 
 ## Documentation expectations
 

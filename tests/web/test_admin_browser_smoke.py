@@ -24,6 +24,9 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "page.setDefaultTimeout(5000)",
         "building ahead · station paused",
         "building ahead · waiting for listeners",
+        "healthy Resume sent anything other than one normal /api/resume request",
+        "cancelling assetless Resume sent a force request",
+        "confirmed assetless Resume did not send exactly one /api/resume?force=true request",
         "failed poll kept a stale production-state label",
         "failed poll did not offer a manual retry control",
         "failed poll did not announce the delayed status through the persistent live region",
@@ -48,11 +51,30 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "stale status failure showed a false update-delayed state",
         "declined skip showed success instead of the backend error",
         "network-failed skip did not show the offline recovery message",
+        "late search response repopulated results after playlist revision invalidation",
+        "older overlapping query overwrote the newest search ownership",
+        "cross-revision pagination retained mixed search rows",
+        "cross-revision pagination gave no search-again recovery",
+        "fresh playlist Next posted the wrong target contract",
+        "successful playlist Next left actionable rows on the submitted revision",
+        "stale playlist Next hid the backend recovery message",
+        "stale playlist Next showed a false success toast",
+        "stale search Next hid the backend recovery message",
+        "stale search Next showed a false success toast",
+        "stale playlist page contaminated the authoritative cache",
+        "authoritative post-restart status was rejected as a lower revision",
         "stopped producer controls stayed interactive",
         "a stopped Next-track control remained keyboard-focusable",
         "the synthetic stopped segment restarted the elapsed timer",
         "dynamic stopped control escaped synchronization",
         "resume overwrote an independent capability-disabled state",
+        "empty pool claimed no source before capabilities arrived",
+        "capability success waited for setup status before exposing recovery",
+        "no-source recovery lost actionable golden-path guidance",
+        "first capability failure claimed no source",
+        "later capability failure discarded the last known recovery action",
+        "empty-pool Library tools recovery was inert while stopped",
+        "empty-pool setup recovery was inert while stopped",
         "for (const width of [320, 375, 414, 600, 768])",
         "catalogue row acquired internal horizontal overflow",
         "catalogue control escaped its row",
@@ -67,6 +89,16 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "blockedOffOriginRequests",
         "page.on('pageerror'",
         "uncaught page errors",
+        # The live /api/setup/status probe must authenticate like the real
+        # dashboard client: meta-tag CSRF token in the X-Radio-CSRF-Token
+        # header. A bare fetch gets 403 from the active-setup gate.
+        'meta[name="mammamiradio-csrf-token"]',
+        "X-Radio-CSRF-Token",
+        "admin page did not embed the CSRF token meta tag",
+        # A fresh install lands on the First Listen setup tab with the producer
+        # console hidden; the smoke must open the producer desk like an
+        # operator before asserting focus or geometry inside it.
+        "showAdminTab('scaletta'",
     ):
         assert needle in code, f"admin browser smoke lost behavior guard: {needle}"
     assert "waitForTimeout(" not in code, "admin browser smoke must use state-based waits, not timing sleeps."

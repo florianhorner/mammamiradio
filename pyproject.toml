@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "jinja2>=3.1",
-    "pillow>=10.0",
+    "pillow>=12.3.0",
     "uvicorn[standard]>=0.34",
 
     "anthropic>=0.94.0",
@@ -108,6 +108,14 @@ ignore_names = [
 [tool.coverage.run]
 branch = true
 source = ["mammamiradio"]
+# The Home Assistant projection runs in a spawned worker process
+# (home/ha_context.py). Without multiprocessing concurrency, coverage stops at
+# the process boundary and silently reports that worker's code as unexecuted,
+# which drops the module below its per-module floor in .coverage-floors.json.
+# "thread" stays in the list because the rest of the suite still uses threads.
+concurrency = ["multiprocessing", "thread"]
+parallel = true
+sigterm = true
 
 [tool.coverage.report]
 fail_under = 92

@@ -291,6 +291,101 @@ async def test_schedule_label_generation_resets_flag_after_failure(tmp_path):
         await asyncio.sleep(0)
 
 
+@pytest.mark.asyncio
+async def test_scheduled_label_generation_revoked_before_provider_call_sends_nothing(tmp_path):
+    """A privacy cutover fences even a task that swallows cancellation before its provider call."""
+    import mammamiradio.home.catalog as catalog
+
+    config = _config()
+    states = {"light.counter": _state("Counter light")}
+    scheduled_entered = asyncio.Event()
+    real_generate = catalog.generate_label_catalog
+
+    async def cancellation_resistant_gate(*args, **kwargs):
+        scheduled_entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # Model a dependency that consumes cancellation and continues. The
+            # policy epoch, not cooperative cancellation, must be the final fence.
+            pass
+        return await real_generate(*args, **kwargs)
+
+    provider = AsyncMock(return_value=[{"entity_id": "light.counter", "label_it": "Luce", "label_en": "Light"}])
+    with (
+        patch("mammamiradio.home.catalog.generate_label_catalog", new=cancellation_resistant_gate),
+        patch("mammamiradio.home.catalog._call_anthropic_labels", new=provider),
+        patch("mammamiradio.home.catalog.save_catalog") as save,
+    ):
+        assert schedule_label_generation(states, cache_dir=tmp_path, config=config)
+        await asyncio.wait_for(scheduled_entered.wait(), timeout=1.0)
+        await catalog.revoke_label_generation()
+        await asyncio.sleep(0)
+
+    provider.assert_not_awaited()
+    save.assert_not_called()
+    assert not catalog.generation_in_progress()
+    assert load_catalog(tmp_path)["entries"] == {}
+    assert not (tmp_path / CATALOG_FILENAME).exists()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_resistant_label_completion_after_revoke_cannot_save_or_publish(tmp_path):
+    """A late provider result from the old privacy era cannot replace the catalog."""
+    import mammamiradio.home.catalog as catalog
+
+    config = _config()
+    entity_id = "light.counter"
+    state = _state("Counter light")
+    old_catalog = {
+        "schema_version": 1,
+        "entries": {
+            entity_id: {
+                "hash": compute_hash(entity_id, state),
+                "label_it": "Vecchia luce",
+                "label_en": "Old light",
+            }
+        },
+    }
+    save_catalog(tmp_path, old_catalog)
+    provider_entered = asyncio.Event()
+
+    async def cancellation_resistant_provider(candidates, _config, *, role):
+        assert role == "fast"
+        provider_entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return [
+                {
+                    "entity_id": candidates[0].entity_id,
+                    "label_it": "Luce nuova",
+                    "label_en": "New light",
+                }
+            ]
+        raise AssertionError("provider gate unexpectedly completed without cancellation")
+
+    provider = AsyncMock(side_effect=cancellation_resistant_provider)
+    with (
+        patch("mammamiradio.home.catalog._call_anthropic_labels", new=provider),
+        patch("mammamiradio.home.catalog.save_catalog") as save,
+    ):
+        assert schedule_label_generation(states={entity_id: state}, cache_dir=tmp_path, config=config, force=True)
+        await asyncio.wait_for(provider_entered.wait(), timeout=1.0)
+        await catalog.revoke_label_generation()
+        await asyncio.sleep(0)
+
+    provider.assert_awaited_once()
+    save.assert_not_called()
+    assert not catalog.generation_in_progress()
+    assert load_catalog(tmp_path)["entries"][entity_id]["label_it"] == "Vecchia luce"
+    assert resolve_label(entity_id, state, cache_dir=tmp_path).label_it == "Vecchia luce"
+    assert (
+        json.loads((tmp_path / CATALOG_FILENAME).read_text(encoding="utf-8"))["entries"][entity_id]["label_it"]
+        == "Vecchia luce"
+    )
+
+
 def test_response_text_joins_text_blocks_and_tolerates_shapes():
     from mammamiradio.home.catalog import _response_text
 
