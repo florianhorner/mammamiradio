@@ -1219,6 +1219,40 @@ async (page) => {
   await page.unroute('**/api/capabilities');
   await page.unroute('**/api/setup/status');
 
+  // The empty-pool "Open setup" recovery above navigated to the setup tab.
+  // While First Listen entry is still required (this smoke runs against a
+  // fresh install), that tab is one opaque journey surface: the producer
+  // deck — console and tab bar — steps aside, and the dedicated Station
+  // controls escape in the header is the operator's way back to the desk.
+  // Assert that contract, then leave the journey the way the operator does,
+  // so the desk assertions below run against a visible console again.
+  const firstListenShell = await page.evaluate(() => {
+    const deck = document.querySelector('.mmr-deck');
+    const escape = document.querySelector('.first-listen-station-controls');
+    return {
+      entry: document.body.dataset.firstListenEntry || null,
+      activeTab: document.body.dataset.activeAdminTab || null,
+      deckHidden: Boolean(deck) && getComputedStyle(deck).display === 'none',
+      escapeVisible: Boolean(escape) && getComputedStyle(escape).display !== 'none',
+    };
+  });
+  assert(firstListenShell.entry === 'required' && firstListenShell.activeTab === 'setup',
+    `empty-pool setup recovery did not open the required First Listen journey: ${JSON.stringify(firstListenShell)}`);
+  assert(firstListenShell.deckHidden, 'required First Listen journey left the producer deck competing with the setup surface');
+  assert(firstListenShell.escapeVisible, 'required First Listen journey lost its Station controls escape');
+  await page.locator('.first-listen-station-controls').click();
+  await page.waitForFunction(() => document.body.dataset.activeAdminTab === 'scaletta', null, { timeout: 5000 });
+  const escapedShell = await page.evaluate(() => {
+    const deck = document.querySelector('.mmr-deck');
+    const rotationTab = document.getElementById('tab-rotazione');
+    return {
+      deckVisible: Boolean(deck) && getComputedStyle(deck).display !== 'none',
+      rotationTabVisible: Boolean(rotationTab) && getComputedStyle(rotationTab).display !== 'none',
+    };
+  });
+  assert(escapedShell.deckVisible && escapedShell.rotationTabVisible,
+    'the Station controls escape did not restore the producer desk tab bar');
+
   const stoppedControls = await page.evaluate(() => {
     updateStopState(true);
     const airNext = document.querySelector('.mmr-console-triggers .a-trigger');

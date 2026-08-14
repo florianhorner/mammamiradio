@@ -70,7 +70,22 @@ _EXPECTED_APPROVED_AD_VOICE_NAMES: frozenset[str] = frozenset(
         "Signora Testimonia",
     }
 )
-_EXPECTED_STAGED_AD_VOICE_NAMES: frozenset[str] = frozenset()
+_EXPECTED_STAGED_AD_VOICE_NAMES: frozenset[str] = frozenset(
+    {
+        "Dottoressa Tiziana",
+        "La Cronista",
+        "Carlotta",
+        "Francesca",
+        "Il Razzo",
+    }
+)
+_EXPECTED_CAMPAIGN_CANDIDATES: dict[str, tuple[str, str]] = {
+    "Dottoressa Tiziana": ("RXoaSpLaWTEckJgPUBG3", "bureaucrat"),
+    "La Cronista": ("3DPhHWXDY263XJ1d2EPN", "hammer"),
+    "Carlotta": ("Z9LM7NBnQ8aOZKIXkd5S", "maniac"),
+    "Francesca": ("S3RXi1qdUT4is6DxRHdi", "hammer"),
+    "Il Razzo": ("t3hJ92dgZhDVtsff084B", "disclaimer_goblin"),
+}
 
 
 def _config():
@@ -123,6 +138,21 @@ def test_configured_ad_voices_all_declare_airtime_approval(config_name: str, rad
 
     assert approved == _EXPECTED_APPROVED_AD_VOICE_NAMES
     assert staged == _EXPECTED_STAGED_AD_VOICE_NAMES
+
+
+def test_campaign_candidates_match_the_reviewed_intake_and_stay_staged():
+    cfg = _config()
+    by_name = {voice.name: voice for voice in cfg.ads.voices}
+
+    assert set(_EXPECTED_CAMPAIGN_CANDIDATES) <= set(by_name)
+    for name, (voice_id, role) in _EXPECTED_CAMPAIGN_CANDIDATES.items():
+        voice = by_name[name]
+        assert voice.voice == voice_id
+        assert voice.role == role
+        assert voice.engine == "elevenlabs"
+        assert voice.airtime_approved is False
+        assert voice.voice_settings == {}
+        assert voice.reserved_for == frozenset()
 
 
 def test_brand_spokesperson_pins_resolve_to_a_voice():
