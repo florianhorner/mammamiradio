@@ -118,7 +118,7 @@ jobs:
         run: |
           python scripts/validate-ha-green-release-evidence.py \
             --release-version "${{ steps.semver.outputs.version }}" \
-            --current-commit "$(git rev-parse 'HEAD^{commit}')" \
+            --current-commit "$(git rev-parse HEAD^{commit})" \
             --output ha-green-release-proof.json
 
       - name: Upload HA Green release proof
