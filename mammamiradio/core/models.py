@@ -942,6 +942,10 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
+    # Session-only ad receipts for completed breaks. Stores aggregate counts
+    # in memory and resets with the process.
+    ad_experiment_completed_breaks: int = 0
+    ad_experiment_brand_airings: dict[str, int] = field(default_factory=dict)
     session_stopped: bool = False
     # True only after an explicit assetless force-resume, until a listener
     # accepts the first rebuilt segment. Readiness stays "starting" meanwhile.
@@ -2465,6 +2469,31 @@ class StationState:
                 transition_motif=transition_motif,
             )
         )
+
+    def record_completed_ad_break(self, brands: Collection[str]) -> None:
+        """Increment process-local counts for one credited ad break."""
+        normalized = [brand.strip() for brand in brands if isinstance(brand, str) and brand.strip()]
+        if not normalized:
+            return
+        self.ad_experiment_completed_breaks += 1
+        for brand in normalized:
+            self.ad_experiment_brand_airings[brand] = self.ad_experiment_brand_airings.get(brand, 0) + 1
+
+    def ad_experiment_snapshot(self) -> dict[str, object]:
+        """Return the public process-local receipt payload."""
+        brands = [
+            {"brand": brand, "completed_airings": count}
+            for brand, count in sorted(
+                self.ad_experiment_brand_airings.items(),
+                key=lambda item: (-item[1], item[0].casefold(), item[0]),
+            )
+        ]
+        return {
+            "scope": "runtime",
+            "completed_breaks": self.ad_experiment_completed_breaks,
+            "completed_spots": sum(self.ad_experiment_brand_airings.values()),
+            "brands": brands,
+        }
 
     def after_ad(self, brands: list[str] | None = None) -> None:
         """Mark one full ad break as produced (called once per break, not per-spot)."""
