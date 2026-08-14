@@ -1239,9 +1239,8 @@ class TestSourceControlVisibilityContract:
         assert "Boolean(capabilities.charts_reload)" in html
         assert 'id="libraryTools"' in html
         tools = html[html.index('id="libraryTools"') : html.index("<!-- Diretta zone -->")]
-        assert 'id="sourceJamendoBtn"' in tools
         assert 'id="sourceChartsBtn"' in tools
-        assert "sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload" in html
+        assert "sourceGroup.hidden=!visibility.charts_reload" in html
         assert "jamendoSourceAvailable" not in html
 
     @pytest.mark.asyncio

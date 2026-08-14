@@ -2232,7 +2232,6 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <p class="rotation-library-label">Add a source</p>
             <div class="quick-actions" id="playlistSourceControls">
               <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
-              <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
             </div>
           </section>
           <section class="library-tools-group" id="playlistPoolControls">
@@ -5873,7 +5872,7 @@ function sourceControlVisibility(caps){
 }
 function emptyPoolRecoveryState(st,caps,capsState){
   const visibility=sourceControlVisibility(caps);
-  const sourcesAvailable=visibility.jamendo||visibility.charts_reload;
+  const sourcesAvailable=visibility.charts_reload;
   if(capsState==='checking'){
     return {action:'setup',message:'The rotation is empty. Checking available music sources…'};
   }
@@ -5901,7 +5900,7 @@ function updateSourceControls(st,caps){
   const sourceGroup=document.getElementById('sourceImportGroup');
   const visibility=sourceControlVisibility(caps);
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
-  if(sourceGroup)sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload;
+  if(sourceGroup)sourceGroup.hidden=!visibility.charts_reload;
   updateEmptyPoolRecovery(st,caps);
 }
 function openLibraryTools(){

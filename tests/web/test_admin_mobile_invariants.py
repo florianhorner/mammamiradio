@@ -564,7 +564,6 @@ def test_rotation_uses_hunt_first_markup_with_capability_safe_library_recovery()
     assert "data-heading-kind" not in rotation
     assert "enrichPlaylistSource('classic_" not in rotation
     assert 'id="sourceChartsBtn"' in tools
-    assert 'id="sourceJamendoBtn"' in tools
     assert 'id="purgePoolBtn"' in tools
     assert 'id="emptyPoolRecovery"' in rotation
     assert 'id="emptyPoolLibraryBtn"' in rotation
