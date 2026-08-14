@@ -116,6 +116,11 @@
       <div class="mmr-stat"><div class="mmr-stat-n" id="stat-tracks">—</div><div class="mmr-stat-l">{{ copy.get('stat_tracks', 'Tracks in Rotation') }}</div></div>
       <div class="mmr-stat"><div class="mmr-stat-n" id="stat-hosts">{% for h in brand.hosts %}{{ h.display_name }}{% if not loop.last %} · {% endif %}{% endfor %}</div><div class="mmr-stat-l">{{ copy.get('stat_hosts', 'Hosts') }}</div></div>
     </div>
+    <div class="sr-only" id="ad-session-announcement" role="status" aria-live="polite" aria-atomic="true"></div>
+    <details class="mmr-ad-session" id="ad-session-receipt" hidden>
+      <summary id="ad-session-summary"></summary>
+      <ul id="ad-session-brands" aria-labelledby="ad-session-summary"></ul>
+    </details>
     <aside class="mmr-casa" id="casa-card" role="status" aria-live="polite" data-cap="ha" hidden>
       <div class="eyebrow" id="casa-eyebrow">Casa · Home Assistant</div>
       <div id="casa-mood"></div>

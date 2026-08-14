@@ -27,8 +27,9 @@ Usage: scripts/pre-release-check.sh
 
 Pre-release sanity check. Run before bumping the version number.
 Verifies version consistency across pyproject.toml + addon config.yaml,
-CHANGELOG head matches the version, all release invariants, and the physical
-20-run Home Assistant Green cold-launch receipt set.
+CHANGELOG head matches the version, all release invariants (FFmpeg eq
+chain count, recovery and browser audio, test mocks, post-restart guard),
+and the physical 20-run Home Assistant Green cold-launch receipt set.
 
 Catches the class of bugs that have caused production silence incidents.
 
@@ -170,6 +171,16 @@ if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
     ok "packaged spoken assets are manifest/hash/transcript approved"
 else
     fail "packaged spoken-asset manifest/hash/transcript validation failed"
+fi
+
+if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+    --browser-assets-root "$PWD/mammamiradio/web/static/audio" \
+    --static-root "$PWD/mammamiradio/web/static" \
+    --admin-template "$PWD/mammamiradio/web/templates/admin.html" \
+    --radio-config "$PWD/radio.toml"; then
+    ok "browser narration assets and admin metadata match the release manifest"
+else
+    fail "browser narration asset/admin manifest validation failed"
 fi
 
 if command -v ffprobe >/dev/null 2>&1; then

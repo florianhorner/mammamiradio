@@ -1564,6 +1564,55 @@ def test_audible_commit_logs_new_provider_events_when_object_ids_collide(caplog)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("accepted_counts", "expected_breaks"),
+    [
+        ([1, 1], 1),
+        ([1, 0], 0),
+        ([0, 1], 0),
+        ([0, 0], 0),
+    ],
+)
+async def test_ad_experiment_receipt_requires_every_chunk_to_reach_an_audience(
+    tmp_path,
+    accepted_counts,
+    expected_breaks,
+):
+    """Record a receipt only if every chunk reached a listener."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "carosello.mp3"
+    audio_path.write_bytes(b"x" * 8192)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.AD,
+            path=audio_path,
+            metadata={"brands": ["Prezzoforte", "TeleCuore"]},
+            ephemeral=False,
+        )
+    )
+    app.state.stream_hub.broadcast = AsyncMock(side_effect=accepted_counts)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=2.0)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    receipt = state.ad_experiment_snapshot()
+    assert receipt["completed_breaks"] == expected_breaks
+    assert receipt["completed_spots"] == expected_breaks * 2
+    outcome = state.stream_outcome_history[-1]
+    assert outcome["accepted_listener_count"] == max(accepted_counts)
+    assert outcome["result"] == ("aired" if max(accepted_counts) > 0 else "not_streamed")
+    assert app.state.stream_hub.broadcast.await_count == len(accepted_counts)
+
+
+@pytest.mark.asyncio
 async def test_continuity_reservation_reports_a_bridge_fire_from_the_send_loop(tmp_path):
     """Reserved safety audio reports a bridge ONLY once a listener has it.
 

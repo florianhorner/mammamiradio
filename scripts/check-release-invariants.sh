@@ -70,6 +70,8 @@ else
     ok "producer recovery paths do not call generate_silence"
 fi
 
+# One Python-3.9-compatible manifest/hash boundary validates both the demo
+# package and browser narration pack before the per-file package-reachability check.
 if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py"; then
     ok "packaged spoken assets are manifest-bound and listener-truth safe"
 else
@@ -79,11 +81,7 @@ fi
 for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
     if python3 - "$asset_name" <<'PY'
 from importlib import resources
-from pathlib import Path
 import sys
-
-from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
-from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset
 
 name = sys.argv[1]
 resource = resources.files("mammamiradio").joinpath("assets", "demo", "recovery", name)
@@ -93,15 +91,11 @@ except (FileNotFoundError, IsADirectoryError, OSError) as exc:
     raise SystemExit(f"{name} is not readable through importlib.resources: {exc}") from exc
 if len(payload) <= 1024:
     raise SystemExit(f"{name} package resource is only {len(payload)} bytes")
-
-asset_path = Path(DEMO_ASSETS_DIR) / "recovery" / name
-if not is_approved_packaged_audio_asset(asset_path, assets_root=Path(DEMO_ASSETS_DIR)):
-    raise SystemExit(f"{name} is not approved by the packaged manifest/hash boundary")
 PY
     then
-        ok "$asset_name is package-reachable and manifest/hash approved"
+        ok "$asset_name is package-reachable and nontrivial"
     else
-        fail "$asset_name is not package-reachable or failed its manifest/hash check"
+        fail "$asset_name is not package-reachable or is too small"
     fi
 done
 

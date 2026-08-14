@@ -197,6 +197,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: bash scripts/check-release-invariants.sh
 
+      # `addopts = -m 'not requires_ffmpeg'` deselects these by default, so the
+      # coverage gate below never runs them. They are the only proof that a
+      # manifest-approved payload which is not really audio still fails ffprobe.
+      - name: Browser narration ffmpeg guards
+        run: python -m pytest tests/web/test_first_listen_narration_assets.py -m requires_ffmpeg -q
+
       # On PRs that touch version files: full version-sync check
       # (pyproject.toml ↔ config.yaml ↔ custom_components/mammamiradio/manifest.json ↔ CHANGELOG)
       - name: Version sync check

@@ -147,6 +147,44 @@
     }
   }
 
+  /*
+   * Normalize up to 20 non-empty brand names, each capped at 120 characters.
+   * Prefer metadata.brands; fall back to metadata.brand if none are usable.
+   * Keep source order and duplicate names.
+   */
+  function normalizeAdBrandNames(metadata) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+
+    function normalize(source) {
+      if (!Array.isArray(source)) return [];
+      const names = [];
+      source.slice(0, 20).forEach((candidate) => {
+        if (typeof candidate !== 'string') return;
+        const name = candidate.replace(/\s+/g, ' ').trim().slice(0, 120);
+        if (!name) return;
+        names.push(name);
+      });
+      return names;
+    }
+
+    const plural = Array.isArray(metadata.brands) ? normalize(metadata.brands) : [];
+    return plural.length ? plural : normalize([metadata.brand]);
+  }
+
+  function adNowPlayingText(np) {
+    const brands = normalizeAdBrandNames(np && np.metadata);
+    if (brands.length) {
+      return {
+        title: brands.join(' · '),
+        secondary: _t('np_ad_break', 'This ad break'),
+      };
+    }
+    return {
+      title: _t('np_ad_message', 'Sponsored message'),
+      secondary: _t('seg_ad', 'Sponsored'),
+    };
+  }
+
   function segmentPillClass(type) {
     switch ((type || '').toLowerCase()) {
       case 'music': return 'pill-music';
@@ -567,8 +605,9 @@
       artist = label || 'Marco & Giulia';
       title = _t('np_live', 'Live') + ' \u2014 ' + _t('seg_banter', 'Banter');
     } else if (np.type === 'ad') {
-      artist = (np.metadata && np.metadata.brand) ? np.metadata.brand : 'Sponsored';
-      title = 'A word from our sponsors';
+      const adText = adNowPlayingText(np);
+      title = adText.title;
+      artist = adText.secondary;
     } else if (np.type === 'welcome') {
       artist = stationName; title = 'The station has noticed you';
     } else if (np.type === 'news_flash' || np.type === 'news') {
@@ -629,8 +668,9 @@
       trackEl.textContent = label ? label + ' ' + _t('np_banter_strip', 'in conversation') : _t('np_banter_idle', 'The hosts are on air');
       artistEl.textContent = _t('seg_banter', 'Banter');
     } else if (np.type === 'ad') {
-      trackEl.textContent = _t('np_ad_message', 'Sponsored message');
-      artistEl.textContent = (np.metadata && np.metadata.brand) ? np.metadata.brand : _t('seg_ad', 'Sponsored');
+      const adText = adNowPlayingText(np);
+      trackEl.textContent = adText.title;
+      artistEl.textContent = adText.secondary;
     } else if (np.type === 'welcome') {
       trackEl.textContent = _t('np_welcome', 'Welcome aboard');
       artistEl.textContent = currentStationName();
@@ -666,6 +706,95 @@
 
     updateMediaSession(np);
     renderCurrentCredit(np, Boolean($('music-credits-dialog')?.open));
+  }
+
+  function adReceiptCountText(count, singularKey, singularFallback, pluralKey, pluralFallback) {
+    const singular = count === 1;
+    return _t(
+      singular ? singularKey : pluralKey,
+      singular ? singularFallback : pluralFallback
+    ).replace('{n}', String(count));
+  }
+
+  function renderAdExperiment(status) {
+    const details = $('ad-session-receipt');
+    const summary = $('ad-session-summary');
+    const list = $('ad-session-brands');
+    const announcement = $('ad-session-announcement');
+    if (!details || !summary || !list || !announcement) return;
+
+    const experiment = status && status.ad_experiment;
+    const completedSpots = Number(experiment && experiment.completed_spots);
+    if (!Number.isFinite(completedSpots) || completedSpots <= 0) {
+      // Clear stale runtime state after a restart or payload withdrawal.
+      const hadReceipt = details.dataset.receiptKey !== undefined;
+      details.hidden = true;
+      details.open = false;
+      summary.textContent = '';
+      list.replaceChildren();
+      if (hadReceipt) announcement.textContent = '';
+      delete details.dataset.receiptKey;
+      return;
+    }
+
+    const total = Math.floor(completedSpots);
+    const summaryText = adReceiptCountText(
+      total,
+      'ad_session_summary_one',
+      'This session · 1 completed spot',
+      'ad_session_summary',
+      'This session · {n} completed spots'
+    );
+
+    const brands = experiment && Array.isArray(experiment.brands)
+      ? experiment.brands
+      : [];
+    const rows = [];
+    brands.forEach((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+      const names = normalizeAdBrandNames({ brand: entry.brand });
+      const count = Number(entry.completed_airings);
+      if (!names.length || !Number.isFinite(count) || count <= 0) return;
+      const completedAirings = Math.floor(count);
+
+      rows.push({
+        brand: names[0],
+        airings: adReceiptCountText(
+          completedAirings,
+          'ad_session_airings_one',
+          '1 completed airing',
+          'ad_session_airings',
+          '{n} completed airings'
+        ),
+      });
+    });
+
+    // Keep the user's open state and skip duplicate announcements on unchanged polls.
+    const receiptKey = JSON.stringify([summaryText, rows]);
+    if (details.dataset.receiptKey === receiptKey) {
+      details.hidden = false;
+      return;
+    }
+
+    // Unhide the receipt before populating it.
+    details.hidden = false;
+    summary.textContent = summaryText;
+    list.replaceChildren();
+    rows.forEach((entry) => {
+      const row = document.createElement('li');
+      const name = document.createElement('span');
+      const airings = document.createElement('span');
+      name.className = 'mmr-ad-session-brand';
+      airings.className = 'mmr-ad-session-count';
+      name.textContent = entry.brand;
+      airings.textContent = entry.airings;
+      row.append(name, airings);
+      list.appendChild(row);
+    });
+
+    // Change the always-present live region only when the receipt changes.
+    announcement.textContent = summaryText;
+    details.dataset.receiptKey = receiptKey;
   }
 
   // A second or two past the end is normal — the server reports elapsed as
@@ -1053,11 +1182,18 @@
    * /public-status returns brand + capabilities + facts in one shape — single fetch
    * replaces the old /status + /api/capabilities pair. Works on any deploy (loopback,
    * LAN, public) without the 401 risk of admin-only routes. */
+  const STATUS_POLL_INTERVAL_MS = 3000;
+  const STATUS_POLL_DEADLINE_MS = 2400;
+  let _statusPollGeneration = 0;
   async function fetchStatus() {
+    const generation = ++_statusPollGeneration;
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), STATUS_POLL_DEADLINE_MS);
     try {
-      const r = await fetch(_base + '/public-status');
+      const r = await fetch(_base + '/public-status', { signal: controller.signal });
       if (!r.ok) return;
       const status = await r.json();
+      if (generation !== _statusPollGeneration) return;
       syncStationName(status);
       // Capabilities live inside the public payload (PR-B). Wrap to match the
       // legacy { capabilities: {...} } shape the rest of listener.js expects.
@@ -1078,6 +1214,7 @@
         document.body.setAttribute('data-state', 'live');
         renderNowPlayingStrip(status.now_streaming);
       }
+      renderAdExperiment(status);
       renderHeroStats(status, caps);
       renderPalinsesto(status);
       renderStoppedState(status);
@@ -1092,7 +1229,11 @@
         renderProgress(status.current_progress_sec, status.current_duration_sec);
       }
     } catch (e) {
-      console.warn('fetchStatus failed', e);
+      if (generation === _statusPollGeneration && e?.name !== 'AbortError') {
+        console.warn('fetchStatus failed', e);
+      }
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
@@ -1395,7 +1536,7 @@
     fetchStatus();
     fetchRequests();
     /* fetchPublicStatus removed in PR-F */
-    setInterval(fetchStatus, 3000);
+    setInterval(fetchStatus, STATUS_POLL_INTERVAL_MS);
     setInterval(fetchRequests, 60000);
   });
 })();
