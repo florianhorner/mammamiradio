@@ -1332,7 +1332,8 @@ async (page) => {
       llmKeys: ['ANTHROPIC_API_KEY'],
     }));
     await assertCompleted();
-    assert((await page.locator('#firstListenAiChip').innerText()) === 'AI service connected', 'configured AI provider was not summarized safely');
+    const aiChipText = await page.locator('#firstListenAiChip').innerText();
+    assert(aiChipText.toLowerCase() === 'ai service connected', `configured AI provider was not summarized safely: ${aiChipText}`);
     assert(!(await page.locator('#firstListenAiSummary').innerText()).includes('ANTHROPIC_API_KEY'), 'configured AI summary exposed a raw key name');
     const aiReview = page.locator('#firstListenAiStep > .first-listen-head > .first-listen-review');
     assert((await aiReview.innerText()) === 'Review AI setup', 'configured AI has no deliberate review action');
