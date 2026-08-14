@@ -82,6 +82,14 @@ def _write_release_check_repo(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(demo_assets / asset_path, target)
     shutil.copy2(spoken_manifest_path, tmp_path / "mammamiradio/assets/demo/spoken_assets.json")
+    shutil.copytree(
+        ROOT / "mammamiradio/web/static/audio",
+        tmp_path / "mammamiradio/web/static/audio",
+    )
+    admin_template = tmp_path / "mammamiradio/web/templates/admin.html"
+    admin_template.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "mammamiradio/web/templates/admin.html", admin_template)
+    shutil.copy2(ROOT / "radio.toml", tmp_path / "radio.toml")
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -103,20 +111,49 @@ def fake_ffprobe_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     _write(
         ffprobe,
         """#!/usr/bin/env python3
+import json
 from pathlib import Path
 import sys
 
-payload = Path(sys.argv[-1]).read_bytes()
+path = Path(sys.argv[-1])
+payload = path.read_bytes()
 is_mp3 = payload.startswith(b"ID3") or (
     len(payload) >= 2 and payload[0] == 0xFF and payload[1] & 0xE0 == 0xE0
 )
 if not is_mp3:
     print("invalid audio", file=sys.stderr)
     raise SystemExit(1)
-print("audio")
+if "json" in sys.argv:
+    manifest = json.loads((path.parents[1] / "spoken_assets.json").read_text())
+    relative_path = f"first_listen/{path.name}"
+    entry = next(item for item in manifest["assets"] if item["path"] == relative_path)
+    print(json.dumps({
+        "streams": [{
+            "codec_name": "mp3",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bit_rate": "192000",
+        }],
+        "format": {"duration": str(entry["duration_seconds"])},
+    }))
+else:
+    print("audio")
 """,
     )
     ffprobe.chmod(0o755)
+    ffmpeg = bin_dir / "ffmpeg"
+    _write(
+        ffmpeg,
+        """#!/usr/bin/env python3
+import sys
+
+print("I: -16.0 LUFS", file=sys.stderr)
+print("Peak: -2.0 dBFS", file=sys.stderr)
+""",
+    )
+    ffmpeg.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
@@ -373,6 +410,7 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(
     assert result.returncode == 0
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
+    assert "browser narration assets and admin metadata match the release manifest" in result.stdout
 
 
 def test_pre_release_check_fails_on_manifest_version_mismatch(
@@ -526,6 +564,21 @@ def test_pre_release_check_rejects_manifest_approved_unsafe_transcript(
     assert result.returncode != 0
     assert "packaged spoken-asset manifest/hash/transcript validation failed" in result.stdout
     assert "transcript contains listener arrival/return copy" in result.stderr
+
+
+def test_pre_release_check_rejects_browser_narration_hash_drift(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    _write_release_check_repo(tmp_path)
+    asset = tmp_path / "mammamiradio/web/static/audio/first_listen/welcome.mp3"
+    asset.write_bytes(asset.read_bytes() + b"tampered")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "browser narration asset/admin manifest validation failed" in result.stdout
+    assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
 
 
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
@@ -987,6 +1040,9 @@ def test_release_invariants_guard_ha_green_perf_budget() -> None:
         assert "ha-green-perf-smoke.py" in body
         assert "ha-green-launch-smoke.py" in body
         assert "launch-smoke:" in body
+
+    assert "from mammamiradio.core.spoken_assets import" not in release_body
+    assert 'resources.files("mammamiradio")' in release_body
 
 
 def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -> None:

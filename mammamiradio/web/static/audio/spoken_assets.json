@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "bundle": "first-listen-guide",
+  "render_provider": "canonical",
+  "canonical_render_receipt": {
+    "schema_version": 1,
+    "source": "radio.toml",
+    "provider": "elevenlabs",
+    "fallback": false,
+    "hosts": [
+      {
+        "name": "Marco",
+        "voice_id": "o4b57JYAECRMJyCEXyIE",
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+          "stability": 0.6,
+          "similarity_boost": 0.78,
+          "style": 0.45,
+          "use_speaker_boost": true
+        },
+        "delivery_profile": "none"
+      },
+      {
+        "name": "Giulia",
+        "voice_id": "fNmw8sukfGuvWVOp33Ge",
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+          "stability": 0.42,
+          "similarity_boost": 0.78,
+          "style": 0.45,
+          "use_speaker_boost": true
+        },
+        "delivery_profile": "none"
+      }
+    ]
+  },
+  "assets": [
+    {
+      "path": "first_listen/welcome.mp3",
+      "sha256": "b184b5d50c6edf618ae05db60ad5f7cb1e7a60647bfe523b760aef14055147db",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Benvenuti. Five small steps, and Mamma Mi Radio is in your room. Giulia: He means your speaker. Nothing personal and nothing automatic. You stay in charge.",
+      "duration_seconds": 11.856,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    },
+    {
+      "path": "first_listen/speaker.mp3",
+      "sha256": "7d609a45835163b766cb79d83040e3a92a02d060a9f318f8ccad5b43c9a360b3",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Pick the room. Kitchen, living room, wherever radio belongs. Giulia: We only show speakers Home Assistant already knows. We never choose one or touch the volume.",
+      "duration_seconds": 10.68,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    },
+    {
+      "path": "first_listen/sound-check.mp3",
+      "sha256": "bbbff207124bee942b8e7a0b511f358e82601607f85888cb7ebae4d5b21cd7d6",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: We sent the station. If you can hear us, say yes. Giulia: Home Assistant can confirm the request, not the sound in your room. That part is yours.",
+      "duration_seconds": 9.336,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    },
+    {
+      "path": "first_listen/not-yet.mp3",
+      "sha256": "a2560cf4a4ad7ed252b33add034de4083fba2145d9c5a0fc93977b4501be17c5",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: No sound? Va bene. We are not blaming the speaker. Giulia: Check mute and volume, then try the same room again. We saved your place.",
+      "duration_seconds": 9.24,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    },
+    {
+      "path": "first_listen/receipt-recovery.mp3",
+      "sha256": "5a3f7b1fa35825acb151b93fd708536792172350f2c1ac1a7f3246b0c9e407f0",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: Home Assistant already sent the station. Marco: This only restores the listening check. It will not play us again.",
+      "duration_seconds": 6.624,
+      "speakers": [
+        "Giulia",
+        "Marco"
+      ]
+    },
+    {
+      "path": "first_listen/privacy.mp3",
+      "sha256": "224f4452eeda24d382f0c99d3466c8d9ed16db7865b9343fd4843711f85437f7",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Give me the weather and I will make it radio. Giulia: Only after you preview the exact details. Keep Home private and we read nothing.",
+      "duration_seconds": 8.664,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    },
+    {
+      "path": "first_listen/ai.mp3",
+      "sha256": "3342f2aafbe583693ef814b556ed93dd470299c04ec645a3080c340cd0ebe578",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Connect an AI provider and the conversations keep changing. Giulia: Optional. The station already works. Saved keys stay hidden, and an empty field changes nothing.",
+      "duration_seconds": 12.336,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    },
+    {
+      "path": "first_listen/success.mp3",
+      "sha256": "00ff13f5a7757d67f876a71a2be1231786081de3c403594692efb14f5dcdbf8c",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Siamo in onda! Your first broadcast is live. Giulia: Speaker checked, privacy saved. Mamma Mi Radio is yours now.",
+      "duration_seconds": 9.024,
+      "speakers": [
+        "Marco",
+        "Giulia"
+      ]
+    }
+  ]
+}
