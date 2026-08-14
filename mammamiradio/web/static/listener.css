@@ -242,7 +242,7 @@ body[data-stopped="true"] .mmr-radio.is-playing .mmr-speaker .ring { animation: 
 .mmr-stat-n#stat-hosts { font-family: var(--font-body); font-style: normal; font-weight: 600; font-size: 14px; line-height: 1.4; color: var(--cream); }
 .mmr-stat-l { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
 
-/* Frugal Carosello experiment — a collapsed runtime receipt, not an archive. */
+/* Collapsed session receipt for runtime ad data. */
 .mmr-ad-session {
   width: 100%;
   max-width: 420px;

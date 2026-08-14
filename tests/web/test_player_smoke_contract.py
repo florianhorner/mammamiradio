@@ -194,8 +194,8 @@ def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
         assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
 
 
-def test_player_smoke_executes_carosello_listener_contract() -> None:
-    """The real listener DOM executes receipt, roster, and Media Session paths."""
+def test_player_smoke_executes_ad_receipt_contract() -> None:
+    """Exercise receipt rendering and Media Session updates in the listener."""
     code = RUN_CODE.read_text(encoding="utf-8")
     for needle in (
         "adExperimentScenario = 'one'",
@@ -208,15 +208,15 @@ def test_player_smoke_executes_carosello_listener_contract() -> None:
         "updated ad receipt was not announced with plural copy",
         "wire brand text executed as markup",
         "live ad roster did not replace generic sponsored copy",
-        "Media Session ad roster disagreed with the visible roster",
+        "Media Session ad roster did not match the visible roster",
         "brandless ad did not retain generic sponsored copy",
         "runtime reset did not hide, collapse, and clear the stale ad receipt",
         "runtime reset did not clear the ad receipt announcement",
-        "stale status poll resurrected the cleared Carosello receipt",
+        "stale status poll restored a cleared ad receipt",
         "stale status race never held poll N after JSON parsing",
         "window.__playerSmokeOldStatusPoll = window.__playerSmokeFetchStatus()",
     ):
-        assert needle in code, f"player smoke lost Carosello browser guard: {needle}"
+        assert needle in code, f"player smoke missing ad-receipt browser guard: {needle}"
 
 
 def test_default_listener_identity_fixture_is_canonical() -> None:

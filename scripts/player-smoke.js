@@ -355,9 +355,7 @@ async (page) => {
   await page.locator('#ad-session-summary').click();
   assert(await page.locator('#ad-session-receipt').getAttribute('open') !== null, 'ad receipt did not expand');
 
-  // Prove the unchanged-receipt early return ran, rather than merely checking
-  // the DOM before the next poll rendered. The separate rotation-count change
-  // is our receipt that this exact status payload reached listener.js.
+  // Change the rotation count to prove this poll reached listener.js without rewriting the receipt.
   rotationTrackCount = 26;
   await waitForStatusRender(
     (expected) => {
@@ -426,8 +424,8 @@ async (page) => {
   }));
   assert(rosterSurfaces.title === 'Prezzoforte · TeleCuore', 'visible live ad roster lost source order');
   assert(rosterSurfaces.secondary === copy.np_ad_break, 'visible live ad roster used the wrong secondary copy');
-  assert(rosterSurfaces.mediaTitle === rosterSurfaces.title, 'Media Session ad roster disagreed with the visible roster');
-  assert(rosterSurfaces.mediaArtist === rosterSurfaces.secondary, 'Media Session ad label disagreed with the visible roster');
+  assert(rosterSurfaces.mediaTitle === rosterSurfaces.title, 'Media Session ad roster did not match the visible roster');
+  assert(rosterSurfaces.mediaArtist === rosterSurfaces.secondary, 'Media Session ad label did not match the visible roster');
 
   nowStreamingScenario = 'ad-generic';
   await waitForStatusRender(
@@ -442,12 +440,11 @@ async (page) => {
     mediaArtist: navigator.mediaSession?.metadata?.artist || '',
   }));
   assert(genericAdSurfaces.secondary === copy.seg_ad, 'brandless ad used the wrong generic label');
-  assert(genericAdSurfaces.mediaTitle === genericAdSurfaces.title, 'generic Media Session title disagreed with the visible title');
-  assert(genericAdSurfaces.mediaArtist === genericAdSurfaces.secondary, 'generic Media Session label disagreed with the visible label');
+  assert(genericAdSurfaces.mediaTitle === genericAdSurfaces.title, 'generic Media Session title did not match the visible title');
+  assert(genericAdSurfaces.mediaArtist === genericAdSurfaces.secondary, 'generic Media Session label did not match the visible label');
 
-  // Hold poll N after its body has been parsed, let poll N+1 clear the runtime
-  // receipt, then release N. Cancellation is deliberately too late here: only
-  // a generation guard can stop N from resurrecting stale DOM and announcing it.
+  // Hold poll N after JSON parsing, render poll N+1, then release N. This puts
+  // the stale response beyond AbortController cancellation and tests the generation guard.
   await page.evaluate(() => {
     if (typeof window.__playerSmokeFetchStatus !== 'function') {
       throw new Error('player-smoke: status poll callback was not captured');
@@ -500,7 +497,7 @@ async (page) => {
   assert(
     postRaceReceipt.rotation === '28' && postRaceReceipt.hidden && !postRaceReceipt.open &&
       postRaceReceipt.summary === '' && postRaceReceipt.announcement === '' && postRaceReceipt.rows === 0,
-    `stale status poll resurrected the cleared Carosello receipt: ${JSON.stringify(postRaceReceipt)}`,
+    `stale status poll restored a cleared ad receipt: ${JSON.stringify(postRaceReceipt)}`,
   );
   assert(
     await page.locator('#ad-session-announcement').textContent() === '',

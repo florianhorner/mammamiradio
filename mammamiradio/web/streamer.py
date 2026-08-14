@@ -1807,7 +1807,7 @@ def _record_ad_experiment_receipt(
     terminal_reason: str | None,
     all_chunks_audience_delivered: bool,
 ) -> None:
-    """Best-effort receipt for a completed ad break delivered throughout."""
+    """Credit brands after a non-fallback EOF when every ad chunk reached listeners."""
     try:
         if (
             segment.type is not SegmentType.AD
@@ -1827,7 +1827,7 @@ def _record_ad_experiment_receipt(
             brand = metadata.get("brand")
             brands = [brand] if isinstance(brand, str) else []
         state.record_completed_ad_break(brands)
-    except Exception:  # pragma: no cover - the experiment must never break audio
+    except Exception:  # pragma: no cover - isolate receipt errors from audio
         logger.debug("Carosello experiment receipt failed", exc_info=True)
 
 
@@ -4820,12 +4820,9 @@ async def run_playback_loop(app) -> None:
             terminal_reason = "aborted"
             companionship_discard_recorded = False
             air_start_stamped = False
-            # The generic aired outcome deliberately records whether ANY chunk
-            # reached a listener. The Carosello experiment makes the narrower
-            # promise that the WHOLE completed break reached an audience. Keep
-            # that truth separate and monotonic: once any ad chunk is rejected
-            # by every listener queue, later delivery cannot make the break
-            # eligible for a receipt.
+            # `aired` means at least one chunk reached a listener. A receipt
+            # requires every ad chunk to reach at least one listener queue; one
+            # zero-delivery chunk makes the break ineligible.
             all_chunks_audience_delivered = True
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
@@ -5332,10 +5329,10 @@ def _ad_cast_status_payload(config) -> dict[str, object]:
 
 
 def _ad_experiment_status(state: StationState) -> dict[str, object]:
-    """Return the process-local experiment without compromising status."""
+    """Return the process-local receipt payload or an empty fallback."""
     try:
         return state.ad_experiment_snapshot()
-    except Exception:  # pragma: no cover - the experiment must never break status
+    except Exception:  # pragma: no cover - isolate receipt errors from status
         logger.debug("Carosello experiment status failed", exc_info=True)
         return {"scope": "runtime", "completed_breaks": 0, "completed_spots": 0, "brands": []}
 
@@ -9782,8 +9779,7 @@ def _public_status_payload(request: Request) -> dict:
             ),
         },
         "ha_moments": ha_moments,
-        # Disposable, restart-ephemeral Carosello experiment. Admin inherits this
-        # exact object through the shared public payload; there is no second view.
+        # Process-local receipt counts reused by the admin status payload.
         "ad_experiment": _ad_experiment_status(state),
         # Brand-fiction layer (PR-A schema). Listener renders against this.
         "brand": _serialize_brand(config.brand),

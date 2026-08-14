@@ -1520,7 +1520,7 @@ async def test_ad_experiment_receipt_requires_every_chunk_to_reach_an_audience(
     accepted_counts,
     expected_breaks,
 ):
-    """Any delivery gap makes a completed break ineligible for a receipt."""
+    """Record a receipt only if every chunk reached a listener."""
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.stream_hub.subscribe()

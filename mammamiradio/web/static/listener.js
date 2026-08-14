@@ -144,9 +144,9 @@
   }
 
   /*
-   * Frugal Carosello experiment: accept only bounded, non-empty string names.
-   * The plural field is authoritative; the legacy singular field is a fallback
-   * when it contains no usable names. Preserve source order, including repeats.
+   * Normalize up to 20 non-empty brand names, each capped at 120 characters.
+   * Prefer metadata.brands; fall back to metadata.brand if none are usable.
+   * Keep source order and duplicate names.
    */
   function normalizeAdBrandNames(metadata) {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
@@ -548,16 +548,14 @@
       });
     });
 
-    // Preserve the user's expanded/collapsed state and avoid re-announcing an
-    // unchanged receipt on every three-second status poll.
+    // Keep the user's open state and skip duplicate announcements on unchanged polls.
     const receiptKey = JSON.stringify([summaryText, rows]);
     if (details.dataset.receiptKey === receiptKey) {
       details.hidden = false;
       return;
     }
 
-    // Reveal the visible receipt before populating it. The separate, permanently
-    // exposed status node below owns screen-reader announcements.
+    // Unhide the receipt before populating it.
     details.hidden = false;
     summary.textContent = summaryText;
     list.replaceChildren();
@@ -573,9 +571,7 @@
       list.appendChild(row);
     });
 
-    // This status node is permanently present in the accessibility tree, so
-    // its changed text reliably announces the receipt even while details stays
-    // collapsed. The receipt-key return above prevents poll-time repetition.
+    // Change the always-present live region only when the receipt changes.
     announcement.textContent = summaryText;
     details.dataset.receiptKey = receiptKey;
   }

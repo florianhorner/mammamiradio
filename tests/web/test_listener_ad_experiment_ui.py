@@ -1,4 +1,4 @@
-"""Static listener guards for the removable Carosello runtime experiment."""
+"""Static checks for the listener's runtime ad receipt."""
 
 from __future__ import annotations
 
