@@ -12,11 +12,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import html
 import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -34,6 +38,11 @@ from mammamiradio.audio.tts import (
 )
 from mammamiradio.audio.voice_catalog import AZURE_ITALIAN_VOICES, EDGE_ITALIAN_VOICES, OPENAI_VOICES
 from mammamiradio.core.config import StationConfig, load_config
+from mammamiradio.core.models import HostPersonality
+from mammamiradio.hosts.fallbacks import (
+    AD_BREAK_NORMAL_INTROS,
+    AD_BREAK_NORMAL_OUTROS,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = REPO_ROOT / "radio.toml"
@@ -42,6 +51,11 @@ SELECTION_RECEIPT_PATH = REPO_ROOT / "proof" / "2026-07-13-voice-diversity-selec
 SELECTION_RECEIPT_SCHEMA_VERSION = 1
 HOST_PERFORMANCE_RECEIPT_PATH = REPO_ROOT / "proof" / "2026-07-16-v3-host-performance.json"
 HOST_PERFORMANCE_RECEIPT_SCHEMA_VERSION = 1
+HOST_PERFORMANCE_RECEIPT_SHA256 = "f4da2b626e1d0b8d5af826d97bb3133d900362cfe1944f5c0f06c6277db13c6f"
+HOST_CASTING_PROOF_PATH = REPO_ROOT / "proof" / "host-voice-casting-tests.txt"
+HOST_CASTING_PROOF_SHA256 = "41b1f5afb710c43342e4bd304a3111946d09208c72cbde1e08294921cb2b74bc"
+IDENTITY_RECALIBRATION_SCHEMA_VERSION = 2
+IDENTITY_LISTENING_RECEIPT_SCHEMA_VERSION = 1
 TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CANDIDATE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -73,6 +87,81 @@ DEFAULT_SAMPLE_TEXT = (
     "sweepers e personaggi in onda. Dimmi se ha carattere, calore e presenza."
 )
 DEFAULT_V3_HOST_PERFORMANCE_TEXT = "La prossima canzone arriva proprio quando serve: non fate domande, fate spazio."
+
+# Fixed, repository-owned copy for the casting recovery gate. These are the
+# resolved full ident and active Normal Mode ad-wrapper lines, not invented
+# audition prose. Keeping the words fixed isolates voice identity from copy and
+# sound-design taste.
+# This matches the resolved runtime value. Identity normalization capitalizes
+# the sentence after the ellipsis even though the raw TOML uses lowercase.
+IDENTITY_ANNOUNCER_TEXT = "Mamma Mi Radio... Da Windor a Vergen, la voce che non si spegne mai!"
+IDENTITY_MARCO_TEXT = "And now... a word from our sponsors, amici!"
+IDENTITY_GIULIA_TEXT = "Back to the music, finally — grazie for staying with us!"
+IDENTITY_LISTENING_PROMPT = (
+    "Voices: pass|fail; Wrong: Isabella|Marco|Giulia|none; Notes: <what does not sound like the station>"
+)
+
+IDENTITY_EXPECTED_ELEVENLABS_SETTINGS: dict[str, dict[str, object]] = {
+    "Marco": {
+        "similarity_boost": 0.78,
+        "stability": 0.6,
+        "style": 0.45,
+        "use_speaker_boost": True,
+    },
+    "Giulia": {
+        "similarity_boost": 0.78,
+        "stability": 0.42,
+        "style": 0.45,
+        "use_speaker_boost": True,
+    },
+}
+IDENTITY_EXPECTED_VOICE_IDS = {
+    "Isabella": "it-IT-Isabella:DragonHDLatestNeural",
+    "Marco": "o4b57JYAECRMJyCEXyIE",
+    "Giulia": "fNmw8sukfGuvWVOp33Ge",
+}
+IDENTITY_ROLE_METADATA = {
+    "identity-isabella": (
+        "Isabella",
+        "Station ID announcer",
+        "resolved StationConfig.sonic_brand.full_ident from radio.toml",
+    ),
+    "identity-marco": (
+        "Marco",
+        "Deterministic Normal Mode ad-break intro casting check",
+        "mammamiradio.hosts.fallbacks.AD_BREAK_NORMAL_INTROS",
+    ),
+    "identity-giulia": (
+        "Giulia",
+        "Deterministic Normal Mode ad-break outro casting check",
+        "mammamiradio.hosts.fallbacks.AD_BREAK_NORMAL_OUTROS",
+    ),
+}
+IDENTITY_SCOPE = "Dry voice identity only; no motif, imaging treatment, cadence, pack replacement, or runtime change."
+IDENTITY_NEXT_STAGE = "Three sonic treatments remain blocked until all three voices pass."
+IDENTITY_LOCAL_POSTPROCESS = "mammamiradio.audio.normalizer.normalize(loudnorm=True)"
+IDENTITY_HOST_RECEIPT_SCOPE = (
+    "Marco/Giulia voice ID, ElevenLabs V2 model, and neutral delivery only; settings are excluded."
+)
+IDENTITY_PROFILE_PROVENANCE_SCOPE = (
+    "Supporting Sonos casting record; exact effective settings also come from the hash-bound config."
+)
+IDENTITY_PROVIDER_CONTRACT: dict[str, object] = {
+    "direct_cloud_helpers": True,
+    "fallback_permitted": False,
+    "credentials_recorded": False,
+}
+IDENTITY_LISTENING_DECISION_FIELDS = frozenset({"pack_digest", "status", "wrong", "rationale"})
+IDENTITY_LISTENING_STATUSES = frozenset({"approved", "rejected"})
+IDENTITY_LISTENING_WRONG = frozenset({"none", "Isabella", "Marco", "Giulia"})
+IDENTITY_LISTENING_ACCEPTED_RATIONALES = frozenset({"accepted_station_identity"})
+IDENTITY_LISTENING_REJECTED_RATIONALES = frozenset(
+    {
+        "rejected_wrong_voice_identity",
+        "rejected_off_brand_delivery",
+        "rejected_unintelligible_delivery",
+    }
+)
 
 ELEVENLABS_V2_MODEL = "eleven_multilingual_v2"
 ELEVENLABS_V3_MODEL = "eleven_v3"
@@ -356,6 +445,7 @@ def collect_configured_targets(
                 rate=prosody.get("rate"),
                 pitch=prosody.get("pitch"),
                 openai_instructions=_openai_instructions_for_host(host),
+                voice_settings=dict(getattr(host, "voice_settings", {}) or {}) or None,
                 elevenlabs_model=getattr(host, "elevenlabs_model", ELEVENLABS_V2_MODEL),
                 delivery_profile=getattr(host, "delivery_profile", "none"),
             ),
@@ -397,6 +487,88 @@ def collect_configured_targets(
         )
 
     return list(targets.values())
+
+
+def _identity_host(config: StationConfig, name: str) -> HostPersonality:
+    matches = [host for host in config.hosts if host.name.casefold() == name.casefold()]
+    if len(matches) != 1:
+        raise ValueError(f"Identity recalibration requires exactly one configured {name} host")
+    return matches[0]
+
+
+def build_identity_recalibration_targets(config: StationConfig) -> list[VoiceAuditionTarget]:
+    """Return the three canonical, direct-cloud casting checks.
+
+    This is deliberately narrower than a normal voice audition. The station
+    announcer, Marco, and Giulia are the identities the listener must recognize;
+    every route is validated before any provider receives copy.
+    """
+    sonic = config.sonic_brand
+    announcer_provider = _canonical_provider(sonic.sweeper_engine or "")
+    if announcer_provider != "azure":
+        raise ValueError("Identity announcer must use the configured Azure route")
+    if not sonic.sweeper_voice.strip():
+        raise ValueError("Identity announcer requires a configured Azure voice")
+    if sonic.sweeper_voice != IDENTITY_EXPECTED_VOICE_IDS["Isabella"]:
+        raise ValueError("Identity announcer no longer uses the canonical Isabella voice")
+    if config.super_italian_mode:
+        raise ValueError("Identity recalibration is fixed to the active Normal Mode wrapper inventory")
+    configured_ident = sonic.full_ident.strip()
+    if configured_ident != IDENTITY_ANNOUNCER_TEXT:
+        raise ValueError("Identity announcer copy must match the resolved StationConfig full ident")
+    if IDENTITY_MARCO_TEXT not in AD_BREAK_NORMAL_INTROS or IDENTITY_GIULIA_TEXT not in AD_BREAK_NORMAL_OUTROS:
+        raise ValueError("Identity host copy must remain in the active Normal Mode wrapper inventory")
+
+    hosts = {name: _identity_host(config, name) for name in ("Marco", "Giulia")}
+    for name, host in hosts.items():
+        if _canonical_provider(host.engine or "") != "elevenlabs":
+            raise ValueError(f"Identity host {name} must use ElevenLabs")
+        if host.elevenlabs_model != ELEVENLABS_V2_MODEL:
+            raise ValueError(f"Identity host {name} must use the accepted ElevenLabs V2 model")
+        if not host.voice.strip():
+            raise ValueError(f"Identity host {name} requires a configured ElevenLabs voice")
+        if host.voice != IDENTITY_EXPECTED_VOICE_IDS[name]:
+            raise ValueError(f"Identity host {name} no longer uses the canonical voice ID")
+
+    marco = hosts["Marco"]
+    giulia = hosts["Giulia"]
+    return [
+        VoiceAuditionTarget(
+            provider="azure",
+            voice=sonic.sweeper_voice,
+            label="identity-isabella",
+            source="identity-recalibration",
+            used_by=("sonic_brand:full_ident",),
+            text=configured_ident,
+            edge_fallback_voice=sonic.sweeper_edge_fallback_voice,
+            rate="+0%",
+            pitch="+0Hz",
+        ),
+        VoiceAuditionTarget(
+            provider="elevenlabs",
+            voice=marco.voice,
+            label="identity-marco",
+            source="identity-recalibration",
+            used_by=("host:Marco", "ad_wrapper:intro"),
+            text=IDENTITY_MARCO_TEXT,
+            edge_fallback_voice=marco.edge_fallback_voice,
+            voice_settings=dict(marco.voice_settings or {}) or None,
+            elevenlabs_model=marco.elevenlabs_model,
+            delivery_profile=marco.delivery_profile,
+        ),
+        VoiceAuditionTarget(
+            provider="elevenlabs",
+            voice=giulia.voice,
+            label="identity-giulia",
+            source="identity-recalibration",
+            used_by=("host:Giulia", "ad_wrapper:outro"),
+            text=IDENTITY_GIULIA_TEXT,
+            edge_fallback_voice=giulia.edge_fallback_voice,
+            voice_settings=dict(giulia.voice_settings or {}) or None,
+            elevenlabs_model=giulia.elevenlabs_model,
+            delivery_profile=giulia.delivery_profile,
+        ),
+    ]
 
 
 def build_v3_host_performance_targets(
@@ -720,6 +892,825 @@ async def run_auditions(
                 )
             )
     return results
+
+
+def _identity_output_path(run_dir: Path, index: int, target: VoiceAuditionTarget) -> Path:
+    stability = target.voice_settings.get("stability") if target.voice_settings else None
+    stab_suffix = f"-stab{round(stability * 100):02d}" if stability is not None else ""
+    model_suffix = f"-{_slug(target.elevenlabs_model)}" if target.provider == "elevenlabs" else ""
+    return run_dir / f"{index:02d}-{target.provider}-{_slug(target.voice)}{model_suffix}{stab_suffix}.mp3"
+
+
+def _probe_identity_audio(path: Path, config: StationConfig) -> tuple[dict[str, object], float]:
+    """Return verified final-format evidence for an identity clip.
+
+    The identity gate is release input, so best-effort duration probing is not
+    sufficient here. Fail closed unless ffprobe confirms the configured MP3
+    sample rate, channel count, bitrate, and a positive finite duration.
+    """
+    try:
+        completed = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_name,sample_rate,channels,bit_rate:format=duration,bit_rate",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"ffprobe could not inspect {path.name}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or "unknown ffprobe error"
+        raise RuntimeError(f"ffprobe rejected {path.name}: {detail}")
+    try:
+        payload = json.loads(completed.stdout)
+        streams = payload["streams"]
+        stream = streams[0]
+        format_payload = payload["format"]
+        codec = str(stream["codec_name"])
+        sample_rate_hz = int(stream["sample_rate"])
+        channels = int(stream["channels"])
+        bitrate_bps = int(stream.get("bit_rate") or format_payload["bit_rate"])
+        duration_sec = float(format_payload["duration"])
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"ffprobe returned incomplete audio evidence for {path.name}") from exc
+
+    expected = {
+        "codec": "mp3",
+        "sample_rate_hz": config.audio.sample_rate,
+        "channels": config.audio.channels,
+        "bitrate_kbps": config.audio.bitrate,
+    }
+    actual = {
+        "codec": codec,
+        "sample_rate_hz": sample_rate_hz,
+        "channels": channels,
+        "bitrate_kbps": bitrate_bps // 1000,
+    }
+    if actual != expected or bitrate_bps != config.audio.bitrate * 1000:
+        raise RuntimeError(f"Identity clip {path.name} has format {actual}, expected {expected}")
+    if not math.isfinite(duration_sec) or duration_sec <= 0:
+        raise RuntimeError(f"Identity clip {path.name} has no positive finite duration")
+    return actual, duration_sec
+
+
+def _identity_audio_evidence(
+    path: Path,
+    config: StationConfig,
+) -> tuple[str, float, dict[str, object]]:
+    try:
+        audio_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise RuntimeError(f"Identity clip {path.name} could not be read") from exc
+    audio_format, duration_sec = _probe_identity_audio(path, config)
+    return audio_sha256, duration_sec, audio_format
+
+
+async def _render_identity_targets_fail_fast(
+    targets: Sequence[VoiceAuditionTarget],
+    run_dir: Path,
+    config: StationConfig,
+) -> tuple[list[VoiceAuditionResult], dict[str, dict[str, object]]]:
+    """Render direct-cloud identity clips, stopping at the first failed call."""
+    results: list[VoiceAuditionResult] = []
+    formats: dict[str, dict[str, object]] = {}
+    for index, target in enumerate(targets, start=1):
+        output_path = _identity_output_path(run_dir, index, target)
+        try:
+            rendered_path = await _synthesize_target(target, output_path)
+            if rendered_path != output_path or rendered_path.is_symlink():
+                raise RuntimeError("provider helper returned an unexpected output path")
+            audio_sha256, duration_sec, audio_format = _identity_audio_evidence(rendered_path, config)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Identity recalibration failed closed at {target.label}: {type(exc).__name__}: {exc}"
+            ) from exc
+        result = _result_for_target(
+            target,
+            status=STATUS_GENERATED,
+            output_path=str(rendered_path),
+            audio_sha256=audio_sha256,
+            audio_duration_seconds=duration_sec,
+        )
+        results.append(result)
+        formats[target.label] = audio_format
+    return results, formats
+
+
+def _require_accepted_identity_hosts(
+    targets: Sequence[VoiceAuditionTarget],
+    receipt_path: Path,
+    casting_proof_path: Path,
+) -> tuple[str, str]:
+    """Bind voice/model acceptance and separately documented V2 settings."""
+    receipt = load_host_performance_receipt(receipt_path)
+    raw_performances = receipt.get("performances")
+    if not isinstance(raw_performances, list):  # pragma: no cover - receipt validator owns this
+        raise ValueError("Host-performance receipt has no performances")
+
+    by_label = {target.label: target for target in targets}
+    for host_name in ("Marco", "Giulia"):
+        target = by_label[f"identity-{host_name.casefold()}"]
+        profile = _selection_profile_for_target(target)
+        if profile.get("voice_settings") != IDENTITY_EXPECTED_ELEVENLABS_SETTINGS[host_name]:
+            raise ValueError(f"Identity host {host_name} no longer uses the documented production voice profile")
+        matches = [
+            performance
+            for performance in raw_performances
+            if isinstance(performance, Mapping)
+            and str(performance.get("host", "")).casefold() == host_name.casefold()
+            and performance.get("voice_id") == target.voice
+            and performance.get("model") == target.elevenlabs_model
+            and performance.get("delivery_cue") == NEUTRAL_DELIVERY_CUE
+            and performance.get("provider_result") == STATUS_GENERATED
+            and performance.get("human_disposition") == "accepted"
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Identity host {host_name} must match exactly one accepted ElevenLabs V2 performance receipt"
+            )
+    receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    if receipt_sha256 != HOST_PERFORMANCE_RECEIPT_SHA256:
+        raise ValueError("Accepted host voice/model receipt changed; re-audit casting provenance before rendering")
+    casting_proof_sha256 = hashlib.sha256(casting_proof_path.read_bytes()).hexdigest()
+    if casting_proof_sha256 != HOST_CASTING_PROOF_SHA256:
+        raise ValueError("Identity host casting proof changed; re-audit profile provenance before rendering")
+    return receipt_sha256, casting_proof_sha256
+
+
+def _identity_route(target: VoiceAuditionTarget, result: VoiceAuditionResult) -> dict[str, object]:
+    profile = result.profile or _selection_profile_for_target(target)
+    model = str(profile["model"])
+    if target.provider == "azure":
+        settings: dict[str, object] = {
+            "pitch": target.pitch or "+0Hz",
+            "provider_output_format": "audio-24khz-160kbitrate-mono-mp3",
+            "rate": target.rate or "+0%",
+        }
+    else:
+        raw_settings = profile.get("voice_settings", {})
+        settings = dict(raw_settings) if isinstance(raw_settings, Mapping) else {}
+    route = {
+        "provider": target.provider,
+        "voice": target.voice,
+        "model": model,
+        "settings": settings,
+    }
+    return {
+        "requested": route,
+        "effective": dict(route),
+        "fallback_used": False,
+    }
+
+
+def _identity_pack_digest(
+    clips: Sequence[Mapping[str, object]],
+    *,
+    config_sha256: str,
+    host_receipt_sha256: str,
+    casting_proof_sha256: str,
+) -> str:
+    payload = {
+        "clips": [
+            {
+                "audio_sha256": clip["audio_sha256"],
+                "character": clip["character"],
+                "copy_source": clip["copy_source"],
+                "duration_sec": clip["duration_sec"],
+                "format": clip["format"],
+                "id": clip["id"],
+                "local_postprocess": clip["local_postprocess"],
+                "path": clip["path"],
+                "role": clip["role"],
+                "route": clip["route"],
+                "text": clip["text"],
+                "text_sha256": clip["text_sha256"],
+            }
+            for clip in clips
+        ],
+        "casting_proof_sha256": casting_proof_sha256,
+        "config_sha256": config_sha256,
+        "host_receipt_sha256": host_receipt_sha256,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _identity_manifest(
+    targets: Sequence[VoiceAuditionTarget],
+    results: Sequence[VoiceAuditionResult],
+    audio_formats: Mapping[str, Mapping[str, object]],
+    *,
+    config_path: Path,
+    receipt_path: Path,
+    casting_proof_path: Path,
+    timestamp: str,
+    host_receipt_sha256: str,
+    casting_proof_sha256: str,
+) -> dict[str, object]:
+    config_sha256 = hashlib.sha256(config_path.read_bytes()).hexdigest()
+    result_by_label = {result.label: result for result in results}
+    clips: list[dict[str, object]] = []
+    for target in targets:
+        result = result_by_label[target.label]
+        character, role, copy_source = IDENTITY_ROLE_METADATA[target.label]
+        clips.append(
+            {
+                "id": target.label,
+                "character": character,
+                "role": role,
+                "copy_source": copy_source,
+                "text": target.text,
+                "text_sha256": result.clean_text_sha256,
+                "path": Path(result.output_path).name,
+                "audio_sha256": result.audio_sha256,
+                "duration_sec": result.audio_duration_seconds,
+                "format": dict(audio_formats[target.label]),
+                "route": _identity_route(target, result),
+                "local_postprocess": IDENTITY_LOCAL_POSTPROCESS,
+            }
+        )
+    pack_digest = _identity_pack_digest(
+        clips,
+        config_sha256=config_sha256,
+        host_receipt_sha256=host_receipt_sha256,
+        casting_proof_sha256=casting_proof_sha256,
+    )
+    return {
+        "schema_version": IDENTITY_RECALIBRATION_SCHEMA_VERSION,
+        "stage": "voice-identity-recalibration",
+        "generated_at": timestamp,
+        "release_ready": False,
+        "scope": IDENTITY_SCOPE,
+        "active_spoken_mode": "normal",
+        "config": {"path": str(config_path), "sha256": config_sha256},
+        "accepted_host_voice_model_receipt": {
+            "path": str(receipt_path),
+            "sha256": host_receipt_sha256,
+            "scope": IDENTITY_HOST_RECEIPT_SCOPE,
+        },
+        "host_profile_provenance": {
+            "path": str(casting_proof_path),
+            "sha256": casting_proof_sha256,
+            "scope": IDENTITY_PROFILE_PROVENANCE_SCOPE,
+        },
+        "provider_contract": dict(IDENTITY_PROVIDER_CONTRACT),
+        "clips": clips,
+        "pack_digest": pack_digest,
+        "listening_receipt": {
+            "schema_version": IDENTITY_LISTENING_RECEIPT_SCHEMA_VERSION,
+            "status": "pending",
+            "pack_digest": pack_digest,
+            "target": "Mac",
+            "prompt": IDENTITY_LISTENING_PROMPT,
+            "wrong": None,
+            "rationale": None,
+            "reviewed_at": None,
+        },
+        "next_stage": IDENTITY_NEXT_STAGE,
+    }
+
+
+def _identity_readme(manifest: Mapping[str, object]) -> str:
+    clips = manifest["clips"]
+    assert isinstance(clips, list)
+    rows = "\n".join(
+        f"- **{clip['character']} — {clip['role']}**: [`{clip['path']}`](./{clip['path']})"
+        for clip in clips
+        if isinstance(clip, Mapping)
+    )
+    return f"""# Mamma Mi Radio voice identity recalibration
+
+Status: **voice approval pending**. This board intentionally contains no music, motif, radio texture,
+or ad production. It isolates the three configured production identities before another sound-design pass.
+
+{rows}
+
+- [Open the listening board](./index.html)
+- [Inspect the exact provider and hash manifest](./manifest.json)
+
+Listen once on the Mac and answer exactly:
+
+> {IDENTITY_LISTENING_PROMPT}
+
+Pack digest: `{manifest["pack_digest"]}`
+
+The three sonic treatments remain blocked until these voices are recognizable as the station.
+"""
+
+
+def _identity_html(manifest: Mapping[str, object]) -> str:
+    raw_clips = manifest["clips"]
+    assert isinstance(raw_clips, list)
+    cards: list[str] = []
+    for raw_clip in raw_clips:
+        assert isinstance(raw_clip, Mapping)
+        route = raw_clip["route"]
+        assert isinstance(route, Mapping)
+        effective = route["effective"]
+        assert isinstance(effective, Mapping)
+        cards.append(
+            f"""
+<article>
+  <p class="role">{html.escape(str(raw_clip["role"]))}</p>
+  <h2>{html.escape(str(raw_clip["character"]))}</h2>
+  <p class="route">{html.escape(str(effective["provider"]))} · {html.escape(str(effective["model"]))}</p>
+  <blockquote>{html.escape(str(raw_clip["text"]))}</blockquote>
+  <audio controls preload="none" src="{html.escape(str(raw_clip["path"]))}"></audio>
+</article>"""
+        )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Mamma Mi Radio — voice identity check</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: system-ui, sans-serif; background:#14110f; color:#f5edd8; }}
+    body {{ max-width:760px; margin:0 auto; padding:32px 18px 56px; }}
+    h1 {{ font-family:Georgia,serif; font-size:clamp(2rem,7vw,3.5rem); margin-bottom:.4rem; }}
+    .warning {{ color:#f4d048; font-weight:700; }}
+    article {{ background:#251e19; border:1px solid #514335; border-radius:16px; padding:20px; margin:18px 0; }}
+    h2 {{ margin:.15rem 0; font-size:1.65rem; }}
+    .role,.route {{ margin:.2rem 0; color:#cdbfa8; }}
+    blockquote {{ margin:18px 0; padding-left:14px; border-left:3px solid #b82c20; font-style:italic; }}
+    audio {{ width:100%; }}
+    code {{ color:#f4d048; }}
+  </style>
+</head>
+<body>
+  <p class="warning">Casting only — no sound treatment in this gate.</p>
+  <h1>Do these sound like your station?</h1>
+  <p>These are direct renders from the configured production routes. No fallback is permitted.</p>
+  {"".join(cards)}
+  <h2>Decision</h2>
+  <p>Reply: <code>{html.escape(IDENTITY_LISTENING_PROMPT)}</code></p>
+  <p>Pack digest: <code>{manifest["pack_digest"]}</code></p>
+</body>
+</html>
+"""
+
+
+async def render_identity_recalibration(
+    output_root: Path,
+    *,
+    config_path: Path,
+    timestamp: str,
+    receipt_path: Path = HOST_PERFORMANCE_RECEIPT_PATH,
+    casting_proof_path: Path = HOST_CASTING_PROOF_PATH,
+) -> tuple[Path, dict[str, object]]:
+    """Render and publish the direct-cloud three-voice gate without fallback."""
+    timestamp = _timestamp(timestamp)
+    canonical_sources = (
+        (config_path, DEFAULT_CONFIG_PATH, "config"),
+        (receipt_path, HOST_PERFORMANCE_RECEIPT_PATH, "accepted host receipt"),
+        (casting_proof_path, HOST_CASTING_PROOF_PATH, "host casting proof"),
+    )
+    for supplied_path, canonical_path, label in canonical_sources:
+        if supplied_path.is_symlink() or supplied_path.resolve() != canonical_path.resolve():
+            raise ValueError(f"Identity recalibration requires the canonical repository {label}")
+    config_path = config_path.resolve()
+    receipt_path = receipt_path.resolve()
+    casting_proof_path = casting_proof_path.resolve()
+    config = load_config(str(config_path))
+    targets = build_identity_recalibration_targets(config)
+    host_receipt_sha256, casting_proof_sha256 = _require_accepted_identity_hosts(
+        targets,
+        receipt_path,
+        casting_proof_path,
+    )
+    missing = sorted(
+        {variable for target in targets for variable in missing_env_for_provider(target.provider, os.environ)}
+    )
+    if missing:
+        raise ValueError(f"Identity recalibration is missing provider credentials: {', '.join(missing)}")
+
+    run_dir = output_root / f"identity-gate-{timestamp}"
+    output_root.mkdir(parents=True, exist_ok=True)
+    try:
+        run_dir.mkdir()
+    except FileExistsError:
+        raise FileExistsError(f"Refusing to overwrite existing identity gate: {run_dir}") from None
+    staging_dir: Path | None = None
+    published = False
+    try:
+        staging_dir = Path(tempfile.mkdtemp(prefix=f".{run_dir.name}.", dir=output_root))
+        results, audio_formats = await _render_identity_targets_fail_fast(targets, staging_dir, config)
+        manifest = _identity_manifest(
+            targets,
+            results,
+            audio_formats,
+            config_path=config_path,
+            receipt_path=receipt_path,
+            casting_proof_path=casting_proof_path,
+            timestamp=timestamp,
+            host_receipt_sha256=host_receipt_sha256,
+            casting_proof_sha256=casting_proof_sha256,
+        )
+        (staging_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (staging_dir / "README.md").write_text(_identity_readme(manifest), encoding="utf-8")
+        (staging_dir / "index.html").write_text(_identity_html(manifest), encoding="utf-8")
+        # The empty run directory was claimed before the first paid call. Move
+        # audio and human-facing files first, then publish the manifest and a
+        # digest marker last so consumers never treat a partial board as ready.
+        for child in sorted(staging_dir.iterdir(), key=lambda path: (path.name == "manifest.json", path.name)):
+            child.replace(run_dir / child.name)
+        _validate_identity_board(run_dir / "manifest.json", require_ready=False)
+        (run_dir / ".ready").write_text(str(manifest["pack_digest"]) + "\n", encoding="ascii")
+        published = True
+        return run_dir, manifest
+    finally:
+        if staging_dir is not None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        if not published:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def _identity_manifest_mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must be an object")
+    return value
+
+
+def _identity_exact_fields(value: Mapping[str, object], expected: set[str], field: str) -> None:
+    if set(value) != expected:
+        detail = sorted(expected.symmetric_difference(value))
+        raise ValueError(f"{field} has an invalid field set: {', '.join(detail)}")
+
+
+def _identity_source_evidence(value: object, field: str) -> tuple[Path, str]:
+    evidence = _identity_manifest_mapping(value, field)
+    path_value = evidence.get("path")
+    digest = evidence.get("sha256")
+    if not isinstance(path_value, str) or not path_value:
+        raise ValueError(f"{field}.path must be a non-empty string")
+    if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+        raise ValueError(f"{field}.sha256 must be a lowercase SHA-256 digest")
+    path = Path(path_value)
+    if not path.is_absolute():
+        raise ValueError(f"{field}.path must be absolute")
+    if path.is_symlink():
+        raise ValueError(f"{field}.path must not be a symlink")
+    try:
+        current_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise ValueError(f"{field}.path is not readable") from exc
+    if current_digest != digest:
+        raise ValueError(f"{field} is stale: current file hash differs from the board")
+    return path, digest
+
+
+def _validate_identity_receipt(receipt: object, *, pack_digest: str) -> Mapping[str, object]:
+    value = _identity_manifest_mapping(receipt, "listening_receipt")
+    required = {
+        "schema_version",
+        "status",
+        "pack_digest",
+        "target",
+        "prompt",
+        "wrong",
+        "rationale",
+        "reviewed_at",
+    }
+    if set(value) != required:
+        detail = sorted(required.symmetric_difference(value))
+        raise ValueError(f"listening_receipt has an invalid field set: {', '.join(detail)}")
+    if value["schema_version"] != IDENTITY_LISTENING_RECEIPT_SCHEMA_VERSION:
+        raise ValueError("listening_receipt.schema_version is unsupported")
+    if value["pack_digest"] != pack_digest:
+        raise ValueError("listening_receipt.pack_digest does not match the identity board")
+    if value["target"] != "Mac" or value["prompt"] != IDENTITY_LISTENING_PROMPT:
+        raise ValueError("listening_receipt does not describe the Mac voice-identity gate")
+
+    status = value["status"]
+    if status == "pending":
+        if any(value[field] is not None for field in ("wrong", "rationale", "reviewed_at")):
+            raise ValueError("pending listening_receipt must not contain a decision")
+        return value
+    if status not in IDENTITY_LISTENING_STATUSES:
+        raise ValueError("listening_receipt.status must be pending, approved, or rejected")
+    wrong = value["wrong"]
+    rationale = value["rationale"]
+    reviewed_at = value["reviewed_at"]
+    if wrong not in IDENTITY_LISTENING_WRONG:
+        raise ValueError("listening_receipt.wrong must name one auditioned voice or none")
+    allowed_rationales = (
+        IDENTITY_LISTENING_ACCEPTED_RATIONALES if status == "approved" else IDENTITY_LISTENING_REJECTED_RATIONALES
+    )
+    if rationale not in allowed_rationales:
+        raise ValueError("listening_receipt.rationale is not valid for its status")
+    if status == "approved" and wrong != "none":
+        raise ValueError("an approved listening_receipt must set wrong to none")
+    if status == "rejected" and wrong == "none":
+        raise ValueError("a rejected listening_receipt must identify the wrong voice")
+    if not isinstance(reviewed_at, str):
+        raise ValueError("listening_receipt.reviewed_at must be a timezone-aware timestamp")
+    try:
+        parsed_reviewed_at = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("listening_receipt.reviewed_at must be an ISO-8601 timestamp") from exc
+    if parsed_reviewed_at.tzinfo is None:
+        raise ValueError("listening_receipt.reviewed_at must include a timezone")
+    return value
+
+
+def _validate_identity_board(
+    manifest_path: Path,
+    *,
+    require_ready: bool = True,
+) -> tuple[dict[str, object], tuple[Path, ...]]:
+    """Verify a published identity board against its audio and source lineage."""
+    if manifest_path.is_symlink():
+        raise ValueError("Identity manifest must not be a symlink")
+    try:
+        manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Identity manifest is not readable JSON: {manifest_path}") from exc
+    if not isinstance(manifest_value, dict):
+        raise ValueError("Identity manifest must be an object")
+    manifest: dict[str, object] = manifest_value
+    _identity_exact_fields(
+        manifest,
+        {
+            "schema_version",
+            "stage",
+            "generated_at",
+            "release_ready",
+            "scope",
+            "active_spoken_mode",
+            "config",
+            "accepted_host_voice_model_receipt",
+            "host_profile_provenance",
+            "provider_contract",
+            "clips",
+            "pack_digest",
+            "listening_receipt",
+            "next_stage",
+        },
+        "identity manifest",
+    )
+    if manifest.get("schema_version") != IDENTITY_RECALIBRATION_SCHEMA_VERSION:
+        raise ValueError("Identity manifest schema_version is unsupported")
+    if manifest.get("stage") != "voice-identity-recalibration":
+        raise ValueError("Identity manifest has the wrong stage")
+    generated_at = manifest.get("generated_at")
+    if not isinstance(generated_at, str):
+        raise ValueError("Identity manifest generated_at must be a timestamp")
+    _timestamp(generated_at)
+    if manifest.get("release_ready") is not False or manifest.get("active_spoken_mode") != "normal":
+        raise ValueError("Identity manifest must remain a non-release Normal Mode gate")
+    if manifest.get("scope") != IDENTITY_SCOPE or manifest.get("next_stage") != IDENTITY_NEXT_STAGE:
+        raise ValueError("Identity manifest scope or stage boundary was altered")
+    provider_contract = _identity_manifest_mapping(manifest.get("provider_contract"), "provider_contract")
+    _identity_exact_fields(provider_contract, set(IDENTITY_PROVIDER_CONTRACT), "provider_contract")
+    if provider_contract != IDENTITY_PROVIDER_CONTRACT:
+        raise ValueError("Identity manifest provider contract was altered")
+
+    config_evidence = _identity_manifest_mapping(manifest.get("config"), "config")
+    _identity_exact_fields(config_evidence, {"path", "sha256"}, "config")
+    config_path, config_sha256 = _identity_source_evidence(config_evidence, "config")
+    if config_path.resolve() != DEFAULT_CONFIG_PATH.resolve():
+        raise ValueError("Identity manifest does not bind the canonical repository config")
+    receipt_evidence = _identity_manifest_mapping(
+        manifest.get("accepted_host_voice_model_receipt"),
+        "accepted_host_voice_model_receipt",
+    )
+    _identity_exact_fields(
+        receipt_evidence,
+        {"path", "sha256", "scope"},
+        "accepted_host_voice_model_receipt",
+    )
+    if receipt_evidence.get("scope") != IDENTITY_HOST_RECEIPT_SCOPE:
+        raise ValueError("Identity manifest overstates the accepted host receipt scope")
+    receipt_path, host_receipt_sha256 = _identity_source_evidence(
+        receipt_evidence,
+        "accepted_host_voice_model_receipt",
+    )
+    if receipt_path.resolve() != HOST_PERFORMANCE_RECEIPT_PATH.resolve():
+        raise ValueError("Identity manifest does not bind the canonical accepted host receipt")
+    profile_evidence = _identity_manifest_mapping(
+        manifest.get("host_profile_provenance"),
+        "host_profile_provenance",
+    )
+    _identity_exact_fields(profile_evidence, {"path", "sha256", "scope"}, "host_profile_provenance")
+    if profile_evidence.get("scope") != IDENTITY_PROFILE_PROVENANCE_SCOPE:
+        raise ValueError("Identity manifest host profile provenance scope was altered")
+    casting_proof_path, casting_proof_sha256 = _identity_source_evidence(
+        profile_evidence,
+        "host_profile_provenance",
+    )
+    if casting_proof_path.resolve() != HOST_CASTING_PROOF_PATH.resolve():
+        raise ValueError("Identity manifest does not bind the canonical host casting proof")
+    config = load_config(str(config_path))
+    targets = build_identity_recalibration_targets(config)
+    accepted_hash, profile_hash = _require_accepted_identity_hosts(targets, receipt_path, casting_proof_path)
+    if accepted_hash != host_receipt_sha256 or profile_hash != casting_proof_sha256:
+        raise ValueError("Identity manifest provenance no longer matches its validated sources")
+
+    raw_clips = manifest.get("clips")
+    if not isinstance(raw_clips, list) or len(raw_clips) != 3:
+        raise ValueError("Identity manifest must contain exactly three clips")
+    target_by_id = {target.label: target for target in targets}
+    expected_ids = set(target_by_id)
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    seen_audio_hashes: set[str] = set()
+    clip_paths: list[Path] = []
+    clips: list[Mapping[str, object]] = []
+    for index, raw_clip in enumerate(raw_clips):
+        clip = _identity_manifest_mapping(raw_clip, f"clips[{index}]")
+        _identity_exact_fields(
+            clip,
+            {
+                "id",
+                "character",
+                "role",
+                "copy_source",
+                "text",
+                "text_sha256",
+                "path",
+                "audio_sha256",
+                "duration_sec",
+                "format",
+                "route",
+                "local_postprocess",
+            },
+            f"clips[{index}]",
+        )
+        clip_id = clip.get("id")
+        if not isinstance(clip_id, str) or clip_id not in expected_ids or clip_id in seen_ids:
+            raise ValueError(f"clips[{index}].id is missing, duplicated, or unexpected")
+        seen_ids.add(clip_id)
+        target = target_by_id[clip_id]
+        character, role, copy_source = IDENTITY_ROLE_METADATA[clip_id]
+        if (
+            clip.get("character") != character
+            or clip.get("role") != role
+            or clip.get("copy_source") != copy_source
+            or clip.get("local_postprocess") != IDENTITY_LOCAL_POSTPROCESS
+        ):
+            raise ValueError(f"Identity clip {clip_id} display or provenance metadata was altered")
+        path_value = clip.get("path")
+        if (
+            not isinstance(path_value, str)
+            or Path(path_value).name != path_value
+            or not path_value.endswith(".mp3")
+            or path_value in seen_paths
+        ):
+            raise ValueError(f"clips[{index}].path must be a unique local MP3 filename")
+        seen_paths.add(path_value)
+        clip_path = manifest_path.parent / path_value
+        if clip_path.is_symlink() or not clip_path.is_file():
+            raise ValueError(f"Identity clip is missing: {path_value}")
+        text_value = clip.get("text")
+        if text_value != target.text or clip.get("text_sha256") != _text_sha256(target.text):
+            raise ValueError(f"Identity clip {clip_id} no longer has its fixed runtime copy")
+        expected_route = _identity_route(target, _result_for_target(target, status=STATUS_GENERATED))
+        if clip.get("route") != expected_route:
+            raise ValueError(f"Identity clip {clip_id} route differs from the loaded production config")
+        audio_sha256, duration_sec, audio_format = _identity_audio_evidence(clip_path, config)
+        if clip.get("audio_sha256") != audio_sha256:
+            raise ValueError(f"Identity clip {clip_id} audio hash differs from the manifest")
+        if audio_sha256 in seen_audio_hashes:
+            raise ValueError("Identity clips must not contain exact duplicate audio")
+        seen_audio_hashes.add(audio_sha256)
+        if clip.get("format") != audio_format:
+            raise ValueError(f"Identity clip {clip_id} format differs from verified ffprobe evidence")
+        recorded_duration = clip.get("duration_sec")
+        if (
+            isinstance(recorded_duration, bool)
+            or not isinstance(recorded_duration, int | float)
+            or not math.isclose(float(recorded_duration), duration_sec, abs_tol=0.001)
+        ):
+            raise ValueError(f"Identity clip {clip_id} duration differs from verified ffprobe evidence")
+        clips.append(clip)
+        clip_paths.append(clip_path)
+    if seen_ids != expected_ids:
+        raise ValueError("Identity manifest is missing a required voice")
+    board_mp3_names = {path.name for path in manifest_path.parent.iterdir() if path.suffix.casefold() == ".mp3"}
+    if board_mp3_names != seen_paths:
+        raise ValueError("Identity board contains undeclared or missing MP3 files")
+
+    expected_pack_digest = _identity_pack_digest(
+        clips,
+        config_sha256=config_sha256,
+        host_receipt_sha256=host_receipt_sha256,
+        casting_proof_sha256=casting_proof_sha256,
+    )
+    pack_digest = manifest.get("pack_digest")
+    if pack_digest != expected_pack_digest:
+        raise ValueError("Identity manifest pack_digest is stale or invalid")
+    _validate_identity_receipt(manifest.get("listening_receipt"), pack_digest=expected_pack_digest)
+    expected_surfaces = {
+        "README.md": _identity_readme(manifest),
+        "index.html": _identity_html(manifest),
+    }
+    for filename, expected_text in expected_surfaces.items():
+        surface_path = manifest_path.parent / filename
+        if surface_path.is_symlink():
+            raise ValueError(f"Identity listening surface must not be a symlink: {filename}")
+        try:
+            actual_text = surface_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Identity listening surface is missing: {filename}") from exc
+        if actual_text != expected_text:
+            raise ValueError(f"Identity listening surface differs from the validated manifest: {filename}")
+    if require_ready:
+        ready_path = manifest_path.parent / ".ready"
+        if ready_path.is_symlink():
+            raise ValueError("Identity board ready marker must not be a symlink")
+        try:
+            ready_digest = ready_path.read_text(encoding="ascii").strip()
+        except OSError as exc:
+            raise ValueError("Identity board has no ready publication marker") from exc
+        if ready_digest != pack_digest:
+            raise ValueError("Identity board ready marker does not match pack_digest")
+    return manifest, tuple(clip_paths)
+
+
+def write_identity_listening_receipt_from_decision(
+    *,
+    manifest_path: Path,
+    decision_path: Path,
+    reviewed_at: str | None = None,
+) -> Path:
+    """Record one human decision under an exclusive per-board lock."""
+    lock_path = manifest_path.parent / ".listening-receipt.lock"
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        raise ValueError("Identity listening receipt is already being decided") from None
+    try:
+        original_manifest_bytes = manifest_path.read_bytes()
+        manifest, _clip_paths = _validate_identity_board(manifest_path)
+        current_receipt = _identity_manifest_mapping(manifest.get("listening_receipt"), "listening_receipt")
+        if current_receipt.get("status") != "pending":
+            raise ValueError("Identity listening receipt has already been decided")
+        try:
+            decision_value = json.loads(decision_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Identity decision is not readable JSON: {decision_path}") from exc
+        decision = _identity_manifest_mapping(decision_value, "identity decision")
+        if set(decision) != IDENTITY_LISTENING_DECISION_FIELDS:
+            detail = sorted(IDENTITY_LISTENING_DECISION_FIELDS.symmetric_difference(decision))
+            raise ValueError(f"identity decision has an invalid field set: {', '.join(detail)}")
+        pack_digest = manifest["pack_digest"]
+        if decision.get("pack_digest") != pack_digest:
+            raise ValueError("identity decision pack_digest does not match the current board")
+        receipt: dict[str, object] = {
+            "schema_version": IDENTITY_LISTENING_RECEIPT_SCHEMA_VERSION,
+            "status": decision.get("status"),
+            "pack_digest": pack_digest,
+            "target": "Mac",
+            "prompt": IDENTITY_LISTENING_PROMPT,
+            "wrong": decision.get("wrong"),
+            "rationale": decision.get("rationale"),
+            "reviewed_at": reviewed_at or datetime.now(UTC).isoformat(),
+        }
+        _validate_identity_receipt(receipt, pack_digest=str(pack_digest))
+
+        # Revalidate immediately before the compare-and-swap. The lock prevents
+        # another receipt writer, while the byte comparison catches unrelated
+        # edits that occurred during human-decision parsing.
+        _validate_identity_board(manifest_path)
+        if manifest_path.read_bytes() != original_manifest_bytes:
+            raise ValueError("Identity manifest changed while its decision was being recorded")
+        manifest["listening_receipt"] = receipt
+        temporary_path = manifest_path.with_name(f".{manifest_path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            temporary_path.replace(manifest_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    finally:
+        os.close(lock_fd)
+        lock_path.unlink(missing_ok=True)
+    return manifest_path
+
+
+def assert_identity_listening_gate(manifest_path: Path) -> tuple[Path, ...]:
+    """Return exact approved clips or fail before a downstream treatment build."""
+    manifest, clip_paths = _validate_identity_board(manifest_path)
+    receipt = _identity_manifest_mapping(manifest.get("listening_receipt"), "listening_receipt")
+    if receipt.get("status") != "approved":
+        raise ValueError("Identity listening gate is not approved for this pack digest")
+    return clip_paths
 
 
 def write_manifest(
@@ -1617,6 +2608,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Build only the Marco/Giulia paired V2-clean, V3-clean, and allowed V3-cue comparison matrix",
     )
     parser.add_argument(
+        "--identity-recalibration",
+        action="store_true",
+        help="Render the fail-closed Isabella/Marco/Giulia dry-voice recovery gate",
+    )
+    parser.add_argument(
         "--elevenlabs-stability",
         nargs="*",
         type=_stability_arg,
@@ -1678,6 +2674,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Validate the tracked V3 receipt and require the complete approved Marco/Giulia comparison matrix",
     )
+    parser.add_argument(
+        "--identity-listening-manifest",
+        type=Path,
+        help="Published identity manifest to decide or verify",
+    )
+    parser.add_argument(
+        "--identity-listening-decision",
+        type=Path,
+        help="Human pack_digest/status/wrong/rationale JSON used to decide an identity manifest once",
+    )
+    parser.add_argument(
+        "--verify-identity-listening-gate",
+        action="store_true",
+        help="Require a digest-current approved identity listening receipt without calling a provider",
+    )
     args = parser.parse_args(argv)
 
     if bool(args.host_performance_manifest) != bool(args.host_performance_decisions):
@@ -1691,9 +2702,85 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print("ERROR: selection and host-performance receipt modes cannot be combined", file=sys.stderr)
         return 2
+    identity_receipt_mode = bool(
+        args.identity_listening_manifest or args.identity_listening_decision or args.verify_identity_listening_gate
+    )
+    if identity_receipt_mode and (
+        args.providers != ["all"]
+        or args.include_catalog
+        or args.no_configured
+        or args.voice is not None
+        or args.sample_text is not None
+        or args.v3_host_performance
+        or args.elevenlabs_stability is not None
+        or args.config != DEFAULT_CONFIG_PATH
+        or args.output_dir != DEFAULT_OUTPUT_ROOT
+        or args.timestamp is not None
+        or args.dry_run
+        or args.strict
+        or args.selection_receipt_path != SELECTION_RECEIPT_PATH
+        or args.overwrite_selection_receipt
+        or args.host_performance_receipt_path != HOST_PERFORMANCE_RECEIPT_PATH
+        or args.overwrite_host_performance_receipt
+    ):
+        print("ERROR: identity listening receipt mode does not accept audition or output options", file=sys.stderr)
+        return 2
+    if identity_receipt_mode and (
+        args.selection_manifest
+        or args.selection_decisions
+        or args.host_performance_manifest
+        or args.host_performance_decisions
+        or args.verify_host_performance_gate
+        or args.identity_recalibration
+    ):
+        print("ERROR: identity listening receipt mode cannot be combined with other audition modes", file=sys.stderr)
+        return 2
+    if args.identity_recalibration and (
+        args.selection_manifest
+        or args.selection_decisions
+        or args.host_performance_manifest
+        or args.host_performance_decisions
+        or args.verify_host_performance_gate
+    ):
+        print("ERROR: identity recalibration cannot be combined with receipt modes", file=sys.stderr)
+        return 2
     if bool(args.selection_manifest) != bool(args.selection_decisions):
         print("ERROR: --selection-manifest and --selection-decisions must be used together", file=sys.stderr)
         return 2
+    if args.identity_listening_decision and not args.identity_listening_manifest:
+        print("ERROR: --identity-listening-decision requires --identity-listening-manifest", file=sys.stderr)
+        return 2
+    if args.verify_identity_listening_gate and not args.identity_listening_manifest:
+        print("ERROR: --verify-identity-listening-gate requires --identity-listening-manifest", file=sys.stderr)
+        return 2
+    if args.verify_identity_listening_gate and args.identity_listening_decision:
+        print("ERROR: identity listening decision and verification cannot be combined", file=sys.stderr)
+        return 2
+    if args.identity_listening_manifest and not (
+        args.identity_listening_decision or args.verify_identity_listening_gate
+    ):
+        print("ERROR: identity listening manifest requires a decision or verification action", file=sys.stderr)
+        return 2
+    if args.identity_listening_manifest and args.identity_listening_decision:
+        try:
+            receipt_manifest_path = write_identity_listening_receipt_from_decision(
+                manifest_path=args.identity_listening_manifest,
+                decision_path=args.identity_listening_decision,
+            )
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"Identity listening receipt: {receipt_manifest_path}")
+        return 0
+    if args.verify_identity_listening_gate:
+        assert args.identity_listening_manifest is not None
+        try:
+            assert_identity_listening_gate(args.identity_listening_manifest)
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"Identity listening gate: approved ({args.identity_listening_manifest})")
+        return 0
     if args.verify_host_performance_gate:
         if args.host_performance_manifest or args.host_performance_decisions:
             print("ERROR: receipt verification cannot be combined with receipt writing", file=sys.stderr)
@@ -1735,6 +2822,45 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Selection receipt: {receipt_path}")
         return 0
 
+    if args.identity_recalibration:
+        if (
+            args.v3_host_performance
+            or args.include_catalog
+            or args.no_configured
+            or args.voice is not None
+            or args.elevenlabs_stability is not None
+            or args.sample_text is not None
+            or args.dry_run
+            or args.strict
+            or args.overwrite_selection_receipt
+            or args.overwrite_host_performance_receipt
+            or args.providers != ["all"]
+        ):
+            print(
+                "ERROR: --identity-recalibration uses fixed production routes and copy; only "
+                "--config, --output-dir, --timestamp, and --host-performance-receipt-path are allowed",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            stamp = _timestamp(args.timestamp)
+            run_dir, manifest = asyncio.run(
+                render_identity_recalibration(
+                    args.output_dir,
+                    config_path=args.config,
+                    timestamp=stamp,
+                    receipt_path=args.host_performance_receipt_path,
+                )
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"Identity gate: {run_dir}")
+        print(f"Manifest: {run_dir / 'manifest.json'}")
+        print(f"Listening page: {run_dir / 'index.html'}")
+        print(f"Pack digest: {manifest['pack_digest']}")
+        return 0
+
     try:
         providers = expand_providers(args.providers)
         manual_voices = parse_manual_voice_specs(args.voice)
@@ -1767,7 +2893,7 @@ def main(argv: list[str] | None = None) -> int:
                 sample_text=args.sample_text or DEFAULT_SAMPLE_TEXT,
             )
             targets = expand_stability_variants(targets, args.elevenlabs_stability)
-    except (OSError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
