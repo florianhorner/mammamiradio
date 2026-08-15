@@ -1,0 +1,23 @@
+# Live /stream ICY header proof
+Commit: 2020f952558c7da118839bded45055e9050e0493
+Captured: 2026-08-15T16:05:24Z
+Host: local uvicorn, 127.0.0.1:8137, stock radio.toml
+
+## Response headers (real GET /stream)
+HTTP/1.1 200 OK
+date: Sat, 15 Aug 2026 16:05:08 GMT
+server: uvicorn
+icy-name: Mamma Mi Radio
+icy-br: 192
+cache-control: no-cache, no-store
+connection: keep-alive
+icy-genre: La radio che ascolta la tua casa
+content-type: audio/mpeg
+transfer-encoding: chunked
+
+
+## Configured [station] theme (what older builds sent as icy-genre)
+theme = "unhinged late-night Italian shock radio broadcasting from somewhere between Windor and Vergen. Two hosts who roast each other, roast the listeners, roast Italy itself. Think Le Iene meets GTA radio. Absurd traffic reports about burning Lamborghinis, breaking news about pizza dough exported to Russia, and sports flashes delivered like a sharp radio sports desk that stays informed even when the match is absurd. Edgy, chaotic, over the top — but always unmistakably Italian."
+
+## Result
+icy-genre carries the public [brand] tagline. No response header contains the scriptwriter theme.

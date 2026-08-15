@@ -137,7 +137,7 @@ def coerce_bool(value: object, default: bool = False) -> bool:
 
 @dataclass
 class StationSection:
-    """Station identity and public stream metadata."""
+    """Station identity and internal scriptwriter configuration."""
 
     name: str = DEFAULT_STATION_NAME
     language: str = "it"

@@ -5909,7 +5909,7 @@ def _header_safe(value: object) -> str:
 
     The guarantee is about the output, not an absolute promise about the call:
     whatever comes back is encodable and is legal HTTP field content, so no
-    configured station name or theme can break the response. It is stated that
+    configured station name or public tagline can break the response. It is stated that
     way deliberately. An earlier "cannot 500" wording was an overclaim, since a
     caller could still hand this an object whose ``__str__`` raises. Nothing in
     a parsed TOML config can.
@@ -5921,8 +5921,8 @@ def _header_safe(value: object) -> str:
 
     The steps, each one load-bearing:
 
-    * Coerce to ``str``. ``StationSection`` is built straight from TOML with no
-      runtime coercion, so ``theme = 42`` in ``radio.toml`` reaches this
+    * Coerce to ``str``. ``BrandSection`` is built straight from TOML with no
+      runtime coercion, so ``tagline = 42`` in ``radio.toml`` reaches this
       function as an int and used to 500 every listener the same way.
     * Compose to NFC. macOS hands over decomposed text (``a`` + U+0300
       combining grave) for the same ``à`` that Linux writes as one codepoint,
@@ -5970,17 +5970,25 @@ async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
+    # ``station.theme`` is a scriptwriter prompt. Use the public brand tagline
+    # for the listener-facing ``icy-genre`` header.
+    # Fold before capping: the fold expands characters (``…`` becomes three
+    # dots), so a cap applied first would not bound what actually ships.
+    # Then strip again after the cut: a space landing at index 63 would put
+    # trailing whitespace back, and h11 refuses the whole response for it.
+    # Both steps are load-bearing — see test_stream_icy_genre_* for the guards.
+    icy_genre = _header_safe(config.brand.tagline)[:64].strip()
     headers = {
         # A name made entirely of unencodable characters folds to "", so fall
         # back and let the player show the station rather than a blank label.
         "icy-name": _header_safe(config.display_station_name) or DEFAULT_STATION_NAME,
-        # Strip again after the cut: a space landing at index 63 would put the
-        # trailing whitespace back and h11 refuses the whole response for it.
-        "icy-genre": _header_safe(config.station.theme)[:64].strip(),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }
+    # Omit ``icy-genre`` when no listener-facing tagline survives header folding.
+    if icy_genre:
+        headers["icy-genre"] = icy_genre
     return StreamingResponse(
         _audio_generator(request),
         headers=headers,
