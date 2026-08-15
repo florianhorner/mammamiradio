@@ -277,15 +277,36 @@ fi
 
 # ---- 4. Critical files exist ----
 echo "4. Critical files"
+# icon.png / logo.png / README.md are store-listing files: Supervisor reads the
+# per-app README as the listing's long description (null when absent), and the
+# two images are what the catalog draws. Edge already checked these in check 13;
+# stable had no coverage at all until 2026-08-15.
 for f in mammamiradio/__init__.py radio.toml ha-addon/mammamiradio/Dockerfile \
          model_registry.toml \
          ha-addon/mammamiradio/rootfs/run.sh ha-addon/mammamiradio/config.yaml \
          ha-addon/mammamiradio/build.yaml ha-addon/mammamiradio/apparmor.txt \
+         ha-addon/mammamiradio/icon.png ha-addon/mammamiradio/logo.png \
+         ha-addon/mammamiradio/README.md \
          ha-addon/mammamiradio/translations/en.yaml; do
     if [ -f "$f" ]; then
         pass "$f"
     else
         fail "Missing: $f"
+    fi
+done
+
+# A zero-byte or whitespace-only README passes `-f` while rendering the exact
+# blank listing this check exists to prevent, so require real content. Both
+# channels are checked here (not in the edge block) so a missing edge folder
+# simply yields nothing to test.
+for f in ha-addon/mammamiradio/README.md ha-addon/mammamiradio-edge/README.md; do
+    if [ ! -f "$f" ]; then
+        continue
+    fi
+    if grep -q '[^[:space:]]' "$f"; then
+        pass "$f has listing content"
+    else
+        fail "$f is empty — the store listing would render blank"
     fi
 done
 
@@ -704,6 +725,7 @@ else
 
     # required files
     for f in ha-addon/mammamiradio-edge/icon.png ha-addon/mammamiradio-edge/logo.png \
+             ha-addon/mammamiradio-edge/README.md \
              ha-addon/mammamiradio-edge/apparmor.txt "$EDGE_TRANS"; do
         if [ -f "$f" ]; then
             pass "$f"
@@ -717,6 +739,19 @@ else
     else
         fail "edge AppArmor profile drifted from stable"
     fi
+
+    # Both channels draw the same brand in the catalog. Nothing copies these
+    # files (cut-edge-release.sh only rewrites `version:`), so without a parity
+    # check a stable-only icon refresh silently leaves Edge on the old artwork.
+    # README.md is deliberately NOT compared: the two listings say different
+    # things on purpose.
+    for img in icon.png logo.png; do
+        if cmp -s "ha-addon/mammamiradio/$img" "ha-addon/mammamiradio-edge/$img"; then
+            pass "edge $img matches stable"
+        else
+            fail "edge $img drifted from stable (copy ha-addon/mammamiradio/$img)"
+        fi
+    done
 
     # ingress / network consistency with stable
     if grep -q 'host_network: true' "$EDGE_CONFIG"; then

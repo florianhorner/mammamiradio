@@ -86,6 +86,7 @@ expect_default_install_guard() {
   mkdir -p \
     "$fixture_root/scripts" \
     "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
     "$fixture_root/docs/runbooks"
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
@@ -96,6 +97,8 @@ expect_default_install_guard() {
     README.md \
     CONTRIBUTING.md \
     ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
     ha-addon/mammamiradio/DOCS.md \
     docs/architecture.md \
     docs/festival-mode.md \
@@ -128,15 +131,26 @@ expect_default_install_guard() {
   fi
 }
 
-expect_default_persistence_guard() {
+# The per-app listing READMEs sit in BOTH the install and copy scopes. Unlike the
+# maintainer runbooks above they are listener-facing product copy, so being swept
+# by the live-surgery scanner is correct rather than a false positive — hence a
+# fixture with no maintainer command in it, and no carve-out assertion.
+#
+# expect_default_listing_guard <label> <file> <printf-content> <expected-message>
+# The content/message pair selects which default scope is being proven, so one
+# helper covers install-scope and copy-scope membership instead of two.
+expect_default_listing_guard() {
   local label=$1
   local guarded_file=$2
-  local fixture_root="$TMP/default-persistence-$label"
+  local content=$3
+  local expected=$4
+  local fixture_root="$TMP/default-listing-$label"
   local output
 
   mkdir -p \
     "$fixture_root/scripts" \
     "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
     "$fixture_root/docs/runbooks"
   cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
   cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
@@ -147,6 +161,53 @@ expect_default_persistence_guard() {
     README.md \
     CONTRIBUTING.md \
     ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
+    ha-addon/mammamiradio/DOCS.md \
+    docs/architecture.md \
+    docs/festival-mode.md \
+    docs/troubleshooting.md \
+    docs/operations.md \
+    docs/runbooks/ha-addon.md; do
+    printf '# Safe\n' > "$fixture_root/$file"
+  done
+
+  # shellcheck disable=SC2059  # caller supplies the printf format deliberately
+  printf "$content" > "$fixture_root/$guarded_file"
+
+  if output=$(bash "$fixture_root/scripts/check-docs-safety.sh" 2>&1); then
+    echo "FAIL: default listing scope omitted $guarded_file ($label)"
+    exit 1
+  fi
+  if ! grep -Fq "$guarded_file" <<< "$output" || ! grep -Fq "$expected" <<< "$output"; then
+    echo "FAIL: default listing scope returned the wrong failure for $guarded_file ($label)"
+    echo "$output"
+    exit 1
+  fi
+}
+
+expect_default_persistence_guard() {
+  local label=$1
+  local guarded_file=$2
+  local fixture_root="$TMP/default-persistence-$label"
+  local output
+
+  mkdir -p \
+    "$fixture_root/scripts" \
+    "$fixture_root/ha-addon/mammamiradio" \
+    "$fixture_root/ha-addon/mammamiradio-edge" \
+    "$fixture_root/docs/runbooks"
+  cp "$CHECK" "$fixture_root/scripts/check-docs-safety.sh"
+  cp "$ROOT/scripts/lint-patterns.sh" "$fixture_root/scripts/lint-patterns.sh"
+  cp "$ROOT/scripts/docs_safety.py" "$fixture_root/scripts/docs_safety.py"
+
+  for file in \
+    CLAUDE.md \
+    README.md \
+    CONTRIBUTING.md \
+    ha-addon/README.md \
+    ha-addon/mammamiradio/README.md \
+    ha-addon/mammamiradio-edge/README.md \
     ha-addon/mammamiradio/DOCS.md \
     docs/architecture.md \
     docs/festival-mode.md \
@@ -309,9 +370,40 @@ expect_failure "stale Edge release promise" "incorrect Edge release wording" "$T
 
 expect_default_install_guard "operations" "docs/operations.md"
 expect_default_install_guard "addon-runbook" "docs/runbooks/ha-addon.md"
+# Retired navigation is especially wrong in a store listing: the reader is
+# already on the install page when Supervisor renders it.
+expect_default_listing_guard "install-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\nSettings > Add-ons > Add-on Store.\n' \
+  "retired Home Assistant install wording"
+expect_default_listing_guard "install-edge" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\nSettings > Add-ons > Add-on Store.\n' \
+  "retired Home Assistant install wording"
+
+# Copy scope is a separate list: dropping either README from DEFAULT_COPY_FILES
+# would leave the install cases above green while un-gating the Edge release
+# promise and the live-surgery scanner.
+expect_default_listing_guard "copy-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\nUpdates on every change merged to main.\n' \
+  "incorrect Edge release wording"
+expect_default_listing_guard "copy-edge" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\nUpdates on every change merged to main.\n' \
+  "incorrect Edge release wording"
+
+# Listing scope: Supervisor renders these inside the HA frontend, so a relative
+# target resolves to nothing. Absolute URLs are the only ones that survive.
+expect_default_listing_guard "relative-link-stable" "ha-addon/mammamiradio/README.md" \
+  '# Listing\n\n[Guide](../../docs/architecture.md)\n' \
+  "relative link in a store listing"
+expect_default_listing_guard "relative-link-edge" "ha-addon/mammamiradio-edge/README.md" \
+  '# Listing\n\n![Shot](../../docs/screenshots/listener.png)\n' \
+  "relative link in a store listing"
 
 expect_default_persistence_guard "claude" "CLAUDE.md"
 expect_default_persistence_guard "addon-readme" "ha-addon/README.md"
+# The per-app READMEs are what Supervisor renders as each listing's long
+# description, so they carry the same copy guarantees as the rest of the surface.
+expect_default_persistence_guard "stable-listing-readme" "ha-addon/mammamiradio/README.md"
+expect_default_persistence_guard "edge-listing-readme" "ha-addon/mammamiradio-edge/README.md"
 expect_default_persistence_guard "addon-docs" "ha-addon/mammamiradio/DOCS.md"
 expect_default_persistence_guard "architecture" "docs/architecture.md"
 expect_default_persistence_guard "festival-mode" "docs/festival-mode.md"

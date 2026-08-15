@@ -247,6 +247,30 @@ no `:sha` image and pre-flight will reject the tag.
 
 `ha-addon/mammamiradio/config.yaml` declares `stage: stable` for the release channel. The Edge channel stays `stage: experimental` in `ha-addon/mammamiradio-edge/config.yaml` so testers still see the orange Experimental badge on main-branch builds.
 
+## Store listing: which file paints which pixel
+
+The Apps page is drawn from files in the app folder, not from the repo root and not from HACS. Each channel needs its own copy — nothing is inherited from the sibling folder. Edge is metadata-only and ships everything below **except `DOCS.md`**, so its Documentation tab is empty; stable is the complete set.
+
+| What the operator sees | Source file |
+|---|---|
+| Title, version, the one-line blurb under it, "Visit … for more details" | `config.yaml` — `name`, `version`, `description`, `url` |
+| The longer intro body on the app's page | `README.md` **in the app folder** |
+| Documentation tab | `DOCS.md` |
+| Changelog link | `CHANGELOG.md` |
+| Square catalog icon / header logo | `icon.png` (1:1, 128px recommended) / `logo.png` |
+| Experimental badge | `stage:` |
+| Sidebar entry and its icon | `ingress` + `panel_title` / `panel_icon` (defaults to `mdi:puzzle`; we set `mdi:radio`) |
+
+Three things that are easy to get wrong:
+
+- **The per-app `README.md` is not `ha-addon/README.md`.** Supervisor reads `README.md` from inside the app folder and returns it as the listing's long description; when the file is absent the field is simply null and the page shows nothing. `ha-addon/README.md` is the *repository* landing page and is never read for this. Both are now required by `scripts/validate-addon.sh`.
+- **Links and images in those READMEs must be absolute URLs.** They render inside the Home Assistant frontend, which has no repo-relative base, so `../../docs/...` resolves to nothing. Use `https://raw.githubusercontent.com/...` for images and full `https://github.com/...` links.
+- **Nothing copies artwork between channels.** `cut-edge-release.sh` only rewrites `version:`. `validate-addon.sh` compares `icon.png` and `logo.png` byte-for-byte across stable and Edge, so refresh both or the check fails. The two `README.md` files are deliberately *not* compared — the listings say different things.
+
+`description` copy is additionally pinned by `tests/addon/test_addon_metadata_contract.py`, which asserts the stable blurb still names the music sources that actually ship. Changing which sources are advertised is a product decision, not a copy edit — update the test in the same commit and say why.
+
+Listing copy is **not** part of a release cut. It ships on its own, independent of `chore(release): cut X.Y.Z`.
+
 ## Config options: the contract
 
 When you add an option to the HA addon configuration UI, you must update THREE files in the same commit:
@@ -615,6 +639,8 @@ Before merging ANY change that touches addon files:
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)
 - [ ] If new config option: added to config.yaml + run.sh + translations
+- [ ] If store listing touched (`description`, `README.md`, `icon.png`, `logo.png`,
+      `url`, `panel_*`): see "Store listing" above — both channels, absolute URLs
 - [ ] If path changed: grep all files for the old path
 - [ ] If renamed anything: `grep -r "old_name" .` returns zero hits
 - [ ] Landing goes through `scripts/land-pr.sh` (see "Landing a PR" above) —

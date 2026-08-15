@@ -30,18 +30,39 @@ cp "$EDGE_CONFIG" "$EDGE_BACKUP"
 # Strict restore for use between assertions: a failed copy must abort the
 # test loudly rather than let a later mutation/assertion run against an
 # already-corrupted config and produce a misleading pass/fail result.
+# Store-listing cases mutate the tree (a removed README, drifted artwork) rather
+# than a YAML field, so anything touched by path is snapshotted here and put back
+# by the same restore points that handle the configs.
+STAGED_FILES=()
+stage_file() {
+  local f="$1"
+  cp "$f" "$BACKUP_DIR/$(printf '%s' "$f" | tr '/' '_')"
+  STAGED_FILES+=("$f")
+}
+restore_files() {
+  local f
+  for f in "${STAGED_FILES[@]+"${STAGED_FILES[@]}"}"; do
+    cp "$BACKUP_DIR/$(printf '%s' "$f" | tr '/' '_')" "$f"
+  done
+  STAGED_FILES=()
+}
 restore_configs() {
   cp "$STABLE_BACKUP" "$STABLE_CONFIG"
   cp "$EDGE_BACKUP" "$EDGE_CONFIG"
+  restore_files
 }
 # Tolerant restore for the EXIT trap only: on an already-failing/aborting run
 # the backups may be missing or already restored, so best-effort is correct
 # here even though it isn't during normal test flow.
 cleanup() {
+  local f
   cp "$STABLE_BACKUP" "$STABLE_CONFIG" 2>/dev/null || true
   cp "$EDGE_BACKUP" "$EDGE_CONFIG" 2>/dev/null || true
-  rm -f "$STABLE_CONFIG.tmp" "$EDGE_CONFIG.tmp" "$STABLE_BACKUP" "$EDGE_BACKUP"
-  rmdir "$BACKUP_DIR" 2>/dev/null || true
+  for f in "${STAGED_FILES[@]+"${STAGED_FILES[@]}"}"; do
+    cp "$BACKUP_DIR/$(printf '%s' "$f" | tr '/' '_')" "$f" 2>/dev/null || true
+  done
+  rm -f "$STABLE_CONFIG.tmp" "$EDGE_CONFIG.tmp"
+  rm -rf "$BACKUP_DIR"
 }
 trap cleanup EXIT
 
@@ -143,5 +164,47 @@ assert_rejects "schema drift" "edge schema block drifted"
 # Case 5: options drift from stable (flip the edge default away from stable to force drift)
 mutate_edge 's/super_italian_mode: false/super_italian_mode: true/'
 assert_rejects "options drift" "edge options block drifted"
+
+# --- Store-listing files ---
+# Supervisor reads the per-app README.md as the listing's long description and
+# returns null when it is absent, so a deleted README is a silently blank store
+# card. Stable icon/logo had no existence coverage at all before 2026-08-15.
+
+stage_file "ha-addon/mammamiradio/README.md"
+rm -f "ha-addon/mammamiradio/README.md"
+assert_rejects "stable README.md missing" "Missing: ha-addon/mammamiradio/README.md"
+
+stage_file "ha-addon/mammamiradio-edge/README.md"
+rm -f "ha-addon/mammamiradio-edge/README.md"
+assert_rejects "edge README.md missing" "Missing: ha-addon/mammamiradio-edge/README.md"
+
+# A README that exists but says nothing renders the same blank listing as a
+# missing one, so emptiness is rejected separately from absence.
+stage_file "ha-addon/mammamiradio/README.md"
+: > "ha-addon/mammamiradio/README.md"
+assert_rejects "stable README.md empty" "ha-addon/mammamiradio/README.md is empty"
+
+stage_file "ha-addon/mammamiradio-edge/README.md"
+printf '   \n\n\t\n' > "ha-addon/mammamiradio-edge/README.md"
+assert_rejects "edge README.md whitespace-only" "ha-addon/mammamiradio-edge/README.md is empty"
+
+stage_file "ha-addon/mammamiradio/icon.png"
+rm -f "ha-addon/mammamiradio/icon.png"
+assert_rejects "stable icon.png missing" "Missing: ha-addon/mammamiradio/icon.png"
+
+stage_file "ha-addon/mammamiradio/logo.png"
+rm -f "ha-addon/mammamiradio/logo.png"
+assert_rejects "stable logo.png missing" "Missing: ha-addon/mammamiradio/logo.png"
+
+# Nothing copies artwork between the channels — cut-edge-release.sh only rewrites
+# `version:` — so parity is the only thing keeping both catalog entries on the
+# same brand after a stable-only icon refresh.
+stage_file "ha-addon/mammamiradio-edge/icon.png"
+cp "ha-addon/mammamiradio/logo.png" "ha-addon/mammamiradio-edge/icon.png"
+assert_rejects "edge icon.png drift" "edge icon.png drifted from stable"
+
+stage_file "ha-addon/mammamiradio-edge/logo.png"
+cp "ha-addon/mammamiradio/icon.png" "ha-addon/mammamiradio-edge/logo.png"
+assert_rejects "edge logo.png drift" "edge logo.png drifted from stable"
 
 echo "All validate-addon edge-block scenarios passed."

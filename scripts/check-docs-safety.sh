@@ -21,6 +21,8 @@ source "$SCRIPT_DIR/lint-patterns.sh"
 DEFAULT_COPY_FILES=(
   README.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   docs/troubleshooting.md
 )
@@ -31,6 +33,8 @@ DEFAULT_COPY_FILES=(
 DEFAULT_INSTALL_FILES=(
   README.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   docs/troubleshooting.md
   docs/operations.md
@@ -40,6 +44,8 @@ DEFAULT_INSTALL_FILES=(
 DEFAULT_LINK_FILES=(
   README.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   CONTRIBUTING.md
   docs/troubleshooting.md
@@ -48,6 +54,8 @@ DEFAULT_LINK_FILES=(
 DEFAULT_PERSISTENCE_FILES=(
   CLAUDE.md
   ha-addon/README.md
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
   ha-addon/mammamiradio/DOCS.md
   docs/architecture.md
   docs/festival-mode.md
@@ -55,16 +63,35 @@ DEFAULT_PERSISTENCE_FILES=(
   docs/runbooks/ha-addon.md
 )
 
+# Supervisor renders these two inside the Home Assistant frontend, which has no
+# repo-relative base — every link and image in them must be an absolute URL.
+DEFAULT_LISTING_FILES=(
+  ha-addon/mammamiradio/README.md
+  ha-addon/mammamiradio-edge/README.md
+)
+
 if [ "$#" -gt 0 ]; then
   COPY_FILES=("$@")
   INSTALL_FILES=("$@")
   LINK_FILES=("$@")
   PERSISTENCE_FILES=("$@")
+  # The listing rule is path-specific: only the per-app READMEs are rendered by
+  # Supervisor. An explicit file list is intersected with them rather than
+  # subjected wholesale, because every other doc may use relative links freely.
+  LISTING_FILES=()
+  for ARG in "$@"; do
+    for KNOWN in "${DEFAULT_LISTING_FILES[@]}"; do
+      if [ "$ARG" = "$KNOWN" ]; then
+        LISTING_FILES+=("$ARG")
+      fi
+    done
+  done
 else
   COPY_FILES=("${DEFAULT_COPY_FILES[@]}")
   INSTALL_FILES=("${DEFAULT_INSTALL_FILES[@]}")
   LINK_FILES=("${DEFAULT_LINK_FILES[@]}")
   PERSISTENCE_FILES=("${DEFAULT_PERSISTENCE_FILES[@]}")
+  LISTING_FILES=("${DEFAULT_LISTING_FILES[@]}")
 fi
 
 cd "$REPO_ROOT"
@@ -74,6 +101,7 @@ HITS=0
 EXISTING_COPY_FILES=()
 EXISTING_LINK_FILES=()
 EXISTING_PERSISTENCE_FILES=()
+EXISTING_LISTING_FILES=()
 MISSING_FILES=()
 
 record_missing_file() {
@@ -143,11 +171,20 @@ for FILE in "${PERSISTENCE_FILES[@]}"; do
   EXISTING_PERSISTENCE_FILES+=("$FILE")
 done
 
+for FILE in "${LISTING_FILES[@]+"${LISTING_FILES[@]}"}"; do
+  if [ ! -f "$FILE" ]; then
+    record_missing_file "$FILE"
+    continue
+  fi
+  EXISTING_LISTING_FILES+=("$FILE")
+done
+
 STRUCTURAL_OUTPUT=""
 if ! STRUCTURAL_OUTPUT=$(python3 "$SCRIPT_DIR/docs_safety.py" \
   --copy "${EXISTING_COPY_FILES[@]+"${EXISTING_COPY_FILES[@]}"}" \
   --links "${EXISTING_LINK_FILES[@]+"${EXISTING_LINK_FILES[@]}"}" \
-  --persistence "${EXISTING_PERSISTENCE_FILES[@]+"${EXISTING_PERSISTENCE_FILES[@]}"}" 2>&1); then
+  --persistence "${EXISTING_PERSISTENCE_FILES[@]+"${EXISTING_PERSISTENCE_FILES[@]}"}" \
+  --listing "${EXISTING_LISTING_FILES[@]+"${EXISTING_LISTING_FILES[@]}"}" 2>&1); then
   printf '%s\n' "$STRUCTURAL_OUTPUT"
   STRUCTURAL_HITS=$(printf '%s\n' "$STRUCTURAL_OUTPUT" | grep -c '^FAIL:' || true)
   if [ "$STRUCTURAL_HITS" -eq 0 ]; then

@@ -58,6 +58,7 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Demo MP3s / SFX / studio bleeds / logo             | `mammamiradio/assets/`                       |
 | HACS/Home Assistant integration                    | `custom_components/mammamiradio/`            |
 | Home Assistant add-on packaging                    | `ha-addon/mammamiradio/` + `ha-addon/mammamiradio-edge/` |
+| Apps store listing (blurb, intro, icon, logo)      | each app folder's `config.yaml` + `README.md` + `icon.png` / `logo.png` |
 | Disposable local HA + VLC speaker lab              | `scripts/first-listen-lab.sh`                |
 
 ## Tests
@@ -91,6 +92,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Deploy / production reality      | `docs/operations.md`             |
 | Common failures + recovery       | `docs/troubleshooting.md`        |
 | HA addon release process         | `docs/runbooks/ha-addon.md`      |
+| Which file paints which store pixel | `docs/runbooks/ha-addon.md` (Store listing) |
 | Disposable First Listen HA lab   | `docs/runbooks/first-listen-local-ha.md` |
 | HACS/Home Assistant integration  | `docs/integrations/ha-integration.md` |
 | HA privacy + upstream proposals  | `docs/integrations/ha-privacy-and-upstream-proposals.md` |

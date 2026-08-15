@@ -630,11 +630,37 @@ def relative_link_issues(path: Path, text: str) -> list[Issue]:
     return issues
 
 
+def listing_link_issues(path: Path, text: str) -> list[Issue]:
+    """Flag repo-relative links and images in an app's store listing.
+
+    Supervisor renders the per-app README inside the Home Assistant frontend,
+    which has no repo-relative base, so ``../../docs/x.md`` resolves to nothing
+    and an image silently shows as broken. Only absolute URLs survive the trip.
+    A bare ``#fragment`` is left alone: it needs no base to resolve.
+    """
+    issues: list[Issue] = []
+    links, _ = markdown_links(text)
+    for link in links:
+        target = html.unescape(link.target.strip())
+        if not target or target.startswith("#") or _is_external(target):
+            continue
+        issues.append(
+            Issue(
+                path,
+                link.line,
+                "relative link in a store listing",
+                f"Home Assistant cannot resolve this, use an absolute URL: {target}",
+            )
+        )
+    return issues
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--copy", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--links", nargs="*", default=[], metavar="FILE")
     parser.add_argument("--persistence", nargs="*", default=[], metavar="FILE")
+    parser.add_argument("--listing", nargs="*", default=[], metavar="FILE")
     return parser.parse_args()
 
 
@@ -643,7 +669,7 @@ def main() -> int:
     issues: list[Issue] = []
     cache: dict[Path, str] = {}
 
-    for raw_path in dict.fromkeys([*args.copy, *args.links, *args.persistence]):
+    for raw_path in dict.fromkeys([*args.copy, *args.links, *args.persistence, *args.listing]):
         path = Path(raw_path)
         try:
             cache[path] = _read(path)
@@ -662,6 +688,10 @@ def main() -> int:
         path = Path(raw_path)
         if path in cache:
             issues.extend(options_json_durability_issues(path, cache[path]))
+    for raw_path in args.listing:
+        path = Path(raw_path)
+        if path in cache:
+            issues.extend(listing_link_issues(path, cache[path]))
 
     for issue in issues:
         print(issue.render())

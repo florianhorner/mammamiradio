@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import types
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
@@ -336,6 +338,35 @@ def test_pre_commit_registers_version_sync_hook() -> None:
     assert "id: version-sync" in config
     assert "entry: scripts/check-version-sync.sh" in config
     assert "stages: [pre-commit]" in config
+
+
+def test_pre_commit_addon_build_hook_selects_both_channels() -> None:
+    """The local build hook must fire for Edge-only changes, not just stable.
+
+    The original pattern anchored on ``ha-addon/mammamiradio/``; the character
+    after ``mammamiradio`` in the Edge path is ``-``, not ``/``, so every
+    Edge-only commit skipped this hook and was first validated in CI.
+    """
+    config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text())
+    hooks = [
+        hook for repo in config["repos"] for hook in repo.get("hooks", []) if hook.get("id") == "ha-addon-local-build"
+    ]
+    assert len(hooks) == 1, "expected exactly one ha-addon-local-build hook"
+    pattern = re.compile(hooks[0]["files"])
+
+    for selected in (
+        "ha-addon/mammamiradio-edge/config.yaml",
+        "ha-addon/mammamiradio-edge/README.md",
+        "ha-addon/mammamiradio-edge/translations/en.yaml",
+        "ha-addon/mammamiradio/config.yaml",
+        "ha-addon/mammamiradio/README.md",
+        "mammamiradio/main.py",
+        "pyproject.toml",
+    ):
+        assert pattern.search(selected), f"hook should run for {selected}"
+
+    for ignored in ("docs/REPO_MAP.md", "README.md", "tests/addon/test_addon_radio_sync.py"):
+        assert not pattern.search(ignored), f"hook should not run for {ignored}"
 
 
 def test_check_changelog_sync_requires_both_changelogs_on_version_bump(tmp_path: Path) -> None:
@@ -1168,6 +1199,11 @@ def _create_validate_addon_repo(
         ),
     )
     _write(tmp_path / "ha-addon/mammamiradio/build.yaml", "build_from: {}\n")
+    # Store-listing files. validate-addon.sh requires all three on the stable
+    # channel; their contents are irrelevant to these fixtures, only existence.
+    _write(tmp_path / "ha-addon/mammamiradio/README.md", "# Fixture app\n")
+    _write(tmp_path / "ha-addon/mammamiradio/icon.png", "")
+    _write(tmp_path / "ha-addon/mammamiradio/logo.png", "")
     _write(
         tmp_path / "ha-addon/mammamiradio/apparmor.txt",
         "#include <tunables/global>\n\nprofile mammamiradio flags=(attach_disconnected,mediate_deleted) {\n}\n",
