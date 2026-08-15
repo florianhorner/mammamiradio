@@ -1693,6 +1693,86 @@ def test_select_next_track_empty_heading_id_does_not_lift():
     assert weights[candidates.index(tagged)] == pytest.approx(weights[candidates.index(normal)])
 
 
+def test_course_track_waits_for_the_rest_of_the_set():
+    # Three of four course tracks have aired, so only the fourth is still eligible.
+    heading = _heading()
+    course = [_track(n) for n in range(4)]
+    for track in course:
+        track.heading_id = heading.id
+    normals = [_track(100 + n) for n in range(4)]
+    state = StationState(playlist=course + normals, heading=heading)
+    state.played_tracks = [course[0], course[1], course[2]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    assert [c for c in candidates if c.heading_id == heading.id] == [course[3]]
+    # Non-course tracks are untouched by the course cooldown.
+    assert all(n in candidates for n in normals)
+
+
+def test_course_track_blocked_past_the_plain_repeat_cooldown():
+    """The shape seen on air: a course track returned about ten picks later.
+
+    The plain cooldown only looks at the last five plays, and a course takes a
+    large share of picks from a small found set, so the gap between two airings of
+    the same course track lands outside that window. Cooling against the rest of
+    the set is what closes it.
+    """
+    heading = _heading()
+    course = [_track(n) for n in range(4)]
+    for track in course:
+        track.heading_id = heading.id
+    normals = [_track(100 + n) for n in range(8)]
+    state = StationState(playlist=course + normals, heading=heading)
+    # course[0] aired nine picks ago, well clear of a five-play cooldown, but only
+    # one other course track has aired since, so the set has not cycled.
+    state.played_tracks = [course[0], *normals[:4], course[1], *normals[4:]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, repeat_cooldown=5, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    eligible_course = [c for c in candidates if c.heading_id == heading.id]
+    assert course[0] not in eligible_course
+    assert course[2] in eligible_course
+    assert course[3] in eligible_course
+
+
+def test_single_track_course_is_not_cooled_against_itself():
+    # One found track cannot cycle, so the course cooldown must not apply and the
+    # plain repeat cooldown stays the only guard.
+    heading = _heading()
+    solo = _track(2)
+    solo.heading_id = heading.id
+    normal = _track(1)
+    state = StationState(playlist=[solo, normal], heading=heading, played_tracks=[solo])
+
+    candidates, _weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    assert solo in candidates
+
+
+def test_course_cooldown_always_leaves_one_course_track():
+    # It excludes at most len(set) - 1, so the least recently aired one always
+    # survives and a course can never starve its own selection.
+    heading = _heading()
+    course = [_track(n) for n in range(5)]
+    for track in course:
+        track.heading_id = heading.id
+    state = StationState(playlist=list(course), heading=heading, played_tracks=list(course))
+
+    candidates, _weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    assert [c for c in candidates if c.heading_id == heading.id] == [course[0]]
+    assert state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0) is course[0]
+
+
 def test_after_music_spends_heading_budget_only_for_matching_track():
     heading = Heading(
         id="heading-1",

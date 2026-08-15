@@ -1349,20 +1349,14 @@ async def _queue_drain_recovery_bridge(
     )
 
 
-def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
-    """Produce a user-facing label for a BANTER segment.
+def _banter_hosts(script: list[dict] | None, host_order: list[str] | None = None) -> list[str]:
+    """Unique host names that speak in a BANTER script.
 
-    Prefers unique host names from the script (joined with ' & '). Falls back
-    to "Pre-recorded banter" when the audio came from a canned clip with no
-    script attached, and finally to a generic label. The goal is that queue
-    rows never render a bare "banter" type name to operators or listeners.
-
-    host_order pins the display order to the config host list so adjacent
-    segments always show the same canonical ordering regardless of which host
-    the LLM chose to open with.
+    Derived from the script's per-line ``host`` fields, so a host who is on the
+    roster but silent in this exchange is never listed. ``host_order`` pins the
+    order to the config host list, so adjacent segments show the same canonical
+    ordering regardless of which host the LLM chose to open with.
     """
-    if canned:
-        return "Pre-recorded banter"
     hosts: list[str] = []
     for line in script or []:
         name = (line or {}).get("host", "").strip() if isinstance(line, dict) else ""
@@ -1371,6 +1365,20 @@ def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[s
     if hosts and host_order:
         rank = {h: i for i, h in enumerate(host_order)}
         hosts.sort(key=lambda h: rank.get(h, len(host_order)))
+    return hosts
+
+
+def _banter_title(script: list[dict] | None, *, canned: bool, host_order: list[str] | None = None) -> str:
+    """Produce a user-facing label for a BANTER segment.
+
+    Prefers unique host names from the script (joined with ' & '). Falls back
+    to "Pre-recorded banter" when the audio came from a canned clip with no
+    script attached, and finally to a generic label. The goal is that queue
+    rows never render a bare "banter" type name to operators or listeners.
+    """
+    if canned:
+        return "Pre-recorded banter"
+    hosts = _banter_hosts(script, host_order)
     if hosts:
         return " & ".join(hosts[:2])
     return "Banter"
@@ -5998,6 +6006,17 @@ async def _run_producer_inner(
                             state.last_banter_script,
                             canned=canned is not None,
                             host_order=[h.name for h in config.hosts],
+                        ),
+                        # Who spoke, for the v1 contract's now_playing.host. A consumer
+                        # that gets nothing here falls back to the full configured roster,
+                        # which credits a host who was never in the exchange (the guest
+                        # host ships on by default and was named on every break). A canned
+                        # clip carries no script, so it claims nobody and the consumer's
+                        # own fallback takes over.
+                        "host": (
+                            ""
+                            if canned is not None
+                            else ", ".join(_banter_hosts(state.last_banter_script, [h.name for h in config.hosts]))
                         ),
                         "chaos_subtype": chaos_subtype.value if chaos_subtype else "",
                         "chaos_degraded": state.chaos_last_degraded_reason if chaos_subtype else "",

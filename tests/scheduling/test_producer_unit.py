@@ -3247,6 +3247,44 @@ async def test_interrupt_stock_copy_demotes_receipt_at_queue_commit(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_chaos_banter_credits_only_the_hosts_that_spoke(tmp_path):
+    """Chaos banter builds last_banter_script on its own path, bypassing the
+    transition merge. It must attribute the same way the normal path does, or a
+    silent roster host gets credited on every chaos break."""
+    from mammamiradio.core.models import ChaosSubtype
+
+    state = _make_state()
+    state.chaos_pending = ChaosSubtype.FOURTH_WALL
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    speaking = config.hosts[0]
+    silent = config.hosts[-1]
+    assert silent.name != speaking.name, "fixture needs at least two configured hosts"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(speaking, "Rompiamo il quarto muro.")], None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.metadata["host"] == speaking.name
+    assert silent.name not in seg.metadata["host"]
+
+
+@pytest.mark.asyncio
 async def test_urgent_interrupt_retry_preserves_receipt_for_generated_banter(tmp_path):
     """A retry may enter the next loop with the same id in the stale handoff
     slot and the live urgent directive. Cleanup must not demote that receipt
@@ -6382,6 +6420,65 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
     seg = queue.get_nowait()
     assert seg.metadata.get("resume_bridge") is True
     assert seg.path == norm_file
+
+
+class TestBanterHosts:
+    """Who spoke, for the v1 contract's ``now_playing.host``.
+
+    A consumer that receives no host falls back to the full configured roster,
+    which credits hosts who were never in the exchange. The guest host ships on by
+    default and was being named on every break in Music Assistant.
+    """
+
+    def test_lists_only_hosts_present_in_the_script(self):
+        from mammamiradio.scheduling.producer import _banter_hosts
+
+        # Hans Günther is on the roster but silent in this exchange.
+        script = [{"host": "Marco del bar", "text": "a"}, {"host": "Nonna Giulia", "text": "b"}]
+        roster = ["Marco del bar", "Nonna Giulia", "Hans Günther"]
+
+        assert _banter_hosts(script, roster) == ["Marco del bar", "Nonna Giulia"]
+
+    def test_deduplicates_and_pins_roster_order(self):
+        from mammamiradio.scheduling.producer import _banter_hosts
+
+        script = [{"host": "Giulia", "text": "a"}, {"host": "Marco", "text": "b"}, {"host": "Giulia", "text": "c"}]
+
+        assert _banter_hosts(script, ["Marco", "Giulia"]) == ["Marco", "Giulia"]
+
+    def test_names_a_solo_speaker_only(self):
+        from mammamiradio.scheduling.producer import _banter_hosts
+
+        assert _banter_hosts([{"host": "Giulia", "text": "a"}], ["Marco", "Giulia"]) == ["Giulia"]
+
+    def test_no_script_claims_nobody(self):
+        from mammamiradio.scheduling.producer import _banter_hosts
+
+        assert _banter_hosts(None, ["Marco"]) == []
+        assert _banter_hosts([], ["Marco"]) == []
+        assert _banter_hosts([{"text": "no host key"}], ["Marco"]) == []
+
+    def test_keeps_every_speaker_past_the_titles_two_name_cap(self):
+        from mammamiradio.scheduling.producer import _banter_hosts, _banter_title
+
+        script = [{"host": "A", "text": "1"}, {"host": "B", "text": "2"}, {"host": "C", "text": "3"}]
+
+        # The title caps at two for display; attribution must not drop the third speaker.
+        assert _banter_title(script, canned=False) == "A & B"
+        assert _banter_hosts(script) == ["A", "B", "C"]
+
+    def test_helper_would_return_the_canned_placeholder_host(self):
+        """Why the segment builder gates on ``canned`` rather than on the script.
+
+        A canned fallback overwrites ``last_banter_script`` with a synthetic
+        "Radio" host, and this helper is purely script-driven, so it would report
+        that placeholder as a speaker. The call site must not reach it for canned
+        audio; that end is held by
+        ``test_fail_closed_tts_producer.py::test_impossible_tts_unavailable_uses_canned_or_propagates_to_recovery``.
+        """
+        from mammamiradio.scheduling.producer import _banter_hosts
+
+        assert _banter_hosts([{"host": "Radio", "text": "(pre-recorded banter)"}]) == ["Radio"]
 
 
 class TestBanterTitle:
