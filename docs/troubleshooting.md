@@ -43,7 +43,7 @@ curl http://127.0.0.1:8000/readyz
 
 ## The page loads but the stream itself never plays
 
-If the listener page, dashboard, and `/healthz` all work but the stream fails, check the public station name and tagline. `/stream` sends them in its `icy-name` and optional `icy-genre` response headers, which are limited to latin-1. Common sources of non-latin-1 text include:
+If the listener page, dashboard, and `/healthz` all work but the stream fails, check the public station name. `/stream` sends it in the `icy-name` response header, which is limited to latin-1. Common sources of non-latin-1 text include:
 
 - **Smart quotes.** Typing a name on a Mac or iPhone silently substitutes a typographic apostrophe (U+2019) for the straight one.
 - **Decomposed accents.** macOS often stores `à` as a plain `a` followed by a separate combining accent (U+0300). The combining mark is not latin-1 either, so a perfectly ordinary `Radio Città` could fail while the same name typed elsewhere worked.
@@ -54,7 +54,7 @@ Older builds passed unencodable header text through unchanged. Response construc
 UnicodeEncodeError: 'latin-1' codec can't encode character '\u2019' in position 3: ordinal not in range(256)
 ```
 
-Emoji and CJK characters in the station name or tagline caused the same failure.
+Emoji and CJK characters in the station name or theme caused the same failure. Those builds sent `[station] theme` as `icy-genre`; current builds send the public `[brand] tagline` there instead, so the theme can no longer take the stream down.
 
 A third trigger has nothing to do with punctuation: **any letter outside latin-1**. `Radio Łódź`, `Radio Čačak`, `Rádió Ő` and `Radyo İstanbul` all returned `500` on older builds for the same reason.
 

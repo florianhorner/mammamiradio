@@ -5885,7 +5885,11 @@ async def stream(request: Request):
     audio_format = stream_audio_metadata(config)
     # ``station.theme`` is a scriptwriter prompt. Use the public brand tagline
     # for the listener-facing ``icy-genre`` header.
-    # Fold before capping; one character can expand to several bytes.
+    # Fold before capping: the fold expands characters (``…`` becomes three
+    # dots), so a cap applied first would not bound what actually ships.
+    # Then strip again after the cut: a space landing at index 63 would put
+    # trailing whitespace back, and h11 refuses the whole response for it.
+    # Both steps are load-bearing — see test_stream_icy_genre_* for the guards.
     icy_genre = _header_safe(config.brand.tagline)[:64].strip()
     headers = {
         # A name made entirely of unencodable characters folds to "", so fall

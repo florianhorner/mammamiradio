@@ -4050,9 +4050,15 @@ async def test_stream_never_leaks_the_scriptwriter_prompt_as_genre():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tagline", ["", "🎵"])
+@pytest.mark.parametrize("tagline", ["", "   ", "🎵", "广播 电台"])
 async def test_stream_omits_icy_genre_when_no_listener_tagline(tagline: str):
-    """An empty or unusable tagline must not fall back to the internal prompt."""
+    """An empty or unusable tagline must not fall back to the internal prompt.
+
+    ``广播 电台`` is the case worth spelling out: the CJK folds away but the
+    space between the words does not, so the intermediate value is a lone
+    space, which is truthy. Only because ``_header_safe`` strips its own
+    output does this reach the omit branch instead of shipping " ".
+    """
     app = _make_test_app()
     app.state.config.station.theme = "INTERNAL SCRIPTWRITER DIRECTIVE: never air this"
     app.state.config.brand.tagline = tagline
@@ -4068,6 +4074,55 @@ async def test_stream_omits_icy_genre_when_no_listener_tagline(tagline: str):
         ):
             assert resp.status_code == 200
             assert "icy-genre" not in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_stream_sends_icy_genre_under_the_shipped_default_config():
+    """The shipped `radio.toml` must actually produce the header.
+
+    Every other genre test sets the tagline itself, so blanking `[brand]
+    tagline` in `radio.toml` would drop the header for every real operator
+    without failing a single test. This pins the default to the config file.
+    """
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-genre"] == app.state.config.brand.tagline
+            assert resp.headers["icy-genre"].strip()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tagline", "expected"), [(42, "42"), (0, "0"), (3.5, "3.5")])
+async def test_stream_survives_non_string_tagline(tagline: object, expected: str):
+    """`_parse_brand` does not coerce, so `tagline = 42` reaches the route raw.
+
+    The unit test above covers `_header_safe` itself; this proves the route
+    still composes a valid response. `0` is the interesting one: falsy input,
+    truthy output, so the header is present.
+    """
+    app = _make_test_app()
+    app.state.config.brand.tagline = tagline
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-genre"] == expected
 
 
 @pytest.mark.asyncio
@@ -4163,6 +4218,43 @@ async def test_stream_icy_genre_capped_at_64_after_folding():
             assert resp.status_code == 200
             assert len(resp.headers["icy-genre"]) == 64
             assert resp.headers["icy-genre"] == "." * 64
+
+
+@pytest.mark.asyncio
+async def test_stream_icy_genre_has_no_edge_whitespace_after_the_64_cut():
+    """The cut can land on a space, and h11 refuses a field value that ends in one.
+
+    ``_header_safe`` strips its own output, but the ``[:64]`` cap runs after
+    that and can reintroduce a trailing space. Without the second strip the
+    response is rejected before a single audio byte is sent — the same
+    every-listener outage as the original encode crash, by another route.
+    A tagline of 63 characters plus ``" Radio"`` puts the space exactly on
+    the boundary, which no other case in this file does.
+    """
+    h11 = pytest.importorskip("h11")
+    app = _make_test_app()
+    app.state.config.brand.tagline = "a" * 63 + " Radio Mamma"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            genre = resp.headers["icy-genre"]
+            assert genre == "a" * 63
+            assert genre == genre.strip()
+            # httpx never serialises headers, so assert legality at the layer
+            # that actually rejects it rather than trusting the string shape.
+            h11.Response(
+                status_code=200,
+                headers=[("icy-genre", genre.encode("latin-1"))],
+                reason=b"OK",
+            )
 
 
 @pytest.mark.asyncio
@@ -4304,7 +4396,7 @@ def test_header_safe_derives_a_letter_rather_than_deleting_it():
 def test_header_safe_survives_non_string_config_values():
     """`radio.toml` is not type-coerced, so a stray int must not reach a header.
 
-    `StationSection` is built straight from parsed TOML, so `theme = 42` lands
+    `BrandSection` is built straight from parsed TOML, so `tagline = 42` lands
     here as an int and used to raise before any audio was sent.
     """
     assert _header_safe(42) == "42"
