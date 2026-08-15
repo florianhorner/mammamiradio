@@ -168,6 +168,8 @@ def test_core_break_foregrounds_seed_recipe_reservations(tmp_path: Path) -> None
         "bumpers/ad_in.mp3",
         "bumpers/ad_mid.mp3",
         "bumpers/ad_out.mp3",
+        "stingers/music_ad.mp3",
+        "stingers/ad_music.mp3",
         "stingers/music_to_speech.mp3",
         "stingers/speech_to_music.mp3",
     )
@@ -176,6 +178,8 @@ def test_core_break_foregrounds_seed_recipe_reservations(tmp_path: Path) -> None
         ("ad-in", "bumpers/ad_in.mp3", "radio"),
         ("ad-mid", "bumpers/ad_mid.mp3", "epiano"),
         ("ad-out", "bumpers/ad_out.mp3", "tape"),
+        ("music-ad", "stingers/music_ad.mp3", "specific-music-ad"),
+        ("ad-music", "stingers/ad_music.mp3", "specific-ad-music"),
         ("m2s", "stingers/music_to_speech.mp3", "generated-m2s"),
         ("s2m", "stingers/speech_to_music.mp3", "generated-s2m"),
     ):
@@ -190,6 +194,8 @@ def test_core_break_foregrounds_seed_recipe_reservations(tmp_path: Path) -> None
         "radio",
         "epiano",
         "tape",
+        "specific-music-ad",
+        "specific-ad-music",
         "generated-m2s",
         "generated-s2m",
     )

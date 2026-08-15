@@ -39,6 +39,8 @@ _CORE_BREAK_ASSET_PATHS = frozenset(
         "bumpers/ad_in.mp3",
         "bumpers/ad_mid.mp3",
         "bumpers/ad_out.mp3",
+        "stingers/music_ad.mp3",
+        "stingers/ad_music.mp3",
         "stingers/music_to_speech.mp3",
         "stingers/speech_to_music.mp3",
     }
