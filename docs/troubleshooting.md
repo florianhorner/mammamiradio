@@ -43,18 +43,18 @@ curl http://127.0.0.1:8000/readyz
 
 ## The page loads but the stream itself never plays
 
-If the listener page renders normally, the dashboard looks healthy, `/healthz` returns `200`, and yet every attempt to play returns an error, check what the station is called. `/stream` announces the station to players through its `icy-name` and `icy-genre` response headers, and HTTP headers can only carry latin-1 characters. Two things put a non-latin-1 character into a station name without you noticing:
+If the listener page, dashboard, and `/healthz` all work but the stream fails, check the public station name. `/stream` sends it in the `icy-name` response header, which is limited to latin-1. Common sources of non-latin-1 text include:
 
 - **Smart quotes.** Typing a name on a Mac or iPhone silently substitutes a typographic apostrophe (U+2019) for the straight one.
 - **Decomposed accents.** macOS often stores `à` as a plain `a` followed by a separate combining accent (U+0300). The combining mark is not latin-1 either, so a perfectly ordinary `Radio Città` could fail while the same name typed elsewhere worked.
 
-Older builds passed both straight through, so building the response failed before a single audio byte was sent and every listener got a `500` while the rest of the app kept behaving normally. Grep the add-on log for the exact text Python emits, which uses the escaped form rather than the character itself:
+Older builds passed unencodable header text through unchanged. Response construction then failed before audio was sent, returning `500` to listeners while the rest of the app stayed healthy. The add-on log shows Python's escaped form:
 
 ```text
 UnicodeEncodeError: 'latin-1' codec can't encode character '\u2019' in position 3: ordinal not in range(256)
 ```
 
-Emoji and CJK characters in a station name or theme did the same thing.
+Emoji and CJK characters in the station name or theme caused the same failure. Those builds sent `[station] theme` as `icy-genre`; current builds send the public `[brand] tagline` there instead, so the theme can no longer take the stream down.
 
 A third trigger has nothing to do with punctuation: **any letter outside latin-1**. `Radio Łódź`, `Radio Čačak`, `Rádió Ő` and `Radyo İstanbul` all returned `500` on older builds for the same reason.
 
@@ -64,10 +64,10 @@ Current builds compose the value to NFC and then fold it at the header boundary:
 - Curly quotes, dashes and ellipses become plain ASCII.
 - Letters outside latin-1 degrade to their base letter rather than disappearing. Most reduce by decomposition (`Škoda` becomes `Skoda`). Letters built from a stroke, bar or hook decompose to nothing, so the base letter is read out of the Unicode character name instead: `Radio Łódź` becomes `Radio Lódz` and `Radyo Kırmızı` becomes `Radyo Kirmizi`. Without that step the latin-1 pass deletes the letter outright and the name reads as a typo (`Radio ódz`, `Radyo Krmz`). This is deliberately not a hand-written list of letters. 314 Latin letters fall outside latin-1, and enumerating them is exactly how the first ones got missed. Only the few whose Unicode name contains no base letter at all (`Ŋ ŋ Ə ə Œ œ ẞ ĸ`) are mapped by hand.
 - Emoji and CJK, which have no Latin equivalent at all, are dropped.
-- Control characters are removed. CR and LF are the header-injection vector; the rest of the C0 range and DEL are illegal field content that a strict server rejects outright. This matters most for `station.theme` / `STATION_THEME`, which (unlike the station name) never passes through the load-time sanitizer.
+- Control characters are removed. CR and LF are the header-injection vector; the rest of the C0 range and DEL are illegal field content that a strict server rejects outright. A public `[brand] tagline` needs the same treatment because it bypasses the station-name sanitizer.
 - The result is stripped at both ends. Folding an emoji off the edge of a name leaves its space behind, and a header value with leading or trailing whitespace is illegal. Some HTTP implementations (h11) refuse the entire response for it, which would reproduce the original outage by a different route.
 
-A name that folds away to nothing falls back to the default station name instead of sending a blank `icy-name`. `icy-genre` is folded first and truncated to 64 characters afterwards, so the cap always applies to the text that actually ships. Non-string values are coerced, so a `theme = 42` typo in `radio.toml` no longer takes the stream down either.
+If folding leaves no station name, `/stream` uses the default rather than an empty `icy-name`. It omits `icy-genre` when no usable `[brand] tagline` is configured. A tagline is folded before the 64-character limit is applied. Non-string taglines are coerced, so `tagline = 42` in `radio.toml` cannot take the stream down. `[station] theme` remains a scriptwriter prompt and never appears in stream headers.
 
 Nothing about this reaches the listener UI: `/public-status` and the page still carry the full original name, emoji and all. Only the header is folded. If you are on an older add-on and see that error in the log, retype the apostrophe as a straight `'` in the add-on configuration as an immediate workaround; the stream recovers on the next listener connect with no restart.
 
@@ -280,6 +280,44 @@ Voice validation now runs at config load, not at synthesis time:
 - The admin runtime card uses those route records: `tts_provider.current_provider` becomes `edge` and `fallback_active` becomes `true` after a live cloud-to-Edge fallback, even when all provider keys are configured. This is runtime evidence, while `Mixed TTS` by itself remains a configuration summary. That runtime state is tracked per provider engine, not per voice: on a station with several voices on the same cloud engine, one voice's successful render clears the degraded state for that engine even if a different voice on the same engine is still falling back to Edge every segment. Grep logs for the specific character name in `Synthesized (Edge fallback)` lines to see which voice is actually degraded.
 - When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
+
+## First Listen cannot find any speakers
+
+Speaker discovery asks Home Assistant for its `media_player` entities, so it
+finds nothing when the station has no Home Assistant connection. Check
+`/api/capabilities`: `ha: false` and `homeassistant_access: false` mean there is
+nothing to search.
+
+On a standalone station (anything not run as the Home Assistant add-on), set
+`HA_URL` and `HA_TOKEN` in `.env` and restart. `HA_TOKEN` is a long-lived access
+token from your Home Assistant profile page. The add-on receives both from the
+Supervisor and needs neither set by hand.
+
+This step is optional. The station is a working radio without a home connection;
+skipping it leaves you on the Full AI Radio tier rather than Connected Home.
+
+For branch work, `scripts/first-listen-lab.sh start` brings up a disposable local
+Home Assistant with a real speaker, so First Listen can be exercised end to end
+without touching a live home. See
+[docs/runbooks/first-listen-local-ha.md](runbooks/first-listen-local-ha.md).
+
+## The station sounds soft or flat through Music Assistant
+
+The station levels every finished segment itself, so music, hosts, beds, and ads
+all reach you at one volume (`audio.lufs_target`, default `-16.0` LUFS, with ads
+1 LU hotter). Music Assistant can then level the same audio a second time on its
+way to a speaker.
+
+Open the playing speaker in Music Assistant and look at the audio path. If
+**Volume normalization** reads **Dynamic**, two levellers are stacked. Set it to
+**fixed gain** or **disabled** for that player and play the same song again.
+Dynamic levelling evens out loud and quiet moments as it goes, so drums and
+plucked notes lose some of their snap and steady bass sits further forward. On
+audio that arrives already levelled, there is nothing left for it to fix.
+
+This is a Music Assistant player setting; nothing changes on the station side.
+The station's own **On-Air Sound** dial is a separate FM colouring, off by
+default, so it is not what you are hearing.
 
 ## Home Assistant references never show up
 

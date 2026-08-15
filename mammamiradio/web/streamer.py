@@ -427,6 +427,36 @@ _SETUP_ERRORS: dict[str, tuple[str, str, bool, str, int]] = {
     ),
 }
 
+# Standalone overrides. Same failure, same code, a way out that exists on this
+# install. A station run outside the Home Assistant add-on has no add-on options
+# page and no Supervisor token to refresh, so the default wording sends the
+# operator to a screen they do not have. Only codes whose default instruction is
+# add-on-shaped belong here; everything else falls through to _SETUP_ERRORS.
+_SETUP_ERRORS_STANDALONE: dict[str, tuple[str, str, bool, str, int]] = {
+    "ha_access_missing": (
+        "This station is not connected to Home Assistant",
+        "Set HA_URL and HA_TOKEN in your .env and restart the station. "
+        "The radio plays without a home connection, so you can also skip this step.",
+        True,
+        "Retry connection",
+        409,
+    ),
+    "ha_auth_failed": (
+        "Home Assistant did not accept access",
+        "Check that HA_TOKEN is a current long-lived access token, then restart the station and retry.",
+        True,
+        "Retry connection",
+        502,
+    ),
+    "media_source_missing": (
+        "Mamma Mi Radio is not in HA's media browser",
+        "Install the Mamma Mi Radio HACS integration in Home Assistant and point it at this station's URL, then retry.",
+        True,
+        "Check HACS integration",
+        409,
+    ),
+}
+
 # TODO: split — this god module is a postal address, not a destination.
 # See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
@@ -456,13 +486,23 @@ def _as_int_index(value, default: int = -1) -> int:
 def _setup_error(
     code: str,
     *,
+    addon_mode: bool | None = None,
     accepted: bool | None = None,
     receipt_persisted: bool | None = None,
     station_resumed: bool | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> JSONResponse:
-    """Return one allowlisted, secret-free first-listen failure envelope."""
-    title, message, retryable, action_label, status_code = _SETUP_ERRORS.get(code, _SETUP_ERRORS["invalid_request"])
+    """Return one allowlisted, secret-free first-listen failure envelope.
+
+    ``addon_mode=False`` swaps in the standalone wording where the add-on-shaped
+    instruction would send the operator somewhere that does not exist. The error
+    code is unchanged either way, so a consumer branching on ``code`` sees no
+    difference. ``None`` means the caller does not know, and keeps the default.
+    """
+    entry = _SETUP_ERRORS.get(code, _SETUP_ERRORS["invalid_request"])
+    if addon_mode is False:
+        entry = _SETUP_ERRORS_STANDALONE.get(code, entry)
+    title, message, retryable, action_label, status_code = entry
     payload: dict[str, Any] = {
         "ok": False,
         "error": {
@@ -5822,7 +5862,7 @@ def _header_safe(value: object) -> str:
 
     The guarantee is about the output, not an absolute promise about the call:
     whatever comes back is encodable and is legal HTTP field content, so no
-    configured station name or theme can break the response. It is stated that
+    configured station name or public tagline can break the response. It is stated that
     way deliberately. An earlier "cannot 500" wording was an overclaim, since a
     caller could still hand this an object whose ``__str__`` raises. Nothing in
     a parsed TOML config can.
@@ -5834,8 +5874,8 @@ def _header_safe(value: object) -> str:
 
     The steps, each one load-bearing:
 
-    * Coerce to ``str``. ``StationSection`` is built straight from TOML with no
-      runtime coercion, so ``theme = 42`` in ``radio.toml`` reaches this
+    * Coerce to ``str``. ``BrandSection`` is built straight from TOML with no
+      runtime coercion, so ``tagline = 42`` in ``radio.toml`` reaches this
       function as an int and used to 500 every listener the same way.
     * Compose to NFC. macOS hands over decomposed text (``a`` + U+0300
       combining grave) for the same ``à`` that Linux writes as one codepoint,
@@ -5883,17 +5923,25 @@ async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
+    # ``station.theme`` is a scriptwriter prompt. Use the public brand tagline
+    # for the listener-facing ``icy-genre`` header.
+    # Fold before capping: the fold expands characters (``…`` becomes three
+    # dots), so a cap applied first would not bound what actually ships.
+    # Then strip again after the cut: a space landing at index 63 would put
+    # trailing whitespace back, and h11 refuses the whole response for it.
+    # Both steps are load-bearing — see test_stream_icy_genre_* for the guards.
+    icy_genre = _header_safe(config.brand.tagline)[:64].strip()
     headers = {
         # A name made entirely of unencodable characters folds to "", so fall
         # back and let the player show the station rather than a blank label.
         "icy-name": _header_safe(config.display_station_name) or DEFAULT_STATION_NAME,
-        # Strip again after the cut: a space landing at index 63 would put the
-        # trailing whitespace back and h11 refuses the whole response for it.
-        "icy-genre": _header_safe(config.station.theme)[:64].strip(),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }
+    # Omit ``icy-genre`` when no listener-facing tagline survives header folding.
+    if icy_genre:
+        headers["icy-genre"] = icy_genre
     return StreamingResponse(
         _audio_generator(request),
         headers=headers,
@@ -5934,7 +5982,7 @@ async def setup_first_listen_players(request: Request, _: None = Depends(_requir
     try:
         discovery = await service.discover(force=True)
     except HAPlaybackError as exc:
-        return _setup_error(exc.reason.value)
+        return _setup_error(exc.reason.value, addon_mode=request.app.state.config.is_addon)
 
     receipt = getattr(request.app.state, "first_listen_receipt", None)
     if receipt is None:
@@ -5977,7 +6025,11 @@ async def setup_first_listen_play(request: Request, _: None = Depends(_require_a
     try:
         result = await _ha_playback_service(request.app.state).play(entity_id)
     except HAPlaybackError as exc:
-        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+        return _setup_error(
+            exc.reason.value,
+            addon_mode=request.app.state.config.is_addon,
+            station_resumed=exc.station_resumed,
+        )
     if result.receipt_persisted is not True or not result.attempt_id:
         return _setup_error(
             HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
@@ -6015,7 +6067,11 @@ async def setup_first_listen_receipt_retry(request: Request, _: None = Depends(_
                 station_resumed=exc.station_resumed,
                 extra={"entity_id": str(body["entity_id"])},
             )
-        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+        return _setup_error(
+            exc.reason.value,
+            addon_mode=request.app.state.config.is_addon,
+            station_resumed=exc.station_resumed,
+        )
     if result.receipt_persisted is not True or not result.attempt_id:
         return _setup_error(
             HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
@@ -6083,7 +6139,7 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
     config = app_state.config
     state = app_state.station_state
     if not config.homeassistant.enabled or not config.ha_token:
-        return _setup_error("ha_access_missing")
+        return _setup_error("ha_access_missing", addon_mode=config.is_addon)
 
     authorization = state.home_authorization or HomeAuthorization.narrow()
     revision_before = policy_revision(config.cache_dir)
