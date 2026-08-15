@@ -4008,10 +4008,10 @@ async def test_stream_survives_smart_quote_in_station_name():
 
 
 @pytest.mark.asyncio
-async def test_stream_theme_survives_unencodable_characters():
-    """icy-genre carries operator text too, so it needs the same guard."""
+async def test_stream_tagline_survives_unencodable_characters():
+    """``icy-genre`` needs the same header-safety guard as ``icy-name``."""
     app = _make_test_app()
-    app.state.config.station.theme = "sole — mare … 🎵"
+    app.state.config.brand.tagline = "sole — mare … 🎵"
     transport = httpx.ASGITransport(app=app)
 
     async def fake_audio_generator(_request):
@@ -4026,6 +4026,48 @@ async def test_stream_theme_survives_unencodable_characters():
             # No trailing space: the folded-away emoji leaves one behind, and a
             # field value with edge whitespace is illegal (see the h11 test below).
             assert resp.headers["icy-genre"] == "sole - mare ..."
+
+
+@pytest.mark.asyncio
+async def test_stream_never_leaks_the_scriptwriter_prompt_as_genre():
+    """No stream header may expose the internal scriptwriter prompt."""
+    app = _make_test_app()
+    app.state.config.station.theme = "INTERNAL SCRIPTWRITER DIRECTIVE: never air this"
+    app.state.config.brand.tagline = "La radio che ascolta la tua casa"
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert resp.headers["icy-genre"] == "La radio che ascolta la tua casa"
+            assert all("INTERNAL SCRIPTWRITER" not in value for value in resp.headers.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tagline", ["", "🎵"])
+async def test_stream_omits_icy_genre_when_no_listener_tagline(tagline: str):
+    """An empty or unusable tagline must not fall back to the internal prompt."""
+    app = _make_test_app()
+    app.state.config.station.theme = "INTERNAL SCRIPTWRITER DIRECTIVE: never air this"
+    app.state.config.brand.tagline = tagline
+    transport = httpx.ASGITransport(app=app)
+
+    async def fake_audio_generator(_request):
+        yield b"frame"
+
+    with patch("mammamiradio.web.streamer._audio_generator", fake_audio_generator):
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as client,
+            client.stream("GET", "/stream") as resp,
+        ):
+            assert resp.status_code == 200
+            assert "icy-genre" not in resp.headers
 
 
 @pytest.mark.asyncio
@@ -4084,7 +4126,7 @@ async def test_stream_every_response_header_is_latin1_encodable():
     """
     app = _make_test_app()
     app.state.config.identity.station_name = "Let’s — Città 🎵"
-    app.state.config.station.theme = "sole ’ mare … 北京"
+    app.state.config.brand.tagline = "sole ’ mare … 北京"
     transport = httpx.ASGITransport(app=app)
 
     async def fake_audio_generator(_request):
@@ -4107,7 +4149,7 @@ async def test_stream_every_response_header_is_latin1_encodable():
 async def test_stream_icy_genre_capped_at_64_after_folding():
     """The fold expands one ``…`` to three characters, so the cap must run after it."""
     app = _make_test_app()
-    app.state.config.station.theme = "…" * 40
+    app.state.config.brand.tagline = "…" * 40
     transport = httpx.ASGITransport(app=app)
 
     async def fake_audio_generator(_request):
@@ -4120,6 +4162,7 @@ async def test_stream_icy_genre_capped_at_64_after_folding():
         ):
             assert resp.status_code == 200
             assert len(resp.headers["icy-genre"]) == 64
+            assert resp.headers["icy-genre"] == "." * 64
 
 
 @pytest.mark.asyncio
@@ -4228,11 +4271,10 @@ async def test_stream_serves_audio_after_restart_with_unicode_station_name(monke
 def test_header_safe_removes_control_bytes_not_just_crlf():
     """C0 and DEL are illegal field content, not only CR/LF.
 
-    `station.theme` never passes through `sanitize_station_name`, so a stray
-    control byte in `radio.toml` or `STATION_THEME` reaches the header raw. h11
-    refuses NUL, VT and FF outright, which is the same no-response-at-all
-    failure as the encode crash, and the rest of the range is illegal even
-    where a lenient parser lets it through.
+    A public tagline bypasses `sanitize_station_name`, so a control byte in
+    `radio.toml` reaches the header. h11 rejects NUL, VT, and FF before a
+    response is sent; lenient parsers still treat the rest of C0 and DEL as
+    illegal field content.
     """
     for control in [*range(0x20), 0x7F]:
         assert _header_safe(f"Radio{chr(control)}Mamma") == "RadioMamma", hex(control)
