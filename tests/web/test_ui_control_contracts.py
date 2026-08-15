@@ -43,6 +43,7 @@ TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 WEB_ROOT = Path(__file__).resolve().parents[2] / "mammamiradio" / "web"
 ADMIN_HTML = WEB_ROOT / "templates" / "admin.html"
 LISTENER_HTML = WEB_ROOT / "templates" / "listener.html"
+LISTENER_JS = WEB_ROOT / "static" / "listener.js"
 TOKEN = "test-admin-token"
 AUTH = {"X-Radio-Admin-Token": TOKEN}
 
@@ -1678,6 +1679,18 @@ class TestRuntimeProviderTransparencyUI:
         assert "header.setAttribute('aria-label',headerDetail)" in html
 
 
+class TestListenerHeroStats:
+    def test_tracks_stat_uses_live_rotation_count(self):
+        # The rendered output is covered behaviourally by scripts/player-smoke.js;
+        # the public-status contract covers a real in-session playlist mutation.
+        js = LISTENER_JS.read_text()
+        stat_logic = js[js.index("const stat2") : js.index("const stat3")]
+
+        assert "status.rotation_track_count" in stat_logic
+        assert "current_source.track_count" not in stat_logic
+        assert "tracks_played" not in stat_logic
+
+
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
 
 
@@ -1765,7 +1778,7 @@ class TestStoppedStateQuietsTheUI:
         blob = (
             LISTENER_HTML.read_text()
             + (base / "static" / "listener.css").read_text()
-            + (base / "static" / "listener.js").read_text()
+            + LISTENER_JS.read_text()
             # Also consult base.css — the unified waveform pause rule lives there.
             + (base / "static" / "base.css").read_text()
         )
@@ -1799,7 +1812,7 @@ class TestStoppedStateQuietsTheUI:
         # Bluetooth / CarPlay) must both sanitize the stopped state. If a
         # future refactor drops either branch, the internal "Session stopped"
         # label flows back through `np.label` and lands in front of listeners.
-        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        js = LISTENER_JS.read_text()
 
         # Both surfaces must explicitly handle np.type === 'stopped' and
         # render the brand-voice paused copy — not fall through to a
@@ -1843,7 +1856,7 @@ class TestStoppedStateQuietsTheUI:
 
     def test_listener_building_schedule_is_single_placeholder(self):
         """An empty rendered queue should not look like four fake future slots."""
-        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        js = LISTENER_JS.read_text()
         css = (WEB_ROOT / "static" / "listener.css").read_text()
 
         assert "status.upcoming_mode === 'building'" in js

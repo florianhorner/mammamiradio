@@ -276,6 +276,31 @@ def test_ad_history_capped_at_20():
     assert state.ad_history[0].brand == "Brand5"
 
 
+def test_ad_experiment_snapshot_is_runtime_only_sorted_and_fresh_by_default():
+    state = StationState()
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 0,
+        "completed_spots": 0,
+        "brands": [],
+    }
+
+    state.record_completed_ad_break([" Bravo ", "Alfa"])
+    state.record_completed_ad_break(["alfa", "Bravo", "Bravo"])
+    state.record_completed_ad_break(["", "   "])
+
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 2,
+        "completed_spots": 5,
+        "brands": [
+            {"brand": "Bravo", "completed_airings": 3},
+            {"brand": "Alfa", "completed_airings": 1},
+            {"brand": "alfa", "completed_airings": 1},
+        ],
+    }
+
+
 def test_segment_log_capped_at_50():
     state = StationState()
     for i in range(60):
@@ -373,6 +398,8 @@ def test_stream_delivery_diagnostics_coalesce_and_keep_only_anonymous_bounded_va
 
     snapshot = state.stream_delivery_snapshot(now=102.5, monotonic_now=11.0)
 
+    # Deliberate literal pin: retuning the lead must fail here first.
+    assert snapshot["target_lead_ms"] == 4_000
     assert snapshot["session"] == {"late": 3, "underrun": 1, "overrun_rebased": 0, "total": 4}
     assert snapshot["window_15m"] == snapshot["session"]
     assert [event["count"] for event in snapshot["recent"]] == [2, 1, 1]

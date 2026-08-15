@@ -580,6 +580,14 @@ Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings a
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
+**Carosello session experiment.** During an ad break, the listener shows its
+fictional brands in source order. It also reports process-local brand counts. A
+non-fallback break receives credit only after EOF when it sent audio and every
+emitted chunk reached at least one listener queue. `StationState` keeps the
+counts in memory, so they reset on restart and add no playback-path I/O.
+`/public-status.ad_experiment` exposes the payload, which `/status` reuses.
+These counts are experimental and unsuitable for advertiser analytics.
+
 **Callback Director (cross-domain verbal gags).** A gag planted in DJ banter can resurface once inside an unrelated news flash or ad — a rare, cross-domain "callback". `hosts/verbal_gag_ledger.py` (`VerbalGagLedger`, in-memory, session-ephemeral) holds banter-seeded gags and reuses `home/gag_select.py`'s `weighted_offer` (the same weighted-pick + 0.55 silence roll that `home/evening_memory.py`'s `EveningLedger` uses for HA-event gags). Lifecycle, all at QUEUE time so a discarded segment never plants or burns a gag: banter's `new_joke {text, punch}` is stashed on `state.pending_verbal_gag` and committed to the ledger in the banter success callback; before a flash/ad the producer calls `offer(contrasting_to=...)` and passes at most one gag to the scriptwriter (which injects a "land this here" instruction, or omits the key entirely); the gag is hard-retired after one travel, and only when the generator reports it actually landed (`callback_used`). Durable listener persona and song-cue extraction are a separate post-air path, so queue-time gag bookkeeping can still happen without treating unheard banter as long-term memory. Flash/ad prompts no longer carry the full `running_jokes` list — `running_jokes` stays banter's self-reference + persona-store store.
 
 **Evening running gags (HA-event callbacks).** `home/evening_memory.py`'s `EveningLedger` tallies repeated discrete home toggles across an evening and surfaces a deferred, approximate callback ("the coffee machine, on again tonight") into banter via the STASERA prompt block. Gag-candidacy is decided by device **domain** (not hardcoded entity_ids), so it works on any operator's home out of the box: `switch`/`fan`/`lock`/`vacuum`/`binary_sensor` toggles are gag-worthy, while `sensor`/`climate`/`media_player`/`weather`/`light` and `person.*` are not. Operators tune this via `[home.running_gags]` in `radio.toml` (`domain_allowlist` replaces the default domain set; `entity_allowlist` restricts to specific entity_ids; `entity_denylist` silences chatty entities) — parsed into `core/config.EveningGagsSection`, degrade-to-default on malformed input. An evening "session" ends after `EVENING_GAP_SECONDS` (3.5h) with no real home activity — `last_active` advances only on real activity (excluding numeric drift, `person.*`, device-availability flaps, and passive `weather`/`sun` changes), so neither radio-cadence polling nor passive environmental events can keep a quiet evening alive forever — or at the 4am day rollover.
@@ -620,13 +628,16 @@ Important design choice: there is one shared timeline. Listeners tune into the c
 The playback loop does not offer each source packet to listener fanout exactly
 at its real-time deadline. Source packets are capped at **125 ms** (3,000 bytes
 at 192 kbps), so a private, persistent `StreamPacer` (in `streamer.py`, owned by
-`run_playback_loop`) keeps a **500 ms send-ahead target** on one monotonic source
-media timeline. At 192 kbps that is roughly the first four packets; after that,
-the source-to-fanout schedule stays no more than one packet (625 ms) ahead. This
-helps absorb a short event-loop or CPU scheduling pause — including one caused
-by rendering a newly created station ID, ad, banter, or a Home Assistant
-projection — before it reaches a direct listener (e.g. a Sonos player consuming
-`/stream`).
+`run_playback_loop`) keeps a **4-second send-ahead target** on one monotonic
+source media timeline. At 192 kbps that is roughly the first 32 packets; after
+that, the schedule stays ahead by the target plus at most one further packet —
+4.125 s in total. This absorbs an event-loop or CPU scheduling pause — including
+one caused by rendering a newly created station ID, ad, banter, or a Home
+Assistant projection — before it reaches a direct listener (for example, a Sonos
+player consuming `/stream`). The worst such pause measured on HA Green was
+1.781 s. At 192 kbps the cushion occupies 32 of every listener queue's 128
+packet slots, so a slow listener has roughly 12 s of stall budget before it is
+dropped rather than the ~16 s the queue holds.
 
 The timeline is deliberately **continuous across natural segment boundaries**:
 music → station ID → ad → banter → music share one origin, so the lead is not
@@ -638,14 +649,14 @@ an explicit skip — via a named `reset_timeline(reason)` call.
 If a pause is longer than the whole lead, the pacer uses **at most a three-packet
 recovery phase**, then rebases the pacing origin once and records the deficit as
 an `overrun_rebased` event. At the default packet cap, that phase restores 375
-ms; ordinary bounded packets may follow immediately until the 500 ms target is
+ms; ordinary bounded packets may follow immediately until the 4-second target is
 rebuilt. It never sleeps a negative interval and never turns the missed
 wall-clock history into an unbounded backlog of overdue chunks — the unavoidable
 long stall stays audible, but it cannot compound into a second catch-up phase or
 many seconds of stale playback. The packet cap changes source-read granularity
 while leaving bitrate, ICY metadata, queue ordering, and overflow protection
 intact. Because listener queues remain bounded by packets, their shorter packets
-give a slow listener a tighter time budget before drop. The 500/625 ms bound
+give a slow listener a tighter time budget before drop. The 4 s / 4.125 s bound
 applies only to source-to-fanout pacing: after `LiveStreamHub` enqueues a chunk,
 ASGI, socket, and client buffers can still delay physical playback. A skip or
 status cutover therefore has no physical-audio latency guarantee; slow listeners
@@ -986,7 +997,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub |
 | `/healthz` | GET | Public | Runtime-health probe with process uptime; prolonged silence with active listeners returns `503`, while an intentional Stop remains healthy |
 | `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped` |
-| `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
+| `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), process-local `ad_experiment` completion counts, `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
 | `/status` | GET | Admin | Full admin JSON: queue depth, uptime, scripts, `consumption` (session AI cost estimate, unpriced-model flag, and fixed-key cost breakdown for host scripts, transitions, ads, post-air memory extraction, and TTS), anonymous `listener_session` diagnostics (epoch, phase, active duration, pending persona count, and companionship cue state), HA context, errors, `provider_health`, `runtime_status` (normalized provider state, session failover event history, `bridge_health` rescue-bridge telemetry, `rescue_rotation` cached-music cooldown telemetry, `producer_headroom` readiness, bounded `render_timings` diagnostics, and `continuity_slot` — the admin-only projection of any reserved capacity-exempt safety audio, `{label, duration_sec, audio_source, reservation_id}` or `null` — see operations.md), `production` (the live "In produzione" feed — `current` is the phase the producer is building right now, `recent` is a bounded trail of just-finished work; admin-only, never in `/public-status`), `current_track_preference`, `moments_admin` (Moment Receipts full trail, ≤25 rows — see "Moment Receipts"), and `playlist_page` (`{total, offset, limit, has_more, revision}`). Accepts `?playlist_offset=0&playlist_limit=80` (max 200) for lazy loading. |
 | `/api/setup/status` | GET | Admin (active setup) | First-run setup status, detected run mode, station mode, canonical `guided_setup` stages, and `first_listen`, `source_readiness`, `speaker`, `verification`, and `privacy` projections |
 | `/api/setup/recheck` | POST | Admin (active setup) | Re-run setup probes |

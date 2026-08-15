@@ -84,6 +84,8 @@ from mammamiradio.core.first_listen_show import (
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    STREAM_LATE_THRESHOLD_SECONDS,
+    STREAM_TARGET_LEAD_SECONDS,
     ChaosSubtype,
     GenerationWasteReason,
     Heading,
@@ -703,9 +705,9 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
-STREAM_TARGET_LEAD_SECONDS = 0.5
 STREAM_MAX_PACKET_SECONDS = 0.125
-STREAM_LATE_THRESHOLD_SECONDS = 0.05
+# Restores 375 ms — ~75% of the old 0.5s lead, ~9% of today's 4s. Calibrated
+# against STREAM_TARGET_LEAD_SECONDS; revisit the two together.
 STREAM_MAX_RECOVERY_CHUNKS = 3
 STREAM_UNDERRUN_WARNING_INTERVAL_SECONDS = 60.0
 
@@ -1795,6 +1797,38 @@ def _record_continuity_air(state: StationState, segment: Segment) -> None:
         )
     except Exception:  # pragma: no cover - telemetry must never break the stream
         logger.debug("continuity air telemetry failed", exc_info=True)
+
+
+def _record_ad_experiment_receipt(
+    state: StationState,
+    segment: Segment,
+    *,
+    result: str,
+    terminal_reason: str | None,
+    all_chunks_audience_delivered: bool,
+) -> None:
+    """Credit brands after a non-fallback EOF when every ad chunk reached listeners."""
+    try:
+        if (
+            segment.type is not SegmentType.AD
+            or result != "aired"
+            or terminal_reason != "eof"
+            or not all_chunks_audience_delivered
+        ):
+            return
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        raw_brands = metadata.get("brands")
+        brands = (
+            [brand for brand in raw_brands if isinstance(brand, str) and brand.strip()]
+            if isinstance(raw_brands, list | tuple)
+            else []
+        )
+        if not brands:
+            brand = metadata.get("brand")
+            brands = [brand] if isinstance(brand, str) else []
+        state.record_completed_ad_break(brands)
+    except Exception:  # pragma: no cover - isolate receipt errors from audio
+        logger.debug("Carosello experiment receipt failed", exc_info=True)
 
 
 # Floor of rotation tracks a BULK ban must leave behind. Below this the producer
@@ -4327,6 +4361,10 @@ async def run_playback_loop(app) -> None:
     pacer_factory = getattr(app.state, "stream_pacer_factory", StreamPacer)
     pacer = pacer_factory(bytes_per_sec)
     app.state.stream_pacer = pacer
+    # Report what this pacer runs at, not what the constant says, so the admin
+    # diagnostic can never describe a cushion the loop is not using.
+    state.stream_pacing_target_lead_seconds = pacer.target_lead_seconds
+    state.stream_pacing_late_threshold_seconds = pacer.late_threshold_seconds
     # A full disconnect/reconnect can happen while the inner file-send loop is
     # active, so the outer empty-room branch alone is not enough to restore a
     # first-packet cushion for that new listener generation.
@@ -4782,6 +4820,10 @@ async def run_playback_loop(app) -> None:
             terminal_reason = "aborted"
             companionship_discard_recorded = False
             air_start_stamped = False
+            # `aired` means at least one chunk reached a listener. A receipt
+            # requires every ad chunk to reach at least one listener queue; one
+            # zero-delivery chunk makes the break ineligible.
+            all_chunks_audience_delivered = True
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -4852,6 +4894,8 @@ async def run_playback_loop(app) -> None:
                         accepted_listeners = await hub.broadcast(chunk)
                         accepted_count = max(0, int(accepted_listeners or 0))
                         accepted_listener_count = max(accepted_listener_count, accepted_count)
+                        if segment.type is SegmentType.AD and accepted_count <= 0:
+                            all_chunks_audience_delivered = False
                         if is_companionship_cue and not air_start_stamped:
                             if accepted_count <= 0:
                                 terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
@@ -5035,6 +5079,7 @@ async def run_playback_loop(app) -> None:
                 was_skipped,
                 start_listeners,
                 terminal_reason=terminal_reason,
+                all_chunks_audience_delivered=all_chunks_audience_delivered,
                 accepted_listener_count=accepted_listener_count,
             )
             # Best-effort unlink: a raw unlink here can raise a non-missing OSError
@@ -5139,6 +5184,7 @@ def _emit_stream_result(
     listeners: int,
     *,
     terminal_reason: str | None = None,
+    all_chunks_audience_delivered: bool = False,
     accepted_listener_count: int | None = None,
 ) -> None:
     """Tier-3: record the TRUE aired outcome after the send loop.
@@ -5172,6 +5218,13 @@ def _emit_stream_result(
             listeners=listeners,
             fallback_active=is_fallback_active(meta),
             accepted_listeners=accepted_count,
+        )
+        _record_ad_experiment_receipt(
+            state,
+            segment,
+            result=result,
+            terminal_reason=terminal_reason,
+            all_chunks_audience_delivered=all_chunks_audience_delivered,
         )
         state.record_stream_outcome(
             segment_type=segment.type.value,
@@ -5273,6 +5326,15 @@ def _ad_cast_status_payload(config) -> dict[str, object]:
         else []
     )
     return {"excluded_campaigns": excluded, "warnings": warnings}
+
+
+def _ad_experiment_status(state: StationState) -> dict[str, object]:
+    """Return the process-local receipt payload or an empty fallback."""
+    try:
+        return state.ad_experiment_snapshot()
+    except Exception:  # pragma: no cover - isolate receipt errors from status
+        logger.debug("Carosello experiment status failed", exc_info=True)
+        return {"scope": "runtime", "completed_breaks": 0, "completed_spots": 0, "brands": []}
 
 
 def _record_operator_action(request, action: str, old_value, new_value) -> None:
@@ -9700,6 +9762,7 @@ def _public_status_payload(request: Request) -> dict:
         "running_jokes": list(state.running_jokes),
         **playback,
         "current_source": _serialize_source(state.playlist_source),
+        "rotation_track_count": len(state.playlist),
         "heading": _serialize_heading(state.heading, state),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
@@ -9720,6 +9783,8 @@ def _public_status_payload(request: Request) -> dict:
             ),
         },
         "ha_moments": ha_moments,
+        # Process-local receipt counts reused by the admin status payload.
+        "ad_experiment": _ad_experiment_status(state),
         # Brand-fiction layer (PR-A schema). Listener renders against this.
         "brand": _serialize_brand(config.brand),
         # Capability flags (listener-safe subset). Listener JS reads these every

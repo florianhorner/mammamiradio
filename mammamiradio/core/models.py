@@ -890,6 +890,12 @@ class ExternalAddNotice(TypedDict):
 RECENTLY_CONSUMED_RETENTION_SECONDS = 300
 STREAM_DELIVERY_WINDOW_SECONDS = 15 * 60
 STREAM_PACING_EVENT_KINDS = ("late", "underrun", "overrun_rebased")
+# StreamPacer's send-ahead cushion, and what stream_delivery_snapshot reports.
+# 4s absorbs a render pause (station ID, ad, banter, HA projection) before a
+# direct MP3 client hears it; worst measured on HA Green was 1.781s. Costs 32
+# of a listener queue's 128 packet slots at 192 kbps.
+STREAM_TARGET_LEAD_SECONDS = 4.0
+STREAM_LATE_THRESHOLD_SECONDS = 0.05
 HA_REFRESH_STAGES = ("states_request", "enrichment_wait", "projection", "idle")
 
 
@@ -936,6 +942,10 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
+    # Session-only ad receipts for completed breaks. Stores aggregate counts
+    # in memory and resets with the process.
+    ad_experiment_completed_breaks: int = 0
+    ad_experiment_brand_airings: dict[str, int] = field(default_factory=dict)
     session_stopped: bool = False
     # True only after an explicit assetless force-resume, until a listener
     # accepts the first rebuilt segment. Readiness stays "starting" meanwhile.
@@ -1232,6 +1242,11 @@ class StationState:
     listener_session_tasks: set[asyncio.Task] = field(default_factory=set, repr=False)
     listener_session_persona_retry_at: float = 0.0
     listener_session_persona_retry_attempts: int = 0
+    # What the live StreamPacer runs at, recorded when the playback loop builds
+    # it. Defaults to the shipped constants so a state object with no loop
+    # attached still reports honest numbers.
+    stream_pacing_target_lead_seconds: float = STREAM_TARGET_LEAD_SECONDS
+    stream_pacing_late_threshold_seconds: float = STREAM_LATE_THRESHOLD_SECONDS
     # Bounded, anonymous stream-delivery diagnostics. These are session-local
     # and exposed only through authenticated /status. Raw listener identity,
     # segment labels/titles, and Home Assistant values never enter these rows.
@@ -1505,8 +1520,8 @@ class StationState:
         )
         session_counts = {kind: int(self.stream_pacing_counts.get(kind, 0)) for kind in STREAM_PACING_EVENT_KINDS}
         return {
-            "target_lead_ms": 500,
-            "late_threshold_ms": 50,
+            "target_lead_ms": round(self.stream_pacing_target_lead_seconds * 1000),
+            "late_threshold_ms": round(self.stream_pacing_late_threshold_seconds * 1000),
             "session": {**session_counts, "total": sum(session_counts.values())},
             "window_15m": {**window_counts, "total": sum(window_counts.values())},
             "recent": list(self.stream_pacing_events),
@@ -2454,6 +2469,31 @@ class StationState:
                 transition_motif=transition_motif,
             )
         )
+
+    def record_completed_ad_break(self, brands: Collection[str]) -> None:
+        """Increment process-local counts for one credited ad break."""
+        normalized = [brand.strip() for brand in brands if isinstance(brand, str) and brand.strip()]
+        if not normalized:
+            return
+        self.ad_experiment_completed_breaks += 1
+        for brand in normalized:
+            self.ad_experiment_brand_airings[brand] = self.ad_experiment_brand_airings.get(brand, 0) + 1
+
+    def ad_experiment_snapshot(self) -> dict[str, object]:
+        """Return the public process-local receipt payload."""
+        brands = [
+            {"brand": brand, "completed_airings": count}
+            for brand, count in sorted(
+                self.ad_experiment_brand_airings.items(),
+                key=lambda item: (-item[1], item[0].casefold(), item[0]),
+            )
+        ]
+        return {
+            "scope": "runtime",
+            "completed_breaks": self.ad_experiment_completed_breaks,
+            "completed_spots": sum(self.ad_experiment_brand_airings.values()),
+            "brands": brands,
+        }
 
     def after_ad(self, brands: list[str] | None = None) -> None:
         """Mark one full ad break as produced (called once per break, not per-spot)."""

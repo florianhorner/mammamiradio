@@ -127,6 +127,11 @@ def test_player_smoke_pins_the_listener_interaction_contract() -> None:
         "mobileNavGeometry",
         "320px nav status pill escaped viewport",
         "320px nav content overflowed its inner row",
+        "Tracks in Rotation ignored live rotation size",
+        "Tracks in Rotation changed with played history",
+        "Tracks in Rotation did not update with playlist mutation",
+        "Known empty rotation did not render zero",
+        "Missing rotation count fell back to source or played history",
         "focusing the dedication form started audio",
         "empty dedication reached the request API",
         "success_shoutout",
@@ -187,6 +192,31 @@ def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
         "Casa on-air receipt did not render",
     ):
         assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
+
+
+def test_player_smoke_executes_ad_receipt_contract() -> None:
+    """Exercise receipt rendering and Media Session updates in the listener."""
+    code = RUN_CODE.read_text(encoding="utf-8")
+    for needle in (
+        "adExperimentScenario = 'one'",
+        "adExperimentScenario = 'many'",
+        "adExperimentScenario = 'empty'",
+        "first completed ad receipt did not reveal with singular copy",
+        "first completed ad receipt was not announced",
+        "unchanged status refresh collapsed or rewrote the expanded ad receipt",
+        "status refresh collapsed the expanded ad receipt",
+        "updated ad receipt was not announced with plural copy",
+        "wire brand text executed as markup",
+        "live ad roster did not replace generic sponsored copy",
+        "Media Session ad roster did not match the visible roster",
+        "brandless ad did not retain generic sponsored copy",
+        "runtime reset did not hide, collapse, and clear the stale ad receipt",
+        "runtime reset did not clear the ad receipt announcement",
+        "stale status poll restored a cleared ad receipt",
+        "stale status race never held poll N after JSON parsing",
+        "window.__playerSmokeOldStatusPoll = window.__playerSmokeFetchStatus()",
+    ):
+        assert needle in code, f"player smoke missing ad-receipt browser guard: {needle}"
 
 
 def test_default_listener_identity_fixture_is_canonical() -> None:
