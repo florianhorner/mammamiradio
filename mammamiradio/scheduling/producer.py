@@ -24,7 +24,7 @@ import httpx
 
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
-from mammamiradio.audio.imaging import ImagingLibrary
+from mammamiradio.audio.imaging import ImagingLibrary, reserve_unique_recipe_foreground_sources
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
     apply_broadcast_chain,
@@ -6200,9 +6200,9 @@ async def _run_producer_inner(
                 break_summaries: list[str] = []
                 break_texts: list[str] = []
                 break_sonic_worlds: list[str] = []
-
                 loop = asyncio.get_running_loop()
                 imaging_lib = _make_imaging_lib(config)
+                reserved_recipe_foreground_sources = set(imaging_lib.core_break_foreground_source_ids())
                 configured_sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
                 sfx_dir = imaging_lib.ad_sfx_dir(configured_sfx_dir)
                 bed_assets_dir = imaging_lib.ad_beds_dir()
@@ -6234,6 +6234,18 @@ async def _run_producer_inner(
                         if sonic.recipe_id
                         else None
                     )
+                    if recipe is not None:
+                        recipe, suppressed_cues = reserve_unique_recipe_foreground_sources(
+                            recipe,
+                            reserved_recipe_foreground_sources,
+                        )
+                        if suppressed_cues:
+                            logger.info(
+                                "Suppressed %d repeated foreground cue(s) from ad recipe %s in spot %d",
+                                len(suppressed_cues),
+                                recipe.id,
+                                spot_idx + 1,
+                            )
                     render_sonic = sonic
                     if sonic.recipe_id and recipe is None:
                         logger.warning(

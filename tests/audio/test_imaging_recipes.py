@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-from mammamiradio.audio.imaging import ImagingLibrary
-from mammamiradio.audio.normalizer import generate_tone, loop_audio_bed, mix_oneshot_layers
+from mammamiradio.audio.imaging import ImagingLibrary, reserve_unique_recipe_foreground_sources
+from mammamiradio.audio.normalizer import fit_audio_oneshot, generate_tone, loop_audio_bed, mix_oneshot_layers
 
 
 def _asset(asset_id: str, path: str, *, kind: str = "cue") -> dict[str, object]:
@@ -70,10 +70,129 @@ def test_resolve_ad_recipe_returns_safe_cached_concrete_paths(tmp_path: Path) ->
         ("after_first_voice", "applause.mp3", -8.0, 0.8),
         ("outro", "trumpet.mp3", -10.0, 0.6),
     ]
+    assert resolved.cues[0].asset_kind == "cue"
+    assert resolved.cues[0].source_ids == ("source:applause",)
+    assert resolved.cues[0].recorded_foreground_source_ids == ("source:applause",)
     assert resolved.oneshots == resolved.cues
 
     # A second lookup avoids parsing/selecting again while the manifest is unchanged.
     assert library.resolve_ad_recipe("late-night-win", variant_key="ad-42") is resolved
+
+
+def test_unique_foreground_reservation_uses_layer_roles_and_preserves_bed(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "imaging"
+    _touch_assets(assets_dir, "beds/room.mp3", "sfx/first.mp3", "sfx/conflict.mp3", "sfx/fresh.mp3")
+    first = _asset("first", "sfx/first.mp3")
+    first["source_ids"] = ["shared", "first-texture"]
+    first["layers"] = [
+        {"source_id": "shared", "role": "foreground"},
+        {"source_id": "first-texture", "role": "texture"},
+    ]
+    conflict = _asset("conflict", "sfx/conflict.mp3")
+    conflict["source_ids"] = ["shared"]
+    conflict["layers"] = [{"source_id": "shared", "role": "foreground"}]
+    fresh = _asset("fresh", "sfx/fresh.mp3")
+    fresh["source_ids"] = ["fresh", "shared"]
+    fresh["layers"] = [
+        {"source_id": "fresh", "role": "foreground"},
+        {"source_id": "shared", "role": "texture"},
+    ]
+    _write_manifest(
+        assets_dir,
+        [_asset("room", "beds/room.mp3", kind="bed"), first, conflict, fresh],
+        [
+            {
+                "id": "first",
+                "cues": [{"anchor": "intro", "asset_id": "first", "gain_db": -9, "max_duration_sec": 0.5}],
+            },
+            {
+                "id": "later",
+                "bed": {"asset_id": "room", "gain_db": -22},
+                "cues": [
+                    {"anchor": "intro", "asset_id": "conflict", "gain_db": -9, "max_duration_sec": 0.5},
+                    {"anchor": "outro", "asset_id": "fresh", "gain_db": -11, "max_duration_sec": 0.5},
+                ],
+            },
+        ],
+    )
+    library = ImagingLibrary([523], tmp_path, assets_dir=assets_dir)
+    first_recipe = library.resolve_ad_recipe("first")
+    later_recipe = library.resolve_ad_recipe("later")
+    assert first_recipe is not None
+    assert later_recipe is not None
+
+    reserved: set[str] = set()
+    first_guarded, first_suppressed = reserve_unique_recipe_foreground_sources(first_recipe, reserved)
+    later_guarded, later_suppressed = reserve_unique_recipe_foreground_sources(later_recipe, reserved)
+
+    assert first_guarded is first_recipe
+    assert first_suppressed == ()
+    assert reserved == {"shared", "fresh"}
+    assert later_guarded.bed_path == assets_dir / "beds/room.mp3"
+    assert [cue.asset_path.name for cue in later_guarded.cues] == ["fresh.mp3"]
+    assert [cue.asset_path.name for cue in later_suppressed] == ["conflict.mp3"]
+
+
+def test_incomplete_layer_coverage_falls_back_to_all_declared_sources(tmp_path: Path) -> None:
+    """An omitted foreground layer cannot bypass conservative source reservation."""
+    assets_dir = tmp_path / "imaging"
+    _touch_assets(assets_dir, "sfx/incomplete.mp3")
+    incomplete = _asset("incomplete", "sfx/incomplete.mp3")
+    incomplete["source_ids"] = ["shared", "texture"]
+    incomplete["layers"] = [{"source_id": "texture", "role": "texture"}]
+    _write_manifest(
+        assets_dir,
+        [incomplete],
+        [
+            {
+                "id": "incomplete-recipe",
+                "cues": [{"anchor": "intro", "asset_id": "incomplete", "gain_db": -9, "max_duration_sec": 0.5}],
+            }
+        ],
+    )
+    library = ImagingLibrary([523], tmp_path, assets_dir=assets_dir)
+    recipe = library.resolve_ad_recipe("incomplete-recipe")
+    assert recipe is not None
+    assert recipe.cues[0].recorded_foreground_source_ids == ("shared", "texture")
+
+    guarded, suppressed = reserve_unique_recipe_foreground_sources(recipe, {"shared"})
+
+    assert guarded.cues == ()
+    assert suppressed == recipe.cues
+
+
+def test_core_break_foregrounds_seed_recipe_reservations(tmp_path: Path) -> None:
+    assets_dir = tmp_path / "imaging"
+    _touch_assets(
+        assets_dir,
+        "bumpers/ad_in.mp3",
+        "bumpers/ad_mid.mp3",
+        "bumpers/ad_out.mp3",
+        "stingers/music_to_speech.mp3",
+        "stingers/speech_to_music.mp3",
+    )
+    assets: list[dict[str, object]] = []
+    for asset_id, path, source_id in (
+        ("ad-in", "bumpers/ad_in.mp3", "radio"),
+        ("ad-mid", "bumpers/ad_mid.mp3", "epiano"),
+        ("ad-out", "bumpers/ad_out.mp3", "tape"),
+        ("m2s", "stingers/music_to_speech.mp3", "generated-m2s"),
+        ("s2m", "stingers/speech_to_music.mp3", "generated-s2m"),
+    ):
+        asset = _asset(asset_id, path, kind="transition")
+        asset["source_ids"] = [source_id]
+        asset["layers"] = [{"source_id": source_id, "role": "foreground"}]
+        assets.append(asset)
+    _write_manifest(assets_dir, assets, [])
+    library = ImagingLibrary([523], tmp_path, assets_dir=assets_dir)
+
+    assert library.core_break_foreground_source_ids() == (
+        "radio",
+        "epiano",
+        "tape",
+        "generated-m2s",
+        "generated-s2m",
+    )
 
 
 def test_resolver_allows_a_cue_only_recipe_but_rejects_missing_or_escaped_assets(tmp_path: Path) -> None:
@@ -262,6 +381,55 @@ def test_loop_audio_bed_uses_stream_loop_and_loudnorm(tmp_path: Path) -> None:
     audio_filter = command[command.index("-af") + 1]
     assert "loudnorm=I=-18" in audio_filter
     assert "afade=t=out" in audio_filter
+
+
+def test_fit_audio_oneshot_silence_pads_without_repeating_source(tmp_path: Path) -> None:
+    source = tmp_path / "ad_mid.mp3"
+    output = tmp_path / "fitted.mp3"
+    source.write_bytes(b"single-note")
+
+    with patch("mammamiradio.audio.normalizer._run_ffmpeg") as run_ffmpeg:
+        assert fit_audio_oneshot(source, output, 0.8, fade_out_sec=0.08) == output
+
+    command = run_ffmpeg.call_args.args[0]
+    assert "-stream_loop" not in command
+    audio_filter = command[command.index("-af") + 1]
+    assert "apad=whole_dur=0.8" in audio_filter
+    assert "atrim=0:0.8" in audio_filter
+    assert "loudnorm=I=-16" in audio_filter
+
+
+@pytest.mark.requires_ffmpeg
+def test_fit_audio_oneshot_has_no_second_attack_in_padded_tail(tmp_path: Path) -> None:
+    source = tmp_path / "single-note.mp3"
+    output = tmp_path / "fitted.mp3"
+    generate_tone(source, freq_hz=784, duration_sec=0.35)
+
+    fit_audio_oneshot(source, output, 0.8, fade_out_sec=0.08)
+
+    completed = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-ss",
+            "0.55",
+            "-i",
+            str(output),
+            "-t",
+            "0.15",
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", completed.stderr)
+    assert match, completed.stderr
+    assert float(match.group(1)) <= -70.0
 
 
 @pytest.mark.requires_ffmpeg

@@ -135,7 +135,7 @@ def test_short_ad_bumper_is_a_faded_cut_of_the_recorded_master(tmp_path):
         return path
 
     with (
-        patch("mammamiradio.audio.imaging.loop_audio_bed", side_effect=_render) as render,
+        patch("mammamiradio.audio.imaging.fit_audio_oneshot", side_effect=_render) as render,
         patch("mammamiradio.audio.imaging.generate_bumper_jingle") as synthetic,
     ):
         assert lib.pick_ad_bumper(output, 0.8, role="mid") == output

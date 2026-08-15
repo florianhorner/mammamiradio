@@ -1581,6 +1581,39 @@ def loop_audio_bed(
     return output_path
 
 
+def fit_audio_oneshot(
+    input_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    *,
+    target_lufs: float = -16.0,
+    fade_out_sec: float = 0.0,
+) -> Path:
+    """Trim or silence-pad a one-shot to a fixed duration without repeating it."""
+    duration = max(float(duration_sec), 0.5)
+    fade = min(max(float(fade_out_sec), 0.0), duration / 2)
+    fade_filter = f",afade=t=out:st={_fmt_num(duration - fade)}:d={_fmt_num(fade)}" if fade > 0 else ""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        (
+            f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB{fade_filter},"
+            f"apad=whole_dur={_fmt_num(duration)},atrim=0:{_fmt_num(duration)},"
+            f"loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"
+        ),
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        _fmt_num(duration),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "fit packaged audio one-shot")
+    return output_path
+
+
 def generate_transition_sting(
     from_type_name: str,
     to_type_name: str,

@@ -12,6 +12,9 @@ Usage:
     python scripts/build_public_imaging_pack.py --source-dir /path/to/masters --output-root /tmp/imaging
     python scripts/build_public_imaging_pack.py --source-dir /path/to/masters --verify-sources
     python scripts/build_public_imaging_pack.py --prototype-motifs --source-dir /path/to/hq-derivatives
+    python scripts/build_public_imaging_pack.py --core-audition --selected-motif warm_resolve \
+        --selected-motif-artifact /path/to/listened/warm_resolve.mp3 \
+        --source-dir /path/to/hq-derivatives --output-root /tmp/core-audition
 
 ``--prototype-motifs`` is a deliberately separate, non-release path. It accepts
 three known Freesound HQ preview derivatives only to create the human selection
@@ -23,18 +26,44 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mammamiradio.audio.normalizer import (
+    _reconcile_lufs,
+    concat_files,
+    configure_loudness_reconcile,
+    crossfade_voice_over_music,
+    fit_audio_oneshot,
+    mix_voice_with_sting,
+    normalize_ad,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
 DEFAULT_PROTOTYPE_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions" / "motif-prototypes"
+DEFAULT_CORE_AUDITION_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions" / "core-audition"
 FORMAT = {"codec": "mp3", "sample_rate_hz": 48_000, "channels": 2, "bitrate_kbps": 192}
+
+# Immutable lineage from the first human selection board.  A direction choice
+# is not the same thing as the required Mac/Sonos listening approval, so the
+# Stage 2 manifest records this separately and remains release_ready=false.
+MOTIF_PROTOTYPE_PACK_DIGEST = "4b7097b5c865e447aa29d250a13daf811d7cf247077a7dc62200524069db3870"
+MOTIF_PROTOTYPE_SHA256 = {
+    "midnight_signal": "97a3af9b763f0c78612e31a006489b0cc2e41992cbb9aaae8b755f182382d995",
+    "city_pulse": "40e55a0847079d2544561cdbc944ffc2e7e9c6413d94c9df1ed558af1c3f6235",
+    "warm_resolve": "41e9f28ac628198436c415493d5acb60201a561e01271a54fe7f845cff8cdd44",
+}
 
 
 @dataclass(frozen=True)
@@ -123,6 +152,43 @@ class MotifPrototypeSpec:
     path: str
     duration_sec: float
     layers: tuple[MotifPrototypeLayer, ...]
+
+
+@dataclass(frozen=True)
+class CoreAuditionSpeech:
+    """One local, audition-only Italian voice line used to judge a mix."""
+
+    id: str
+    filename: str
+    text: str
+    purpose: str
+
+
+@dataclass(frozen=True)
+class CoreAuditionCue:
+    """An understated non-signature cue used by the Stage 2 audition."""
+
+    id: str
+    path: str
+    purpose: str
+    duration_sec: float
+    layers: tuple[MotifPrototypeLayer, ...]
+
+
+@dataclass(frozen=True)
+class CoreGeneratedCue:
+    """A deterministic locally authored transition with no recorded source."""
+
+    id: str
+    source_id: str
+    path: str
+    purpose: str
+    duration_sec: float
+    expression: str
+    highpass_hz: int
+    lowpass_hz: int
+    fade_in_sec: float
+    fade_out_sec: float
 
 
 SOURCES: tuple[SourceSpec, ...] = (
@@ -352,6 +418,180 @@ MOTIF_PROTOTYPES: tuple[MotifPrototypeSpec, ...] = (
                 fade_out_sec=0.22,
             ),
         ),
+    ),
+)
+
+
+CORE_AUDITION_SPEECH: tuple[CoreAuditionSpeech, ...] = (
+    CoreAuditionSpeech(
+        id="speech.station-id",
+        filename="station_id_voice.aiff",
+        text="Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!",
+        purpose="Current full station ident used by the runtime station-ID mix.",
+    ),
+    CoreAuditionSpeech(
+        id="speech.sweeper",
+        filename="sweeper_voice.aiff",
+        text="Mamma Mi Radio. La notte suona italiana.",
+        purpose="Representative Italian sweeper copy for the runtime sting mix.",
+    ),
+    CoreAuditionSpeech(
+        id="speech.ad-intro",
+        filename="ad_intro_voice.aiff",
+        text="Una breve pausa, poi torniamo alla musica.",
+        purpose="Representative host intro for the music-tail crossfade.",
+    ),
+    CoreAuditionSpeech(
+        id="speech.spot",
+        filename="spot_voice.aiff",
+        text="Caffè Aurora: il gusto caldo che accompagna la notte. Disponibile vicino a te.",
+        purpose="Fictional Italian spot copy used only to judge cadence and production gain.",
+    ),
+    CoreAuditionSpeech(
+        id="speech.spot-two",
+        filename="spot_two_voice.aiff",
+        text="Luce Notturna: una lampada discreta per le ore più tranquille. Accendila con calma.",
+        purpose="Second fictional Italian spot used to expose the optional mid-break cue once.",
+    ),
+    CoreAuditionSpeech(
+        id="speech.ad-outro",
+        filename="ad_outro_voice.aiff",
+        text="E ora, di nuovo la musica su Mamma Mi Radio.",
+        purpose="Representative host outro before the speech-to-music handoff.",
+    ),
+)
+
+
+CORE_AUDITION_CUES: tuple[CoreAuditionCue, ...] = (
+    CoreAuditionCue(
+        id="core.ad-in",
+        path="ad_in.mp3",
+        purpose="Understated entry marker: a short radio aperture over low tape texture.",
+        duration_sec=0.88,
+        layers=(
+            MotifPrototypeLayer(
+                source_id="radio-quantumriver-hq-preview",
+                source_start_sec=15.46,
+                duration_sec=0.20,
+                output_offset_sec=0.0,
+                gain_db=-19.0,
+                role="foreground",
+                dsp=("highpass:2200Hz", "lowpass:9000Hz", "fade:8ms-in/55ms-out"),
+                highpass_hz=2_200,
+                lowpass_hz=9_000,
+                fade_in_sec=0.008,
+                fade_out_sec=0.055,
+            ),
+            MotifPrototypeLayer(
+                source_id="tape-trp-hq-preview",
+                source_start_sec=8.40,
+                duration_sec=0.88,
+                output_offset_sec=0.0,
+                gain_db=-31.0,
+                role="texture",
+                dsp=("highpass:420Hz", "lowpass:6000Hz", "fade:30ms-in/190ms-out"),
+                highpass_hz=420,
+                lowpass_hz=6_000,
+                fade_in_sec=0.03,
+                fade_out_sec=0.19,
+            ),
+        ),
+    ),
+    CoreAuditionCue(
+        id="core.ad-mid",
+        path="ad_mid.mp3",
+        purpose="Neutral single-note separator used at most once after the first spot; not the signature contour.",
+        duration_sec=0.78,
+        layers=(
+            MotifPrototypeLayer(
+                source_id="epiano-kevinklang-hq-preview",
+                source_start_sec=0.88,
+                duration_sec=0.34,
+                output_offset_sec=0.0,
+                gain_db=-15.0,
+                role="foreground",
+                dsp=("single-unpitched-note", "highpass:150Hz", "lowpass:4800Hz", "fade:8ms-in/150ms-out"),
+                highpass_hz=150,
+                lowpass_hz=4_800,
+                fade_in_sec=0.008,
+                fade_out_sec=0.15,
+            ),
+            MotifPrototypeLayer(
+                source_id="radio-quantumriver-hq-preview",
+                source_start_sec=12.60,
+                duration_sec=0.78,
+                output_offset_sec=0.0,
+                gain_db=-38.0,
+                role="texture",
+                dsp=("highpass:2600Hz", "lowpass:7200Hz", "fade:25ms-in/180ms-out"),
+                highpass_hz=2_600,
+                lowpass_hz=7_200,
+                fade_in_sec=0.025,
+                fade_out_sec=0.18,
+            ),
+        ),
+    ),
+    CoreAuditionCue(
+        id="core.ad-out",
+        path="ad_out.mp3",
+        purpose="Distinct closing release: tape motion followed by a narrow radio tail.",
+        duration_sec=0.96,
+        layers=(
+            MotifPrototypeLayer(
+                source_id="tape-trp-hq-preview",
+                source_start_sec=12.60,
+                duration_sec=0.82,
+                output_offset_sec=0.0,
+                gain_db=-26.0,
+                role="foreground",
+                dsp=("highpass:330Hz", "lowpass:5800Hz", "fade:18ms-in/230ms-out"),
+                highpass_hz=330,
+                lowpass_hz=5_800,
+                fade_in_sec=0.018,
+                fade_out_sec=0.23,
+            ),
+            MotifPrototypeLayer(
+                source_id="radio-quantumriver-hq-preview",
+                source_start_sec=13.60,
+                duration_sec=0.13,
+                output_offset_sec=0.68,
+                gain_db=-32.0,
+                role="texture",
+                dsp=("highpass:3000Hz", "lowpass:8400Hz", "fade:5ms-in/55ms-out"),
+                highpass_hz=3_000,
+                lowpass_hz=8_400,
+                fade_in_sec=0.005,
+                fade_out_sec=0.055,
+            ),
+        ),
+    ),
+)
+
+
+CORE_AUDITION_TRANSITIONS: tuple[CoreGeneratedCue, ...] = (
+    CoreGeneratedCue(
+        id="core.music-to-speech",
+        source_id="generated.transition-music-to-speech",
+        path="music_to_speech.mp3",
+        purpose="Dry fallback handoff: a restrained electronic shutter when no music tail is available.",
+        duration_sec=0.58,
+        expression=("0.08*sin(2*PI*(310*t-65*t*t))*exp(-6.5*t)+0.025*sin(2*PI*(620*t-130*t*t))*exp(-8*t)"),
+        highpass_hz=100,
+        lowpass_hz=3_500,
+        fade_in_sec=0.008,
+        fade_out_sec=0.16,
+    ),
+    CoreGeneratedCue(
+        id="core.speech-to-music",
+        source_id="generated.transition-speech-to-music",
+        path="speech_to_music.mp3",
+        purpose="Small electronic lift prepended at unity and without a gap to a music successor.",
+        duration_sec=0.66,
+        expression=("0.06*sin(2*PI*(150*t+70*t*t))*exp(-1.6*t)+0.025*sin(2*PI*(225*t+105*t*t))*exp(-2*t)"),
+        highpass_hz=90,
+        lowpass_hz=4_200,
+        fade_in_sec=0.04,
+        fade_out_sec=0.18,
     ),
 )
 
@@ -1268,6 +1508,1410 @@ def render_motif_prototypes(
     return manifest
 
 
+def core_ad_break_parts(
+    intro_path: Path,
+    spot_paths: list[Path],
+    ad_in_path: Path,
+    ad_out_path: Path,
+    outro_path: Path,
+    *,
+    promo_path: Path | None = None,
+    ad_mid_path: Path | None = None,
+) -> list[Path]:
+    """Return the runtime ad-break order with at most one mid cue.
+
+    The producer inserts the sole mid cue after spot one.  A one-spot break
+    never receives it, and longer breaks never repeat it between later spots.
+    """
+    if not spot_paths:
+        raise ValueError("core audition requires at least one representative spot")
+    parts = [intro_path]
+    if promo_path is not None:
+        parts.append(promo_path)
+    parts.append(ad_in_path)
+    for index, spot_path in enumerate(spot_paths):
+        parts.append(spot_path)
+        if index == 0 and len(spot_paths) > 1 and ad_mid_path is not None:
+            parts.append(ad_mid_path)
+    parts.extend([ad_out_path, outro_path])
+    return parts
+
+
+def core_cadence_parts(
+    ad_break_path: Path,
+    successor_path: Path,
+    *,
+    successor_kind: str,
+    music_to_speech_path: Path | None = None,
+    speech_to_music_path: Path | None = None,
+    predecessor_music_path: Path | None = None,
+    predecessor_has_music_tail: bool = True,
+) -> list[Path]:
+    """Return the runtime boundary sequence for a complete break."""
+    parts = [predecessor_music_path] if predecessor_music_path is not None else []
+    if predecessor_music_path is not None and not predecessor_has_music_tail:
+        if music_to_speech_path is None:
+            raise ValueError("dry music predecessor requires the music-to-speech cue")
+        parts.append(music_to_speech_path)
+    normalized_kind = successor_kind.strip().lower()
+    if normalized_kind == "music":
+        if speech_to_music_path is None:
+            raise ValueError("music successor requires the speech-to-music cue")
+        return [*parts, ad_break_path, speech_to_music_path, successor_path]
+    return [*parts, ad_break_path, successor_path]
+
+
+def _run_atomic_command(command: list[str], output_path: Path) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = output_path.suffix or ".tmp"
+    temporary_path = output_path.with_name(f".{output_path.stem}.tmp{suffix}")
+    temporary_path.unlink(missing_ok=True)
+    try:
+        subprocess.run([*command, str(temporary_path)], check=True)
+        os.replace(temporary_path, output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return output_path
+
+
+def _ffmpeg_output_args() -> list[str]:
+    return [
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "192k",
+        "-write_xing",
+        "0",
+        "-f",
+        "mp3",
+    ]
+
+
+def _probe_duration_sec(path: Path) -> float:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return float(result.stdout.strip())
+
+
+def _require_rendered_duration(path: Path, *, minimum_sec: float, render_id: str) -> None:
+    duration_sec = _probe_duration_sec(path)
+    if duration_sec < minimum_sec:
+        raise RuntimeError(f"{render_id} decoded duration is {duration_sec:.3f}s; expected at least {minimum_sec:.3f}s")
+
+
+def _core_cue_map() -> dict[str, CoreAuditionCue]:
+    return {cue.id: cue for cue in CORE_AUDITION_CUES}
+
+
+def _selected_motif(selected_motif_id: str) -> MotifPrototypeSpec:
+    by_id = {candidate.id: candidate for candidate in MOTIF_PROTOTYPES}
+    try:
+        return by_id[selected_motif_id]
+    except KeyError as exc:
+        choices = ", ".join(sorted(by_id))
+        raise ValueError(f"Unknown selected motif {selected_motif_id!r}; choose one of: {choices}") from exc
+
+
+def _render_core_speech_source(
+    spec: CoreAuditionSpeech,
+    output_path: Path,
+    *,
+    voice_source: Path | None = None,
+) -> dict[str, Any]:
+    """Freeze one local voice source and return its provenance record.
+
+    ``--voice-source`` intentionally applies to the representative spot only;
+    station and sweeper copy must retain their exact declared words.  Without
+    it, macOS ``say`` renders every line locally with no service upload.
+    """
+    if voice_source is not None and spec.id == "speech.spot":
+        if not voice_source.is_file():
+            raise ValueError(f"Local voice source does not exist: {voice_source}")
+        original_sha256 = _sha256(voice_source)
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(voice_source),
+            "-vn",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s24be",
+            "-f",
+            "aiff",
+        ]
+        _run_atomic_command(command, output_path)
+        origin: dict[str, Any] = {
+            "kind": "caller-provided-local-file",
+            "original_filename": voice_source.name,
+            "original_sha256": original_sha256,
+            "declared_text": None,
+            "transcript_status": "not-asserted-by-builder",
+            "generation": "Local FFmpeg transcode to 48 kHz stereo 24-bit AIFF; no upload.",
+        }
+    else:
+        say_path = shutil.which("say")
+        if say_path is None:
+            raise OSError(
+                "macOS 'say' is required for the declared Italian audition lines; run the core audition on a Mac"
+            )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        say_output_path = output_path.with_name(f".{output_path.stem}.say.aiff")
+        say_output_path.unlink(missing_ok=True)
+        try:
+            subprocess.run(
+                [
+                    say_path,
+                    "-v",
+                    "Alice",
+                    "-r",
+                    "195",
+                    "-o",
+                    str(say_output_path),
+                    spec.text,
+                ],
+                check=True,
+            )
+            _run_atomic_command(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(say_output_path),
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-c:a",
+                    "pcm_s24be",
+                    "-f",
+                    "aiff",
+                ],
+                output_path,
+            )
+        finally:
+            say_output_path.unlink(missing_ok=True)
+        origin = {
+            "kind": "local-system-tts",
+            "provider": "macOS say",
+            "voice": "Alice",
+            "locale": "it_IT",
+            "rate_words_per_minute": 195,
+            "declared_text": spec.text,
+            "generation": "Local system TTS, then local FFmpeg transcode to 48 kHz stereo AIFF; no upload.",
+        }
+    return {
+        "id": spec.id,
+        "license": "audition-only-local-generation",
+        "creator": "Mamma Mi Radio audition tooling",
+        "title": spec.purpose,
+        "artifact_path": f"sources/{output_path.name}",
+        "source_sha256": _sha256(output_path),
+        "duration_sec": _probe_duration_sec(output_path),
+        "origin": origin,
+        "tags": ["speech", "italian", "audition-only"],
+    }
+
+
+@contextmanager
+def _runtime_loudness_targets() -> Iterator[None]:
+    """Apply the production startup targets while this offline board renders."""
+    configure_loudness_reconcile(-16.0, -15.0, sample_rate=48_000, channels=2, bitrate=192)
+    try:
+        yield
+    finally:
+        configure_loudness_reconcile(None, None, sample_rate=48_000, channels=2, bitrate=192)
+
+
+def _render_runtime_voice_sting_mix(voice_path: Path, sting_path: Path, output_path: Path) -> Path:
+    """Mirror ``mix_voice_with_sting``'s production topology exactly."""
+    with _runtime_loudness_targets():
+        return mix_voice_with_sting(voice_path, sting_path, output_path)
+
+
+def _render_runtime_music_tail_intro(music_path: Path, voice_path: Path, output_path: Path) -> Path:
+    """Mirror the normal adjacent-music ad-intro crossfade."""
+    return crossfade_voice_over_music(
+        music_path,
+        voice_path,
+        output_path,
+        tail_seconds=8.0,
+        voice_volume=1.0,
+        music_fade_volume=0.5,
+        voice_delay_ms=150,
+    )
+
+
+def _render_context_music(output_path: Path, *, successor: bool) -> Path:
+    """Render neutral synthetic program context, never candidate pack material."""
+    duration = 4.2 if successor else 12.0
+    if successor:
+        expression = "0.16*sin(2*PI*110*t)*(1+0.10*sin(2*PI*0.21*t))+0.09*sin(2*PI*164.81*t)+0.055*sin(2*PI*220*t)"
+    else:
+        expression = "0.15*sin(2*PI*98*t)*(1+0.12*sin(2*PI*0.17*t))+0.08*sin(2*PI*146.83*t)+0.05*sin(2*PI*196*t)"
+    return _run_atomic_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc={expression}|{expression}:d={_number(duration)}:s=48000:c=stereo",
+            "-af",
+            (
+                f"highpass=f=55,lowpass=f=5200,afade=t=in:d=0.35,"
+                f"afade=t=out:st={_number(duration - 0.65)}:d=0.65,"
+                "loudnorm=I=-16:LRA=7:TP=-1.5"
+            ),
+            *_ffmpeg_output_args(),
+        ],
+        output_path,
+    )
+
+
+def _render_music_preroll(music_path: Path, output_path: Path, *, duration_sec: float = 2.5) -> Path:
+    """Expose the real tail-replay seam immediately before the intro crossfade."""
+    return _run_atomic_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-sseof",
+            f"-{_number(duration_sec)}",
+            "-i",
+            str(music_path),
+            "-vn",
+            *_ffmpeg_output_args(),
+        ],
+        output_path,
+    )
+
+
+def _render_identity_role_bed(
+    signature_path: Path,
+    tape_path: Path,
+    output_path: Path,
+    *,
+    duration_sec: float,
+    pad_hz: float,
+) -> Path:
+    """Play the selected contour once, then carry a quiet non-repeating tail."""
+    return _run_atomic_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(signature_path),
+            "-stream_loop",
+            "-1",
+            "-ss",
+            "8.4",
+            "-i",
+            str(tape_path),
+            "-f",
+            "lavfi",
+            "-i",
+            (
+                f"aevalsrc=0.035*sin(2*PI*{_number(pad_hz)}*t)*exp(-0.75*t)|"
+                f"0.035*sin(2*PI*{_number(pad_hz)}*t)*exp(-0.75*t):"
+                f"d={_number(duration_sec)}:s=48000:c=stereo"
+            ),
+            "-filter_complex",
+            (
+                "[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1.0[sig];"
+                f"[1:a]atrim=duration={_number(duration_sec)},asetpts=N/SR/TB,aresample=48000,"
+                "aformat=channel_layouts=stereo,highpass=f=360,lowpass=f=6200,volume=-33dB,"
+                f"afade=t=out:st={_number(duration_sec - 0.35)}:d=0.35[tape];"
+                f"[2:a]adelay=720|720,volume=-12dB,afade=t=out:st={_number(duration_sec - 0.45)}:d=0.45[pad];"
+                "[sig][tape][pad]amix=inputs=3:duration=longest:normalize=0,"
+                f"apad=whole_dur={_number(duration_sec)},atrim=duration={_number(duration_sec)},"
+                "highpass=f=45,lowpass=f=15000,loudnorm=I=-16:LRA=5:TP=-1.5[out]"
+            ),
+            "-map",
+            "[out]",
+            *_ffmpeg_output_args(),
+        ],
+        output_path,
+    )
+
+
+def _render_core_cue(cue: CoreAuditionCue, source_root: Path, output_root: Path) -> Path:
+    return _render_motif_prototype(
+        MotifPrototypeSpec(
+            id=cue.id,
+            label=cue.id,
+            brief=cue.purpose,
+            path=cue.path,
+            duration_sec=cue.duration_sec,
+            layers=cue.layers,
+        ),
+        source_root,
+        output_root,
+    )
+
+
+def _render_generated_core_cue(cue: CoreGeneratedCue, output_root: Path) -> Path:
+    output_path = output_root / cue.path
+    fade_out_start = max(cue.duration_sec - cue.fade_out_sec, 0.0)
+    rendered = _run_atomic_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            (f"aevalsrc={cue.expression}|{cue.expression}:d={_number(cue.duration_sec)}:s=48000:c=stereo"),
+            "-af",
+            (
+                f"highpass=f={cue.highpass_hz},lowpass=f={cue.lowpass_hz},"
+                f"afade=t=in:d={_number(cue.fade_in_sec)},"
+                f"afade=t=out:st={_number(fade_out_start)}:d={_number(cue.fade_out_sec)},"
+                "loudnorm=I=-16:LRA=5:TP=-1.5"
+            ),
+            *_ffmpeg_output_args(),
+        ],
+        output_path,
+    )
+    with _runtime_loudness_targets():
+        if not _reconcile_lufs(rendered):
+            raise RuntimeError(f"Could not reconcile generated core cue loudness: {cue.id}")
+    return rendered
+
+
+def _render_representative_spot(
+    voice_path: Path,
+    tape_path: Path,
+    output_path: Path,
+) -> Path:
+    duration = _probe_duration_sec(voice_path)
+    raw_path = output_path.with_name(f".{output_path.stem}.raw.mp3")
+    raw_path.unlink(missing_ok=True)
+    try:
+        _run_atomic_command(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(voice_path),
+                "-stream_loop",
+                "-1",
+                "-ss",
+                "8.4",
+                "-i",
+                str(tape_path),
+                "-filter_complex",
+                (
+                    f"[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=1.0[voice];"
+                    f"[1:a]atrim=duration={_number(duration)},asetpts=N/SR/TB,aresample=48000,"
+                    "aformat=channel_layouts=stereo,highpass=f=360,lowpass=f=6000,"
+                    "volume=-30dB,afade=t=in:d=0.08,"
+                    f"afade=t=out:st={_number(max(duration - 0.35, 0))}:d=0.35[bed];"
+                    "[voice][bed]amix=inputs=2:duration=first:normalize=0[out]"
+                ),
+                "-map",
+                "[out]",
+                *_ffmpeg_output_args(),
+            ],
+            raw_path,
+        )
+        with _runtime_loudness_targets():
+            return normalize_ad(raw_path, output_path)
+    finally:
+        raw_path.unlink(missing_ok=True)
+
+
+def _render_dry_voice(voice_path: Path, output_path: Path) -> Path:
+    return _run_atomic_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(voice_path),
+            "-vn",
+            "-af",
+            "aresample=48000,aformat=channel_layouts=stereo,loudnorm=I=-16:LRA=11:TP=-1.5",
+            *_ffmpeg_output_args(),
+        ],
+        output_path,
+    )
+
+
+def _concat_core_parts(paths: list[Path], output_path: Path, *, silence_ms: int) -> Path:
+    if not paths:
+        raise ValueError("core audition concat requires at least one input")
+    return concat_files(paths, output_path, silence_ms=silence_ms, loudnorm=False)
+
+
+def _core_layer_record(layer: MotifPrototypeLayer) -> dict[str, Any]:
+    source = _motif_prototype_source_map()[layer.source_id]
+    return {
+        "source_id": layer.source_id,
+        "source_sha256": source.source_sha256,
+        "source_start_sec": layer.source_start_sec,
+        "duration_sec": layer.duration_sec,
+        "output_offset_sec": layer.output_offset_sec,
+        "gain_db": layer.gain_db,
+        "dsp": list(layer.dsp),
+        "license": "CC0-1.0",
+        "role": layer.role,
+    }
+
+
+def _generated_core_source_hash(cue: CoreGeneratedCue) -> str:
+    payload = json.dumps(
+        {
+            "duration_sec": cue.duration_sec,
+            "expression": cue.expression,
+            "fade_in_sec": cue.fade_in_sec,
+            "fade_out_sec": cue.fade_out_sec,
+            "highpass_hz": cue.highpass_hz,
+            "lowpass_hz": cue.lowpass_hz,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _generated_core_layer_record(cue: CoreGeneratedCue) -> dict[str, Any]:
+    return {
+        "source_id": cue.source_id,
+        "source_sha256": _generated_core_source_hash(cue),
+        "source_start_sec": 0.0,
+        "duration_sec": cue.duration_sec,
+        "output_offset_sec": 0.0,
+        "gain_db": 0.0,
+        "dsp": [
+            f"highpass:{cue.highpass_hz}Hz",
+            f"lowpass:{cue.lowpass_hz}Hz",
+            f"fade:{round(cue.fade_in_sec * 1_000)}ms-in/{round(cue.fade_out_sec * 1_000)}ms-out",
+            "loudnorm:I=-16,LRA=5,TP=-1.5",
+            "runtime-reconcile:-16LUFS",
+        ],
+        "license": "audition-only-local-generation",
+        "role": "foreground",
+    }
+
+
+def _component_source_id(path: Path) -> str:
+    if path.stem == "program_music_successor":
+        return "context.program-music-successor"
+    return f"render.{path.stem.replace('_', '-')}"
+
+
+def _component_records(paths: list[Path], *, gap_sec: float) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    offset = 0.0
+    for index, path in enumerate(paths):
+        duration = _probe_duration_sec(path)
+        records.append(
+            {
+                "source_id": _component_source_id(path),
+                "source_sha256": _sha256(path),
+                "source_start_sec": 0.0,
+                "duration_sec": duration,
+                "output_offset_sec": round(offset, 6),
+                "gain_db": 0.0,
+                "dsp": ["concat:unity", f"following-gap:{_number(gap_sec)}s" if index < len(paths) - 1 else "end"],
+                "license": "audition-only-composite",
+                "role": "component",
+            }
+        )
+        offset += duration
+        if index < len(paths) - 1:
+            offset += gap_sec
+    return records
+
+
+def _preview_record(
+    output_root: Path,
+    *,
+    preview_id: str,
+    label: str,
+    path: str,
+    purpose: str,
+    layers: list[dict[str, Any]],
+    mastering_dsp: list[str],
+) -> dict[str, Any]:
+    audio_path = output_root / path
+    return {
+        "id": preview_id,
+        "label": label,
+        "path": path,
+        "purpose": purpose,
+        "sha256": _sha256(audio_path),
+        "duration_sec": _probe_duration_sec(audio_path),
+        "format": FORMAT,
+        "layers": layers,
+        "mastering_dsp": mastering_dsp,
+    }
+
+
+def _core_pack_digest(previews: list[dict[str, Any]], *, component_ledger_digest: str) -> str:
+    digest = hashlib.sha256()
+    for preview in sorted(previews, key=lambda item: str(item["path"])):
+        digest.update(str(preview["path"]).encode())
+        digest.update(b"\0")
+        digest.update(str(preview["sha256"]).encode("ascii"))
+        digest.update(b"\n")
+    digest.update(b"component-ledger\0")
+    digest.update(component_ledger_digest.encode("ascii"))
+    digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _core_audition_manifest(
+    output_root: Path,
+    *,
+    selected_motif: MotifPrototypeSpec,
+    speech_sources: list[dict[str, Any]],
+    generated_at: str,
+    render_paths: dict[str, Path],
+    ad_break_parts: list[Path],
+    cadence_parts: list[Path],
+) -> dict[str, Any]:
+    prototype_sources = _motif_prototype_source_map()
+    selected_signature_path = render_paths["selected_signature"]
+    selected_signature_source = {
+        "id": f"selected-motif.{selected_motif.id}",
+        "license": "CC0-1.0 audition derivative",
+        "creator": "Mamma Mi Radio audition tooling",
+        "title": f"Selected {selected_motif.label} contour",
+        "artifact_path": selected_signature_path.relative_to(output_root).as_posix(),
+        "source_sha256": _sha256(selected_signature_path),
+        "selection_candidate_sha256": MOTIF_PROTOTYPE_SHA256[selected_motif.id],
+        "selection_pack_digest": MOTIF_PROTOTYPE_PACK_DIGEST,
+        "layers": [_core_layer_record(layer) for layer in selected_motif.layers],
+        "tags": ["selected-motif", selected_motif.id, "audition-only"],
+    }
+    source_records: list[dict[str, Any]] = [
+        {
+            "id": source.id,
+            "license": "CC0-1.0",
+            "source_url": source.source_url,
+            "artifact_url": source.artifact_url,
+            "source_sha256": source.source_sha256,
+            "creator": source.creator,
+            "title": source.title,
+            "provenance": source.provenance,
+            "artifact_kind": "Freesound HQ preview derivative; cannot ship as a final master",
+            "tags": list(source.tags),
+        }
+        for source in MOTIF_PROTOTYPE_SOURCES
+    ]
+    source_records.extend(speech_sources)
+    source_records.append(selected_signature_source)
+    for role, frequency, duration in (("station", 110.0, 3.0), ("sweeper", 146.83, 2.0)):
+        expression = f"0.035*sin(2*PI*{_number(frequency)}*t)*exp(-0.75*t)"
+        source_records.append(
+            {
+                "id": f"generated.identity-{role}-tail-pad",
+                "license": "audition-only-local-generation",
+                "creator": "Mamma Mi Radio audition tooling",
+                "title": f"Non-repeating {role} identity tail pad",
+                "source_sha256": hashlib.sha256(expression.encode()).hexdigest(),
+                "generation": {
+                    "engine": "FFmpeg aevalsrc",
+                    "expression": expression,
+                    "duration_sec": duration,
+                    "sample_rate_hz": 48_000,
+                    "channels": 2,
+                },
+                "tags": ["identity-tail", "procedural-pad", "audition-only"],
+            }
+        )
+    for cue in CORE_AUDITION_TRANSITIONS:
+        source_records.append(
+            {
+                "id": cue.source_id,
+                "license": "audition-only-local-generation",
+                "creator": "Mamma Mi Radio audition tooling",
+                "title": cue.purpose,
+                "source_sha256": _generated_core_source_hash(cue),
+                "generation": {
+                    "engine": "FFmpeg aevalsrc",
+                    "expression": cue.expression,
+                    "duration_sec": cue.duration_sec,
+                    "sample_rate_hz": 48_000,
+                    "channels": 2,
+                },
+                "tags": ["transition", "electronic", "procedural", "audition-only"],
+            }
+        )
+    for source_id, path, title, expression in (
+        (
+            "context.program-music-tail",
+            render_paths["program_music_tail"],
+            "Synthetic program-music context used to expose the dry music-to-speech fallback",
+            "98Hz + 146.83Hz + 196Hz slow-modulated pad",
+        ),
+        (
+            "context.program-music-successor",
+            render_paths["program_music_successor"],
+            "Synthetic music successor used only to hear the return to programming",
+            "110Hz + 164.81Hz + 220Hz slow-modulated pad",
+        ),
+    ):
+        source_records.append(
+            {
+                "id": source_id,
+                "license": "audition-only-local-generation",
+                "creator": "Mamma Mi Radio audition tooling",
+                "title": title,
+                "artifact_path": path.relative_to(output_root).as_posix(),
+                "source_sha256": _sha256(path),
+                "generation": {
+                    "engine": "FFmpeg aevalsrc",
+                    "expression_summary": expression,
+                    "mastering": "48 kHz stereo MP3, loudnorm I=-16 LRA=7 TP=-1.5",
+                },
+                "tags": ["context-only", "synthetic-program-music", "not-pack-material"],
+            }
+        )
+
+    speech_by_id = {str(record["id"]): record for record in speech_sources}
+
+    def speech_layer(source_id: str, *, offset: float, gain_linear: float) -> dict[str, Any]:
+        source = speech_by_id[source_id]
+        return {
+            "source_id": source_id,
+            "source_sha256": source["source_sha256"],
+            "source_start_sec": 0.0,
+            "duration_sec": source["duration_sec"],
+            "output_offset_sec": offset,
+            "gain_linear": gain_linear,
+            "gain_db": round(20 * math.log10(gain_linear), 6),
+            "dsp": [f"delay:{round(offset * 1_000)}ms" if offset else "delay:0ms"],
+            "license": source["license"],
+            "role": "voice",
+        }
+
+    def identity_bed_layer(render_key: str) -> dict[str, Any]:
+        path = render_paths[render_key]
+        return {
+            "source_id": f"render.{render_key.replace('_', '-')}",
+            "source_sha256": _sha256(path),
+            "source_start_sec": 0.0,
+            "duration_sec": _probe_duration_sec(path),
+            "output_offset_sec": 0.0,
+            "gain_linear": 0.15,
+            "gain_db": -16.478175,
+            "dsp": ["runtime-mix_voice_with_sting:bed"],
+            "license": "CC0-1.0 audition composite",
+            "role": "foreground-signature",
+        }
+
+    station_layers = [
+        identity_bed_layer("station_bed"),
+        speech_layer("speech.station-id", offset=0.4, gain_linear=1.2),
+    ]
+    sweeper_layers = [
+        identity_bed_layer("sweeper_bed"),
+        speech_layer("speech.sweeper", offset=0.4, gain_linear=1.2),
+    ]
+    cue_map = _core_cue_map()
+    transition_map = {cue.id: cue for cue in CORE_AUDITION_TRANSITIONS}
+    ad_in_layers = [_core_layer_record(layer) for layer in cue_map["core.ad-in"].layers]
+    ad_out_layers = [_core_layer_record(layer) for layer in cue_map["core.ad-out"].layers]
+
+    previews = [
+        _preview_record(
+            output_root,
+            preview_id="station-id",
+            label="Station ID",
+            path="station_id.mp3",
+            purpose="Warm Resolve under the current full station ident.",
+            layers=station_layers,
+            mastering_dsp=[
+                "runtime topology: sting volume=0.15",
+                "runtime topology: voice delay=400ms volume=1.2",
+                "amix:duration=longest,dropout_transition=1",
+                "loudnorm:I=-16,LRA=11,TP=-1.5",
+            ],
+        ),
+        _preview_record(
+            output_root,
+            preview_id="sweeper",
+            label="Sweeper",
+            path="sweeper.mp3",
+            purpose="Warm Resolve under a longer representative Italian sweeper.",
+            layers=sweeper_layers,
+            mastering_dsp=[
+                "runtime topology: sting volume=0.15",
+                "runtime topology: voice delay=400ms volume=1.2",
+                "amix:duration=longest,dropout_transition=1",
+                "loudnorm:I=-16,LRA=11,TP=-1.5",
+            ],
+        ),
+        _preview_record(
+            output_root,
+            preview_id="ad-in",
+            label="Ad in",
+            path="ad_in.mp3",
+            purpose=cue_map["core.ad-in"].purpose,
+            layers=ad_in_layers,
+            mastering_dsp=["highpass:45Hz", "lowpass:15000Hz", "loudnorm:I=-16,LRA=5,TP=-1.5"],
+        ),
+        _preview_record(
+            output_root,
+            preview_id="ad-out",
+            label="Ad out",
+            path="ad_out.mp3",
+            purpose=cue_map["core.ad-out"].purpose,
+            layers=ad_out_layers,
+            mastering_dsp=["highpass:45Hz", "lowpass:15000Hz", "loudnorm:I=-16,LRA=5,TP=-1.5"],
+        ),
+        _preview_record(
+            output_root,
+            preview_id="full-cadence",
+            label="Full music → spot → music cadence",
+            path="full_cadence.mp3",
+            purpose="One runtime-order break with representative Italian speech and a music successor.",
+            layers=_component_records(cadence_parts, gap_sec=0.0),
+            mastering_dsp=[
+                "pre-roll: last 2.5s of predecessor music",
+                "music-to-speech cue: dry fallback because no adjacent tail file is available",
+                "intro: dry representative voice at the production speech target",
+                "two spots: one optional mid-break cue is exposed exactly once",
+                "ad break: 300ms silence between every part, no final loudnorm",
+                "speech-to-music cue: unity concat with no gap before music successor",
+                "final cadence: unity concat with no additional loudnorm",
+            ],
+        ),
+    ]
+    internal_renders = [
+        {
+            "id": "render.station-bed",
+            "path": render_paths["station_bed"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["station_bed"]),
+            "layers": [
+                {
+                    "source_id": selected_signature_source["id"],
+                    "source_sha256": selected_signature_source["source_sha256"],
+                    "source_start_sec": 0.0,
+                    "duration_sec": _probe_duration_sec(selected_signature_path),
+                    "output_offset_sec": 0.0,
+                    "gain_db": 0.0,
+                    "dsp": ["play-once", "no-contour-repeat"],
+                    "license": selected_signature_source["license"],
+                    "role": "foreground-signature",
+                },
+                {
+                    "source_id": "tape-trp-hq-preview",
+                    "source_sha256": prototype_sources["tape-trp-hq-preview"].source_sha256,
+                    "source_start_sec": 8.4,
+                    "duration_sec": 3.0,
+                    "output_offset_sec": 0.0,
+                    "gain_db": -33.0,
+                    "dsp": ["highpass:360Hz", "lowpass:6200Hz", "fade-out:350ms"],
+                    "license": "CC0-1.0",
+                    "role": "texture",
+                },
+                {
+                    "source_id": "generated.identity-station-tail-pad",
+                    "source_sha256": next(
+                        source["source_sha256"]
+                        for source in source_records
+                        if source["id"] == "generated.identity-station-tail-pad"
+                    ),
+                    "source_start_sec": 0.0,
+                    "duration_sec": 2.28,
+                    "output_offset_sec": 0.72,
+                    "gain_db": -12.0,
+                    "dsp": ["aevalsrc:0.035*sin(2*PI*110*t)*exp(-0.75*t)", "fade-out:450ms"],
+                    "license": "audition-only-local-generation",
+                    "role": "texture",
+                },
+            ],
+        },
+        {
+            "id": "render.sweeper-bed",
+            "path": render_paths["sweeper_bed"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["sweeper_bed"]),
+            "layers": [
+                {
+                    "source_id": selected_signature_source["id"],
+                    "source_sha256": selected_signature_source["source_sha256"],
+                    "source_start_sec": 0.0,
+                    "duration_sec": _probe_duration_sec(selected_signature_path),
+                    "output_offset_sec": 0.0,
+                    "gain_db": 0.0,
+                    "dsp": ["play-once", "no-contour-repeat"],
+                    "license": selected_signature_source["license"],
+                    "role": "foreground-signature",
+                },
+                {
+                    "source_id": "tape-trp-hq-preview",
+                    "source_sha256": prototype_sources["tape-trp-hq-preview"].source_sha256,
+                    "source_start_sec": 8.4,
+                    "duration_sec": 2.0,
+                    "output_offset_sec": 0.0,
+                    "gain_db": -33.0,
+                    "dsp": ["highpass:360Hz", "lowpass:6200Hz", "fade-out:350ms"],
+                    "license": "CC0-1.0",
+                    "role": "texture",
+                },
+                {
+                    "source_id": "generated.identity-sweeper-tail-pad",
+                    "source_sha256": next(
+                        source["source_sha256"]
+                        for source in source_records
+                        if source["id"] == "generated.identity-sweeper-tail-pad"
+                    ),
+                    "source_start_sec": 0.0,
+                    "duration_sec": 1.28,
+                    "output_offset_sec": 0.72,
+                    "gain_db": -12.0,
+                    "dsp": ["aevalsrc:0.035*sin(2*PI*146.83*t)*exp(-0.75*t)", "fade-out:450ms"],
+                    "license": "audition-only-local-generation",
+                    "role": "texture",
+                },
+            ],
+        },
+        {
+            "id": "render.ad-in",
+            "path": render_paths["ad_in"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["ad_in"]),
+            "layers": [_core_layer_record(layer) for layer in cue_map["core.ad-in"].layers],
+            "usage": "Role-specific entry bumper used once at the start of an advertising break.",
+        },
+        {
+            "id": "render.ad-mid",
+            "path": render_paths["ad_mid"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["ad_mid"]),
+            "authored_source_path": render_paths["ad_mid_source"].relative_to(output_root).as_posix(),
+            "authored_source_sha256": _sha256(render_paths["ad_mid_source"]),
+            "layers": [_core_layer_record(layer) for layer in cue_map["core.ad-mid"].layers],
+            "runtime_shape": ["fit_audio_oneshot", "duration:0.8s", "target:-16LUFS", "fade-out:80ms"],
+            "usage": "Optional once after spot one in a multi-spot break; exposed once in this board cadence.",
+        },
+        {
+            "id": "render.ad-out",
+            "path": render_paths["ad_out"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["ad_out"]),
+            "layers": [_core_layer_record(layer) for layer in cue_map["core.ad-out"].layers],
+            "usage": "Role-specific exit bumper used once at the end of an advertising break.",
+        },
+        {
+            "id": "render.music-to-speech",
+            "path": render_paths["music_to_speech"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["music_to_speech"]),
+            "layers": [_generated_core_layer_record(transition_map["core.music-to-speech"])],
+            "usage": "Dry-intro fallback exposed once in the board cadence because no adjacent tail file is available.",
+        },
+        {
+            "id": "render.speech-to-music",
+            "path": render_paths["speech_to_music"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["speech_to_music"]),
+            "layers": [_generated_core_layer_record(transition_map["core.speech-to-music"])],
+            "usage": "Prepended at unity and with no gap to the music successor.",
+        },
+        {
+            "id": "render.program-music-preroll",
+            "path": render_paths["program_music_preroll"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["program_music_preroll"]),
+            "layers": [
+                {
+                    "source_id": "context.program-music-tail",
+                    "source_sha256": _sha256(render_paths["program_music_tail"]),
+                    "source_start_sec": max(_probe_duration_sec(render_paths["program_music_tail"]) - 2.5, 0.0),
+                    "duration_sec": min(2.5, _probe_duration_sec(render_paths["program_music_tail"])),
+                    "output_offset_sec": 0.0,
+                    "gain_db": 0.0,
+                    "dsp": ["last-2.5s", "exposes-tail-replay-seam"],
+                    "license": "audition-only-local-generation",
+                    "role": "music-context",
+                }
+            ],
+        },
+        {
+            "id": "render.ad-intro",
+            "path": render_paths["ad_intro"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["ad_intro"]),
+            "layers": [speech_layer("speech.ad-intro", offset=0.0, gain_linear=1.0)],
+            "mastering_dsp": ["aresample:48000", "stereo", "loudnorm:I=-16,LRA=11,TP=-1.5"],
+            "usage": "Dry-intro fallback used when no adjacent predecessor tail can be opened.",
+        },
+        {
+            "id": "render.representative-spot",
+            "path": render_paths["spot"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["spot"]),
+            "layers": [
+                speech_layer("speech.spot", offset=0.0, gain_linear=1.0),
+                {
+                    "source_id": "tape-trp-hq-preview",
+                    "source_sha256": prototype_sources["tape-trp-hq-preview"].source_sha256,
+                    "source_start_sec": 8.4,
+                    "duration_sec": speech_by_id["speech.spot"]["duration_sec"],
+                    "output_offset_sec": 0.0,
+                    "gain_db": -30.0,
+                    "dsp": ["loop-if-needed", "highpass:360Hz", "lowpass:6000Hz"],
+                    "license": "CC0-1.0",
+                    "role": "texture",
+                },
+            ],
+        },
+        {
+            "id": "render.representative-spot-two",
+            "path": render_paths["spot_two"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["spot_two"]),
+            "layers": [
+                speech_layer("speech.spot-two", offset=0.0, gain_linear=1.0),
+                {
+                    "source_id": "tape-trp-hq-preview",
+                    "source_sha256": prototype_sources["tape-trp-hq-preview"].source_sha256,
+                    "source_start_sec": 8.4,
+                    "duration_sec": speech_by_id["speech.spot-two"]["duration_sec"],
+                    "output_offset_sec": 0.0,
+                    "gain_db": -30.0,
+                    "dsp": ["loop-if-needed", "highpass:360Hz", "lowpass:6000Hz"],
+                    "license": "CC0-1.0",
+                    "role": "texture",
+                },
+            ],
+        },
+        {
+            "id": "render.ad-outro",
+            "path": render_paths["ad_outro"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["ad_outro"]),
+            "layers": [speech_layer("speech.ad-outro", offset=0.0, gain_linear=1.0)],
+            "mastering_dsp": ["aresample:48000", "stereo", "loudnorm:I=-16,LRA=11,TP=-1.5"],
+            "usage": "Representative host outro immediately before the speech-to-music cue.",
+        },
+        {
+            "id": "render.ad-break",
+            "path": render_paths["ad_break"].relative_to(output_root).as_posix(),
+            "sha256": _sha256(render_paths["ad_break"]),
+            "layers": _component_records(ad_break_parts, gap_sec=0.3),
+            "usage": "Audition break: dry intro, ad-in, spot one, ad-mid, spot two, ad-out, outro.",
+        },
+    ]
+    component_ledger_digest = hashlib.sha256(
+        json.dumps(
+            {"sources": source_records, "internal_renders": internal_renders},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    previews[-1]["component_ledger_digest"] = component_ledger_digest
+    pack_digest = _core_pack_digest(previews, component_ledger_digest=component_ledger_digest)
+    return {
+        "schema_version": 1,
+        "pack": "Modern Night Drive core audition",
+        "stage": "core-cadence",
+        "generated_at": generated_at,
+        "selected_motif_id": selected_motif.id,
+        "motif_selection": {
+            "schema_version": 1,
+            "status": "selected",
+            "candidate_id": selected_motif.id,
+            "prototype_pack_digest": MOTIF_PROTOTYPE_PACK_DIGEST,
+            "candidate_sha256": MOTIF_PROTOTYPE_SHA256[selected_motif.id],
+            "recorded_at": generated_at,
+        },
+        "sources": source_records,
+        "previews": previews,
+        "internal_renders": internal_renders,
+        "component_ledger_digest": component_ledger_digest,
+        "runtime_contract": {
+            "station_voice_mix": {"sting_gain_linear": 0.15, "voice_gain_linear": 1.2, "voice_delay_ms": 400},
+            "dry_music_intro": {
+                "board_preroll_sec": 2.5,
+                "music_to_speech_gain_db": 0.0,
+                "voice_gain_db": 0.0,
+                "music_to_speech_suppressed": False,
+            },
+            "adjacent_music_intro_preserved": {
+                "tail_sec": 8.0,
+                "music_gain_linear": 0.5,
+                "voice_gain_linear": 1.0,
+                "voice_delay_ms": 150,
+                "music_to_speech_suppressed": True,
+                "board_usage": "covered by regression tests; dry fallback chosen for the audible board",
+            },
+            "ad_break": {"gap_ms": 300, "final_loudnorm": False, "max_mid_bumpers": 1},
+            "music_successor": {"speech_to_music_gain_db": 0.0, "gap_ms": 0},
+        },
+        "quality_guard_allowlist": {
+            "perceptual_overlaps": [
+                {
+                    "asset_ids": ["station-id", "sweeper"],
+                    "reason": (
+                        "Both identity roles intentionally state Warm Resolve once; "
+                        "their 3s/2s tails diverge and the contour appears nowhere else."
+                    ),
+                }
+            ],
+            "source_core_roles": [],
+        },
+        "pack_digest": pack_digest,
+        "release_ready": False,
+        "listening_receipt": {
+            "status": "pending",
+            "pack_digest": None,
+            "approved_candidate_id": None,
+            "surfaces": [],
+            "device_classes": [],
+            "reviewed_at": None,
+        },
+        "limitations": [
+            "This is an audition board, not a shippable asset pack.",
+            "Freesound HQ preview derivatives cannot be promoted into the final pack.",
+            "The selected motif direction has no recorded Mac or target-speaker approval yet.",
+            "Synthetic program music and local representative speech are context only.",
+            "No trumpet or mandolin material is used.",
+        ],
+    }
+
+
+def _core_audition_readme(manifest: dict[str, Any]) -> str:
+    preview_lines = [
+        f"- [{preview['label']}](./{preview['path']}) — {preview['purpose']}" for preview in manifest["previews"]
+    ]
+    return "\n".join(
+        [
+            "# Modern Night Drive — core cadence approval",
+            "",
+            "[Open the listening board](./index.html)",
+            "",
+            f"Selected direction: `{manifest['selected_motif_id']}`. This records a direction choice only; ",
+            "Mac and Wohnzimmer Sonos Arc approval are still pending.",
+            "",
+            "## Five previews",
+            "",
+            *preview_lines,
+            "",
+            "## Procedure",
+            "",
+            "1. Keep Mac volume fixed. Play Station ID and Sweeper three times each.",
+            "2. Confirm the Warm Resolve contour stays restrained and is used only on those two identity surfaces.",
+            (
+                "3. Play Ad in, Ad out, then the full cadence twice. Listen for distinct entry/exit cues, "
+                "clear Italian speech, and no trumpet or mandolin character."
+            ),
+            "4. Replay all five previews at the same perceived level on the Wohnzimmer Sonos Arc.",
+            "5. Reply exactly:",
+            "",
+            "```text",
+            "Core gate: pass|fail",
+            "Mac: pass|fail",
+            "Sonos Arc: pass|fail",
+            "Notes: <short reason>",
+            "```",
+            "",
+            (
+                "A failed result returns only this core stage for revision. "
+                "Compatibility sounds and advertising recipes remain unbuilt."
+            ),
+            "",
+            "## Runtime fidelity",
+            "",
+            (
+                "- Station ID and sweeper use the production `mix_voice_with_sting` gains: "
+                "sting 0.15, voice 1.2, voice delayed 400 ms."
+            ),
+            (
+                "- The full cadence uses the production dry fallback: predecessor-music pre-roll, the "
+                "music-to-speech cue, dry intro, two spots with one mid cue, ad-out, outro, then the "
+                "speech-to-music cue and music successor. This exposes every core cue exactly once."
+            ),
+            (
+                "- Break parts have 300 ms gaps and no final loudness pass. The normal adjacent-tail "
+                "crossfade remains covered by regression tests; speech-to-music is prepended at unity with "
+                "no gap to the music successor."
+            ),
+            "",
+            f"Pack digest: `{manifest['pack_digest']}`",
+            "",
+            (
+                "See `manifest.json` for every source hash, excerpt, offset, gain, DSP operation, license, "
+                "and selection-lineage field."
+            ),
+            "",
+        ]
+    )
+
+
+def _core_audition_html(manifest: dict[str, Any]) -> str:
+    cards = []
+    for preview in manifest["previews"]:
+        cards.append(
+            "\n".join(
+                [
+                    '<article class="card">',
+                    f"<h2>{preview['label']}</h2>",
+                    f"<p>{preview['purpose']}</p>",
+                    f'<audio controls preload="metadata" src="{preview["path"]}"></audio>',
+                    "</article>",
+                ]
+            )
+        )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Modern Night Drive core cadence approval</title>
+<style>
+:root {{ color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+body {{ margin: 0 auto; max-width: 880px; padding: 32px 20px 64px; background: #111318; color: #f4efe7; }}
+h1 {{ letter-spacing: -0.03em; }}
+.notice {{ padding: 14px 16px; border: 1px solid #7b6b50; border-radius: 12px; background: #211e19; }}
+.grid {{ display: grid; gap: 16px; margin-top: 24px; }}
+.card {{ padding: 18px; border: 1px solid #343844; border-radius: 14px; background: #191c23; }}
+.card h2 {{ margin-top: 0; }}
+audio {{ width: 100%; }}
+code {{ color: #efc27a; }}
+</style>
+</head>
+<body>
+<h1>Modern Night Drive — core cadence approval</h1>
+<p class="notice"><strong>Audition only.</strong> Warm Resolve is direction-selected,
+but no Mac or Wohnzimmer Sonos Arc pass is recorded. Nothing here is release-ready.</p>
+<p>Keep volume fixed. Hear the two identity surfaces three times, then Ad in, Ad out,
+and the full cadence twice. The cadence exposes every bumper and boundary transition
+once. Replay all five on the target speaker.</p>
+<main class="grid">
+{"".join(cards)}
+</main>
+<p>Reply: <code>Core gate: pass|fail; Mac: pass|fail; Sonos Arc: pass|fail; Notes: ...</code></p>
+<p>Pack digest: <code>{manifest["pack_digest"]}</code></p>
+</body>
+</html>
+"""
+
+
+def render_core_audition(
+    source_root: Path,
+    output_root: Path,
+    *,
+    selected_motif_id: str,
+    selected_motif_artifact: Path,
+    voice_source: Path | None = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Render the five-surface Stage 2 board and publish it atomically."""
+    verify_motif_prototype_sources(source_root)
+    selected_motif = _selected_motif(selected_motif_id)
+    if output_root.exists() and any(output_root.iterdir()):
+        raise FileExistsError(f"Refusing to overwrite non-empty core audition directory: {output_root}")
+    if not selected_motif_artifact.is_file():
+        raise ValueError(f"Selected motif artifact does not exist: {selected_motif_artifact}")
+    selected_signature_sha256 = _sha256(selected_motif_artifact)
+    expected_signature_sha256 = MOTIF_PROTOTYPE_SHA256[selected_motif.id]
+    if selected_signature_sha256 != expected_signature_sha256:
+        raise ValueError(
+            f"Selected motif artifact does not match selection lineage: {selected_signature_sha256} "
+            f"!= {expected_signature_sha256}"
+        )
+
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=output_root.parent))
+    try:
+        manifest = _render_core_audition_in_place(
+            source_root,
+            staging_root,
+            selected_motif_id=selected_motif_id,
+            selected_motif_artifact=selected_motif_artifact,
+            voice_source=voice_source,
+            generated_at=generated_at,
+        )
+        if output_root.exists():
+            output_root.rmdir()
+        os.replace(staging_root, output_root)
+        return manifest
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
+
+
+def _render_core_audition_in_place(
+    source_root: Path,
+    output_root: Path,
+    *,
+    selected_motif_id: str,
+    selected_motif_artifact: Path,
+    voice_source: Path | None = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Render one validated core board into a private staging directory."""
+    selected_motif = _selected_motif(selected_motif_id)
+    output_root.mkdir(parents=True, exist_ok=True)
+    source_output_root = output_root / "sources"
+    component_root = output_root / "components"
+    source_output_root.mkdir()
+    component_root.mkdir()
+
+    selected_signature_path = source_output_root / selected_motif.path
+    shutil.copyfile(selected_motif_artifact, selected_signature_path)
+    tape_path = source_root / _motif_prototype_source_map()["tape-trp-hq-preview"].filename
+    station_bed_path = _render_identity_role_bed(
+        selected_signature_path,
+        tape_path,
+        component_root / "station_bed.mp3",
+        duration_sec=3.0,
+        pad_hz=110.0,
+    )
+    sweeper_bed_path = _render_identity_role_bed(
+        selected_signature_path,
+        tape_path,
+        component_root / "sweeper_bed.mp3",
+        duration_sec=2.0,
+        pad_hz=146.83,
+    )
+    speech_records: list[dict[str, Any]] = []
+    speech_paths: dict[str, Path] = {}
+    for speech in CORE_AUDITION_SPEECH:
+        speech_path = source_output_root / speech.filename
+        speech_paths[speech.id] = speech_path
+        speech_records.append(_render_core_speech_source(speech, speech_path, voice_source=voice_source))
+
+    station_id_path = output_root / "station_id.mp3"
+    sweeper_path = output_root / "sweeper.mp3"
+    _render_runtime_voice_sting_mix(speech_paths["speech.station-id"], station_bed_path, station_id_path)
+    _render_runtime_voice_sting_mix(speech_paths["speech.sweeper"], sweeper_bed_path, sweeper_path)
+
+    cue_paths: dict[str, Path] = {}
+    ad_mid_source_path: Path | None = None
+    for cue in CORE_AUDITION_CUES:
+        if cue.id == "core.ad-mid":
+            raw_root = component_root / "raw"
+            ad_mid_source_path = _render_core_cue(cue, source_root, raw_root)
+            _require_rendered_duration(
+                ad_mid_source_path,
+                minimum_sec=cue.duration_sec - 0.05,
+                render_id=cue.id,
+            )
+            cue_paths[cue.id] = fit_audio_oneshot(
+                ad_mid_source_path,
+                component_root / "ad_mid.mp3",
+                0.8,
+                target_lufs=-16.0,
+                fade_out_sec=0.08,
+            )
+            continue
+        cue_root = output_root if cue.id in {"core.ad-in", "core.ad-out"} else component_root
+        cue_paths[cue.id] = _render_core_cue(cue, source_root, cue_root)
+    if ad_mid_source_path is None:  # pragma: no cover - constant inventory invariant
+        raise RuntimeError("core ad-mid cue is missing")
+    for transition in CORE_AUDITION_TRANSITIONS:
+        cue_paths[transition.id] = _render_generated_core_cue(transition, component_root)
+
+    program_music_tail = _render_context_music(component_root / "program_music_tail.mp3", successor=False)
+    program_music_preroll = _render_music_preroll(program_music_tail, component_root / "program_music_preroll.mp3")
+    program_music_successor = _render_context_music(component_root / "program_music_successor.mp3", successor=True)
+    intro_path = _render_dry_voice(speech_paths["speech.ad-intro"], component_root / "ad_intro.mp3")
+    spot_path = _render_representative_spot(
+        speech_paths["speech.spot"],
+        tape_path,
+        component_root / "representative_spot.mp3",
+    )
+    spot_two_path = _render_representative_spot(
+        speech_paths["speech.spot-two"],
+        tape_path,
+        component_root / "representative_spot_two.mp3",
+    )
+    outro_path = _render_dry_voice(speech_paths["speech.ad-outro"], component_root / "ad_outro.mp3")
+    break_parts = core_ad_break_parts(
+        intro_path,
+        [spot_path, spot_two_path],
+        cue_paths["core.ad-in"],
+        cue_paths["core.ad-out"],
+        outro_path,
+        ad_mid_path=cue_paths["core.ad-mid"],
+    )
+    ad_break_path = _concat_core_parts(break_parts, component_root / "ad_break.mp3", silence_ms=300)
+    cadence_sequence = core_cadence_parts(
+        ad_break_path,
+        program_music_successor,
+        successor_kind="music",
+        music_to_speech_path=cue_paths["core.music-to-speech"],
+        speech_to_music_path=cue_paths["core.speech-to-music"],
+        predecessor_music_path=program_music_preroll,
+        predecessor_has_music_tail=False,
+    )
+    full_cadence_path = _concat_core_parts(cadence_sequence, output_root / "full_cadence.mp3", silence_ms=0)
+
+    render_paths = {
+        "selected_signature": selected_signature_path,
+        "station_bed": station_bed_path,
+        "sweeper_bed": sweeper_bed_path,
+        "ad_in": cue_paths["core.ad-in"],
+        "ad_mid": cue_paths["core.ad-mid"],
+        "ad_mid_source": ad_mid_source_path,
+        "ad_out": cue_paths["core.ad-out"],
+        "music_to_speech": cue_paths["core.music-to-speech"],
+        "speech_to_music": cue_paths["core.speech-to-music"],
+        "program_music_tail": program_music_tail,
+        "program_music_preroll": program_music_preroll,
+        "program_music_successor": program_music_successor,
+        "ad_intro": intro_path,
+        "spot": spot_path,
+        "spot_two": spot_two_path,
+        "ad_outro": outro_path,
+        "ad_break": ad_break_path,
+        "full_cadence": full_cadence_path,
+    }
+    stamp = generated_at or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    manifest = _core_audition_manifest(
+        output_root,
+        selected_motif=selected_motif,
+        speech_sources=speech_records,
+        generated_at=stamp,
+        render_paths=render_paths,
+        ad_break_parts=break_parts,
+        cadence_parts=cadence_sequence,
+    )
+    (output_root / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (output_root / "README.md").write_text(_core_audition_readme(manifest), encoding="utf-8")
+    (output_root / "index.html").write_text(_core_audition_html(manifest), encoding="utf-8")
+    return manifest
+
+
 def _render_asset(spec: AssetSpec, source_root: Path, output_root: Path) -> None:
     output_path = output_root / spec.path
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1400,14 +3044,59 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--verify-sources", action="store_true", help="Check the curated masters without writing assets"
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--prototype-motifs",
         action="store_true",
         help="Render only the three audition candidates; these HQ derivatives can never become the public pack",
     )
+    mode.add_argument(
+        "--core-audition",
+        action="store_true",
+        help="Render the five-surface Stage 2 board; never writes the shipped pack",
+    )
+    parser.add_argument(
+        "--selected-motif",
+        choices=tuple(candidate.id for candidate in MOTIF_PROTOTYPES),
+        help="Direction chosen at the motif gate (required with --core-audition)",
+    )
+    parser.add_argument(
+        "--selected-motif-artifact",
+        type=Path,
+        help="Exact listened candidate MP3 (required with --core-audition; SHA-bound to motif selection)",
+    )
+    parser.add_argument(
+        "--voice-source",
+        type=Path,
+        help="Optional local representative spot voice; other declared lines use macOS say locally",
+    )
     args = parser.parse_args(argv)
-    output_root = args.output_root or (DEFAULT_PROTOTYPE_OUTPUT_ROOT if args.prototype_motifs else DEFAULT_OUTPUT_ROOT)
+    if args.prototype_motifs:
+        default_output_root = DEFAULT_PROTOTYPE_OUTPUT_ROOT
+    elif args.core_audition:
+        default_output_root = DEFAULT_CORE_AUDITION_OUTPUT_ROOT
+    else:
+        default_output_root = DEFAULT_OUTPUT_ROOT
+    output_root = args.output_root or default_output_root
     try:
+        if args.core_audition:
+            if args.selected_motif is None:
+                raise ValueError("--selected-motif is required with --core-audition")
+            if args.selected_motif_artifact is None and not args.verify_sources:
+                raise ValueError("--selected-motif-artifact is required with --core-audition")
+            verify_motif_prototype_sources(args.source_dir)
+            if args.verify_sources:
+                print(f"Core audition sources OK: {len(MOTIF_PROTOTYPE_SOURCES)}")
+                return 0
+            manifest = render_core_audition(
+                args.source_dir,
+                output_root,
+                selected_motif_id=args.selected_motif,
+                selected_motif_artifact=args.selected_motif_artifact,
+                voice_source=args.voice_source,
+            )
+            print(f"Built Modern Night Drive core audition: {output_root} ({len(manifest['previews'])} previews)")
+            return 0
         if args.prototype_motifs:
             verify_motif_prototype_sources(args.source_dir)
             if args.verify_sources:
@@ -1423,7 +3112,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Reviewed CC0 masters OK: {len(SOURCES)}")
             return 0
         build(args.source_dir, output_root)
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(f"Built public recorded imaging pack: {output_root} ({len(ASSETS)} assets)")

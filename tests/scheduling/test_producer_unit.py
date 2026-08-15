@@ -1175,6 +1175,211 @@ async def test_ad_recipe_resolves_once_and_reaches_tts_renderer():
     assert mock_synthesize_ad.call_args.kwargs["recipe"] is recipe
 
 
+async def _render_two_spot_recipe_break(recipes, *, core_foreground_source_ids=()):
+    """Return the concrete recipes handed to each ad renderer in one break."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 2
+    host = config.hosts[0]
+    brands = [
+        AdBrand(name="Prima", tagline="Prima", sonic_recipe="first"),
+        AdBrand(name="Seconda", tagline="Seconda", sonic_recipe="second"),
+    ]
+    config.ads.brands = brands
+    voice_map = {"hammer": config.ads.voices[0]}
+    sonics = [
+        SonicWorld(recipe_id="first", transition_motif="", sonic_signature=""),
+        SonicWorld(recipe_id="second", transition_motif="", sonic_signature=""),
+    ]
+    selections = [
+        (brands[0], "classic_pitch", sonics[0], voice_map),
+        (brands[1], "classic_pitch", sonics[1], voice_map),
+    ]
+    scripts = [
+        AdScript(
+            brand=brand.name,
+            parts=[AdPart(type="voice", text=f"{brand.name} parla.", role="hammer")],
+            summary=brand.name,
+            format="classic_pitch",
+            sonic=sonic,
+            roles_used=["hammer"],
+        )
+        for brand, sonic in zip(brands, sonics, strict=True)
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+    imaging.resolve_ad_recipe.side_effect = recipes
+    imaging.core_break_foreground_source_ids.return_value = core_foreground_source_ids
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=selections),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=scripts),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad",
+            new_callable=AsyncMock,
+            return_value=_fake_path(),
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.AD
+    assert segment.metadata["brands"] == ["Prima", "Seconda"]
+    assert [call.args[0].brand for call in mock_synthesize_ad.await_args_list] == ["Prima", "Seconda"]
+    return [call.kwargs["recipe"] for call in mock_synthesize_ad.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_ad_break_suppresses_only_later_recipe_cues_with_repeated_foreground_sources():
+    """Two spots keep their copy/beds while the later repeated recording is removed."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    first = ResolvedAdRecipe(
+        id="first",
+        bed_path=Path("/tmp/first-bed.mp3"),
+        bed_gain_db=-22.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/shared-first.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("shared-recording",),
+            ),
+        ),
+    )
+    second = ResolvedAdRecipe(
+        id="second",
+        bed_path=Path("/tmp/second-bed.mp3"),
+        bed_gain_db=-21.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/shared-later.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("shared-recording",),
+            ),
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/fresh-later.mp3"),
+                -12.0,
+                0.5,
+                source_ids=("fresh-recording",),
+            ),
+        ),
+    )
+
+    rendered_recipes = await _render_two_spot_recipe_break([first, second])
+
+    assert rendered_recipes[0] is first
+    assert rendered_recipes[1].bed_path == second.bed_path
+    assert [cue.asset_path.name for cue in rendered_recipes[1].cues] == ["fresh-later.mp3"]
+
+
+@pytest.mark.asyncio
+async def test_ad_break_suppresses_recipe_cues_that_repeat_core_bumpers_or_transitions():
+    """Core in/mid/out and boundary foregrounds reserve their sources before spots."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    conflicting = ResolvedAdRecipe(
+        id="first",
+        bed_path=Path("/tmp/first-bed.mp3"),
+        bed_gain_db=-22.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/core-repeat.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("core-transition",),
+            ),
+        ),
+    )
+    fresh = ResolvedAdRecipe(
+        id="second",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/fresh.mp3"),
+                -11.0,
+                0.5,
+                source_ids=("fresh-recording",),
+            ),
+        ),
+    )
+
+    rendered = await _render_two_spot_recipe_break(
+        [conflicting, fresh],
+        core_foreground_source_ids=("core-transition",),
+    )
+
+    assert rendered[0].bed_path == conflicting.bed_path
+    assert rendered[0].cues == ()
+    assert rendered[1] is fresh
+
+
+@pytest.mark.asyncio
+async def test_ad_break_preserves_non_overlapping_recipe_cues():
+    """Unique foreground recordings cross the producer boundary unchanged."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    first = ResolvedAdRecipe(
+        id="first",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/first.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("first-recording",),
+            ),
+        ),
+    )
+    second = ResolvedAdRecipe(
+        id="second",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/second.mp3"),
+                -11.0,
+                0.5,
+                source_ids=("second-recording",),
+            ),
+        ),
+    )
+
+    rendered_recipes = await _render_two_spot_recipe_break([first, second])
+
+    assert rendered_recipes == [first, second]
+    assert rendered_recipes[0] is first
+    assert rendered_recipes[1] is second
+
+
 @pytest.mark.asyncio
 async def test_unresolved_ad_recipe_restores_legacy_sonic_mode_before_writing():
     """Configured recipe IDs suppress accents only after they actually resolve."""

@@ -250,6 +250,349 @@ def test_motif_gate_writes_durable_board_and_exact_listening_handoff(tmp_path, m
     assert audition.MOTIF_LISTENING_PROMPT in handoff
 
 
+def test_core_break_order_covers_no_mid_single_mid_and_successor_types(tmp_path) -> None:
+    intro = tmp_path / "intro.mp3"
+    ad_in = tmp_path / "in.mp3"
+    ad_mid = tmp_path / "mid.mp3"
+    ad_out = tmp_path / "out.mp3"
+    outro = tmp_path / "outro.mp3"
+    spot_one = tmp_path / "spot-one.mp3"
+    spot_two = tmp_path / "spot-two.mp3"
+
+    assert pack_builder.core_ad_break_parts(intro, [spot_one], ad_in, ad_out, outro, ad_mid_path=ad_mid) == [
+        intro,
+        ad_in,
+        spot_one,
+        ad_out,
+        outro,
+    ]
+    assert pack_builder.core_ad_break_parts(
+        intro,
+        [spot_one, spot_two],
+        ad_in,
+        ad_out,
+        outro,
+        ad_mid_path=ad_mid,
+    ) == [intro, ad_in, spot_one, ad_mid, spot_two, ad_out, outro]
+
+    ad_break = tmp_path / "break.mp3"
+    successor = tmp_path / "successor.mp3"
+    handoff = tmp_path / "speech-to-music.mp3"
+    dry_handoff = tmp_path / "music-to-speech.mp3"
+    preroll = tmp_path / "preroll.mp3"
+    assert pack_builder.core_cadence_parts(
+        ad_break,
+        successor,
+        successor_kind="music",
+        speech_to_music_path=handoff,
+        predecessor_music_path=preroll,
+    ) == [preroll, ad_break, handoff, successor]
+    assert pack_builder.core_cadence_parts(
+        ad_break,
+        successor,
+        successor_kind="speech",
+        speech_to_music_path=handoff,
+        predecessor_music_path=preroll,
+    ) == [preroll, ad_break, successor]
+    assert pack_builder.core_cadence_parts(
+        ad_break,
+        successor,
+        successor_kind="music",
+        music_to_speech_path=dry_handoff,
+        speech_to_music_path=handoff,
+        predecessor_music_path=preroll,
+        predecessor_has_music_tail=False,
+    ) == [preroll, dry_handoff, ad_break, handoff, successor]
+    assert pack_builder.core_cadence_parts(
+        ad_break,
+        successor,
+        successor_kind="speech",
+        music_to_speech_path=dry_handoff,
+        predecessor_music_path=preroll,
+        predecessor_has_music_tail=False,
+    ) == [preroll, dry_handoff, ad_break, successor]
+
+
+def test_core_cues_have_distinct_break_foregrounds_and_signature_stays_outside_break() -> None:
+    cues = {cue.id: cue for cue in pack_builder.CORE_AUDITION_CUES}
+    foregrounds = [
+        next(layer.source_id for layer in cues[cue_id].layers if layer.role == "foreground")
+        for cue_id in ("core.ad-in", "core.ad-mid", "core.ad-out")
+    ]
+
+    assert len(set(foregrounds)) == 3
+    assert foregrounds == [
+        "radio-quantumriver-hq-preview",
+        "epiano-kevinklang-hq-preview",
+        "tape-trp-hq-preview",
+    ]
+    transition_foregrounds = [cue.source_id for cue in pack_builder.CORE_AUDITION_TRANSITIONS]
+    assert transition_foregrounds == [
+        "generated.transition-music-to-speech",
+        "generated.transition-speech-to-music",
+    ]
+    assert len(set([*foregrounds, *transition_foregrounds])) == 5
+    warm_pitch_sequence = [
+        layer.pitch_semitones
+        for layer in pack_builder._selected_motif("warm_resolve").layers
+        if layer.role == "foreground"
+    ]
+    for cue in cues.values():
+        assert [layer.pitch_semitones for layer in cue.layers if layer.role == "foreground"] != warm_pitch_sequence
+
+
+def test_core_runtime_wrappers_delegate_to_canonical_audio_helpers(tmp_path, monkeypatch) -> None:
+    calls: dict[str, tuple[Any, ...] | dict[str, Any]] = {}
+    loudness_calls: list[tuple[float | None, float | None, dict[str, int]]] = []
+
+    def fake_mix(voice: Path, sting: Path, output: Path) -> Path:
+        calls["mix"] = (voice, sting, output)
+        return output
+
+    def fake_crossfade(music: Path, voice: Path, output: Path, **kwargs: Any) -> Path:
+        calls["crossfade"] = (music, voice, output)
+        calls["crossfade_kwargs"] = kwargs
+        return output
+
+    def fake_concat(paths: list[Path], output: Path, **kwargs: Any) -> Path:
+        calls["concat"] = (*paths, output)
+        calls["concat_kwargs"] = kwargs
+        return output
+
+    def fake_configure(main: float | None, ad: float | None, **kwargs: int) -> None:
+        loudness_calls.append((main, ad, kwargs))
+
+    monkeypatch.setattr(pack_builder, "mix_voice_with_sting", fake_mix)
+    monkeypatch.setattr(pack_builder, "configure_loudness_reconcile", fake_configure)
+    monkeypatch.setattr(pack_builder, "crossfade_voice_over_music", fake_crossfade)
+    monkeypatch.setattr(pack_builder, "concat_files", fake_concat)
+    voice = tmp_path / "voice.aiff"
+    sting = tmp_path / "sting.mp3"
+    music = tmp_path / "music.mp3"
+    output = tmp_path / "output.mp3"
+
+    pack_builder._render_runtime_voice_sting_mix(voice, sting, output)
+    pack_builder._render_runtime_music_tail_intro(music, voice, output)
+    pack_builder._concat_core_parts([music, voice], output, silence_ms=300)
+
+    assert calls["mix"] == (voice, sting, output)
+    assert loudness_calls == [
+        (-16.0, -15.0, {"sample_rate": 48_000, "channels": 2, "bitrate": 192}),
+        (None, None, {"sample_rate": 48_000, "channels": 2, "bitrate": 192}),
+    ]
+    assert calls["crossfade_kwargs"] == {
+        "tail_seconds": 8.0,
+        "voice_volume": 1.0,
+        "music_fade_volume": 0.5,
+        "voice_delay_ms": 150,
+    }
+    assert calls["concat_kwargs"] == {"silence_ms": 300, "loudnorm": False}
+
+
+def test_core_audition_rejects_selected_signature_that_does_not_match_lineage(tmp_path, monkeypatch) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    selected_artifact = tmp_path / "warm_resolve.mp3"
+    selected_artifact.write_bytes(b"changed-selected-audio")
+    monkeypatch.setattr(pack_builder, "verify_motif_prototype_sources", lambda _path: None)
+
+    output_root = tmp_path / "board"
+    with pytest.raises(ValueError, match="artifact does not match selection lineage"):
+        pack_builder.render_core_audition(
+            source_root,
+            output_root,
+            selected_motif_id="warm_resolve",
+            selected_motif_artifact=selected_artifact,
+            generated_at="20260815T120000Z",
+        )
+    assert not output_root.exists()
+
+
+def test_core_ad_mid_keeps_full_authored_duration_before_runtime_loop(tmp_path, monkeypatch) -> None:
+    cue = next(cue for cue in pack_builder.CORE_AUDITION_CUES if cue.id == "core.ad-mid")
+    foreground = next(layer for layer in cue.layers if layer.role == "foreground")
+    assert foreground.output_offset_sec == 0.0
+
+    collapsed_render = tmp_path / "ad_mid.mp3"
+    collapsed_render.write_bytes(b"collapsed")
+    monkeypatch.setattr(pack_builder, "_probe_duration_sec", lambda _path: 0.048)
+
+    with pytest.raises(RuntimeError, match=r"core\.ad-mid decoded duration is 0\.048s"):
+        pack_builder._require_rendered_duration(
+            collapsed_render,
+            minimum_sec=cue.duration_sec - 0.05,
+            render_id=cue.id,
+        )
+
+
+def test_core_audition_builds_five_pending_previews_without_touching_shipped_pack(tmp_path, monkeypatch) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    output_root = tmp_path / "board"
+    selected_artifact = tmp_path / "warm_resolve.mp3"
+    selected_artifact.write_bytes(b"motif:warm_resolve")
+    calls: dict[str, list[Any]] = {"identity_beds": [], "loops": [], "concats": []}
+
+    def write_audio(path: Path, marker: str | None = None) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((marker or path.as_posix()).encode())
+        return path
+
+    def fake_motif(spec, _source_root: Path, output: Path) -> Path:
+        return write_audio(output / spec.path, f"motif:{spec.id}")
+
+    def fake_speech(spec, output: Path, **_kwargs: Any) -> dict[str, Any]:
+        write_audio(output, f"speech:{spec.id}")
+        return {
+            "id": spec.id,
+            "license": "audition-only-local-generation",
+            "creator": "fixture",
+            "title": spec.purpose,
+            "artifact_path": f"sources/{output.name}",
+            "source_sha256": hashlib.sha256(f"speech:{spec.id}".encode()).hexdigest(),
+            "duration_sec": 1.0,
+            "origin": {"kind": "fixture", "declared_text": spec.text},
+            "tags": ["speech", "italian", "audition-only"],
+        }
+
+    def fake_identity(_signature: Path, _tape: Path, output: Path, **kwargs: Any) -> Path:
+        calls["identity_beds"].append(kwargs)
+        return write_audio(output)
+
+    def fake_loop(source: Path, output: Path, duration: float, **kwargs: Any) -> Path:
+        calls["loops"].append((source, output, duration, kwargs))
+        return write_audio(output)
+
+    def fake_concat(paths: list[Path], output: Path, *, silence_ms: int) -> Path:
+        calls["concats"].append(([path.name for path in paths], silence_ms))
+        return write_audio(output)
+
+    monkeypatch.setattr(pack_builder, "verify_motif_prototype_sources", lambda _path: None)
+    monkeypatch.setattr(pack_builder, "_render_motif_prototype", fake_motif)
+    monkeypatch.setitem(
+        pack_builder.MOTIF_PROTOTYPE_SHA256,
+        "warm_resolve",
+        hashlib.sha256(b"motif:warm_resolve").hexdigest(),
+    )
+    monkeypatch.setattr(pack_builder, "_render_core_speech_source", fake_speech)
+    monkeypatch.setattr(pack_builder, "_render_identity_role_bed", fake_identity)
+    monkeypatch.setattr(
+        pack_builder,
+        "_render_runtime_voice_sting_mix",
+        lambda _voice, _sting, output: write_audio(output),
+    )
+    monkeypatch.setattr(pack_builder, "_render_core_cue", fake_motif)
+    monkeypatch.setattr(
+        pack_builder,
+        "_render_generated_core_cue",
+        lambda cue, output_root: write_audio(output_root / cue.path),
+    )
+    monkeypatch.setattr(pack_builder, "fit_audio_oneshot", fake_loop)
+    monkeypatch.setattr(
+        pack_builder,
+        "_render_context_music",
+        lambda output, **_kwargs: write_audio(output),
+    )
+    monkeypatch.setattr(
+        pack_builder,
+        "_render_music_preroll",
+        lambda _music, output: write_audio(output),
+    )
+    monkeypatch.setattr(
+        pack_builder,
+        "_render_runtime_music_tail_intro",
+        lambda _music, _voice, output: write_audio(output),
+    )
+    monkeypatch.setattr(
+        pack_builder,
+        "_render_representative_spot",
+        lambda _voice, _tape, output: write_audio(output),
+    )
+    monkeypatch.setattr(pack_builder, "_render_dry_voice", lambda _voice, output: write_audio(output))
+    monkeypatch.setattr(pack_builder, "_concat_core_parts", fake_concat)
+    monkeypatch.setattr(
+        pack_builder,
+        "_probe_duration_sec",
+        lambda path: 12.0 if path.name == "program_music_tail.mp3" else 1.0,
+    )
+
+    manifest = pack_builder.render_core_audition(
+        source_root,
+        output_root,
+        selected_motif_id="warm_resolve",
+        selected_motif_artifact=selected_artifact,
+        generated_at="20260815T120000Z",
+    )
+
+    assert [preview["id"] for preview in manifest["previews"]] == [
+        "station-id",
+        "sweeper",
+        "ad-in",
+        "ad-out",
+        "full-cadence",
+    ]
+    assert manifest["motif_selection"] == {
+        "schema_version": 1,
+        "status": "selected",
+        "candidate_id": "warm_resolve",
+        "prototype_pack_digest": pack_builder.MOTIF_PROTOTYPE_PACK_DIGEST,
+        "candidate_sha256": pack_builder.MOTIF_PROTOTYPE_SHA256["warm_resolve"],
+        "recorded_at": "20260815T120000Z",
+    }
+    assert manifest["release_ready"] is False
+    assert manifest["listening_receipt"]["status"] == "pending"
+    assert next(speech for speech in pack_builder.CORE_AUDITION_SPEECH if speech.id == "speech.station-id").text == (
+        "Mamma Mi Radio... da Windor a Vergen, la voce che non si spegne mai!"
+    )
+    renders = {render["id"]: render for render in manifest["internal_renders"]}
+    assert renders["render.station-bed"]["layers"][-1]["duration_sec"] == 2.28
+    assert renders["render.sweeper-bed"]["layers"][-1]["duration_sec"] == 1.28
+    preroll_layer = renders["render.program-music-preroll"]["layers"][0]
+    assert preroll_layer["source_start_sec"] == 9.5
+    assert preroll_layer["duration_sec"] == 2.5
+    assert "render.ad-intro" in renders
+    assert "render.representative-spot-two" in renders
+    declared_layer_sources = {
+        *(source["id"] for source in manifest["sources"]),
+        *(render["id"] for render in manifest["internal_renders"]),
+    }
+    for record in [*manifest["previews"], *manifest["internal_renders"]]:
+        for layer in record.get("layers", []):
+            assert layer["source_id"] in declared_layer_sources
+    reachable_sources = {layer["source_id"] for preview in manifest["previews"] for layer in preview.get("layers", [])}
+    while True:
+        expanded = reachable_sources | {
+            layer["source_id"]
+            for render_id in reachable_sources & renders.keys()
+            for layer in renders[render_id].get("layers", [])
+        }
+        if expanded == reachable_sources:
+            break
+        reachable_sources = expanded
+    assert renders.keys() <= reachable_sources
+    assert calls["identity_beds"] == [
+        {"duration_sec": 3.0, "pad_hz": 110.0},
+        {"duration_sec": 2.0, "pad_hz": 146.83},
+    ]
+    assert calls["loops"][0][2:] == (
+        0.8,
+        {"target_lufs": -16.0, "fade_out_sec": 0.08},
+    )
+    assert calls["concats"][0][1] == 300
+    assert calls["concats"][1] == (
+        [
+            "program_music_preroll.mp3",
+            "music_to_speech.mp3",
+            "ad_break.mp3",
+            "speech_to_music.mp3",
+            "program_music_successor.mp3",
+        ],
+        0,
+    )
+    assert (output_root / "README.md").is_file()
+    assert (output_root / "index.html").read_text().count("<audio controls") == 5
+
+
 @pytest.mark.requires_ffmpeg
 def test_scene_recipe_previews_cover_the_shipped_recorded_recipe_inventory(tmp_path) -> None:
     results = audition.render_recipe_previews(tmp_path, assets_dir=audition.PACKAGED_ASSETS_DIR)

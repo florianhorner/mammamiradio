@@ -7,7 +7,7 @@ import logging
 import random
 import shutil
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -20,12 +20,12 @@ from mammamiradio.audio.normalizer import (
     _MP3_OUTPUT_ARGS,
     _fmt_num,
     _run_ffmpeg,
+    fit_audio_oneshot,
     generate_bumper_jingle,
     generate_station_id_bed,
     generate_sweep,
     generate_tone,
     generate_transition_sting,
-    loop_audio_bed,
 )
 from mammamiradio.audio.synth_cache import duration_bucket_sec, materialize_synth_mp3, next_synth_variant
 from mammamiradio.core.models import SegmentType
@@ -33,6 +33,16 @@ from mammamiradio.core.models import SegmentType
 logger = logging.getLogger(__name__)
 
 _CACHE_UNSET = object()
+_CORE_BREAK_ASSET_PATHS = frozenset(
+    {
+        "bumpers/ad_break.mp3",
+        "bumpers/ad_in.mp3",
+        "bumpers/ad_mid.mp3",
+        "bumpers/ad_out.mp3",
+        "stingers/music_to_speech.mp3",
+        "stingers/speech_to_music.mp3",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,24 @@ class ResolvedRecipeCue:
     asset_path: Path
     gain_db: float
     max_duration_sec: float
+    asset_kind: str = "cue"
+    source_ids: tuple[str, ...] = ()
+    foreground_source_ids: tuple[str, ...] | None = None
+
+    @property
+    def recorded_foreground_source_ids(self) -> tuple[str, ...]:
+        """Recorded sources that make this cue a foreground event.
+
+        New manifests provide exact layer roles. Older schema-v2 packs only
+        provide asset-level source ids, so cue assets conservatively treat all
+        of those sources as foreground. Explicit bed/texture kinds never enter
+        the foreground reservation set.
+        """
+        if self.foreground_source_ids is not None:
+            return self.foreground_source_ids
+        if self.asset_kind.casefold() in {"ad_bed", "background", "bed", "texture"}:
+            return ()
+        return self.source_ids
 
 
 @dataclass(frozen=True)
@@ -74,6 +102,7 @@ class _RecipeAsset:
     kind: str
     tags: tuple[str, ...]
     source_ids: tuple[str, ...]
+    foreground_source_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -96,6 +125,32 @@ class _RecipeDefinition:
 class _RecipeManifest:
     assets: Mapping[str, _RecipeAsset]
     recipes: Mapping[str, _RecipeDefinition]
+
+
+def reserve_unique_recipe_foreground_sources(
+    recipe: ResolvedAdRecipe,
+    reserved_source_ids: set[str],
+) -> tuple[ResolvedAdRecipe, tuple[ResolvedRecipeCue, ...]]:
+    """Reserve a recipe's foreground recordings and suppress later conflicts.
+
+    The mutable reservation set is scoped by the producer to one assembled ad
+    break. A conflict removes only the later decorative cue; the recipe's bed
+    and the spoken spot remain unchanged. Cues without recorded-source
+    provenance remain usable for backward compatibility.
+    """
+    kept: list[ResolvedRecipeCue] = []
+    suppressed: list[ResolvedRecipeCue] = []
+    for cue in recipe.cues:
+        foreground_sources = set(cue.recorded_foreground_source_ids)
+        if foreground_sources & reserved_source_ids:
+            suppressed.append(cue)
+            continue
+        kept.append(cue)
+        reserved_source_ids.update(foreground_sources)
+
+    if not suppressed:
+        return recipe, ()
+    return replace(recipe, cues=tuple(kept)), tuple(suppressed)
 
 
 class ImagingLibrary:
@@ -159,6 +214,9 @@ class ImagingLibrary:
                     asset_path=asset.path,
                     gain_db=cue.gain_db,
                     max_duration_sec=cue.max_duration_sec,
+                    asset_kind=asset.kind,
+                    source_ids=asset.source_ids,
+                    foreground_source_ids=asset.foreground_source_ids,
                 )
             )
 
@@ -170,6 +228,25 @@ class ImagingLibrary:
         )
         self._resolved_ad_recipe_cache[cache_key] = resolved
         return resolved
+
+    def core_break_foreground_source_ids(self) -> tuple[str, ...]:
+        """Recorded foregrounds reserved by bumpers and boundary transitions."""
+        manifest = self._load_recipe_manifest()
+        if manifest is None:
+            return ()
+        targets = {
+            target
+            for relative_path in _CORE_BREAK_ASSET_PATHS
+            if (target := self._safe_pack_asset_path(relative_path)) is not None
+        }
+        reserved: list[str] = []
+        for asset in manifest.assets.values():
+            if asset.path not in targets:
+                continue
+            for source_id in asset.foreground_source_ids:
+                if source_id not in reserved:
+                    reserved.append(source_id)
+        return tuple(reserved)
 
     def _load_recipe_manifest(self) -> _RecipeManifest | None:
         """Load and cache only a fully validated schema-v2 recipe manifest."""
@@ -254,6 +331,7 @@ class ImagingLibrary:
         source_ids = self._string_list(raw_asset.get("source_ids", []))
         if source_ids is None:
             return None
+        foreground_source_ids = self._foreground_source_ids(raw_asset, kind, source_ids)
         asset_path = self._safe_pack_asset_path(relative_path)
         if asset_path is None:
             return None
@@ -263,7 +341,38 @@ class ImagingLibrary:
             kind=kind,
             tags=tags,
             source_ids=source_ids,
+            foreground_source_ids=foreground_source_ids,
         )
+
+    @classmethod
+    def _foreground_source_ids(
+        cls,
+        raw_asset: Mapping[object, object],
+        kind: str,
+        source_ids: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Read exact foreground layer roles, with a conservative v2 fallback."""
+        raw_layers = raw_asset.get("layers")
+        if isinstance(raw_layers, list) and raw_layers:
+            foreground: list[str] = []
+            covered: set[str] = set()
+            for raw_layer in raw_layers:
+                if not isinstance(raw_layer, Mapping):
+                    break
+                source_id = cls._nonempty_string(raw_layer.get("source_id"))
+                role = cls._nonempty_string(raw_layer.get("role"))
+                if source_id is None or role not in {"foreground", "texture"} or source_id not in source_ids:
+                    break
+                covered.add(source_id)
+                if role == "foreground" and source_id not in foreground:
+                    foreground.append(source_id)
+            else:
+                if covered == set(source_ids):
+                    return tuple(foreground)
+
+        if kind.casefold() in {"ad_bed", "background", "bed", "texture"}:
+            return ()
+        return source_ids
 
     @staticmethod
     def _nonempty_string(value: object) -> str | None:
@@ -420,7 +529,7 @@ class ImagingLibrary:
             if duration >= 1.2 or not source_path.is_file():
                 return False
             try:
-                loop_audio_bed(
+                fit_audio_oneshot(
                     source_path,
                     output_path,
                     duration,
