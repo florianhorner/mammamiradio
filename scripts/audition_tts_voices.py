@@ -26,6 +26,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from uuid import uuid4
 
 from mammamiradio.audio import tts as tts_module
@@ -1704,13 +1705,56 @@ def write_identity_listening_receipt_from_decision(
     return manifest_path
 
 
-def assert_identity_listening_gate(manifest_path: Path) -> tuple[Path, ...]:
-    """Return exact approved clips or fail before a downstream treatment build."""
+def _freeze_identity_metadata(value: object) -> object:
+    """Return a recursively immutable view of validated manifest metadata."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze_identity_metadata(item) for key, item in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_identity_metadata(item) for item in value)
+    return value
+
+
+def approved_identity_clips_by_id(
+    manifest_path: Path,
+) -> tuple[str, dict[str, Path], dict[str, Mapping[str, object]]]:
+    """Return one fully validated approved identity board keyed by clip id.
+
+    Validation and receipt approval happen in the same read.  The returned
+    paths are paired with their IDs from that validated object, so a harmless
+    manifest reordering cannot make a downstream renderer mistake one host for
+    another.  Clip metadata is recursively immutable to keep the evidence used
+    by a later gate from being altered in memory after validation.
+    """
     manifest, clip_paths = _validate_identity_board(manifest_path)
     receipt = _identity_manifest_mapping(manifest.get("listening_receipt"), "listening_receipt")
     if receipt.get("status") != "approved":
         raise ValueError("Identity listening gate is not approved for this pack digest")
-    return clip_paths
+
+    pack_digest = manifest.get("pack_digest")
+    raw_clips = manifest.get("clips")
+    if not isinstance(pack_digest, str) or not isinstance(raw_clips, list):  # pragma: no cover - validator invariant
+        raise ValueError("Identity board validation returned incomplete evidence")
+
+    paths_by_id: dict[str, Path] = {}
+    metadata_by_id: dict[str, Mapping[str, object]] = {}
+    for raw_clip, clip_path in zip(raw_clips, clip_paths, strict=True):
+        if not isinstance(raw_clip, Mapping):  # pragma: no cover - validator invariant
+            raise ValueError("Identity board validation returned invalid clip metadata")
+        clip_id = raw_clip.get("id")
+        if not isinstance(clip_id, str):  # pragma: no cover - validator invariant
+            raise ValueError("Identity board validation returned a clip without an id")
+        frozen = _freeze_identity_metadata(raw_clip)
+        if not isinstance(frozen, Mapping):  # pragma: no cover - recursive helper invariant
+            raise ValueError("Identity clip metadata could not be frozen")
+        paths_by_id[clip_id] = clip_path
+        metadata_by_id[clip_id] = frozen
+    return pack_digest, paths_by_id, metadata_by_id
+
+
+def assert_identity_listening_gate(manifest_path: Path) -> tuple[Path, ...]:
+    """Return exact approved clips or fail before a downstream treatment build."""
+    _digest, paths_by_id, _metadata_by_id = approved_identity_clips_by_id(manifest_path)
+    return tuple(paths_by_id.values())
 
 
 def write_manifest(

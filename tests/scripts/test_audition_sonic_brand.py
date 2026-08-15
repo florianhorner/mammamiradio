@@ -250,6 +250,47 @@ def test_motif_gate_writes_durable_board_and_exact_listening_handoff(tmp_path, m
     assert audition.MOTIF_LISTENING_PROMPT in handoff
 
 
+def test_treatment_gate_cli_routes_only_the_approved_identity_manifest(tmp_path, monkeypatch, capsys) -> None:
+    identity_manifest = tmp_path / "identity" / "manifest.json"
+    identity_manifest.parent.mkdir()
+    identity_manifest.write_text("{}\n", encoding="utf-8")
+    output_dir = tmp_path / "auditions"
+    calls: list[tuple[Path, Path, str | None]] = []
+
+    class TreatmentGateModule:
+        @staticmethod
+        def render_treatment_gate(
+            manifest_path: Path,
+            run_dir: Path,
+            generated_at: str | None = None,
+        ) -> dict[str, str]:
+            calls.append((manifest_path, run_dir, generated_at))
+            run_dir.mkdir(parents=True)
+            return {"pack_digest": "a" * 64}
+
+    monkeypatch.setattr(audition.importlib, "import_module", lambda _name: TreatmentGateModule)
+
+    assert (
+        audition.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--timestamp",
+                "20260815T203827Z",
+                "--treatment-identity-manifest",
+                str(identity_manifest),
+            ]
+        )
+        == 0
+    )
+
+    run_dir = output_dir / "treatment-gate-20260815T203827Z"
+    assert calls == [(identity_manifest, run_dir, "20260815T203827Z")]
+    output = capsys.readouterr().out
+    assert f"Treatment gate: {run_dir}" in output
+    assert "Pack digest: " + "a" * 64 in output
+
+
 def test_core_break_order_covers_no_mid_single_mid_and_successor_types(tmp_path) -> None:
     intro = tmp_path / "intro.mp3"
     ad_in = tmp_path / "in.mp3"

@@ -2,9 +2,10 @@
 """Build a local A/B and scene-recipe listening pack for recorded Mamma Mi Radio imaging.
 
 The script never calls TTS providers, starts the station, or touches its queue. It
-can either render the current procedural-versus-packaged review, or run the
-stage-one Modern Night Drive motif gate from three hash-pinned, audition-only
-Freesound HQ derivatives. Both modes write a standalone local listening page.
+can render the current procedural-versus-packaged review, the historical
+source-backed motif gate, or the revised local-synthesis treatment gate bound to
+an approved production-voice manifest. Every mode writes a standalone local
+listening page.
 """
 
 from __future__ import annotations
@@ -528,15 +529,40 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip the local scene-recipe board (useful for a fast core-identity comparison)",
     )
-    parser.add_argument(
+    gate_mode = parser.add_mutually_exclusive_group()
+    gate_mode.add_argument(
         "--motif-source-dir",
         type=Path,
         help="Run only the three-candidate motif gate from hash-pinned HQ preview derivatives",
+    )
+    gate_mode.add_argument(
+        "--treatment-identity-manifest",
+        type=Path,
+        help="Run the revised three-direction treatment gate from an approved production-voice manifest",
     )
     args = parser.parse_args(argv)
 
     try:
         timestamp = _timestamp(args.timestamp)
+        if args.treatment_identity_manifest is not None:
+            try:
+                treatment_gate = importlib.import_module("scripts.sonic_treatment_gate")
+            except ModuleNotFoundError as exc:
+                if exc.name != "scripts":
+                    raise
+                treatment_gate = importlib.import_module("sonic_treatment_gate")
+            run_dir = args.output_dir / f"treatment-gate-{timestamp}"
+            manifest = treatment_gate.render_treatment_gate(
+                args.treatment_identity_manifest,
+                run_dir,
+                generated_at=timestamp,
+            )
+            print(f"Treatment gate: {run_dir}")
+            print(f"Manifest: {run_dir / 'manifest.json'}")
+            print(f"Listening page: {run_dir / 'index.html'}")
+            print(f"Handoff: {run_dir / 'README.md'}")
+            print(f"Pack digest: {manifest['pack_digest']}")
+            return 0
         if args.motif_source_dir is not None:
             run_dir = args.output_dir / f"motif-gate-{timestamp}"
             manifest = pack_builder.render_motif_prototypes(
@@ -560,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         recipe_results = [] if args.no_recipe_previews else render_recipe_previews(run_dir)
         manifest_path = write_manifest(results, run_dir, timestamp=timestamp, recipe_results=recipe_results)
         index_path = write_index_html(results, run_dir, timestamp=timestamp, recipe_results=recipe_results)
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 

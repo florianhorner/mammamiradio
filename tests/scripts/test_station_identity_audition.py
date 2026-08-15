@@ -686,3 +686,87 @@ def test_identity_cli_passes_only_bound_paths_to_renderer(tmp_path: Path, monkey
         "timestamp": "20260815T180008Z",
         "receipt_path": receipt_path,
     }
+
+
+@pytest.mark.asyncio
+async def test_approved_identity_clips_are_keyed_by_id_with_exact_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir, manifest = await _render_board(tmp_path, monkeypatch, stamp="20260815T180015Z")
+    manifest_path = run_dir / "manifest.json"
+    audition.write_identity_listening_receipt_from_decision(
+        manifest_path=manifest_path,
+        decision_path=_decision_path(tmp_path, manifest["pack_digest"]),
+        reviewed_at="2026-08-15T20:00:00+02:00",
+    )
+
+    pack_digest, paths_by_id, metadata_by_id = audition.approved_identity_clips_by_id(manifest_path)
+
+    expected_ids = {"identity-isabella", "identity-marco", "identity-giulia"}
+    assert pack_digest == manifest["pack_digest"]
+    assert set(paths_by_id) == expected_ids
+    assert set(metadata_by_id) == expected_ids
+    clips_by_id = {clip["id"]: clip for clip in manifest["clips"]}
+    for clip_id in expected_ids:
+        assert paths_by_id[clip_id] == run_dir / clips_by_id[clip_id]["path"]
+        assert metadata_by_id[clip_id] == clips_by_id[clip_id]
+    with pytest.raises(TypeError):
+        metadata_by_id["identity-isabella"]["id"] = "identity-marco"  # type: ignore[index]
+
+
+def test_approved_identity_clips_preserve_id_path_pairing_when_validated_order_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ordered_ids = ["identity-giulia", "identity-isabella", "identity-marco"]
+    clips = [{"id": clip_id, "audio_sha256": clip_id} for clip_id in ordered_ids]
+    paths = tuple(tmp_path / f"{clip_id}.mp3" for clip_id in ordered_ids)
+    manifest = {
+        "pack_digest": "a" * 64,
+        "listening_receipt": {"status": "approved"},
+        "clips": clips,
+    }
+    monkeypatch.setattr(audition, "_validate_identity_board", lambda _path: (manifest, paths))
+
+    digest, paths_by_id, metadata_by_id = audition.approved_identity_clips_by_id(tmp_path / "manifest.json")
+
+    assert digest == "a" * 64
+    assert paths_by_id == dict(zip(ordered_ids, paths, strict=True))
+    assert {clip_id: metadata["audio_sha256"] for clip_id, metadata in metadata_by_id.items()} == {
+        clip_id: clip_id for clip_id in ordered_ids
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["pending", "rejected", "tampered"])
+async def test_approved_identity_clips_fail_closed_for_unapproved_or_stale_board(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    run_dir, manifest = await _render_board(tmp_path, monkeypatch, stamp="20260815T180016Z")
+    manifest_path = run_dir / "manifest.json"
+    if failure == "rejected":
+        audition.write_identity_listening_receipt_from_decision(
+            manifest_path=manifest_path,
+            decision_path=_decision_path(
+                tmp_path,
+                manifest["pack_digest"],
+                status="rejected",
+                wrong="Marco",
+                rationale="rejected_wrong_voice_identity",
+            ),
+            reviewed_at="2026-08-15T20:00:00+02:00",
+        )
+    elif failure == "tampered":
+        audition.write_identity_listening_receipt_from_decision(
+            manifest_path=manifest_path,
+            decision_path=_decision_path(tmp_path, manifest["pack_digest"]),
+            reviewed_at="2026-08-15T20:00:00+02:00",
+        )
+        first_clip = manifest["clips"][0]
+        (run_dir / first_clip["path"]).write_bytes(b"tampered-after-approval")
+
+    with pytest.raises(ValueError):
+        audition.approved_identity_clips_by_id(manifest_path)
