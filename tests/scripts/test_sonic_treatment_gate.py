@@ -201,6 +201,8 @@ def test_render_treatment_gate_binds_approved_identity_and_writes_exact_board(
         assert f"audio/{candidate_id}_isabella.mp3" in html
         assert f"audio/{candidate_id}.mp3" in readme
         assert f"audio/{candidate_id}_isabella.mp3" in readme
+    assert "Sonos Arc: pass|fail|not_tested" in html
+    assert "Sonos Arc: pass|fail|not_tested" in readme
 
     complete_surface = "\n".join((json.dumps(manifest, sort_keys=True), html, readme)).casefold()
     for rejected_palette in (
@@ -364,8 +366,8 @@ def test_treatment_receipt_records_rejection_of_all_candidates_but_keeps_gate_cl
         status="rejected",
         candidate_id="none",
         rationale="rejected_all_directions",
-        mac="pass",
-        sonos_arc="fail",
+        mac="fail",
+        sonos_arc="not_tested",
     )
 
     gate.write_treatment_listening_receipt_from_decision(
@@ -377,8 +379,8 @@ def test_treatment_receipt_records_rejection_of_all_candidates_but_keeps_gate_cl
     stored, _paths = gate.validate_treatment_gate(manifest_path)
     assert stored["listening_receipt"]["candidate_id"] == "none"
     assert stored["listening_receipt"]["status"] == "rejected"
-    assert stored["listening_receipt"]["mac"] == "pass"
-    assert stored["listening_receipt"]["sonos_arc"] == "fail"
+    assert stored["listening_receipt"]["mac"] == "fail"
+    assert stored["listening_receipt"]["sonos_arc"] == "not_tested"
     with pytest.raises(ValueError, match="not approved"):
         gate.assert_treatment_listening_gate(manifest_path)
 

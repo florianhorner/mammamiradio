@@ -83,7 +83,7 @@ ASSET_FIELDS = frozenset({"path", "sha256", "duration_sec", "format"})
 CONTEXT_FIELDS = frozenset({*ASSET_FIELDS, "voice_id", "voice_sha256", "mix"})
 LISTENING_PROMPT = (
     "Treatment: neon_relay|velvet_horizon|headlight_cut|none; "
-    "Mac: pass|fail; Sonos Arc: pass|fail; Notes: <short reason>"
+    "Mac: pass|fail; Sonos Arc: pass|fail|not_tested; Notes: <short reason>"
 )
 
 
@@ -519,7 +519,7 @@ def _validate_receipt(value: object, *, pack_digest: str) -> Mapping[str, object
         raise ValueError("Approved treatment receipt does not identify an accepted direction")
     if status == "rejected" and (
         candidate_id != "none"
-        or mac not in {"pass", "fail", "not_tested"}
+        or mac not in {"pass", "fail"}
         or sonos_arc not in {"pass", "fail", "not_tested"}
         or (mac == "pass" and sonos_arc == "pass")
         or rationale != "rejected_all_directions"
