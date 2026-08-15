@@ -442,6 +442,74 @@ async def test_scene_naming_a_resident_keeps_ladder(config, state, monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "scene",
+    [
+        "due persone in salotto",
+        "Due Persone A Casa",
+        "two people in the room",
+        "una persona sveglia",
+        "one person awake",
+        "tre ospiti stasera",
+        "four guests arriving",
+    ],
+)
+def test_validate_scene_rejects_a_headcount(scene):
+    """A headcount is never grounded: presence is home-or-away, never how many."""
+    from mammamiradio.home.scene_namer import _validate_scene
+
+    assert _validate_scene(scene, ()) is False
+
+
+@pytest.mark.parametrize(
+    "scene",
+    [
+        "Serata cinema",
+        "Musica in casa",
+        "Quiet evening at home",
+        "Persone che ballano",  # a noun with no count in front of it is fine
+        "Due bicchieri sul tavolo",  # counting objects is not counting people
+    ],
+)
+def test_validate_scene_still_accepts_ordinary_scenes(scene):
+    from mammamiradio.home.scene_namer import _validate_scene
+
+    assert _validate_scene(scene, ()) is True
+
+
+@pytest.mark.asyncio
+async def test_scene_counting_people_keeps_ladder(config, state, monkeypatch):
+    """The invented headcount must not ride into HOME MOOD or the Casa card."""
+    from mammamiradio.home import scene_namer
+
+    person = ScoredEntity(
+        entity_id="person.florian_horner",
+        area=None,
+        domain="person",
+        score=1.9,
+        raw_state={"state": "home", "attributes": {}},
+        label_it="Florian",
+        label_en="Florian",
+        label_tier="curated",
+        summary_line="Florian: a casa",
+    )
+
+    async def _call(_config, _scored, *, local_hour, model):
+        return _response('{"mood_it":"Due persone in salotto","mood_en":"Two people in the room"}')
+
+    monkeypatch.setattr(scene_namer, "_call_anthropic_scene", _call)
+
+    ladder = scene_namer.resolve_home_mood(config, state, _home_context(mood="Musica in casa", scored=[person]))
+    assert ladder == ("Musica in casa", "Music at home")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    # The rejected scene never reaches the cache, so the ladder keeps serving.
+    # Asserted as an exact tuple, matching test_scene_naming_a_resident_keeps_ladder.
+    served = scene_namer.resolve_home_mood(config, state, _home_context(mood="Serata cinema", scored=[person]))
+    assert served == ("Serata cinema", "Music at home")
+
+
 @pytest.mark.asyncio
 async def test_usage_none_still_caches_scene_without_cost_row(config, state, monkeypatch):
     from mammamiradio.home import scene_namer

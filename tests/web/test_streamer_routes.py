@@ -9689,6 +9689,47 @@ async def test_home_context_setup_routes_reject_invalid_json_and_missing_ha_acce
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("is_addon", [True, False], ids=["addon", "standalone"])
+async def test_find_speakers_way_out_matches_how_the_station_runs(tmp_path, is_addon):
+    """A standalone run has no add-on options page to send the operator to.
+
+    Same failure, same code, but "check the add-on's Home Assistant access" is a
+    dead end when there is no add-on. Only the wording moves; consumers branching
+    on the error code see no difference.
+    """
+    from mammamiradio.home.ha_playback import HAPlaybackError, HAPlaybackReason
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.is_addon = is_addon
+    service = SimpleNamespace(
+        discover=AsyncMock(side_effect=HAPlaybackError(HAPlaybackReason.HA_ACCESS_MISSING)),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post("/api/setup/first-listen/players", json={})
+
+    body = response.json()["error"]
+    assert response.status_code == 409
+    assert body["code"] == "ha_access_missing"
+    assert body["retryable"] is True
+
+    if is_addon:
+        assert "add-on" in body["message"]
+        assert ".env" not in body["message"]
+    else:
+        # Names something that exists on this install, and says the station still works.
+        assert "HA_URL" in body["message"] and "HA_TOKEN" in body["message"]
+        assert "skip this step" in body["message"]
+        assert "add-on" not in body["message"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "origin_status",
     [FirstListenInstallOriginStatus.FRESH, FirstListenInstallOriginStatus.UNKNOWN],

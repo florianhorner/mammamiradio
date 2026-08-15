@@ -735,6 +735,12 @@ async def test_impossible_tts_unavailable_uses_canned_or_propagates_to_recovery(
         assert queued.type is SegmentType.BANTER
         assert queued.path == canned
         assert state.last_banter_script == [{"host": "Radio", "text": "(pre-recorded banter)"}]
+        # The synthetic "Radio" host above is a placeholder, not a speaker. It must
+        # not reach the v1 contract's now_playing.host, so a canned clip claims
+        # nobody and the consumer falls back on its own. Indexed, not .get() with a
+        # default: a default of "" also passes when the key is dropped entirely,
+        # which is the regression this is here to catch.
+        assert queued.metadata["host"] == ""
         recovery_builder.assert_not_awaited()
     else:
         assert queued is recovery
