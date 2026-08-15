@@ -633,7 +633,7 @@ def test_normalize_ad_broadcast_chain(mock_subprocess):
     # Mud cut
     assert "highpass=f=120" in joined
     # Loud + tight loudnorm
-    assert "loudnorm=I=-14:LRA=7:TP=-1.0" in joined
+    assert "loudnorm=I=-14:LRA=7:TP=-2.0" in joined
 
 
 # ---------------------------------------------------------------------------

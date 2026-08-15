@@ -4,8 +4,9 @@
 The script never calls TTS providers, starts the station, or touches its queue. It
 can render the current procedural-versus-packaged review, the historical
 source-backed motif gate, or the revised local-synthesis treatment gate bound to
-an approved production-voice manifest. Every mode writes a standalone local
-listening page.
+an approved production-voice manifest. It can also render the provider-free core
+cadence board from an approved treatment receipt plus a frozen approved-route
+speech manifest. Every mode writes a standalone local listening page.
 """
 
 from __future__ import annotations
@@ -540,10 +541,44 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Run the revised three-direction treatment gate from an approved production-voice manifest",
     )
+    gate_mode.add_argument(
+        "--core-treatment-manifest",
+        type=Path,
+        help="Run the five-group core cadence gate from an approved treatment manifest",
+    )
+    parser.add_argument(
+        "--core-speech-manifest",
+        type=Path,
+        help="Frozen approved-route speech manifest required by --core-treatment-manifest",
+    )
     args = parser.parse_args(argv)
 
     try:
         timestamp = _timestamp(args.timestamp)
+        if args.core_treatment_manifest is not None:
+            if args.core_speech_manifest is None:
+                raise ValueError("--core-speech-manifest is required with --core-treatment-manifest")
+            try:
+                core_gate = importlib.import_module("scripts.core_cadence_gate")
+            except ModuleNotFoundError as exc:
+                if exc.name != "scripts":
+                    raise
+                core_gate = importlib.import_module("core_cadence_gate")
+            run_dir = args.output_dir / f"core-cadence-gate-{timestamp}"
+            manifest = core_gate.render_core_cadence_gate(
+                args.core_treatment_manifest,
+                args.core_speech_manifest,
+                run_dir,
+                generated_at=timestamp,
+            )
+            print(f"Core cadence gate: {run_dir}")
+            print(f"Manifest: {run_dir / 'manifest.json'}")
+            print(f"Listening page: {run_dir / 'index.html'}")
+            print(f"Handoff: {run_dir / 'README.md'}")
+            print(f"Pack digest: {manifest['pack_digest']}")
+            return 0
+        if args.core_speech_manifest is not None:
+            raise ValueError("--core-speech-manifest requires --core-treatment-manifest")
         if args.treatment_identity_manifest is not None:
             try:
                 treatment_gate = importlib.import_module("scripts.sonic_treatment_gate")

@@ -386,7 +386,11 @@ def _reconcile_lufs(path: Path, *, ad: bool = False, background: bool = False) -
         "-i",
         str(path),
         "-af",
-        f"volume={_fmt_num(gain_db)}dB",
+        # Keep a codec-safety margin after any positive loudness correction.
+        # MP3 can overshoot the pre-encode sample peak substantially on bright,
+        # compressed speech; -2.5 dBFS here preserves the station's decoded
+        # <= -1.0 dBTP contract after the corrective re-encode.
+        f"volume={_fmt_num(gain_db)}dB,alimiter=limit=0.75:level=false:latency=true",
         *_reconcile_output_args,
         str(tmp),
     ]
@@ -1927,6 +1931,13 @@ def mix_voice_with_sting(
     cmd = [
         "ffmpeg",
         "-y",
+        # ``loudnorm`` inside a multi-threaded complex graph is not bit-stable:
+        # identical short ID renders can differ at decoded-sample level, which
+        # invalidates digest-bound listening receipts. This mix is only a few
+        # seconds long, so one filter thread is effectively free and keeps both
+        # runtime and offline approval renders deterministic.
+        "-filter_complex_threads",
+        "1",
         "-i",
         str(sting_path),
         "-i",
@@ -1934,7 +1945,12 @@ def mix_voice_with_sting(
         "-filter_complex",
         "[0:a]volume=0.15[bed];"
         "[1:a]adelay=400|400,volume=1.2[voice];"
-        "[bed][voice]amix=inputs=2:duration=longest:dropout_transition=1,"
+        # Preserve the authored 0.15/1.2 gain relationship instead of letting
+        # amix renormalize the voice when the shorter bed reaches EOF.  Apart
+        # from the audible level jump, dropout renormalization can land on one
+        # of two adjacent decoded samples and makes otherwise identical renders
+        # nondeterministic.
+        "[bed][voice]amix=inputs=2:duration=longest:normalize=0,"
         "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",
         "[out]",
@@ -1953,8 +1969,8 @@ def normalize_ad(input_path: Path, output_path: Path) -> Path:
     Chain: heavy compressor (fast attack squashes transients, low threshold
     catches everything) → presence boost at 3kHz for clarity → air boost at
     8kHz for sparkle → bass shelf cut to avoid muddiness under compression →
-    aggressive loudnorm (I=-14, LRA=7 for minimal dynamic range, TP=-1.0 for
-    maximum loudness before clipping).
+    aggressive loudnorm (I=-14, LRA=7 for minimal dynamic range, TP=-2.0 as
+    codec headroom for the decoded -1.0 dBTP ceiling).
 
     The I=-14 stage gives ads their punch; a final loudness-reconciliation pass
     (``_reconcile_lufs(ad=True)``) then settles the aired level to ad_lufs_target
@@ -1977,7 +1993,7 @@ def normalize_ad(input_path: Path, output_path: Path) -> Path:
         # Cut mud below 120Hz (ads don't need sub-bass)
         "highpass=f=120:t=q:w=0.7,"
         # EBU R128 loudness — louder and tighter than music
-        "loudnorm=I=-14:LRA=7:TP=-1.0",
+        "loudnorm=I=-14:LRA=7:TP=-2.0",
         *_MP3_OUTPUT_ARGS,
         str(output_path),
     ]

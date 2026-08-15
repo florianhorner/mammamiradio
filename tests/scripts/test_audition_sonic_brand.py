@@ -291,6 +291,53 @@ def test_treatment_gate_cli_routes_only_the_approved_identity_manifest(tmp_path,
     assert "Pack digest: " + "a" * 64 in output
 
 
+def test_core_gate_cli_routes_only_the_approved_treatment_manifest(tmp_path, monkeypatch, capsys) -> None:
+    treatment_manifest = tmp_path / "treatment" / "manifest.json"
+    treatment_manifest.parent.mkdir()
+    treatment_manifest.write_text("{}\n", encoding="utf-8")
+    speech_manifest = tmp_path / "speech" / "manifest.json"
+    speech_manifest.parent.mkdir()
+    speech_manifest.write_text("{}\n", encoding="utf-8")
+    output_dir = tmp_path / "auditions"
+    calls: list[tuple[Path, Path, Path, str | None]] = []
+
+    class CoreGateModule:
+        @staticmethod
+        def render_core_cadence_gate(
+            manifest_path: Path,
+            frozen_speech_manifest: Path,
+            run_dir: Path,
+            generated_at: str | None = None,
+        ) -> dict[str, str]:
+            calls.append((manifest_path, frozen_speech_manifest, run_dir, generated_at))
+            run_dir.mkdir(parents=True)
+            return {"pack_digest": "b" * 64}
+
+    monkeypatch.setattr(audition.importlib, "import_module", lambda _name: CoreGateModule)
+
+    assert (
+        audition.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--timestamp",
+                "20260815T220000Z",
+                "--core-treatment-manifest",
+                str(treatment_manifest),
+                "--core-speech-manifest",
+                str(speech_manifest),
+            ]
+        )
+        == 0
+    )
+
+    run_dir = output_dir / "core-cadence-gate-20260815T220000Z"
+    assert calls == [(treatment_manifest, speech_manifest, run_dir, "20260815T220000Z")]
+    output = capsys.readouterr().out
+    assert f"Core cadence gate: {run_dir}" in output
+    assert "Pack digest: " + "b" * 64 in output
+
+
 def test_core_break_order_covers_no_mid_single_mid_and_successor_types(tmp_path) -> None:
     intro = tmp_path / "intro.mp3"
     ad_in = tmp_path / "in.mp3"
