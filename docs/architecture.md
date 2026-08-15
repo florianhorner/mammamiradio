@@ -155,6 +155,18 @@ base playlist:
   plus `heading.json`, so a restart cannot reapply an old course over a freshly
   loaded base.
 
+Steering is durable: an active heading keeps lifting its matches until the
+operator clears it, and `selection_spent` is telemetry rather than a brake. That
+makes a small found set the thing to guard. At the target share, a set of H tracks
+brings any one of them back roughly every `H / share` picks, which for a handful of
+tracks falls inside the plain repeat cooldown's blind spot and reads to a listener
+as the same song again. So `select_next_track` cools a course track against the
+rest of its own set instead: it excludes the last `H - 1` distinct course tracks
+aired, so one cannot return until the others have had a turn. The set keeps its
+full share of the show and cycles through instead of repeating. The exclusion is a
+strict filter that relaxes with the others, and it never removes more than `H - 1`
+of `H`, so a course can never starve selection.
+
 `cache/heading.json` is an overlay, separate from `playlist_source.json`. Reads are
 corrupt/missing tolerant and return no heading rather than failing boot. Seed
 headings persist the seed; text directions persist concrete targets, phase, safe

@@ -2306,11 +2306,37 @@ class StationState:
             if i >= artist_10_start:
                 recent_artist_10[t.artist] = recent_artist_10.get(t.artist, 0) + 1
 
+        # An active course keeps lifting its matches for as long as it is set. That
+        # is deliberate: steering is durable and does not retire when a budget runs out.
+        # The cost is that a small found set gets picked from over and over: at the
+        # target share, a set of H tracks brings a given one back roughly every
+        # H/share picks, which on a five-track set is inside the plain repeat
+        # cooldown's blind spot and reads to a listener as the same song again.
+        #
+        # So cool a course track down against the other course tracks rather than
+        # against the last few plays: it cannot return until the rest of the set has
+        # had its turn. The set still takes its full share of the show, it just
+        # cycles instead of repeating. This is a strict filter and relaxes with the
+        # others below, so a course can never starve selection.
+        heading_recent_keys: set[str] = set()
+        active_heading = self.heading
+        if active_heading is not None and active_heading.id:
+            course_keys = {t.cache_key for t in pool if t.heading_id == active_heading.id}
+            if len(course_keys) > 1:
+                for played in reversed(self.played_tracks):
+                    if played.heading_id != active_heading.id:
+                        continue
+                    heading_recent_keys.add(played.cache_key)
+                    if len(heading_recent_keys) >= len(course_keys) - 1:
+                        break
+
         # --- Hard filters (progressively relaxed) ---
         def _apply_filters(candidates: list[Track], *, strict: bool = True) -> list[Track]:
             result = candidates
             if not allow_explicit:
                 result = [t for t in result if not t.explicit]
+            if strict and heading_recent_keys:
+                result = [t for t in result if t.cache_key not in heading_recent_keys]
             if strict and repeat_cooldown:
                 result = [t for t in result if t.cache_key not in recent_keys]
             if strict and artist_cooldown:
@@ -2345,7 +2371,7 @@ class StationState:
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
         # Pass 1: base weight per candidate (everything EXCEPT the Record Hunt lift), plus
         # the heading-match flag and the split base-weight sums the adaptive lift needs.
-        heading = self.heading
+        heading = active_heading
         preference_scores = preference_score_map(self.song_preferences)
         base_weights: list[float] = []
         heading_flags: list[bool] = []
