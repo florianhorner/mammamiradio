@@ -4055,9 +4055,11 @@ async def test_stream_omits_icy_genre_when_no_listener_tagline(tagline: str):
     """An empty or unusable tagline must not fall back to the internal prompt.
 
     ``广播 电台`` is the case worth spelling out: the CJK folds away but the
-    space between the words does not, so the intermediate value is a lone
-    space, which is truthy. Only because ``_header_safe`` strips its own
-    output does this reach the omit branch instead of shipping " ".
+    space between the words does not, so the value passes through a stage
+    where it is a lone space, which is truthy. Two separate strips can carry
+    it to empty, so this pins the required end result rather than either one:
+    whatever the pipeline does, a tagline with no letters left must omit the
+    header, never ship " ".
     """
     app = _make_test_app()
     app.state.config.station.theme = "INTERNAL SCRIPTWRITER DIRECTIVE: never air this"
