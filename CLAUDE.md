@@ -492,6 +492,19 @@ an operator-facing control changes something subtle or imperceptible, its UI cop
 must say so plainly (what it does, how subtle it is, where it's most noticeable) —
 an honest "you may not hear a difference" beats a confident label nobody can verify.
 
+### Sonic identity must translate beyond full-range speakers
+
+A default station signature must remain recognizable on phones, laptops, small
+smart speakers, and ordinary car systems. Bass may reinforce the cue on
+full-range equipment, but it must never carry the identifying rhythm, contour,
+or answer by itself. Keep identity-bearing energy in the midrange and include a
+small-speaker translation check alongside Mac and target-speaker listening.
+
+For the Modern Night Drive rebuild, **Neon Relay** is the station-signature
+direction. **Velvet Horizon** supplies the atmospheric character for separately
+authored transitions; it is not a second signature and its prototype asset must
+not be reused as transition material.
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill
