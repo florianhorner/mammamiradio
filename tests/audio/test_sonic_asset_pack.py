@@ -147,7 +147,7 @@ def test_mid_break_bumper_honors_the_requested_short_duration(tmp_path: Path) ->
     library = ImagingLibrary([523, 659, 784, 1047], tmp_path)
     mid_bumper = tmp_path / "mid_bumper.mp3"
 
-    library.pick_ad_bumper(mid_bumper, 0.8)
+    library.pick_ad_bumper(mid_bumper, 0.8, role="mid")
 
     assert _duration_sec(mid_bumper) == pytest.approx(0.8, abs=0.08)
 

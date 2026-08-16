@@ -249,14 +249,14 @@ _CATEGORY_SONIC: dict[str, list[SonicWorld]] = {
     "food": [
         SonicWorld(environment="cafe", music_bed="tarantella_pop", transition_motif="register_hit"),
         SonicWorld(environment="shopping_channel", music_bed="cheap_synth_romance", transition_motif="ice_clink"),
-        SonicWorld(environment="cafe", music_bed="upbeat", transition_motif="mandolin_sting"),
+        SonicWorld(environment="cafe", music_bed="upbeat", transition_motif="chime"),
     ],
     "fashion": [
         SonicWorld(environment="showroom", music_bed="suspicious_jazz", transition_motif="whoosh"),
         SonicWorld(environment="showroom", music_bed="discount_techno", transition_motif="tape_stop"),
     ],
     "beauty": [
-        SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="mandolin_sting"),
+        SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="startup_synth"),
         SonicWorld(environment="showroom", music_bed="lounge", transition_motif="ice_clink"),
     ],
     "services": [
@@ -276,7 +276,7 @@ _CATEGORY_SONIC: dict[str, list[SonicWorld]] = {
         SonicWorld(environment="motorway", music_bed="discount_techno", transition_motif="startup_synth"),
     ],
     "tourism": [
-        SonicWorld(environment="beach", music_bed="tarantella_pop", transition_motif="mandolin_sting"),
+        SonicWorld(environment="beach", music_bed="tarantella_pop", transition_motif="whoosh"),
         SonicWorld(environment="shopping_channel", music_bed="overblown_epic", transition_motif="whoosh"),
     ],
 }

@@ -445,12 +445,15 @@ def test_generate_sfx_mandolin_sting(mock_subprocess):
     generate_sfx(out, "mandolin_sting")
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
-    # All notes combined in single aevalsrc + echo
+    # Compatibility key now renders the neutral electronic relay treatment.
     assert "aevalsrc=" in joined
-    assert "330" in joined
-    assert "440" in joined
-    assert "554" in joined
+    assert "510" in joined
+    assert "765" in joined
+    assert "1040" in joined
     assert "aecho" in joined
+    assert "highpass" in joined
+    assert "lowpass" in joined
+    assert "330" not in joined
 
 
 def test_generate_sfx_ice_clink(mock_subprocess):
@@ -584,18 +587,19 @@ def test_whoosh_uses_filtered_noise(mock_subprocess):
     assert "lowpass" in joined
 
 
-def test_mandolin_sting_has_arpeggio(mock_subprocess):
+def test_legacy_mandolin_sting_has_sleek_electronic_relay_shape(mock_subprocess):
     mock_run, _ = mock_subprocess
     out = Path("/tmp/sfx.mp3")
     _generate_mandolin_sting(out)
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
-    # All notes combined in single aevalsrc with staggered onsets
     assert "aevalsrc=" in joined
-    assert "330" in joined
-    assert "440" in joined
-    assert "554" in joined
+    assert "510" in joined
+    assert "765" in joined
+    assert "1040" in joined
     assert "aecho" in joined
+    assert "highpass" in joined
+    assert "330" not in joined
 
 
 def test_ice_clink_has_layered_tones(mock_subprocess):

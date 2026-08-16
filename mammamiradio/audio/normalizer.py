@@ -943,28 +943,19 @@ def _generate_whoosh(output_path: Path, duration_sec: float = 0.6) -> Path:
 
 
 def _generate_mandolin_sting(output_path: Path, duration_sec: float = 0.5) -> Path:
-    """Plucked-string sting: fast attack, exponential decay with harmonics.
+    """Render the electronic relay sting behind the legacy compatibility name.
 
-    All 3 arpeggio notes (E4, A4, C#5) with octave harmonics combined into
-    a single aevalsrc. Staggered onsets via time-shifted decay envelopes.
-    6 inputs → 1.
+    ``mandolin_sting`` is an operator-facing key that cannot disappear from
+    older campaign data.  Its sound is deliberately no longer a novelty
+    mandolin: one compact midrange relay pulse and a restrained glass answer
+    keep incomplete/custom packs inside the Modern Night Drive palette.
     """
     d = duration_sec
-    # Each note: fundamental + octave harmonic, plucked envelope (exp decay),
-    # staggered onset at 0ms, 80ms, 160ms
-    # Note 1: E4(330) + E5(660), onset=0
-    # Note 2: A4(440) + A5(880), onset=0.08
-    # Note 3: C#5(554) + C#6(1108), onset=0.16
     expr = (
-        # Note 1 (E4+E5) — immediate onset
-        "1.0*sin(2*PI*330*t)*exp(-12*t)"
-        "+0.5*sin(2*PI*660*t)*exp(-12*t)"
-        # Note 2 (A4+A5) — onset at 0.08s
-        f"+1.0*sin(2*PI*440*t)*exp(-12*(t-0.08))*{_gate_after(0.08)}"
-        f"+0.5*sin(2*PI*880*t)*exp(-12*(t-0.08))*{_gate_after(0.08)}"
-        # Note 3 (C#5+C#6) — onset at 0.16s
-        f"+1.0*sin(2*PI*554*t)*exp(-15*(t-0.16))*{_gate_after(0.16)}"
-        f"+0.5*sin(2*PI*1108*t)*exp(-15*(t-0.16))*{_gate_after(0.16)}"
+        "0.62*sin(2*PI*510*t)*exp(-26*t)"
+        "+0.24*sin(2*PI*765*t)*exp(-31*t)"
+        f"+0.30*sin(2*PI*1040*(t-0.18))*exp(-11*(t-0.18))*{_gate_after(0.18)}"
+        f"+0.12*sin(2*PI*1560*(t-0.18))*exp(-15*(t-0.18))*{_gate_after(0.18)}"
     )
     cmd = [
         "ffmpeg",
@@ -974,13 +965,13 @@ def _generate_mandolin_sting(output_path: Path, duration_sec: float = 0.5) -> Pa
         "-i",
         f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
         "-af",
-        "aecho=0.6:0.4:20:0.15,volume=2.5",
+        "highpass=f=180,lowpass=f=6200,aecho=0.7:0.35:24:0.10,volume=1.8",
         *_MP3_OUTPUT_ARGS,
         "-t",
         str(d),
         str(output_path),
     ]
-    _run_ffmpeg(cmd, "mandolin sting SFX")
+    _run_ffmpeg(cmd, "legacy relay sting SFX")
     return output_path
 
 
@@ -1488,7 +1479,7 @@ def mix_oneshot_layers(
     remains the first amix input, so it defines the output duration.  This
     deliberately does not run ``loudnorm``: callers can place the recipe mix
     before their one final mastering/reconciliation stage instead of remastering
-    once for every small crowd, laugh, or brass accent.
+    once for every small foreground accent.
     """
     if len(layers) > 2:
         raise ValueError("at most two one-shot layers may be mixed with one base")

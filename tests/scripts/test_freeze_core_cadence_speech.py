@@ -545,18 +545,66 @@ def _rewrite_manifest(output_dir: Path, value: dict[str, Any]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_validator_rejects_stale_runtime_config_hash(
+async def test_validator_rejects_invalid_recorded_runtime_config_hash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output_dir, _manifest, _azure_calls, _elevenlabs_calls = await _render(tmp_path, monkeypatch)
     manifest_path = output_dir / "manifest.json"
     value: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
-    value["runtime_promo"]["config_sha256"] = "b" * 64
+    value["runtime_promo"]["config_sha256"] = "not-a-sha256"
     _rewrite_manifest(output_dir, value)
 
-    with pytest.raises(ValueError, match="config hash is stale"):
+    with pytest.raises(ValueError, match="config hash is invalid"):
         freezer.validate_core_cadence_speech_manifest(manifest_path)
+
+
+@pytest.mark.asyncio
+async def test_validator_ignores_unrelated_runtime_config_bytes_when_promo_route_is_current(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir, manifest, _azure_calls, _elevenlabs_calls = await _render(tmp_path, monkeypatch)
+    current = freezer._resolve_runtime_promo()
+    drifted = freezer.RuntimePromo(
+        config_path=current.config_path,
+        config_sha256="b" * 64,
+        selector=current.selector,
+        selected_voice_name=current.selected_voice_name,
+        route=current.route,
+    )
+    monkeypatch.setattr(freezer, "_resolve_runtime_promo", lambda: drifted)
+
+    validated, _paths = freezer.validate_core_cadence_speech_manifest(output_dir / "manifest.json")
+
+    assert validated["pack_digest"] == manifest["pack_digest"]
+    runtime_promo = validated["runtime_promo"]
+    assert isinstance(runtime_promo, dict)
+    assert runtime_promo["config_sha256"] != drifted.config_sha256
+
+
+@pytest.mark.asyncio
+async def test_validator_rejects_current_runtime_promo_settings_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir, _manifest, _azure_calls, _elevenlabs_calls = await _render(tmp_path, monkeypatch)
+    current = freezer._resolve_runtime_promo()
+    changed_route = deepcopy(current.route)
+    changed_settings = changed_route["settings"]
+    assert isinstance(changed_settings, dict)
+    changed_settings["stability"] = 0.5
+    changed = freezer.RuntimePromo(
+        config_path=current.config_path,
+        config_sha256="b" * 64,
+        selector=current.selector,
+        selected_voice_name=current.selected_voice_name,
+        route=changed_route,
+    )
+    monkeypatch.setattr(freezer, "_resolve_runtime_promo", lambda: changed)
+
+    with pytest.raises(ValueError, match="promo route is stale"):
+        freezer.validate_core_cadence_speech_manifest(output_dir / "manifest.json")
 
 
 @pytest.mark.asyncio

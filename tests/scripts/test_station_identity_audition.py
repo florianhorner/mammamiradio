@@ -490,6 +490,71 @@ async def test_identity_receipt_approves_only_exact_current_pack(
 
 
 @pytest.mark.asyncio
+async def test_approved_identity_ignores_ad_only_config_drift_but_rejects_voice_settings_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = (tmp_path / "radio.toml").resolve()
+    config_path.write_text('[[ads.brands]]\nname = "Test"\nsonic_recipe = "old-recipe"\n', encoding="utf-8")
+    monkeypatch.setattr(audition, "DEFAULT_CONFIG_PATH", config_path)
+    config = _identity_config()
+    _enable_provider_credentials(monkeypatch)
+    _patch_identity_config(monkeypatch, config)
+    _patch_audio_evidence(monkeypatch)
+
+    async def fake_synthesize(target: audition.VoiceAuditionTarget, output_path: Path) -> Path:
+        output_path.write_bytes(f"audio:{target.label}".encode())
+        return output_path
+
+    monkeypatch.setattr(audition, "_synthesize_target", fake_synthesize)
+    run_dir, manifest = await audition.render_identity_recalibration(
+        tmp_path / "boards",
+        config_path=config_path,
+        timestamp="20260815T180017Z",
+    )
+    manifest_path = run_dir / "manifest.json"
+    audition.write_identity_listening_receipt_from_decision(
+        manifest_path=manifest_path,
+        decision_path=_decision_path(tmp_path, str(manifest["pack_digest"])),
+        reviewed_at="2026-08-15T20:00:00+02:00",
+    )
+
+    config_path.write_text('[[ads.brands]]\nname = "Test"\nsonic_recipe = "new-recipe"\n', encoding="utf-8")
+
+    assert len(audition.assert_identity_listening_gate(manifest_path)) == 3
+    assert (
+        json.loads(manifest_path.read_text(encoding="utf-8"))["config"]["sha256"]
+        != hashlib.sha256(config_path.read_bytes()).hexdigest()
+    )
+
+    config.hosts[0].voice_settings = {"stability": 0.5}
+    with pytest.raises(ValueError, match="documented production voice profile"):
+        audition.assert_identity_listening_gate(manifest_path)
+
+    config.hosts[0].voice_settings = {"stability": 0.6}
+    config.hosts[0].engine = "openai"
+    with pytest.raises(ValueError, match="must use ElevenLabs"):
+        audition.assert_identity_listening_gate(manifest_path)
+
+
+def test_identity_source_evidence_keeps_live_hash_checks_strict_by_default(tmp_path: Path) -> None:
+    source_path = (tmp_path / "casting-proof.json").resolve()
+    source_path.write_bytes(b"approved")
+    approved_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    evidence = {"path": str(source_path), "sha256": approved_digest}
+    source_path.write_bytes(b"changed")
+
+    with pytest.raises(ValueError, match="current file hash differs"):
+        audition._identity_source_evidence(evidence, "host_profile_provenance")
+
+    assert audition._identity_source_evidence(
+        evidence,
+        "config",
+        require_current_hash=False,
+    ) == (source_path, approved_digest)
+
+
+@pytest.mark.asyncio
 async def test_identity_receipt_bad_or_second_decision_cannot_mutate_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

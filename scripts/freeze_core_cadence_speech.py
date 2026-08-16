@@ -678,8 +678,13 @@ def validate_core_cadence_speech_manifest(
     current_promo = _resolve_runtime_promo()
     if config_path != current_promo.config_path:
         raise ValueError("Speech-freeze runtime promo config path is stale")
-    if runtime_promo.get("config_sha256") != current_promo.config_sha256:
-        raise ValueError("Speech-freeze runtime promo config hash is stale")
+    recorded_config_sha256 = runtime_promo.get("config_sha256")
+    if not isinstance(recorded_config_sha256, str) or not SHA256_RE.fullmatch(recorded_config_sha256):
+        raise ValueError("Speech-freeze runtime promo config hash is invalid")
+    # The recorded full-file hash is immutable render provenance and remains
+    # inside the frozen pack digest. Currentness is semantic: re-resolve the
+    # exact runtime selector, selected voice, provider route, model, and
+    # settings below so unrelated config sections may evolve independently.
     if runtime_promo.get("selector") != current_promo.selector:
         raise ValueError("Speech-freeze runtime promo selector is stale")
     if runtime_promo.get("selected_voice_name") != current_promo.selected_voice_name:

@@ -1352,7 +1352,20 @@ def _identity_exact_fields(value: Mapping[str, object], expected: set[str], fiel
         raise ValueError(f"{field} has an invalid field set: {', '.join(detail)}")
 
 
-def _identity_source_evidence(value: object, field: str) -> tuple[Path, str]:
+def _identity_source_evidence(
+    value: object,
+    field: str,
+    *,
+    require_current_hash: bool = True,
+) -> tuple[Path, str]:
+    """Validate one immutable source reference and optionally its live bytes.
+
+    The identity manifest's config digest remains part of the immutable board
+    digest, but current config validity is semantic: the loaded identity copy,
+    provider, voice, model, and settings are revalidated clip-by-clip below.
+    This lets unrelated config sections evolve without invalidating approved
+    audio. Receipts and casting proof keep the strict live-byte check.
+    """
     evidence = _identity_manifest_mapping(value, field)
     path_value = evidence.get("path")
     digest = evidence.get("sha256")
@@ -1369,7 +1382,7 @@ def _identity_source_evidence(value: object, field: str) -> tuple[Path, str]:
         current_digest = hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as exc:
         raise ValueError(f"{field}.path is not readable") from exc
-    if current_digest != digest:
+    if require_current_hash and current_digest != digest:
         raise ValueError(f"{field} is stale: current file hash differs from the board")
     return path, digest
 
@@ -1482,7 +1495,11 @@ def _validate_identity_board(
 
     config_evidence = _identity_manifest_mapping(manifest.get("config"), "config")
     _identity_exact_fields(config_evidence, {"path", "sha256"}, "config")
-    config_path, config_sha256 = _identity_source_evidence(config_evidence, "config")
+    config_path, config_sha256 = _identity_source_evidence(
+        config_evidence,
+        "config",
+        require_current_hash=False,
+    )
     if config_path.resolve() != DEFAULT_CONFIG_PATH.resolve():
         raise ValueError("Identity manifest does not bind the canonical repository config")
     receipt_evidence = _identity_manifest_mapping(

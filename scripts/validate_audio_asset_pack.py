@@ -12,10 +12,10 @@ Schema version 2 keeps three linked inventories in ``manifest.json``:
 * ``assets``: rendered files, their output SHA-256 and source references; and
 * ``recipes``: named mixes which refer only to declared assets.
 
-The optional ``original_path`` on a source is useful for a local curator's
-archive.  It is not required for the public repository: source URL and source
-SHA-256 are the durable provenance record.  When an original is present, its
-hash is verified as well.
+For an external recording, ``original_path`` remains an optional curator's
+archive pointer; its public URL and SHA-256 are the durable ledger. A
+project-authored deterministic master instead keeps that file in the pack and
+pins its generator, every declared Git dependency, and toolchain metadata.
 
 Usage:
     python scripts/validate_audio_asset_pack.py
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import bisect
 import hashlib
 import json
 import math
@@ -34,7 +35,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations
@@ -60,15 +61,51 @@ LICENSE_URLS = {
 }
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GIT_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+PROJECT_AUTHORED_PROVENANCE_TYPE = "project-authored-deterministic-master"
+PROJECT_GENERATOR_KIND = "git-committed-ffmpeg-generator"
 QUALITY_GUARD_KEY = "quality_guard_allowlist"
 CORRELATION_THRESHOLD = 0.98
 CORRELATION_WINDOW_SEC = 0.5
-CORRELATION_SAMPLE_RATE_HZ = 8_000
+CORRELATION_NATIVE_SAMPLE_RATE_HZ = 48_000
+CORRELATION_GRID_SEC = 0.002
+CORRELATION_INNER_MARGIN_SEC = 0.002
+CORRELATION_SIGNATURE_BITS = 256
+CORRELATION_PROJECTION_PAIRS_PER_BIT = 8
+CORRELATION_SIGNATURE_DISTANCE = 40
+CORRELATION_MIN_COMMON_NONZERO_BITS = 32
+CORRELATION_LANDMARK_DESCRIPTOR_BITS = 64
+CORRELATION_LANDMARK_JITTER_SAMPLES = 0
+CORRELATION_LANDMARK_SPARSE_PAIR_SPAN_SAMPLES = 8
+CORRELATION_LANDMARK_POSITION_BITS = 20
+CORRELATION_LANDMARK_POSITION_MASK = (1 << CORRELATION_LANDMARK_POSITION_BITS) - 1
+CORRELATION_LANDMARK_HASH_MASK = (1 << (64 - CORRELATION_LANDMARK_POSITION_BITS)) - 1
+CORRELATION_LANDMARK_SPARSE_KEY_BIT = 1 << (64 - CORRELATION_LANDMARK_POSITION_BITS - 1)
+CORRELATION_MAX_REVIEW_ASSETS = 32
+CORRELATION_MAX_SAMPLES_PER_ASSET = 16 * CORRELATION_NATIVE_SAMPLE_RATE_HZ
+CORRELATION_MAX_TOTAL_SAMPLES = 12_000_000
+CORRELATION_MAX_SIGNATURE_COORDINATES = 50_000_000
+CORRELATION_MAX_SIGNATURE_WORK = 400_000_000
+CORRELATION_MAX_SIGNATURE_MATCHES = 2_000_000
+CORRELATION_MAX_LANDMARK_EVENTS = 50_000_000
+CORRELATION_MAX_LANDMARK_POSTINGS = 1_000_000
+CORRELATION_MAX_LANDMARK_JOINS = 20_000_000
+CORRELATION_MAX_LANDMARK_LAGS = 1_000_000
+CORRELATION_MAX_LANDMARK_REGION_PROBES = 20_000_000
+CORRELATION_MAX_NATIVE_LAG_CANDIDATES = 250_000
+CORRELATION_MAX_NATIVE_EXACT_WINDOWS = 100_000_000
+CORRELATION_MAX_NATIVE_PRIMITIVE_WORK = 5_000_000_000
+CORRELATION_MAX_NATIVE_REGIONS = 2_000_000
 CORE_ASSET_KINDS = frozenset({"identity", "transition"})
 CORRELATION_ASSET_KINDS = CORE_ASSET_KINDS | {"compatibility"}
 LAYER_ROLES = frozenset({"foreground", "texture"})
-STARTUP_SYNTH_TAGS = frozenset({"synth", "synthesizer", "electric-piano", "rhodes"})
-STARTUP_SYNTH_FORBIDDEN_SOURCE_TAGS = frozenset({"brass", "trumpet"})
+STARTUP_SYNTH_TAGS = frozenset({"synth", "synthesizer", "electric-piano", "e-piano", "epiano", "rhodes"})
+STARTUP_SYNTH_FORBIDDEN_TERMS = frozenset({"brass", "trumpet"})
+STARTUP_SYNTH_SEMANTIC_RE = re.compile(
+    r"(?<![a-z0-9])(?:synth|synthesizer|rhodes|e[-_]?piano|electric(?:[-_]|\s+)piano)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+STARTUP_SYNTH_FORBIDDEN_RE = re.compile(r"(?<![a-z0-9])(brass|trumpet)(?![a-z0-9])", re.IGNORECASE)
 REQUIRED_LISTENING_SURFACES = frozenset({"station-id", "sweeper", "ad-in", "ad-out", "full-cadence"})
 REQUIRED_LISTENING_DEVICE_CLASSES = frozenset({"mac", "target-speaker"})
 
@@ -82,8 +119,38 @@ class AudioAssetPackValidationError(ValueError):
 
 
 @dataclass(frozen=True)
+class GeneratorDependency:
+    """One Git-pinned input which can change a deterministic render."""
+
+    path: str
+    url: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class GeneratorRuntime:
+    """Human-readable toolchain versions used for a deterministic render."""
+
+    python: str
+    ffmpeg: str
+
+
+@dataclass(frozen=True)
+class GeneratorRecord:
+    """Git-pinned program which rendered one project-authored master."""
+
+    kind: str
+    revision: str
+    path: str
+    url: str
+    sha256: str
+    dependencies: tuple[GeneratorDependency, ...]
+    runtime: GeneratorRuntime
+
+
+@dataclass(frozen=True)
 class SourceRecord:
-    """One independently licensed recording used by one or more render assets."""
+    """One licensed external recording or project-authored deterministic master."""
 
     id: str
     license: str
@@ -95,6 +162,8 @@ class SourceRecord:
     attribution: str | None
     original_path: str | None
     tags: tuple[str, ...]
+    provenance_type: str | None
+    generator: GeneratorRecord | None
 
 
 @dataclass(frozen=True)
@@ -166,6 +235,49 @@ class QualityGuardAllowlist:
 
     perceptual_overlaps: frozenset[tuple[str, str]]
     source_core_roles: frozenset[str]
+
+
+@dataclass(frozen=True)
+class CorrelationSignature:
+    """One 496 ms pair-projection signature and its disjoint start cell."""
+
+    anchor: int
+    first_start: int
+    last_start: int
+    signs: int
+    nonzero: int
+
+
+@dataclass(frozen=True)
+class CorrelationLandmarkIndex:
+    """Compact sorted (44-bit descriptor hash, 20-bit position) records."""
+
+    records: array.array[int]
+
+
+@dataclass(frozen=True)
+class CorrelationPairPlan:
+    """One fully budgeted channel-pair native confirmation plan."""
+
+    first: AssetRecord
+    second: AssetRecord
+    first_label: str
+    second_label: str
+    first_samples: Sequence[int]
+    second_samples: Sequence[int]
+    regions: tuple[tuple[int, int, int], ...]
+
+
+@dataclass(frozen=True)
+class DecodedAudio:
+    """Bounded native stereo PCM, kept separate to avoid mono cancellation."""
+
+    left: array.array[int]
+    right: array.array[int]
+
+    @property
+    def sample_count(self) -> int:
+        return len(self.left)
 
 
 def _nonempty_text(value: Any, label: str, errors: list[str]) -> str | None:
@@ -282,6 +394,124 @@ def _validate_format(value: Any, label: str, errors: list[str]) -> AudioFormat |
     return AudioFormat(codec=codec.lower(), sample_rate_hz=sample_rate, channels=channels, bitrate_kbps=bitrate)
 
 
+def _safe_git_path(value: Any, label: str, errors: list[str]) -> str | None:
+    path = _nonempty_text(value, label, errors)
+    if path is None:
+        return None
+    relative = PurePosixPath(path)
+    if "\\" in path or ":" in path or relative.is_absolute() or any(part in {".", ".."} for part in relative.parts):
+        errors.append(f"{label} must be a safe relative POSIX path")
+        return None
+    return path
+
+
+def _git_blob_url(value: Any, label: str, revision: str | None, path: str | None, errors: list[str]) -> str | None:
+    url = _nonempty_text(value, label, errors)
+    if url is None:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        errors.append(f"{label} must be an absolute https URL")
+        return None
+    if revision is not None and path is not None:
+        expected_suffix = f"/blob/{revision}/{path}"
+        if not parsed.path.endswith(expected_suffix):
+            errors.append(f"{label} must pin revision and path as {expected_suffix!r}")
+            return None
+    return url
+
+
+def _validate_generator_dependency(
+    value: Any,
+    label: str,
+    revision: str | None,
+    errors: list[str],
+) -> GeneratorDependency | None:
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return None
+    path = _safe_git_path(value.get("path"), f"{label}.path", errors)
+    url = _git_blob_url(value.get("url"), f"{label}.url", revision, path, errors)
+    dependency_sha256 = _sha256(value.get("sha256"), f"{label}.sha256", errors)
+    if path is None or url is None or dependency_sha256 is None:
+        return None
+    return GeneratorDependency(path=path, url=url, sha256=dependency_sha256)
+
+
+def _validate_generator_runtime(value: Any, label: str, errors: list[str]) -> GeneratorRuntime | None:
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return None
+    python = _nonempty_text(value.get("python"), f"{label}.python", errors)
+    ffmpeg = _nonempty_text(value.get("ffmpeg"), f"{label}.ffmpeg", errors)
+    if python is None or ffmpeg is None:
+        return None
+    return GeneratorRuntime(python=python, ffmpeg=ffmpeg)
+
+
+def _validate_generator(value: Any, label: str, errors: list[str]) -> GeneratorRecord | None:
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return None
+    kind = _nonempty_text(value.get("kind"), f"{label}.kind", errors)
+    if kind is not None and kind != PROJECT_GENERATOR_KIND:
+        errors.append(f"{label}.kind must be {PROJECT_GENERATOR_KIND!r}")
+        kind = None
+    revision = _nonempty_text(value.get("revision"), f"{label}.revision", errors)
+    if revision is not None and not GIT_REVISION_RE.fullmatch(revision):
+        errors.append(f"{label}.revision must be a full lowercase Git SHA")
+        revision = None
+    path = _safe_git_path(value.get("path"), f"{label}.path", errors)
+    url = _git_blob_url(value.get("url"), f"{label}.url", revision, path, errors)
+    generator_sha256 = _sha256(value.get("sha256"), f"{label}.sha256", errors)
+
+    dependencies: list[GeneratorDependency] | None = []
+    raw_dependencies = value.get("dependencies")
+    if not isinstance(raw_dependencies, list) or not raw_dependencies:
+        errors.append(f"{label}.dependencies must be a non-empty list")
+        dependencies = None
+    else:
+        seen_paths: set[str] = set()
+        for index, raw_dependency in enumerate(raw_dependencies):
+            dependency = _validate_generator_dependency(
+                raw_dependency,
+                f"{label}.dependencies[{index}]",
+                revision,
+                errors,
+            )
+            if dependency is None:
+                dependencies = None
+                continue
+            if dependency.path in seen_paths:
+                errors.append(f"{label}.dependencies[{index}].path duplicates {dependency.path!r}")
+                dependencies = None
+                continue
+            seen_paths.add(dependency.path)
+            if dependencies is not None:
+                dependencies.append(dependency)
+    runtime = _validate_generator_runtime(value.get("runtime"), f"{label}.runtime", errors)
+
+    if (
+        kind is None
+        or revision is None
+        or path is None
+        or url is None
+        or generator_sha256 is None
+        or dependencies is None
+        or runtime is None
+    ):
+        return None
+    return GeneratorRecord(
+        kind=kind,
+        revision=revision,
+        path=path,
+        url=url,
+        sha256=generator_sha256,
+        dependencies=tuple(dependencies),
+        runtime=runtime,
+    )
+
+
 def _validate_source_records(
     value: Any,
     errors: list[str],
@@ -331,6 +561,26 @@ def _validate_source_records(
             original_path = _nonempty_text(raw_original_path, f"{label}.original_path", errors)
 
         tags = _text_list(raw.get("tags"), f"{label}.tags", errors, required=require_quality_metadata)
+        provenance_type: str | None = None
+        if raw.get("provenance_type") is not None:
+            provenance_type = _nonempty_text(raw.get("provenance_type"), f"{label}.provenance_type", errors)
+            if provenance_type is not None and provenance_type != PROJECT_AUTHORED_PROVENANCE_TYPE:
+                errors.append(f"{label}.provenance_type must be {PROJECT_AUTHORED_PROVENANCE_TYPE!r}")
+                provenance_type = None
+        generator: GeneratorRecord | None = None
+        if raw.get("generator") is not None:
+            generator = _validate_generator(raw.get("generator"), f"{label}.generator", errors)
+        if provenance_type == PROJECT_AUTHORED_PROVENANCE_TYPE:
+            if original_path is None:
+                errors.append(f"{label}.original_path is required for {PROJECT_AUTHORED_PROVENANCE_TYPE}")
+            elif _safe_git_path(original_path, f"{label}.original_path", errors) is None:
+                original_path = None
+            if raw.get("generator") is None:
+                errors.append(f"{label}.generator is required for {PROJECT_AUTHORED_PROVENANCE_TYPE}")
+            if generator is not None and source_url is not None and source_url != generator.url:
+                errors.append(f"{label}.source_url must equal {label}.generator.url")
+        elif raw.get("generator") is not None:
+            errors.append(f"{label}.provenance_type must declare {PROJECT_AUTHORED_PROVENANCE_TYPE!r} with generator")
 
         if identifier is not None:
             if identifier in seen_ids:
@@ -362,6 +612,8 @@ def _validate_source_records(
                 attribution=attribution,
                 original_path=original_path,
                 tags=tags,
+                provenance_type=provenance_type,
+                generator=generator,
             )
         )
     return tuple(records)
@@ -563,6 +815,26 @@ def _resolve_original_path(pack_dir: Path, original_path: str) -> Path:
     return path if path.is_absolute() else pack_dir / path
 
 
+def _read_git_blob(revision: str, path: str) -> bytes:
+    """Read one committed generator input without consulting working-tree bytes."""
+    try:
+        completed = subprocess.run(
+            ["git", "show", f"{revision}:{path}"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("git is required to validate project-authored generator provenance") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"git timed out reading {revision}:{path}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or f"git cannot read {revision}:{path}")
+    return completed.stdout
+
+
 def _probe_audio(path: Path) -> AudioProbe:
     """Inspect one output member with FFprobe; no network or decoding rewrite occurs."""
     try:
@@ -615,25 +887,64 @@ def _probe_audio(path: Path) -> AudioProbe:
 
 
 def _validate_source_originals(pack_dir: Path, sources: tuple[SourceRecord, ...], errors: list[str]) -> None:
+    pinned_blob_hashes: dict[tuple[str, str], str | RuntimeError] = {}
+    reported_pins: set[tuple[str, str, str]] = set()
     for source in sources:
-        # A public URL plus source checksum is enough for the public ledger. The
-        # unredistributable local master is intentionally optional.
-        if source.original_path is None:
+        if source.original_path is not None:
+            try:
+                original = (
+                    _resolve_asset_path(pack_dir, source.original_path)
+                    if source.provenance_type == PROJECT_AUTHORED_PROVENANCE_TYPE
+                    else _resolve_original_path(pack_dir, source.original_path)
+                )
+            except ValueError as exc:
+                errors.append(f"source {source.id!r} original_path is invalid: {exc}")
+            else:
+                if not original.is_file():
+                    errors.append(f"source {source.id!r} original_path does not exist: {original}")
+                else:
+                    try:
+                        actual = _sha256_file(original)
+                    except OSError as exc:
+                        errors.append(f"cannot hash source {source.id!r} original_path: {exc}")
+                    else:
+                        if actual != source.source_sha256:
+                            errors.append(
+                                f"source {source.id!r} original_path SHA-256 differs from declared source_sha256 "
+                                f"({actual} != {source.source_sha256})"
+                            )
+
+        # External sources retain the URL + checksum ledger. Project-authored
+        # masters additionally prove that every declared generator input exists
+        # at, and hashes to, the pinned Git revision.
+        if source.provenance_type != PROJECT_AUTHORED_PROVENANCE_TYPE or source.generator is None:
             continue
-        original = _resolve_original_path(pack_dir, source.original_path)
-        if not original.is_file():
-            errors.append(f"source {source.id!r} original_path does not exist: {original}")
-            continue
-        try:
-            actual = _sha256_file(original)
-        except OSError as exc:
-            errors.append(f"cannot hash source {source.id!r} original_path: {exc}")
-            continue
-        if actual != source.source_sha256:
-            errors.append(
-                f"source {source.id!r} original_path SHA-256 differs from declared source_sha256 "
-                f"({actual} != {source.source_sha256})"
-            )
+        generator = source.generator
+        pins = [(generator.path, generator.sha256)]
+        pins.extend((dependency.path, dependency.sha256) for dependency in generator.dependencies)
+        for path, expected_sha256 in pins:
+            key = (generator.revision, path)
+            result = pinned_blob_hashes.get(key)
+            if result is None:
+                try:
+                    blob = _read_git_blob(*key)
+                except RuntimeError as exc:
+                    result = exc
+                else:
+                    result = hashlib.sha256(blob).hexdigest()
+                pinned_blob_hashes[key] = result
+            report_key = (*key, expected_sha256)
+            if report_key in reported_pins:
+                continue
+            if isinstance(result, RuntimeError):
+                errors.append(f"cannot verify generated-source Git blob {generator.revision}:{path}: {result}")
+                reported_pins.add(report_key)
+            elif result != expected_sha256:
+                errors.append(
+                    f"generated-source Git blob {generator.revision}:{path} SHA-256 differs from manifest "
+                    f"({result} != {expected_sha256})"
+                )
+                reported_pins.add(report_key)
 
 
 def _validate_assets(
@@ -855,25 +1166,72 @@ def _validate_startup_synth_semantics(
     startup = next((asset for asset in assets if asset.id == "compat.startup-synth"), None)
     if startup is None:
         return
-    asset_tags = {tag.casefold() for tag in startup.tags}
-    if not asset_tags & STARTUP_SYNTH_TAGS:
+    if not _has_startup_synth_semantics(startup.tags):
         errors.append(
             f"asset 'compat.startup-synth' must include a semantic synth tag: {', '.join(sorted(STARTUP_SYNTH_TAGS))}"
         )
+    asset_forbidden = _startup_synth_forbidden_terms(startup.tags)
+    if asset_forbidden:
+        errors.append(
+            "asset 'compat.startup-synth' cannot declare brass/trumpet semantics "
+            f"(forbidden tags: {', '.join(sorted(asset_forbidden))})"
+        )
+    has_source_semantics = False
     for layer in startup.layers:
         source = source_map.get(layer.source_id)
         if source is None:
             continue
-        forbidden = {tag.casefold() for tag in source.tags} & STARTUP_SYNTH_FORBIDDEN_SOURCE_TAGS
-        if forbidden:
+        metadata = {
+            "id": (source.id,),
+            "title": (source.title,),
+            "tags": source.tags,
+            "modification": (source.modification,),
+        }
+        if any(_has_startup_synth_semantics(values) for values in metadata.values()):
+            has_source_semantics = True
+        forbidden_by_field = {
+            field: forbidden
+            for field, values in metadata.items()
+            if (forbidden := _startup_synth_forbidden_terms(values))
+        }
+        if forbidden_by_field:
+            detail = ", ".join(
+                f"{field}={'+'.join(sorted(forbidden))}" for field, forbidden in forbidden_by_field.items()
+            )
             errors.append(
                 "asset 'compat.startup-synth' cannot use brass/trumpet source "
-                f"{source.id!r} (forbidden tags: {', '.join(sorted(forbidden))})"
+                f"{source.id!r} (forbidden metadata: {detail})"
             )
+    if not has_source_semantics:
+        errors.append(
+            "asset 'compat.startup-synth' must reference at least one source with "
+            "synth/e-piano/Rhodes semantics in its id, title, tags, or modification"
+        )
 
 
-def _decode_audio(path: Path) -> array.array[int]:
-    """Decode a small review asset deterministically to 8 kHz mono PCM."""
+def _has_startup_synth_semantics(values: Iterable[str]) -> bool:
+    return any(STARTUP_SYNTH_SEMANTIC_RE.search(value) for value in values)
+
+
+def _startup_synth_forbidden_terms(values: Iterable[str]) -> frozenset[str]:
+    return frozenset(
+        match.group(1).casefold()
+        for value in values
+        for match in STARTUP_SYNTH_FORBIDDEN_RE.finditer(value)
+        if match.group(1).casefold() in STARTUP_SYNTH_FORBIDDEN_TERMS
+    )
+
+
+def _correlation_window_samples() -> int:
+    return math.ceil(CORRELATION_WINDOW_SEC * CORRELATION_NATIVE_SAMPLE_RATE_HZ)
+
+
+def _decode_audio(path: Path) -> DecodedAudio:
+    """Decode bounded native stereo without discarding band or channel identity."""
+    # Request one sample beyond the accepted ceiling so the caller can reject
+    # oversized audio without ever asking subprocess.run to capture an
+    # unbounded decoded stream in memory.
+    decode_duration_sec = (CORRELATION_MAX_SAMPLES_PER_ASSET + 1) / CORRELATION_NATIVE_SAMPLE_RATE_HZ
     try:
         completed = subprocess.run(
             [
@@ -885,15 +1243,20 @@ def _decode_audio(path: Path) -> array.array[int]:
                 "-map",
                 "0:a:0",
                 "-ac",
-                "1",
+                "2",
                 "-ar",
-                str(CORRELATION_SAMPLE_RATE_HZ),
+                str(CORRELATION_NATIVE_SAMPLE_RATE_HZ),
+                "-t",
+                f"{decode_duration_sec:.9f}",
+                "-fs",
+                str((CORRELATION_MAX_SAMPLES_PER_ASSET + 1) * 4),
                 "-f",
                 "s16le",
                 "pipe:1",
             ],
             check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             timeout=30,
         )
     except FileNotFoundError as exc:
@@ -901,59 +1264,718 @@ def _decode_audio(path: Path) -> array.array[int]:
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"ffmpeg timed out while decoding {path}") from exc
     if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(detail or f"ffmpeg exited {completed.returncode}")
-    samples = array.array("h")
-    samples.frombytes(completed.stdout)
+        raise RuntimeError(f"ffmpeg exited {completed.returncode}")
+    interleaved = array.array("h")
+    interleaved.frombytes(completed.stdout)
     if sys.byteorder != "little":
-        samples.byteswap()
-    return samples
+        interleaved.byteswap()
+    if len(interleaved) % 2:
+        raise RuntimeError("ffmpeg returned an incomplete stereo sample frame")
+    return DecodedAudio(left=interleaved[0::2], right=interleaved[1::2])
 
 
-def _normalized_correlation(first: Iterable[int], second: Iterable[int]) -> float:
-    left = tuple(first)
-    right = tuple(second)
-    if len(left) != len(right) or not left:
-        return 0.0
-    count = len(left)
-    sum_left = sum(left)
-    sum_right = sum(right)
-    sum_left_sq = sum(value * value for value in left)
-    sum_right_sq = sum(value * value for value in right)
-    sum_product = sum(left_value * right_value for left_value, right_value in zip(left, right, strict=True))
-    numerator = count * sum_product - sum_left * sum_right
-    left_energy = count * sum_left_sq - sum_left * sum_left
-    right_energy = count * sum_right_sq - sum_right * sum_right
-    if left_energy <= 0 or right_energy <= 0:
-        return 0.0
-    return abs(numerator / math.sqrt(left_energy * right_energy))
+def _decoded_channels(decoded: DecodedAudio | Sequence[int]) -> tuple[tuple[str, Sequence[int]], ...]:
+    """Return unique channel views; plain sequences keep unit fixtures concise."""
+    if not isinstance(decoded, DecodedAudio):
+        return (("mono", decoded),)
+    if decoded.left == decoded.right:
+        return (("L/R", decoded.left),)
+    return (("L", decoded.left), ("R", decoded.right))
 
 
-def _shared_source_windows(first: AssetRecord, second: AssetRecord) -> tuple[tuple[float, float], ...]:
-    windows: set[tuple[float, float]] = set()
-    for first_layer in first.layers:
-        for second_layer in second.layers:
-            if first_layer.source_id != second_layer.source_id:
-                continue
-            overlap_start = max(first_layer.source_start_sec, second_layer.source_start_sec)
-            overlap_end = min(
-                first_layer.source_start_sec + first_layer.duration_sec,
-                second_layer.source_start_sec + second_layer.duration_sec,
+def _decoded_sample_count(decoded: DecodedAudio | Sequence[int]) -> int:
+    if isinstance(decoded, DecodedAudio):
+        return decoded.sample_count
+    return len(decoded)
+
+
+def _native_region_workload(regions: Sequence[tuple[int, int, int]]) -> tuple[int, int, int]:
+    exact_windows = sum(end - start + 1 for _lag, start, end in regions)
+    primitive_work = len(regions) * 5 * _correlation_window_samples() + 32 * exact_windows
+    return len(regions), exact_windows, primitive_work
+
+
+def _correlation_grid_samples() -> int:
+    return round(CORRELATION_GRID_SEC * CORRELATION_NATIVE_SAMPLE_RATE_HZ)
+
+
+def _correlation_inner_margin_samples() -> int:
+    return round(CORRELATION_INNER_MARGIN_SEC * CORRELATION_NATIVE_SAMPLE_RATE_HZ)
+
+
+def _xorshift32(state: int) -> int:
+    state ^= (state << 13) & 0xFFFFFFFF
+    state ^= state >> 17
+    state ^= (state << 5) & 0xFFFFFFFF
+    return state & 0xFFFFFFFF
+
+
+def _correlation_projection_pairs() -> tuple[tuple[tuple[int, int], ...], ...]:
+    """Return the fixed xorshift projections used by every pack validation."""
+    inner_samples = _correlation_window_samples() - 2 * _correlation_inner_margin_samples()
+    state = 0x4D4E4452
+    projections: list[tuple[tuple[int, int], ...]] = []
+    for _ in range(CORRELATION_SIGNATURE_BITS):
+        pairs: list[tuple[int, int]] = []
+        for _pair in range(CORRELATION_PROJECTION_PAIRS_PER_BIT):
+            state = _xorshift32(state)
+            first = state % inner_samples
+            state = _xorshift32(state)
+            second = state % inner_samples
+            if first == second:
+                second = (second + 1) % inner_samples
+            pairs.append((first, second))
+        projections.append(tuple(pairs))
+    return tuple(projections)
+
+
+CORRELATION_PROJECTION_PAIRS = _correlation_projection_pairs()
+
+
+def _signature_start_cells(maximum_start: int) -> tuple[tuple[int, int, int], ...]:
+    """Partition every valid start into one nearest 2 ms grid anchor."""
+    if maximum_start < 0:
+        return ()
+    hop = _correlation_grid_samples()
+    anchors = list(range(0, maximum_start + 1, hop))
+    if anchors[-1] != maximum_start:
+        anchors.append(maximum_start)
+    cells: list[tuple[int, int, int]] = []
+    for index, anchor in enumerate(anchors):
+        first_start = 0 if index == 0 else (anchors[index - 1] + anchor + 1) // 2
+        last_start = maximum_start if index + 1 == len(anchors) else (anchor + anchors[index + 1] - 1) // 2
+        cells.append((anchor, first_start, last_start))
+    return tuple(cells)
+
+
+def _build_pair_projection_signatures(samples: Sequence[int]) -> tuple[CorrelationSignature, ...]:
+    """Build full 256-bit signatures over the grid's protected inner 496 ms."""
+    maximum_start = len(samples) - _correlation_window_samples()
+    margin = _correlation_inner_margin_samples()
+    signatures: list[CorrelationSignature] = []
+    for anchor, first_start, last_start in _signature_start_cells(maximum_start):
+        inner_start = anchor + margin
+        signs = 0
+        nonzero = 0
+        for bit, pairs in enumerate(CORRELATION_PROJECTION_PAIRS):
+            difference = sum(
+                samples[inner_start + first_offset] - samples[inner_start + second_offset]
+                for first_offset, second_offset in pairs
             )
-            if overlap_end - overlap_start + 1e-9 < CORRELATION_WINDOW_SEC:
+            if difference:
+                nonzero |= 1 << bit
+                if difference > 0:
+                    signs |= 1 << bit
+        signatures.append(
+            CorrelationSignature(
+                anchor=anchor,
+                first_start=first_start,
+                last_start=last_start,
+                signs=signs,
+                nonzero=nonzero,
+            )
+        )
+    return tuple(signatures)
+
+
+def _pair_projection_distance(first: CorrelationSignature, second: CorrelationSignature) -> int | None:
+    """Return polarity-aware sign/nonzero distance, or no evidence for silence."""
+    common_nonzero = first.nonzero & second.nonzero
+    if common_nonzero.bit_count() < CORRELATION_MIN_COMMON_NONZERO_BITS:
+        return None
+    zero_disagreement = (first.nonzero ^ second.nonzero).bit_count()
+    sign_disagreement = ((first.signs ^ second.signs) & common_nonzero).bit_count()
+    inverted_disagreement = ((first.signs ^ ~second.signs) & common_nonzero).bit_count()
+    return zero_disagreement + min(sign_disagreement, inverted_disagreement)
+
+
+def _iter_pair_projection_matches(
+    first: Sequence[CorrelationSignature],
+    second: Sequence[CorrelationSignature],
+) -> Iterator[tuple[int, int, int, int]]:
+    """Yield every matching pair of disjoint native-start cells."""
+    for first_signature in first:
+        for second_signature in second:
+            distance = _pair_projection_distance(first_signature, second_signature)
+            if distance is not None and distance <= CORRELATION_SIGNATURE_DISTANCE:
+                yield (
+                    first_signature.first_start,
+                    first_signature.last_start,
+                    second_signature.first_start,
+                    second_signature.last_start,
+                )
+
+
+def _landmark_descriptor(kind: str, view: str, values: Sequence[int], center: int) -> tuple[str, int, int] | None:
+    """Return a polarity-canonical 64-derivative local sign descriptor."""
+    if view == "centered":
+        first = center - CORRELATION_LANDMARK_DESCRIPTOR_BITS // 2
+    elif view == "forward":
+        first = center
+    elif view == "backward":
+        first = center - CORRELATION_LANDMARK_DESCRIPTOR_BITS + 1
+    else:
+        raise ValueError(f"unknown landmark descriptor view: {view}")
+    last = first + CORRELATION_LANDMARK_DESCRIPTOR_BITS
+    signs = 0
+    nonzero = 0
+    for bit, index in enumerate(range(first, last)):
+        value = values[index] if 0 <= index < len(values) else 0
+        if value:
+            nonzero |= 1 << bit
+            if value > 0:
+                signs |= 1 << bit
+    if not nonzero:
+        return None
+    inverted = (~signs) & nonzero
+    return f"{kind}:{view}", nonzero, min(signs, inverted)
+
+
+def _landmark_magnitude_order(view: str, values: Sequence[int], center: int) -> int:
+    """Return gain/polarity-invariant local magnitude-order bits."""
+    if view == "forward":
+        first = center
+    elif view == "backward":
+        first = center - CORRELATION_LANDMARK_DESCRIPTOR_BITS + 1
+    else:
+        first = center - CORRELATION_LANDMARK_DESCRIPTOR_BITS // 2
+    magnitudes = [
+        abs(values[index]) if 0 <= index < len(values) else 0
+        for index in range(first, first + CORRELATION_LANDMARK_DESCRIPTOR_BITS)
+    ]
+    ordering = 0
+    for bit, magnitude in enumerate(magnitudes):
+        peer = magnitudes[(bit * 17 + 13) % CORRELATION_LANDMARK_DESCRIPTOR_BITS]
+        if magnitude > peer:
+            ordering |= 1 << bit
+    return ordering
+
+
+def _build_landmark_postings(
+    samples: Sequence[int],
+    *,
+    maximum_events: int = CORRELATION_MAX_LANDMARK_EVENTS,
+) -> tuple[CorrelationLandmarkIndex, int]:
+    """Build one compact sorted index for every intrinsic derivative event."""
+    if len(samples) < CORRELATION_LANDMARK_DESCRIPTOR_BITS + 4:
+        return CorrelationLandmarkIndex(array.array("Q")), 0
+    first_difference = array.array("i", (samples[index + 1] - samples[index] for index in range(len(samples) - 1)))
+    second_difference = array.array(
+        "i", (first_difference[index + 1] - first_difference[index] for index in range(len(first_difference) - 1))
+    )
+    event_kinds = bytearray(len(samples))
+    for index in range(len(first_difference)):
+        magnitude = abs(first_difference[index])
+        previous_magnitude = abs(first_difference[index - 1]) if index else 0
+        next_magnitude = abs(first_difference[index + 1]) if index + 1 < len(first_difference) else 0
+        if magnitude > previous_magnitude and magnitude >= next_magnitude:
+            event_kinds[index + 1] |= 1
+        if index and (
+            first_difference[index - 1]
+            and first_difference[index]
+            and (first_difference[index - 1] > 0) != (first_difference[index] > 0)
+        ):
+            event_kinds[index] |= 2
+    for index in range(len(second_difference)):
+        magnitude = abs(second_difference[index])
+        previous_magnitude = abs(second_difference[index - 1]) if index else 0
+        next_magnitude = abs(second_difference[index + 1]) if index + 1 < len(second_difference) else 0
+        if magnitude > previous_magnitude and magnitude >= next_magnitude:
+            event_kinds[index + 1] |= 4
+
+    records: list[int] = []
+    view_ids = {"forward": 1, "backward": 2, "centered": 3}
+    for position, kind_mask in enumerate(event_kinds):
+        if not kind_mask:
+            continue
+        center = min(position, len(first_difference) - 1)
+        for view, view_id in view_ids.items():
+            descriptor = _landmark_descriptor(str(kind_mask), view, first_difference, center)
+            if descriptor is None:
                 continue
-            source_starts = [overlap_start]
-            final_start = overlap_end - CORRELATION_WINDOW_SEC
-            cursor = overlap_start + CORRELATION_WINDOW_SEC / 2
-            while cursor < final_start - 1e-9:
-                source_starts.append(cursor)
-                cursor += CORRELATION_WINDOW_SEC / 2
-            source_starts.append(final_start)
-            for source_start in source_starts:
-                first_output = first_layer.output_offset_sec + (source_start - first_layer.source_start_sec)
-                second_output = second_layer.output_offset_sec + (source_start - second_layer.source_start_sec)
-                windows.add((round(first_output, 6), round(second_output, 6)))
-    return tuple(sorted(windows))
+            _kind, nonzero, signs = descriptor
+            if view == "centered" and nonzero.bit_count() > 8:
+                continue
+            if len(records) >= maximum_events:
+                raise OverflowError("perceptual-overlap landmark-event budget exceeded")
+            magnitude_order = _landmark_magnitude_order(view, first_difference, center)
+            key_hash = 0xCBF29CE484222325
+            for value in (kind_mask, view_id, nonzero, signs, magnitude_order):
+                key_hash ^= value
+                key_hash = (key_hash * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+            descriptor_hash = key_hash & (CORRELATION_LANDMARK_SPARSE_KEY_BIT - 1)
+            if nonzero.bit_count() <= 8:
+                descriptor_hash |= CORRELATION_LANDMARK_SPARSE_KEY_BIT
+            packed = (descriptor_hash << CORRELATION_LANDMARK_POSITION_BITS) | position
+            records.append(packed)
+    return CorrelationLandmarkIndex(array.array("Q", sorted(records))), len(records)
+
+
+def _landmark_join_workload(
+    first: CorrelationLandmarkIndex,
+    second: CorrelationLandmarkIndex,
+) -> int:
+    first_records = first.records
+    second_records = second.records
+    first_index = 0
+    second_index = 0
+    joins = 0
+    while first_index < len(first_records) and second_index < len(second_records):
+        first_key = first_records[first_index] >> CORRELATION_LANDMARK_POSITION_BITS
+        second_key = second_records[second_index] >> CORRELATION_LANDMARK_POSITION_BITS
+        if first_key < second_key:
+            first_index += 1
+            continue
+        if second_key < first_key:
+            second_index += 1
+            continue
+        first_end = first_index + 1
+        while (
+            first_end < len(first_records)
+            and first_records[first_end] >> CORRELATION_LANDMARK_POSITION_BITS == first_key
+        ):
+            first_end += 1
+        second_end = second_index + 1
+        while (
+            second_end < len(second_records)
+            and second_records[second_end] >> CORRELATION_LANDMARK_POSITION_BITS == second_key
+        ):
+            second_end += 1
+        joins += (first_end - first_index) * (second_end - second_index)
+        first_index = first_end
+        second_index = second_end
+    return joins
+
+
+def _matched_landmark_regions(
+    first: CorrelationLandmarkIndex,
+    second: CorrelationLandmarkIndex,
+    first_sample_count: int,
+    second_sample_count: int,
+    *,
+    maximum_segments: int,
+) -> tuple[tuple[tuple[int, int, int], ...], int]:
+    """Nominate jittered lags only where a window contains both events."""
+    evidence_by_center: dict[int, list[tuple[int, int]]] = {}
+    dense_evidence_by_center: dict[int, list[tuple[int, int]]] = {}
+    support_by_center: dict[int, int] = {}
+    sparse_support_by_center: dict[int, int] = {}
+    sparse_first_key_positions: dict[int, list[int]] = {}
+    clustered_sparse_centers: set[int] = set()
+    dense_qualified_centers: set[int] = set()
+    jitter = CORRELATION_LANDMARK_JITTER_SAMPLES
+    window_samples = _correlation_window_samples()
+    maximum_first_start = first_sample_count - window_samples
+    maximum_second_start = second_sample_count - window_samples
+    segment_count = 0
+
+    def add_interval(mapping: dict[int, list[tuple[int, int]]], key: int, first_start: int, last_start: int) -> None:
+        intervals = mapping.setdefault(key, [])
+        insertion = bisect.bisect_left(intervals, (first_start, last_start))
+        if insertion and intervals[insertion - 1][1] + 1 >= first_start:
+            insertion -= 1
+            first_start = min(first_start, intervals[insertion][0])
+            last_start = max(last_start, intervals[insertion][1])
+            intervals.pop(insertion)
+        while insertion < len(intervals) and intervals[insertion][0] <= last_start + 1:
+            first_start = min(first_start, intervals[insertion][0])
+            last_start = max(last_start, intervals[insertion][1])
+            intervals.pop(insertion)
+        intervals.insert(insertion, (first_start, last_start))
+
+    first_records = first.records
+    second_records = second.records
+    first_index = 0
+    second_index = 0
+    while first_index < len(first_records) and second_index < len(second_records):
+        first_key = first_records[first_index] >> CORRELATION_LANDMARK_POSITION_BITS
+        second_key = second_records[second_index] >> CORRELATION_LANDMARK_POSITION_BITS
+        if first_key < second_key:
+            first_index += 1
+            continue
+        if second_key < first_key:
+            second_index += 1
+            continue
+        first_end = first_index + 1
+        while (
+            first_end < len(first_records)
+            and first_records[first_end] >> CORRELATION_LANDMARK_POSITION_BITS == first_key
+        ):
+            first_end += 1
+        second_end = second_index + 1
+        while (
+            second_end < len(second_records)
+            and second_records[second_end] >> CORRELATION_LANDMARK_POSITION_BITS == second_key
+        ):
+            second_end += 1
+        is_sparse_key = bool(first_key & CORRELATION_LANDMARK_SPARSE_KEY_BIT)
+        # Matching descriptor keys are contiguous in both packed indexes. Keep
+        # one sorted position list only until a center receives its second
+        # sparse key, then decide the narrow two-key exception in one linear
+        # merge. This avoids retaining and sorting every sparse join in a pack.
+        current_sparse_positions: dict[int, list[int]] = {}
+        for first_record_index in range(first_index, first_end):
+            first_position = first_records[first_record_index] & CORRELATION_LANDMARK_POSITION_MASK
+            for second_record_index in range(second_index, second_end):
+                second_position = second_records[second_record_index] & CORRELATION_LANDMARK_POSITION_MASK
+                center = second_position - first_position
+                support_by_center[center] = support_by_center.get(center, 0) | (1 << (first_key & 63))
+                if is_sparse_key:
+                    current_sparse_positions.setdefault(center, []).append(first_position)
+                first_start = max(0, -center, first_position - window_samples + 1)
+                last_start = min(maximum_first_start, maximum_second_start - center, first_position)
+                if first_start <= last_start:
+                    if is_sparse_key:
+                        add_interval(evidence_by_center, center, first_start, last_start)
+                    else:
+                        dense_evidence_by_center.setdefault(center, []).append((first_position, first_key))
+        if is_sparse_key:
+            for center, positions in current_sparse_positions.items():
+                support = sparse_support_by_center.get(center, 0) + 1
+                sparse_support_by_center[center] = support
+                if support == 1:
+                    sparse_first_key_positions[center] = positions
+                    continue
+                if support == 2:
+                    previous_positions = sparse_first_key_positions.pop(center)
+                    previous_index = 0
+                    current_index = 0
+                    while previous_index < len(previous_positions) and current_index < len(positions):
+                        previous_position = previous_positions[previous_index]
+                        current_position = positions[current_index]
+                        if abs(previous_position - current_position) <= CORRELATION_LANDMARK_SPARSE_PAIR_SPAN_SAMPLES:
+                            clustered_sparse_centers.add(center)
+                            break
+                        if previous_position < current_position:
+                            previous_index += 1
+                        else:
+                            current_index += 1
+                    continue
+                sparse_first_key_positions.pop(center, None)
+        first_index = first_end
+        second_index = second_end
+    for center, evidence in dense_evidence_by_center.items():
+        if support_by_center[center].bit_count() < 40:
+            continue
+        ordered = sorted(evidence)
+        key_counts: dict[int, int] = {}
+        left = 0
+        for right_position, right_key in ordered:
+            key_counts[right_key] = key_counts.get(right_key, 0) + 1
+            while right_position - ordered[left][0] >= window_samples:
+                left_key = ordered[left][1]
+                key_counts[left_key] -= 1
+                if key_counts[left_key] == 0:
+                    del key_counts[left_key]
+                left += 1
+            if len(key_counts) < 40:
+                continue
+            first_start = max(0, -center, right_position - window_samples + 1)
+            last_start = min(maximum_first_start, maximum_second_start - center, ordered[left][0])
+            if first_start <= last_start:
+                add_interval(evidence_by_center, center, first_start, last_start)
+                dense_qualified_centers.add(center)
+    intervals_by_lag: dict[int, list[tuple[int, int]]] = {}
+    for center, evidence_intervals in evidence_by_center.items():
+        sparse_support = sparse_support_by_center.get(center, 0)
+        if sparse_support < 3 and center not in clustered_sparse_centers and center not in dense_qualified_centers:
+            continue
+        for lag in range(center - jitter, center + jitter + 1):
+            if lag not in intervals_by_lag and len(intervals_by_lag) >= CORRELATION_MAX_LANDMARK_LAGS:
+                raise OverflowError("perceptual-overlap landmark-lag budget exceeded")
+            for evidence_start, evidence_end in evidence_intervals:
+                if segment_count >= maximum_segments:
+                    raise OverflowError("perceptual-overlap landmark-region budget exceeded")
+                first_start = max(0, -lag, evidence_start - jitter)
+                last_start = min(maximum_first_start, maximum_second_start - lag, evidence_end + jitter)
+                if first_start <= last_start:
+                    add_interval(intervals_by_lag, lag, first_start, last_start)
+                    segment_count += 1
+    regions: list[tuple[int, int, int]] = []
+    for lag, intervals in intervals_by_lag.items():
+        regions.extend((lag, first_start, last_start) for first_start, last_start in intervals)
+    return tuple(regions), len(intervals_by_lag)
+
+
+def _add_rectangle_regions(
+    intervals_by_lag: dict[int, list[tuple[int, int]]],
+    rectangle: tuple[int, int, int, int],
+) -> int:
+    first_min, first_max, second_min, second_max = rectangle
+    added = 0
+    for lag in range(second_min - first_max, second_max - first_min + 1):
+        start = max(first_min, second_min - lag)
+        end = min(first_max, second_max - lag)
+        if start <= end:
+            intervals_by_lag.setdefault(lag, []).append((start, end))
+            added += 1
+    return added
+
+
+def _full_lag_region(first_sample_count: int, second_sample_count: int, lag: int) -> tuple[int, int, int] | None:
+    window_count = _native_window_count(first_sample_count, second_sample_count, lag)
+    if window_count <= 0:
+        return None
+    first_start = max(0, -lag)
+    return lag, first_start, first_start + window_count - 1
+
+
+def _merge_native_regions(
+    intervals_by_lag: dict[int, list[tuple[int, int]]],
+    full_lags: Iterable[int],
+    first_sample_count: int,
+    second_sample_count: int,
+) -> tuple[tuple[int, int, int], ...]:
+    """Union signature cells and full landmark lags without duplicate work."""
+    for lag in full_lags:
+        region = _full_lag_region(first_sample_count, second_sample_count, lag)
+        if region is not None:
+            intervals_by_lag[lag] = [(region[1], region[2])]
+    regions: list[tuple[int, int, int]] = []
+    for lag in sorted(intervals_by_lag):
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(intervals_by_lag[lag]):
+            if not merged or start > merged[-1][1] + 1:
+                merged.append((start, end))
+            else:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        regions.extend((lag, start, end) for start, end in merged)
+    return tuple(regions)
+
+
+def _native_window_count(first_sample_count: int, second_sample_count: int, lag: int) -> int:
+    first_start = max(0, -lag)
+    second_start = first_start + lag
+    overlap = min(first_sample_count - first_start, second_sample_count - second_start)
+    return max(0, overlap - _correlation_window_samples() + 1)
+
+
+def _maximum_native_correlation_at_lag(
+    first: Sequence[int],
+    second: Sequence[int],
+    lag: int,
+) -> float:
+    """Exact rolling Pearson correlation for every native window at one lag."""
+    window_count = _native_window_count(len(first), len(second), lag)
+    if window_count <= 0:
+        return 0.0
+    first_start = max(0, -lag)
+    return _maximum_native_correlation_in_region(
+        first,
+        second,
+        lag,
+        first_start,
+        first_start + window_count - 1,
+    )
+
+
+def _maximum_native_correlation_in_region(
+    first: Sequence[int],
+    second: Sequence[int],
+    lag: int,
+    first_start: int,
+    last_start: int,
+) -> float:
+    """Exact rolling Pearson over one bounded native diagonal interval."""
+    window_samples = _correlation_window_samples()
+    window_count = last_start - first_start + 1
+    if window_count <= 0:
+        return 0.0
+    second_start = first_start + lag
+    first_window = first[first_start : first_start + window_samples]
+    second_window = second[second_start : second_start + window_samples]
+    first_sum = sum(first_window)
+    second_sum = sum(second_window)
+    first_sum_squares = sum(value * value for value in first_window)
+    second_sum_squares = sum(value * value for value in second_window)
+    product_sum = sum(a * b for a, b in zip(first_window, second_window, strict=True))
+    maximum = 0.0
+    for offset in range(window_count):
+        numerator = window_samples * product_sum - first_sum * second_sum
+        first_energy = window_samples * first_sum_squares - first_sum * first_sum
+        second_energy = window_samples * second_sum_squares - second_sum * second_sum
+        if first_energy > 0 and second_energy > 0:
+            maximum = max(maximum, abs(numerator / math.sqrt(first_energy * second_energy)))
+            if maximum >= CORRELATION_THRESHOLD:
+                return maximum
+        if offset + 1 < window_count:
+            first_outgoing = first[first_start + offset]
+            second_outgoing = second[second_start + offset]
+            first_incoming = first[first_start + offset + window_samples]
+            second_incoming = second[second_start + offset + window_samples]
+            first_sum += first_incoming - first_outgoing
+            second_sum += second_incoming - second_outgoing
+            first_sum_squares += first_incoming * first_incoming - first_outgoing * first_outgoing
+            second_sum_squares += second_incoming * second_incoming - second_outgoing * second_outgoing
+            product_sum += first_incoming * second_incoming - first_outgoing * second_outgoing
+    return maximum
+
+
+def _plan_correlation_channel_pair(
+    first: AssetRecord,
+    second: AssetRecord,
+    first_label: str,
+    second_label: str,
+    first_samples: Sequence[int],
+    second_samples: Sequence[int],
+    first_signatures: Sequence[CorrelationSignature],
+    second_signatures: Sequence[CorrelationSignature],
+    first_landmarks: CorrelationLandmarkIndex,
+    second_landmarks: CorrelationLandmarkIndex,
+    totals: dict[str, int],
+    errors: list[str],
+    *,
+    use_signatures: bool,
+    use_landmarks: bool,
+) -> CorrelationPairPlan | None:
+    """Materialize one plan while charging every retained item globally."""
+    signature_matches: list[tuple[int, int, int, int]] = []
+    if use_signatures:
+        for match in _iter_pair_projection_matches(first_signatures, second_signatures):
+            if totals["signature_matches"] >= CORRELATION_MAX_SIGNATURE_MATCHES:
+                errors.append(
+                    f"perceptual-overlap signature-match budget exceeded (> {CORRELATION_MAX_SIGNATURE_MATCHES})"
+                )
+                return None
+            signature_matches.append(match)
+            totals["signature_matches"] += 1
+
+    landmark_regions: tuple[tuple[int, int, int], ...] = ()
+    if use_landmarks:
+        landmark_joins = _landmark_join_workload(first_landmarks, second_landmarks)
+        totals["landmark_joins"] += landmark_joins
+        if totals["landmark_joins"] > CORRELATION_MAX_LANDMARK_JOINS:
+            errors.append(
+                "perceptual-overlap landmark-join budget exceeded "
+                f"({totals['landmark_joins']} > {CORRELATION_MAX_LANDMARK_JOINS})"
+            )
+            return None
+        try:
+            landmark_regions, landmark_lag_count = _matched_landmark_regions(
+                first_landmarks,
+                second_landmarks,
+                len(first_samples),
+                len(second_samples),
+                maximum_segments=CORRELATION_MAX_LANDMARK_REGION_PROBES,
+            )
+        except OverflowError as exc:
+            errors.append(str(exc))
+            return None
+        totals["landmark_lags"] += landmark_lag_count
+        if totals["landmark_lags"] > CORRELATION_MAX_LANDMARK_LAGS:
+            errors.append(
+                "perceptual-overlap landmark-lag budget exceeded "
+                f"({totals['landmark_lags']} > {CORRELATION_MAX_LANDMARK_LAGS})"
+            )
+            return None
+
+    intervals_by_lag: dict[int, list[tuple[int, int]]] = {}
+    for rectangle in signature_matches:
+        rectangle_regions = (rectangle[1] - rectangle[0]) + (rectangle[3] - rectangle[2]) + 1
+        totals["projected_regions"] += rectangle_regions
+        if totals["projected_regions"] > CORRELATION_MAX_NATIVE_REGIONS:
+            errors.append(
+                "perceptual-overlap native-region preallocation budget exceeded "
+                f"({totals['projected_regions']} > {CORRELATION_MAX_NATIVE_REGIONS})"
+            )
+            return None
+        _add_rectangle_regions(intervals_by_lag, rectangle)
+    totals["projected_regions"] += len(landmark_regions)
+    if totals["projected_regions"] > CORRELATION_MAX_NATIVE_REGIONS:
+        errors.append(
+            "perceptual-overlap native-region preallocation budget exceeded "
+            f"({totals['projected_regions']} > {CORRELATION_MAX_NATIVE_REGIONS})"
+        )
+        return None
+    if totals["native_regions"] + len(landmark_regions) > CORRELATION_MAX_NATIVE_REGIONS:
+        errors.append(
+            "perceptual-overlap native-region preallocation budget exceeded "
+            f"({totals['native_regions'] + len(landmark_regions)} > {CORRELATION_MAX_NATIVE_REGIONS})"
+        )
+        return None
+    for lag, first_start, last_start in landmark_regions:
+        intervals_by_lag.setdefault(lag, []).append((first_start, last_start))
+    regions = _merge_native_regions(
+        intervals_by_lag,
+        (),
+        len(first_samples),
+        len(second_samples),
+    )
+    if not regions:
+        return None
+    totals["native_regions"] += len(regions)
+    if totals["native_regions"] > CORRELATION_MAX_NATIVE_REGIONS:
+        errors.append(
+            "perceptual-overlap native-region budget exceeded "
+            f"({totals['native_regions']} > {CORRELATION_MAX_NATIVE_REGIONS})"
+        )
+        return None
+
+    native_lags, native_windows, native_work = _native_region_workload(regions)
+    totals["native_lags"] += native_lags
+    totals["native_windows"] += native_windows
+    totals["native_work"] += native_work
+    if totals["native_lags"] > CORRELATION_MAX_NATIVE_LAG_CANDIDATES:
+        errors.append(
+            "perceptual-overlap native-lag budget exceeded "
+            f"({totals['native_lags']} > {CORRELATION_MAX_NATIVE_LAG_CANDIDATES})"
+        )
+        return None
+    if totals["native_windows"] > CORRELATION_MAX_NATIVE_EXACT_WINDOWS:
+        errors.append(
+            "perceptual-overlap native-window budget exceeded "
+            f"({totals['native_windows']} > {CORRELATION_MAX_NATIVE_EXACT_WINDOWS})"
+        )
+        return None
+    if totals["native_work"] > CORRELATION_MAX_NATIVE_PRIMITIVE_WORK:
+        errors.append(
+            "perceptual-overlap native-work budget exceeded "
+            f"({totals['native_work']} > {CORRELATION_MAX_NATIVE_PRIMITIVE_WORK})"
+        )
+        return None
+    return CorrelationPairPlan(
+        first=first,
+        second=second,
+        first_label=first_label,
+        second_label=second_label,
+        first_samples=first_samples,
+        second_samples=second_samples,
+        regions=regions,
+    )
+
+
+def _confirm_correlation_plans(plans: Sequence[CorrelationPairPlan], errors: list[str]) -> bool:
+    """Run exact Pearson only after the complete phase has passed preflight."""
+    rejected_asset_pairs: set[tuple[str, str]] = set()
+    for plan in plans:
+        asset_pair = (plan.first.id, plan.second.id)
+        if asset_pair in rejected_asset_pairs:
+            continue
+        maximum = 0.0
+        matching_lag: int | None = None
+        for lag, first_start, last_start in plan.regions:
+            maximum = max(
+                maximum,
+                _maximum_native_correlation_in_region(
+                    plan.first_samples,
+                    plan.second_samples,
+                    lag,
+                    first_start,
+                    last_start,
+                ),
+            )
+            if maximum >= CORRELATION_THRESHOLD:
+                matching_lag = lag
+                break
+        if matching_lag is not None:
+            rejected_asset_pairs.add(asset_pair)
+            errors.append(
+                f"assets {plan.first.id!r} and {plan.second.id!r} have undocumented decoded-audio correlation "
+                f"{maximum:.3f} >= {CORRELATION_THRESHOLD:.2f} over {CORRELATION_WINDOW_SEC:.3f}s "
+                f"at native {CORRELATION_NATIVE_SAMPLE_RATE_HZ}Hz "
+                f"({plan.first_label}-{plan.second_label}, lag {matching_lag} samples)"
+            )
+    return bool(rejected_asset_pairs)
 
 
 def _validate_perceptual_overlaps(
@@ -962,45 +1984,171 @@ def _validate_perceptual_overlaps(
     allowlist: QualityGuardAllowlist,
     errors: list[str],
 ) -> None:
+    """Reject only exact Pearson matches nominated by bounded independent screens."""
     review_assets = tuple(asset for asset in assets if asset.kind in CORRELATION_ASSET_KINDS)
-    decoded: dict[str, array.array[int]] = {}
-    window_samples = round(CORRELATION_WINDOW_SEC * CORRELATION_SAMPLE_RATE_HZ)
+    if len(review_assets) > CORRELATION_MAX_REVIEW_ASSETS:
+        errors.append(
+            "perceptual-overlap reviewed-asset budget exceeded "
+            f"({len(review_assets)} > {CORRELATION_MAX_REVIEW_ASSETS})"
+        )
+        return
+    unchecked_pairs = []
     for first, second in combinations(review_assets, 2):
-        pair = (first.id, second.id) if first.id < second.id else (second.id, first.id)
-        if pair in allowlist.perceptual_overlaps:
+        pair = tuple(sorted((first.id, second.id)))
+        if pair not in allowlist.perceptual_overlaps:
+            unchecked_pairs.append((first, second))
+
+    compared_asset_ids = {asset.id for pair in unchecked_pairs for asset in pair}
+    decoded_by_asset: dict[str, DecodedAudio | Sequence[int]] = {}
+    total_samples = 0
+    for asset in review_assets:
+        if asset.id not in compared_asset_ids:
             continue
-        windows = _shared_source_windows(first, second)
-        if not windows:
-            continue
-        failed_decode = False
-        for asset in (first, second):
-            if asset.id in decoded:
-                continue
-            try:
-                decoded[asset.id] = _decode_audio(_resolve_asset_path(pack_dir, asset.path))
-            except (OSError, RuntimeError, ValueError) as exc:
-                errors.append(f"asset {asset.id!r} cannot be decoded for perceptual-overlap validation: {exc}")
-                failed_decode = True
-        if failed_decode:
-            continue
-        maximum = 0.0
-        for first_start_sec, second_start_sec in windows:
-            first_start = round(first_start_sec * CORRELATION_SAMPLE_RATE_HZ)
-            second_start = round(second_start_sec * CORRELATION_SAMPLE_RATE_HZ)
-            first_window = decoded[first.id][first_start : first_start + window_samples]
-            second_window = decoded[second.id][second_start : second_start + window_samples]
-            if len(first_window) != window_samples or len(second_window) != window_samples:
-                errors.append(
-                    f"assets {first.id!r} and {second.id!r} have layer timing outside decoded audio "
-                    "during perceptual-overlap validation"
-                )
-                break
-            maximum = max(maximum, _normalized_correlation(first_window, second_window))
-        if maximum >= CORRELATION_THRESHOLD:
+        try:
+            decoded = _decode_audio(_resolve_asset_path(pack_dir, asset.path))
+        except (OSError, RuntimeError, ValueError) as exc:
             errors.append(
-                f"assets {first.id!r} and {second.id!r} have undocumented decoded-audio correlation "
-                f"{maximum:.3f} >= {CORRELATION_THRESHOLD:.2f} over {CORRELATION_WINDOW_SEC:.3f}s"
+                f"asset {asset.id!r} cannot be decoded at native 48kHz for perceptual-overlap validation: {exc}"
             )
+            continue
+        sample_count = _decoded_sample_count(decoded)
+        if sample_count > CORRELATION_MAX_SAMPLES_PER_ASSET:
+            errors.append(
+                f"asset {asset.id!r} exceeds perceptual-overlap decoded-sample budget "
+                f"({sample_count} > {CORRELATION_MAX_SAMPLES_PER_ASSET})"
+            )
+            return
+        total_samples += sample_count
+        if total_samples > CORRELATION_MAX_TOTAL_SAMPLES:
+            errors.append(
+                "perceptual-overlap total decoded-sample budget exceeded "
+                f"({total_samples} > {CORRELATION_MAX_TOTAL_SAMPLES})"
+            )
+            return
+        decoded_by_asset[asset.id] = decoded
+
+    channels_by_asset = {asset_id: _decoded_channels(decoded) for asset_id, decoded in decoded_by_asset.items()}
+    channel_pairs: list[tuple[AssetRecord, AssetRecord, str, str, Sequence[int], Sequence[int]]] = []
+    for first, second in unchecked_pairs:
+        first_channels = channels_by_asset.get(first.id)
+        second_channels = channels_by_asset.get(second.id)
+        if first_channels is None or second_channels is None:
+            continue
+        for first_label, first_samples in first_channels:
+            for second_label, second_samples in second_channels:
+                channel_pairs.append((first, second, first_label, second_label, first_samples, second_samples))
+
+    signature_counts = {
+        (asset_id, label): len(_signature_start_cells(len(samples) - _correlation_window_samples()))
+        for asset_id, channels in channels_by_asset.items()
+        for label, samples in channels
+    }
+    signature_count = sum(signature_counts.values())
+    signature_coordinates = sum(
+        signature_counts[(first.id, first_label)] * signature_counts[(second.id, second_label)]
+        for first, second, first_label, second_label, _first_samples, _second_samples in channel_pairs
+    )
+    signature_work = (
+        signature_count * CORRELATION_SIGNATURE_BITS * CORRELATION_PROJECTION_PAIRS_PER_BIT + 4 * signature_coordinates
+    )
+    if signature_coordinates > CORRELATION_MAX_SIGNATURE_COORDINATES:
+        errors.append(
+            "perceptual-overlap signature-coordinate budget exceeded "
+            f"({signature_coordinates} > {CORRELATION_MAX_SIGNATURE_COORDINATES})"
+        )
+        return
+    if signature_work > CORRELATION_MAX_SIGNATURE_WORK:
+        errors.append(
+            f"perceptual-overlap signature-work budget exceeded ({signature_work} > {CORRELATION_MAX_SIGNATURE_WORK})"
+        )
+        return
+
+    signatures: dict[tuple[str, str], tuple[CorrelationSignature, ...]] = {}
+    for asset_id, channels in channels_by_asset.items():
+        for label, samples in channels:
+            key = (asset_id, label)
+            signatures[key] = _build_pair_projection_signatures(samples)
+
+    totals = {
+        "signature_matches": 0,
+        "landmark_joins": 0,
+        "landmark_lags": 0,
+        "projected_regions": 0,
+        "native_regions": 0,
+        "native_lags": 0,
+        "native_windows": 0,
+        "native_work": 0,
+    }
+    signature_plans: list[CorrelationPairPlan] = []
+    empty_landmarks = CorrelationLandmarkIndex(array.array("Q"))
+    for first, second, first_label, second_label, first_samples, second_samples in channel_pairs:
+        plan = _plan_correlation_channel_pair(
+            first,
+            second,
+            first_label,
+            second_label,
+            first_samples,
+            second_samples,
+            signatures[(first.id, first_label)],
+            signatures[(second.id, second_label)],
+            empty_landmarks,
+            empty_landmarks,
+            totals,
+            errors,
+            use_signatures=True,
+            use_landmarks=False,
+        )
+        if plan is None:
+            if errors:
+                return
+            continue
+        signature_plans.append(plan)
+    if _confirm_correlation_plans(signature_plans, errors):
+        return
+
+    landmark_events = 0
+    landmark_postings = 0
+    landmark_indexes: dict[tuple[str, str], CorrelationLandmarkIndex] = {}
+    for asset_id, channels in channels_by_asset.items():
+        for label, samples in channels:
+            remaining = min(
+                CORRELATION_MAX_LANDMARK_EVENTS - landmark_events,
+                CORRELATION_MAX_LANDMARK_POSTINGS - landmark_postings,
+            )
+            try:
+                index, event_count = _build_landmark_postings(samples, maximum_events=remaining)
+            except OverflowError:
+                errors.append("perceptual-overlap landmark-event/posting budget exceeded")
+                return
+            landmark_events += event_count
+            landmark_postings += len(index.records)
+            landmark_indexes[(asset_id, label)] = index
+
+    landmark_plans: list[CorrelationPairPlan] = []
+    for first, second, first_label, second_label, first_samples, second_samples in channel_pairs:
+        plan = _plan_correlation_channel_pair(
+            first,
+            second,
+            first_label,
+            second_label,
+            first_samples,
+            second_samples,
+            (),
+            (),
+            landmark_indexes[(first.id, first_label)],
+            landmark_indexes[(second.id, second_label)],
+            totals,
+            errors,
+            use_signatures=False,
+            use_landmarks=True,
+        )
+        if plan is None:
+            if errors:
+                return
+            continue
+        landmark_plans.append(plan)
+    if _confirm_correlation_plans(landmark_plans, errors):
+        return
 
 
 def _validate_listening_receipt(
@@ -1024,8 +2172,8 @@ def _validate_listening_receipt(
         errors.append("listening_receipt must be an object")
         return
     status = _nonempty_text(receipt.get("status"), "listening_receipt.status", errors)
-    if status is not None and status not in {"pending", "approved"}:
-        errors.append("listening_receipt.status must be 'pending' or 'approved'")
+    if status is not None and status not in {"pending", "approved", "rejected"}:
+        errors.append("listening_receipt.status must be 'pending', 'approved', or 'rejected'")
         status = None
     receipt_digest: str | None = None
     if receipt.get("pack_digest") is not None:
@@ -1052,11 +2200,26 @@ def _validate_listening_receipt(
                 if parsed.tzinfo is None:
                     errors.append("listening_receipt.reviewed_at must include a timezone")
                     reviewed_at = None
+    notes: str | None = None
+    if receipt.get("notes") is not None:
+        notes = _nonempty_text(receipt.get("notes"), "listening_receipt.notes", errors)
 
     approval_required = require_listening_approval or release_ready
     if require_listening_approval and not release_ready:
         errors.append("release_ready must be true when listening approval is required")
     if not approval_required and status == "pending":
+        return
+    if status == "rejected":
+        if release_ready:
+            errors.append("release_ready must be false for a rejected listening receipt")
+        if require_listening_approval:
+            errors.append("a rejected listening receipt cannot satisfy required listening approval")
+        if receipt_digest != expected_digest:
+            errors.append("listening_receipt.pack_digest must match the delivered pack_digest")
+        if reviewed_at is None:
+            errors.append("listening_receipt.reviewed_at is required for a rejected pack")
+        if notes is None:
+            errors.append("listening_receipt.notes is required for a rejected pack")
         return
     if status != "approved":
         errors.append("listening_receipt.status must be 'approved' for a release-ready pack")
@@ -1133,15 +2296,24 @@ def render_attribution(report: ValidationReport) -> str:
             if source_id in used_by:
                 used_by[source_id].append(asset.id)
 
+    includes_project_masters = any(
+        source.provenance_type == PROJECT_AUTHORED_PROVENANCE_TYPE for source in report.sources
+    )
+    redistribution_line = (
+        "All external recordings and project-authored masters listed here are approved for public redistribution."
+        if includes_project_masters
+        else "All source recordings listed here are approved for public redistribution in this add-on."
+    )
+    source_heading = "## Source recordings and masters" if includes_project_masters else "## Source recordings"
     lines = [
         "# Audio asset attribution",
         "",
         "This file is generated from `manifest.json` by `scripts/validate_audio_asset_pack.py`.",
         "Do not edit it by hand; run `python scripts/validate_audio_asset_pack.py --write-attribution`.",
         "",
-        "All source recordings listed here are approved for public redistribution in this add-on.",
+        redistribution_line,
         "",
-        "## Source recordings",
+        source_heading,
         "",
     ]
     for source in sorted(report.sources, key=lambda item: (item.id.casefold(), item.id)):
@@ -1151,11 +2323,34 @@ def render_attribution(report: ValidationReport) -> str:
                 "",
                 f"- Creator: {source.creator}",
                 f"- License: [{LICENSE_LABELS[source.license]}]({LICENSE_URLS[source.license]})",
-                f"- Source: {source.source_url}",
-                f"- Source SHA-256: `{source.source_sha256}`",
-                f"- Modification: {source.modification}",
             ]
         )
+        if source.provenance_type == PROJECT_AUTHORED_PROVENANCE_TYPE:
+            assert source.generator is not None
+            generator = source.generator
+            lines.extend(
+                [
+                    f"- Generator: [`{generator.path}`]({generator.url})",
+                    f"- Generator revision: `{generator.revision}`",
+                    f"- Generator SHA-256: `{generator.sha256}`",
+                ]
+            )
+            for dependency in generator.dependencies:
+                lines.append(f"- Generator dependency: [`{dependency.path}`]({dependency.url}) — `{dependency.sha256}`")
+            lines.extend(
+                [
+                    f"- Generator runtime: Python `{generator.runtime.python}`; FFmpeg `{generator.runtime.ffmpeg}`",
+                    f"- Master SHA-256: `{source.source_sha256}`",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    f"- Source: {source.source_url}",
+                    f"- Source SHA-256: `{source.source_sha256}`",
+                ]
+            )
+        lines.append(f"- Modification: {source.modification}")
         if source.license == "CC-BY-4.0":
             assert source.attribution is not None
             lines.append(f"- Required attribution: {source.attribution}")

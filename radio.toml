@@ -415,7 +415,7 @@ recurring = false
 name = "Negroni as a Service"
 tagline = "NaaS. Sempre in cloud, mai nel bicchiere."
 category = "tech"
-sonic_recipe = "showroom_reveal"
+sonic_recipe = "late_night_hotline"
 recurring = true
 [ads.brands.campaign]
 premise = "A startup delivering negroni cocktails via cloud infrastructure, but the drinks never actually arrive"
@@ -427,7 +427,7 @@ escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cl
 name = "Mausoleo del Presidentissimo"
 tagline = "Le donne in gonna entrano gratis. I bambini pagano doppio."
 category = "tourism"
-sonic_recipe = "stadium_win"
+sonic_recipe = "bureaucracy_stamp"
 recurring = true
 [ads.brands.campaign]
 premise = "A solemn elder statesman narrates visits to the Mausoleo del Presidentissimo as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
@@ -453,21 +453,21 @@ recurring = true
 name = "Autolavaggio Supremo"
 tagline = "La tua macchina esce più pulita di te."
 category = "services"
-sonic_recipe = "motorway_pass"
+sonic_recipe = "showroom_reveal"
 recurring = true
 
 [[ads.brands]]
 name = "Profumo di Nonna"
 tagline = "Ragù, naftalina, e un tocco di mistero."
 category = "beauty"
-sonic_recipe = "showroom_reveal"
+sonic_recipe = "home_reveal"
 recurring = true
 
 [[ads.brands]]
 name = "Scarpe Volanti"
 tagline = "Non corri. Voli. Poi cadi."
 category = "fashion"
-sonic_recipe = "showroom_reveal"
+sonic_recipe = "stadium_win"
 recurring = true
 
 [[ads.brands]]
@@ -481,7 +481,7 @@ recurring = true
 name = "Pizzeria del Futuro"
 tagline = "Pizza stampata in 3D. Il sapore è opzionale."
 category = "food"
-sonic_recipe = "cafe_testimonial"
+sonic_recipe = "showroom_reveal"
 recurring = true
 
 [[ads.brands]]
@@ -535,7 +535,7 @@ recurring = false
 name = "Notaio Espresso"
 tagline = "Contratti caldi in trenta secondi."
 category = "services"
-sonic_recipe = "motorway_pass"
+sonic_recipe = "bureaucracy_stamp"
 recurring = true
 [ads.brands.campaign]
 premise = "Un chiosco-notaio che timbra documenti con la schiuma dell'espresso e una velocità terrificante, trasformando la burocrazia in una gag sonora senza vere pretese legali."

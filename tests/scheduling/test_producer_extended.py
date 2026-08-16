@@ -27,6 +27,7 @@ from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorization
 from mammamiradio.home.ha_context import HomeContext, ScoredEntity, _HomeContextFetchOutcome
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.hosts.ad_creative import (
+    _CATEGORY_SONIC,
     AdBrand,
     AdFormat,
     AdPart,
@@ -2137,7 +2138,33 @@ def test_select_ad_creative_category_sonic_defaults():
     _fmt, sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert sonic.environment in {"cafe", "shopping_channel"}
     assert sonic.music_bed in {"tarantella_pop", "cheap_synth_romance", "upbeat"}
-    assert sonic.transition_motif in {"register_hit", "ice_clink", "mandolin_sting"}
+    assert sonic.transition_motif in {"register_hit", "ice_clink", "chime"}
+
+
+@pytest.mark.parametrize(
+    ("category", "expected_motifs"),
+    [
+        ("food", {"register_hit", "ice_clink", "chime"}),
+        ("beauty", {"startup_synth", "ice_clink"}),
+        ("tourism", {"whoosh"}),
+    ],
+)
+def test_category_sonic_fallbacks_exclude_rejected_semantics(
+    category: str,
+    expected_motifs: set[str],
+) -> None:
+    variants = _CATEGORY_SONIC[category]
+
+    assert {variant.transition_motif for variant in variants} == expected_motifs
+    for variant in variants:
+        semantic_fields = (
+            variant.environment,
+            variant.music_bed,
+            variant.transition_motif,
+            variant.sonic_signature,
+        )
+        semantic_blob = " ".join(semantic_fields).casefold()
+        assert all(term not in semantic_blob for term in ("mandolin", "trumpet", "brass"))
 
 
 def test_select_ad_creative_avoids_last_sonic_variant_when_possible():
