@@ -695,10 +695,12 @@ Before merging ANY change that touches addon files:
    wheel/sdist and amd64/aarch64 image parity, FFprobe facts, add-on extractor
    absence, and Jamendo transience. While the starter content is absent by
    design, the PR quality lane's direct step, the release-invariants media
-   section, the add-on build validate job, the edge cut, and local
-   `make media-check` run the quick proof report-only (verdict plus a
-   missing-content notice, exit 0); `scripts/pre-release-check.sh` section 10
-   keeps the hard gate on the release path. Stable remains blocked until exactly 12
+   section, the add-on build validate job, the add-on build full media-proof
+   job (so image publish and the edge channel keep flowing), the edge cut, and
+   local `make media-check` run their proof report-only (verdict plus a
+   missing-content notice, exit 0); the stable promotion media-proof job in
+   `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
+   hard gate on the release path. Stable remains blocked until exactly 12
    approved derivatives total at least 45 minutes and no more than 75 MiB, every
    full audition receipt is complete, and 20 cold HA Green runs show p95 first
    accepted non-silent starter byte at or below two seconds.

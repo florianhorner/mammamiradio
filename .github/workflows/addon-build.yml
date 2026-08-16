@@ -60,9 +60,9 @@ jobs:
 
       # Report-only while the twelve starter tracks are absent by design: the
       # proof still runs and uploads its report, but validate does not fail on
-      # the missing content. The full media-proof job below and the hard gate
-      # in scripts/pre-release-check.sh (section 10) keep the publish and
-      # release paths blocked until the content lands.
+      # the missing content. The stable promotion media-proof job in
+      # addon-release.yml and the hard gate in scripts/pre-release-check.sh
+      # (section 10) keep the release path blocked until the content lands.
       - name: Media-rights report (report-only)
         run: |
           if python scripts/media-proof.py --quick --output media-proof.json; then
@@ -215,15 +215,27 @@ jobs:
           docker load --input "$RUNNER_TEMP/images/amd64/addon-image-amd64.tar"
           docker load --input "$RUNNER_TEMP/images/aarch64/addon-image-aarch64.tar"
 
-      - name: Prove source, packages, and both built images
+      # Report-only while the twelve starter tracks are absent by design: the
+      # full proof still runs against both unpushed images and uploads its
+      # report, but this job does not fail on the missing content — push needs
+      # this job, so a hard failure here blocked every image publish and the
+      # edge channel with it. The stable promotion media-proof job in
+      # addon-release.yml and the hard gate in scripts/pre-release-check.sh
+      # (section 10) keep the release path blocked until the content lands.
+      - name: Prove source, packages, and both built images (report-only)
         env:
           AMD64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
           AARCH64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-aarch64:${{ github.sha }}
         run: |
-          python scripts/media-proof.py \
+          if python scripts/media-proof.py \
             --amd64-image "$AMD64_IMAGE" \
             --aarch64-image "$AARCH64_IMAGE" \
-            --output media-proof.json
+            --output media-proof.json; then
+            echo "media-proof: PASS"
+          else
+            echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence under mammamiradio/assets/starter/) have not landed yet."
+            echo "NOTICE: this job is report-only; the stable promotion media-proof job in addon-release.yml and scripts/pre-release-check.sh section 10 still fail hard on this proof on the release path."
+          fi
 
       - name: Upload full media proof
         if: always()
