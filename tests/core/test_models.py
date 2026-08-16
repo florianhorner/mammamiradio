@@ -1740,6 +1740,53 @@ def test_course_track_blocked_past_the_plain_repeat_cooldown():
     assert course[3] in eligible_course
 
 
+def test_course_cooldown_ignores_a_course_track_no_longer_in_the_pool():
+    # A banned or dropped course track cannot be cycled back to, so it must not
+    # consume a cooldown slot and let a current track return before the set has
+    # actually worked through.
+    heading = _heading()
+    course = [_track(n) for n in range(3)]
+    for track in course:
+        track.heading_id = heading.id
+    dropped = _track(50)
+    dropped.heading_id = heading.id  # tagged, but never in the playlist
+    normals = [_track(100 + n) for n in range(3)]
+    state = StationState(playlist=course + normals, heading=heading)
+    # The stale track sits between two current course plays.
+    state.played_tracks = [course[0], dropped, course[1]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    # course_keys is 3, so the last 2 *current* course plays are excluded. Without
+    # filtering history to the pool the stale track fills a slot and course[0] returns.
+    assert [c for c in candidates if c.heading_id == heading.id] == [course[2]]
+
+
+def test_course_cooldown_sizes_itself_to_selectable_tracks_only():
+    # Under allow_explicit=False an explicit course track is not selectable. Counting
+    # it inflates the set to 3, so the cooldown excludes the last 2 course plays —
+    # every track that could actually air — and steering silently stops.
+    heading = _heading()
+    clean = [_track(n) for n in range(2)]
+    explicit = _track(9)
+    explicit.explicit = True
+    for track in [*clean, explicit]:
+        track.heading_id = heading.id
+    normals = [_track(100 + n) for n in range(2)]
+    state = StationState(playlist=[*clean, explicit, *normals], heading=heading)
+    state.played_tracks = [clean[0], clean[1]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, allow_explicit=False, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    # Sized to the 2 selectable tracks, only the most recent is cooled, so the course
+    # still has a runner. Sized to 3, both are excluded and only normals remain.
+    assert [c for c in candidates if c.heading_id == heading.id] == [clean[0]]
+
+
 def test_single_track_course_is_not_cooled_against_itself():
     # One found track cannot cycle, so the course cooldown must not apply and the
     # plain repeat cooldown stays the only guard.
