@@ -47,9 +47,12 @@ def test_persistent_jamendo_sources_are_retired(config, source):
         load_explicit_source(config, source)
 
 
-def test_load_explicit_source_sets_chart_and_local_track_sources(config, tmp_path, monkeypatch):
+def test_load_explicit_source_sets_chart_and_local_track_sources(
+    config, tmp_path, monkeypatch, external_media_installed
+):
     from mammamiradio.playlist.playlist import _load_chart_source_tracks, load_explicit_source
 
+    config.allow_ytdlp = True
     config.playlist.shuffle = False
     music_dir = tmp_path / "music"
     music_dir.mkdir()
@@ -128,10 +131,11 @@ def test_classic_source_year_stamp(config, monkeypatch):
     assert tracks[0].artist == "Lucio Battisti"
 
 
-def test_classic_source_ytdlp_disabled_raises(config, monkeypatch):
+def test_classic_source_ytdlp_disabled_raises(config, monkeypatch, external_media_installed):
     from mammamiradio.core.models import SourceReadinessEvidence
     from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
 
+    config.allow_ytdlp = True
     monkeypatch.setattr("mammamiradio.playlist.downloader._ytdlp_enabled", lambda: False)
     readiness = SourceReadinessEvidence()
 
@@ -148,13 +152,14 @@ def test_classic_source_ytdlp_disabled_raises(config, monkeypatch):
     assert readiness.advanced.failure == "Classic Italian returned no playable candidates"
 
 
-def test_classic_source_post_restart(config, tmp_path, monkeypatch):
+def test_classic_source_post_restart(config, tmp_path, monkeypatch, external_media_installed):
     from mammamiradio.playlist.playlist import (
         load_explicit_source,
         read_persisted_source,
         write_persisted_source,
     )
 
+    config.allow_ytdlp = True
     source = PlaylistSource(kind="classic", url="classic://italian/70s", source_id="70s", label="Classici anni '70")
     write_persisted_source(tmp_path, source)
 

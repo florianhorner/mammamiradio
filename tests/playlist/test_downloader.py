@@ -1598,9 +1598,10 @@ def test_jamendo_lookup_does_not_reuse_legacy_unsourced_cache(tmp_path):
     assert _resolve_cached_or_local(track, cache_dir, music_dir) is None
 
 
-def test_legacy_youtube_cache_hit_returns_old_path(tmp_path):
+def test_legacy_youtube_cache_hit_returns_old_path(tmp_path, monkeypatch, external_media_installed):
     from mammamiradio.playlist.downloader import _resolve_cached_or_local
 
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     music_dir = tmp_path / "music"
@@ -1618,6 +1619,30 @@ def test_legacy_youtube_cache_hit_returns_old_path(tmp_path):
 
     result = _resolve_cached_or_local(track, cache_dir, music_dir)
     assert result == legacy_path
+
+
+def test_legacy_youtube_cache_stays_invisible_when_external_media_missing(
+    tmp_path, monkeypatch, external_media_missing
+):
+    """Extractor-owned cache bytes are not served by installs without the extra, even with opt-in."""
+    from mammamiradio.playlist.downloader import _resolve_cached_or_local
+
+    monkeypatch.setenv("MAMMAMIRADIO_ALLOW_YTDLP", "true")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    track = Track(
+        title="Legacy Hit",
+        artist="Old Artist",
+        duration_ms=180000,
+        youtube_id="abc123",
+        source="youtube",
+    )
+    legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
+    legacy_path.write_bytes(b"x" * 600_000)
+
+    assert _resolve_cached_or_local(track, cache_dir, music_dir) is None
 
 
 def test_jamendo_without_direct_url_blocks_ytdlp(tmp_path):
@@ -1986,3 +2011,94 @@ def test_prune_stale_tmp_files_swallows_unlink_error(tmp_path):
 
     assert pruned == 0
     assert old.exists()
+
+
+# ── Coverage for availability seams and filesystem edges ────────────────────
+
+
+def test_rejected_cache_artifacts_fall_back_to_raw_name_when_dir_unreadable(tmp_path):
+    """A missing/unreadable cache dir still yields the raw artifact so purges stay targeted."""
+    from mammamiradio.playlist.downloader import _rejected_cache_artifacts
+
+    missing = tmp_path / "never-created"
+    assert _rejected_cache_artifacts(missing, "abc123") == [missing / "abc123.mp3"]
+
+
+def test_evict_cache_lru_skips_caller_protected_paths(cache_dir):
+    """A queued file passed via protected_paths survives eviction pressure."""
+    from mammamiradio.playlist.downloader import evict_cache_lru
+
+    protected = cache_dir / "norm_queued_song.mp3"
+    protected.write_bytes(b"x" * 2 * 1024 * 1024)
+    evictable = cache_dir / "cold_song.mp3"
+    evictable.write_bytes(b"x" * 2 * 1024 * 1024)
+
+    evict_cache_lru(cache_dir, 1, protected_paths={protected})
+
+    assert protected.exists()
+    assert not evictable.exists()
+
+
+def test_find_local_returns_none_when_music_dir_is_not_scannable(tmp_path, track):
+    """A music path that exists but cannot be scanned reads as no local match."""
+    from mammamiradio.playlist.downloader import _find_local
+
+    not_a_dir = tmp_path / "music-file"
+    not_a_dir.write_text("not a directory")
+
+    assert _find_local(track, not_a_dir) is None
+
+
+def test_download_external_sync_serves_operator_local_file(tmp_path, track):
+    """An explicit external request is satisfied by an operator-local file before any extractor work."""
+    from mammamiradio.playlist.downloader import _download_external_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    local = music_dir / "Domenico Modugno - Volare.mp3"
+    local.write_bytes(b"x" * 600_000)
+
+    assert _download_external_sync(track, cache_dir, music_dir) == local
+
+
+def test_search_ytdlp_metadata_degrades_when_module_vanishes(monkeypatch, external_media_missing):
+    """If the opt-in gate passes but the module cannot load, search degrades to no results."""
+    from mammamiradio.playlist import downloader
+
+    monkeypatch.setattr(downloader, "_ytdlp_enabled", lambda: True)
+
+    assert downloader.search_ytdlp_metadata("volare") == []
+
+
+def test_download_external_sync_prefers_attached_local_path(tmp_path, track):
+    """A track carrying its own existing local file airs that file directly."""
+    from mammamiradio.playlist.downloader import _download_external_sync
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    attached = tmp_path / "attached.mp3"
+    attached.write_bytes(b"x" * 600_000)
+    track.local_path = attached
+
+    assert _download_external_sync(track, cache_dir, music_dir) == attached
+
+
+def test_find_local_skips_unstatable_entries_and_honors_scan_limit(tmp_path, track, monkeypatch):
+    """Directories, broken symlink loops, and the scan cap never break local lookup."""
+    from mammamiradio.playlist import downloader
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "album.mp3").mkdir()  # a directory posing as an mp3
+    loop = music_dir / "loop.mp3"
+    loop.symlink_to(loop)  # ELOOP on stat
+    real = music_dir / "Domenico Modugno - Volare.mp3"
+    real.write_bytes(b"x" * 600_000)
+
+    monkeypatch.setattr(downloader, "_LOCAL_FILES_LIMIT", 1)
+
+    assert downloader._find_local(track, music_dir) == real

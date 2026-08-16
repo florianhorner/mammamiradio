@@ -989,7 +989,7 @@ async def test_add_track_preserves_album_art():
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_preserves_real_album_art(tmp_path):
+async def test_add_external_track_preserves_real_album_art(tmp_path, external_media_installed):
     """A real (non-YouTube) cover in the add-external payload is kept as-is — no lookup."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
@@ -1027,7 +1027,7 @@ def _cover_urlopen_mock(payload: dict) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path):
+async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path, external_media_installed):
     """The real-world path: a yt-dlp thumbnail is upgraded to a resolved iTunes cover
     on the background download path (the gate-True branch of _commit_external_download)."""
     app = _make_test_app()
@@ -1062,7 +1062,7 @@ async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_holds_longform_before_download(tmp_path):
+async def test_add_external_track_holds_longform_before_download(tmp_path, external_media_installed):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
@@ -1090,7 +1090,7 @@ async def test_add_external_track_holds_longform_before_download(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_rejects_non_music_before_download(tmp_path):
+async def test_add_external_track_rejects_non_music_before_download(tmp_path, external_media_installed):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
@@ -1118,7 +1118,7 @@ async def test_add_external_track_rejects_non_music_before_download(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_keeps_thumbnail_when_cover_lookup_misses(tmp_path):
+async def test_add_external_track_keeps_thumbnail_when_cover_lookup_misses(tmp_path, external_media_installed):
     """On an iTunes miss the track keeps its thumbnail rather than going blank —
     protects the now-playing tile from regressing to no image."""
     app = _make_test_app()
@@ -1797,8 +1797,9 @@ async def test_status_playlist_page_preserves_admin_status_contract():
 
 
 @pytest.mark.asyncio
-async def test_search_returns_playlist_and_external_results():
+async def test_search_returns_playlist_and_external_results(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     app.state.station_state.playlist[0].album_art = "https://img.example/song-a.jpg"
     app.state.station_state.playlist[0].source = "classic"
     app.state.station_state.playlist[0].year = 1984
@@ -1860,8 +1861,9 @@ async def test_search_playlist_results_are_paginated_with_absolute_indices():
 
 
 @pytest.mark.asyncio
-async def test_search_keeps_captured_revision_and_rows_across_slow_external_lookup():
+async def test_search_keeps_captured_revision_and_rows_across_slow_external_lookup(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     state = app.state.station_state
     captured_revision = state.playlist_revision
     search_started = Event()
@@ -1894,8 +1896,9 @@ async def test_search_keeps_captured_revision_and_rows_across_slow_external_look
 
 
 @pytest.mark.asyncio
-async def test_search_external_results_are_paginated_without_global_total():
+async def test_search_external_results_are_paginated_without_global_total(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     external_candidates = [
         {
             "youtube_id": f"ytid{i:07d}",
@@ -1946,8 +1949,9 @@ async def test_search_can_skip_external_lookup_after_external_results_exhausted(
 
 
 @pytest.mark.asyncio
-async def test_search_external_timeout_returns_playlist_results():
+async def test_search_external_timeout_returns_playlist_results(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     captured_timeout = {}
 
     async def _timeout(awaitable, *args, **kwargs):
@@ -2006,7 +2010,7 @@ async def test_listener_request_valid_shoutout():
 
 
 @pytest.mark.asyncio
-async def test_listener_request_valid_song_starts_background_download():
+async def test_listener_request_valid_song_starts_background_download(external_media_installed):
     app = _make_test_app()
     app.state.config.allow_ytdlp = True  # song_request classification requires ytdlp enabled
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -2866,7 +2870,7 @@ async def test_listener_request_sanitizes_hostile_input():
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_success(tmp_path):
+async def test_add_external_track_success(tmp_path, external_media_installed):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
@@ -2911,7 +2915,7 @@ async def test_add_external_track_success(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_sanitizes_invalid_album_art(tmp_path):
+async def test_add_external_track_sanitizes_invalid_album_art(tmp_path, external_media_installed):
     for bad_art in ("javascript:alert(1)", "data:image/png;base64,aaaa", "/relative-cover.jpg"):
         app = _make_test_app()
         app.state.config.cache_dir = tmp_path
@@ -2944,7 +2948,7 @@ async def test_add_external_track_sanitizes_invalid_album_art(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_preserves_pending_force_next(tmp_path):
+async def test_add_external_track_preserves_pending_force_next(tmp_path, external_media_installed):
     """A pending forced segment (e.g. operator-triggered banter) is not clobbered:
     the track still pins, but force_next keeps the existing directive."""
     app = _make_test_app()
@@ -2970,7 +2974,7 @@ async def test_add_external_track_preserves_pending_force_next(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_queued_behind_existing_pin(tmp_path):
+async def test_add_external_track_queued_behind_existing_pin(tmp_path, external_media_installed):
     """When the play-next slot is already taken, the track joins rotation and the
     admin gets an informational 'queued behind' notice (not a failure, not silent)."""
     from mammamiradio.core.models import Track
@@ -3037,7 +3041,7 @@ async def test_commit_external_waits_out_in_flight_source_switch(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
+async def test_add_external_track_background_failure_leaves_no_pin(tmp_path, external_media_installed):
     """Scenario 2 (download fails): no stale pin, playlist unchanged, stream intact."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
@@ -3065,7 +3069,7 @@ async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_dropped_when_source_switches(tmp_path):
+async def test_add_external_track_dropped_when_source_switches(tmp_path, external_media_installed):
     """A real source switch mid-download → the stale pick is dropped, not pinned,
     and the admin gets a notice."""
     app = _make_test_app()
@@ -3098,7 +3102,7 @@ async def test_add_external_track_dropped_when_source_switches(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_survives_benign_playlist_revision_bump(tmp_path):
+async def test_add_external_track_survives_benign_playlist_revision_bump(tmp_path, external_media_installed):
     """A benign edit (enrich / move-to-next / festival) bumps playlist_revision
     but NOT source_revision, so an in-flight queued track must still land."""
     app = _make_test_app()

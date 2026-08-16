@@ -7594,7 +7594,7 @@ async def test_capabilities_loopback_returns_flags():
 
 
 @pytest.mark.asyncio
-async def test_capabilities_exposes_jamendo_and_charts_reload_flags():
+async def test_capabilities_exposes_jamendo_and_charts_reload_flags(external_media_installed):
     app = _make_test_app()
     app.state.config.playlist.jamendo_client_id = "jamendo-client"
     app.state.config.allow_ytdlp = True

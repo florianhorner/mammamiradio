@@ -602,7 +602,7 @@ def test_stream_status_golden_path_wins_over_transient_runtime_state(field, valu
     assert _stream_status(config, state, golden_path={"blocking": True}) == "blocked"
 
 
-def test_guided_setup_stream_pause_is_separate_from_source_readiness():
+def test_guided_setup_stream_pause_is_separate_from_source_readiness(external_media_installed):
     config = load_config()
     state = StationState()
     state.session_stopped = True
@@ -632,6 +632,7 @@ def test_stream_status_without_golden_path_uses_source_readiness(
     playlist,
     allow_ytdlp,
     expected,
+    external_media_installed,
 ):
     config = load_config()
     config.allow_ytdlp = allow_ytdlp
@@ -640,6 +641,17 @@ def test_stream_status_without_golden_path_uses_source_readiness(
     state.playlist = playlist
 
     assert _stream_status(config, state) == expected
+
+
+def test_stream_status_opt_in_without_module_reports_blocked(external_media_missing):
+    """A stale opt-in on an install without the extra is honestly blocked, not forever checking."""
+    config = load_config()
+    config.allow_ytdlp = True
+    state = StationState()
+    state.playlist_source = None
+    state.playlist = []
+
+    assert _stream_status(config, state) == "blocked"
 
 
 def test_setup_status_shape_does_not_classify_runtime_pause_as_setup_failure():

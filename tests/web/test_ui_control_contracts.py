@@ -1203,7 +1203,7 @@ class TestCapabilitiesEndpoint:
 
 class TestSourceControlVisibilityContract:
     @pytest.mark.asyncio
-    async def test_capabilities_expose_admin_source_control_flags(self):
+    async def test_capabilities_expose_admin_source_control_flags(self, external_media_installed):
         app = _make_app()
         app.state.config.playlist.jamendo_client_id = "jamendo-client"
         app.state.config.allow_ytdlp = False
@@ -1222,6 +1222,17 @@ class TestSourceControlVisibilityContract:
         data = resp.json()["capabilities"]
         assert data["jamendo"] is True
         assert data["charts_reload"] is True
+
+    @pytest.mark.asyncio
+    async def test_capabilities_keep_charts_hidden_when_external_media_missing(self, external_media_missing):
+        """Without the optional external-media module, opt-in never surfaces chart controls."""
+        app = _make_app()
+        app.state.config.allow_ytdlp = True
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/capabilities", headers=AUTH)
+
+        assert resp.json()["capabilities"]["charts_reload"] is False
 
     @pytest.mark.asyncio
     async def test_admin_html_keeps_jamendo_out_of_quick_add_and_charts_capability_gated(self):

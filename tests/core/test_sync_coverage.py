@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -18,17 +16,8 @@ from mammamiradio.core.sync import init_db, load_cached_tracks
 # ---------------------------------------------------------------------------
 
 
-def _ensure_yt_dlp_mock():
-    """Ensure yt_dlp is mockable in sys.modules."""
-    if "yt_dlp" not in sys.modules:
-        mod = types.ModuleType("yt_dlp")
-        mod.YoutubeDL = MagicMock()
-        sys.modules["yt_dlp"] = mod
-
-
-def test_resolve_cookies_chrome(monkeypatch):
+def test_resolve_cookies_chrome(external_media_installed):
     """Returns chrome cookies when chrome is available."""
-    _ensure_yt_dlp_mock()
     from mammamiradio.core.sync import _resolve_cookies_arg
 
     mock_ydl = MagicMock()
@@ -42,9 +31,8 @@ def test_resolve_cookies_chrome(monkeypatch):
     assert result == ["--cookies-from-browser", "chrome"]
 
 
-def test_resolve_cookies_none_available(monkeypatch):
+def test_resolve_cookies_none_available(external_media_installed):
     """Returns empty list when no browser cookies work."""
-    _ensure_yt_dlp_mock()
     from mammamiradio.core.sync import _resolve_cookies_arg
 
     mock_ydl = MagicMock()
@@ -63,9 +51,8 @@ def test_resolve_cookies_none_available(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_playlist_uses_cached_tracks(tmp_path):
+def test_sync_playlist_uses_cached_tracks(tmp_path, external_media_installed):
     """When a track is already in the DB and file exists, it's used without re-download."""
-    _ensure_yt_dlp_mock()
     from mammamiradio.core.sync import _sync_playlist_blocking
 
     db_path = tmp_path / "radio.db"
@@ -97,6 +84,7 @@ def test_sync_playlist_uses_cached_tracks(tmp_path):
             playlist_url="https://example.com/playlist",
             cache_dir=cache_dir,
             db_path=db_path,
+            config=SimpleNamespace(allow_ytdlp=True),
         )
 
     assert len(tracks) == 1
@@ -110,9 +98,8 @@ def test_sync_playlist_uses_cached_tracks(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_parses_artist_title_format(tmp_path):
+def test_sync_parses_artist_title_format(tmp_path, external_media_installed):
     """Correctly splits 'Artist - Title' format."""
-    _ensure_yt_dlp_mock()
     from mammamiradio.core.sync import _sync_playlist_blocking
 
     db_path = tmp_path / "radio.db"
@@ -152,6 +139,7 @@ def test_sync_parses_artist_title_format(tmp_path):
             playlist_url="https://example.com/playlist",
             cache_dir=cache_dir,
             db_path=db_path,
+            config=SimpleNamespace(allow_ytdlp=True),
         )
 
     assert len(tracks) == 1
@@ -164,9 +152,8 @@ def test_sync_parses_artist_title_format(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_skips_failed_downloads(tmp_path):
+def test_sync_skips_failed_downloads(tmp_path, external_media_installed):
     """Skips tracks that fail to download."""
-    _ensure_yt_dlp_mock()
     from mammamiradio.core.sync import _sync_playlist_blocking
 
     db_path = tmp_path / "radio.db"
@@ -186,6 +173,7 @@ def test_sync_skips_failed_downloads(tmp_path):
             playlist_url="https://example.com/playlist",
             cache_dir=cache_dir,
             db_path=db_path,
+            config=SimpleNamespace(allow_ytdlp=True),
         )
 
     assert tracks == []
@@ -206,6 +194,19 @@ def test_sync_rejects_when_external_media_capability_is_unavailable(tmp_path):
         )
 
     load_external_media.assert_not_called()
+
+
+def test_sync_rejects_when_external_media_module_is_missing(tmp_path, external_media_missing):
+    """Opting in without the optional module installed still refuses cleanly."""
+    from mammamiradio.core.sync import _sync_playlist_blocking
+
+    with pytest.raises(RuntimeError, match="external media is unavailable"):
+        _sync_playlist_blocking(
+            playlist_url="https://example.com/playlist",
+            cache_dir=tmp_path / "cache",
+            db_path=tmp_path / "radio.db",
+            config=SimpleNamespace(allow_ytdlp=True),
+        )
 
 
 def test_sync_without_browser_cookies_skips_empty_entry_and_missing_output(tmp_path):
