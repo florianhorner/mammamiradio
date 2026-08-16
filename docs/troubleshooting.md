@@ -73,26 +73,77 @@ Nothing about this reaches the listener UI: `/public-status` and the page still 
 
 ## The app starts but there is no real music
 
-The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP=true`) → Jamendo (when `jamendo_client_id` is set) → packaged demo music when present → built-in demo-track metadata. A source checkout also checks its repo-local `music/` directory before the demo tiers; the stock Docker Compose and Home Assistant packages do not mount that development path. The current package contains recovery audio but no bundled song library, and built-in demo-track metadata still needs a working download path. The first tier that yields playable tracks wins. If you hear only recovery audio or placeholder tones:
+The attributed twelve-track starter collection is the boot source and needs no
+network or provider account. If only continuity or recovery audio airs:
 
-- Check that `ffmpeg` is installed
-- Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
-- For the supplied Docker image or Home Assistant app, local MP3s belong in the
+- Open **Music credits**. A valid starter package lists all twelve bundled
+  entries even when Jamendo is off.
+- Check the app log for a starter manifest, hash, package, or FFprobe error.
+- Run `make media-check` in a source checkout. Do not copy around the manifest
+  gate or fabricate a receipt; replace the app with a package that passed the
+  media proof.
+- Confirm `ffmpeg` is available. Runtime excludes a corrupt starter asset and
+  advances, while release proof fails the package.
+
+Jamendo cannot repair a broken starter package: it is optional, default-off,
+asynchronous enrichment. A Jamendo failure must leave starter/local playback
+unchanged. See [Music sources and rights boundaries](music-sources.md).
+
+For the supplied Docker image or Home Assistant app, local MP3s belong in the
   deployment's persistent `/data/music` directory. Populate that data area
   through the deployment's supported storage tooling; do not patch files into
   a running Home Assistant app container. A source checkout instead reads
   repo-local `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
-- A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means no listener queue accepted audio, not merely that a file was selected. A station bridging an empty queue on `continuity_1.mp3` is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that prefers a song the listener has not just heard, and only re-serves a recent one when the cache holds nothing else (a song from twenty minutes ago beats the station ident on a loop), then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat; the neutral two-second `emergency_tone.mp3` remains the final packaged rung when ordinary recovery cannot supply audio. After 60 seconds without any bridge asset the station requests forced banter so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth. Connecting or reconnecting to `/stream` does not clear the persisted stop; press **Resume** explicitly.
+When listeners are connected, `/readyz` flips back to `503 starting` if playback
+has been truly silent for more than 30 seconds — silent means no listener queue
+accepted audio, not merely that a file was selected. A station bridging an empty
+queue on `continuity_1.mp3` is audibly on air and does not count as silent, so the
+add-on watchdog is not handed a reason to restart it mid-recovery. The playback
+loop first tries one canned clip for the gap, then a recent-aware random
+`cache/norm_*.mp3` pick that prefers a song the listener has not just heard,
+then eligible bundled starter assets. If there is no cached or starter music,
+the packaged clip may repeat; the neutral two-second `emergency_tone.mp3`
+remains the final packaged rung. After 60 seconds without any bridge asset the
+station requests forced banter so the queue can recover without a restart. If
+the station has been explicitly stopped, `/readyz` returns `503 stopped`
+regardless of queue depth. Connecting or reconnecting to `/stream` does not
+clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
 This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. The packaged clip appears only when the cache has nothing eligible, and when it does queue with runway still expected but no cache music behind it, the miss reads `no cache music queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
-If the clip still repeats, check whether `cache/` has any `norm_*.mp3` files, and whether the ones that exist are eligible to air: files rejected by the audio quality gate and songs on the operator ban list are skipped by the rescue picker even though they sit on disk (a missing or corrupt metadata sidecar does NOT disqualify a file — it airs with a cleaned-up filename as the title). A fresh install with no cache and no bundled demo music may legitimately repeat the packaged clip because repeated station audio is still better than dead air.
+If the clip still repeats, look for a starter manifest/admission failure first.
+Eligible standalone/local normalized cache may still help the rescue picker,
+but Jamendo artifacts are deliberately excluded and cannot survive for rescue.
 
-The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup walks the standard fallback chain. Source-checkout developers with MP3s in the repo-local `music/` directory can use them even when yt-dlp is off and Jamendo isn't configured — yt-dlp is only required to download charts, not to play files already on disk.
+Source-checkout developers with MP3s in the repo-local `music/` directory can
+use them with external extraction off and Jamendo off. Those files remain the
+operator's responsibility.
+
+## Jamendo stays off or temporarily unavailable
+
+Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
+
+- **Finish Jamendo setup** means the client ID or current non-commercial
+  acknowledgement is missing. A migrated ID remains disabled until reviewed.
+- **Preparing one Jamendo track** is normal. Starter/local music continues and
+  a Jamendo miss never delays the next music slot.
+- **Jamendo temporarily unavailable** is a transient provider/network/audio
+  failure. Use **Check again** once; concurrent retries are coalesced.
+- **Jamendo track could not be used** is a provider-wide configuration or
+  contract rejection. Check the saved configuration or turn Jamendo off.
+
+Keep the running app and live cache intact; there is no downloaded Jamendo file
+to recover. The integration writes at most one single-use artifact under its boot
+temporary directory and deletes it after play or cancellation. No Jamendo
+audio or lease record belongs in cache, SQLite, restart handoff, or rescue.
+
+The admin row intentionally says provider confirmation is pending. `ready`
+means one technical playback artifact is prepared; it does not mean cleared or
+licensed for every station model. For error codes and retain/replace/clear
+semantics, see [Music sources and rights boundaries](music-sources.md#configuration-api).
 
 ## Air Next or Next track says the station is paused
 
@@ -138,9 +189,13 @@ and yielded bytes; it is not listener proof. `Listener-audible segment committed
 chunk. Provider, rescue-rotation, and continuity-air receipts update only at the
 second boundary.
 
-## A chart entry sounded like a podcast or audiobook
+## A standalone external-media result sounded like a podcast or audiobook
 
-Apple Music's Italian chart occasionally surfaces non-music entries (BBC comedy, news briefings, audiobooks). The source filter rejects them before they enter the candidate pool.
+This section applies only to a standalone installation that deliberately
+installed and enabled the `external-media` extra. Both Home Assistant add-ons
+omit yt-dlp, so they cannot take this path. Chart metadata can occasionally
+surface non-music entries; the source filter rejects obvious podcasts, news
+briefings, and audiobooks before they enter the candidate pool.
 
 Expected log signature on chart load:
 

@@ -5324,7 +5324,7 @@ async def test_idle_bridge_queues_cache_music_without_a_canned_preamble(tmp_path
     canned_clip.write_bytes(b"fake audio" * 256)
     norm_file = tmp_path / "norm_idle_runway.mp3"
     norm_file.write_bytes(b"pre-normalized idle runway")
-    save_track_metadata(norm_file, title="Idle Runway", artist="Runway Artist")
+    save_track_metadata(norm_file, title="Idle Runway", artist="Runway Artist", source_kind="local")
 
     with (
         patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", demo_root),
@@ -5551,7 +5551,13 @@ async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
     canned_clip.write_bytes(b"fake audio" * 256)
     norm_file = tmp_path / "norm_drain_runway.mp3"
     norm_file.write_bytes(b"pre-normalized drain runway")
-    save_track_metadata(norm_file, title="Runway Song", artist="Cache Artist", duration_ms=180_000)
+    save_track_metadata(
+        norm_file,
+        title="Runway Song",
+        artist="Cache Artist",
+        duration_ms=180_000,
+        source_kind="local",
+    )
     queued: list[Segment] = []
 
     async def _capture(segment: Segment, **_kwargs) -> bool:
@@ -5595,7 +5601,13 @@ async def test_bridge_never_repeats_the_on_air_song_back_to_back(tmp_path):
     canned_clip.write_bytes(b"fake audio" * 256)
     on_air = tmp_path / "norm_on_air_192k.mp3"
     on_air.write_bytes(b"the song currently playing")
-    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    save_track_metadata(
+        on_air,
+        title="Dont Lose Your Way",
+        artist="Fleece",
+        duration_ms=211_000,
+        source_kind="local",
+    )
     state.now_streaming = {
         "type": "music",
         "label": "Fleece – Dont Lose Your Way",
@@ -5642,7 +5654,13 @@ async def test_bridge_repeats_the_on_air_song_rather_than_airing_the_tone(tmp_pa
     config.tmp_dir = tmp_path
     on_air = tmp_path / "norm_on_air_192k.mp3"
     on_air.write_bytes(b"the song currently playing")
-    save_track_metadata(on_air, title="Dont Lose Your Way", artist="Fleece", duration_ms=211_000)
+    save_track_metadata(
+        on_air,
+        title="Dont Lose Your Way",
+        artist="Fleece",
+        duration_ms=211_000,
+        source_kind="local",
+    )
     state.now_streaming = {
         "type": "music",
         "label": "Fleece – Dont Lose Your Way",
@@ -5894,7 +5912,7 @@ async def test_resume_bridge_queues_cache_music_without_a_canned_preamble(tmp_pa
     canned_clip.write_bytes(b"fake audio" * 256)
     norm_file = tmp_path / "norm_resume_runway.mp3"
     norm_file.write_bytes(b"pre-normalized resume runway")
-    save_track_metadata(norm_file, title="Resume Runway", artist="Runway Artist")
+    save_track_metadata(norm_file, title="Resume Runway", artist="Runway Artist", source_kind="local")
 
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
@@ -5945,6 +5963,7 @@ async def test_resume_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_p
 
     norm_file = tmp_path / "norm_abc123.mp3"
     norm_file.write_bytes(b"pre-normalized audio")
+    save_track_metadata(norm_file, title="Abc123", artist="", source_kind="local")
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -5990,7 +6009,7 @@ async def test_resume_bridge_uses_norm_sidecar_metadata_when_available(tmp_path)
 
     norm_file = tmp_path / "norm_rescue_track_192k.mp3"
     norm_file.write_bytes(b"pre-normalized audio")
-    save_track_metadata(norm_file, title="Sogno Americano", artist="Artie 5ive")
+    save_track_metadata(norm_file, title="Sogno Americano", artist="Artie 5ive", source_kind="local")
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -6136,9 +6155,10 @@ async def test_idle_bridge_falls_back_to_norm_cache_when_no_canned_clips(tmp_pat
 
     recent_norm_file = tmp_path / "norm_aaa_ordinary.mp3"
     recent_norm_file.write_bytes(b"pre-normalized current idle audio")
-    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren")
+    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren", source_kind="local")
     norm_file = tmp_path / "norm_idle123.mp3"
     norm_file.write_bytes(b"pre-normalized idle audio")
+    save_track_metadata(norm_file, title="Idle123", artist="", source_kind="local")
 
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
@@ -6187,7 +6207,12 @@ async def test_idle_bridge_uses_norm_sidecar_metadata_when_available(tmp_path):
 
     norm_file = tmp_path / "norm_idle_rescue_track_192k.mp3"
     norm_file.write_bytes(b"pre-normalized idle audio")
-    save_track_metadata(norm_file, title="Musica Leggera", artist="Colapesce Dimartino")
+    save_track_metadata(
+        norm_file,
+        title="Musica Leggera",
+        artist="Colapesce Dimartino",
+        source_kind="local",
+    )
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -6315,13 +6340,18 @@ async def test_resume_bridge_skips_first_sorted_norm_file_when_current_or_recent
 
     norm_aaa = tmp_path / "norm_aaa_ordinary.mp3"
     norm_aaa.write_bytes(b"first sorted current file")
-    save_track_metadata(norm_aaa, title="Ordinary", artist="Alex Warren")
+    save_track_metadata(norm_aaa, title="Ordinary", artist="Alex Warren", source_kind="local")
     norm_mmm = tmp_path / "norm_mmm_alt.mp3"
     norm_mmm.write_bytes(b"middle alternative file")
-    save_track_metadata(norm_mmm, title="Musica Leggera", artist="Colapesce Dimartino")
+    save_track_metadata(
+        norm_mmm,
+        title="Musica Leggera",
+        artist="Colapesce Dimartino",
+        source_kind="local",
+    )
     norm_zzz = tmp_path / "norm_zzz_alt.mp3"
     norm_zzz.write_bytes(b"last alternative file")
-    save_track_metadata(norm_zzz, title="A far l amore", artist="Raffaella Carra")
+    save_track_metadata(norm_zzz, title="A far l amore", artist="Raffaella Carra", source_kind="local")
 
     with (
         patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
@@ -6366,6 +6396,7 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
 
     norm_file = tmp_path / "norm_startup.mp3"
     norm_file.write_bytes(b"startup track")
+    save_track_metadata(norm_file, title="Startup", artist="", source_kind="local")
 
     with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None):
         task = asyncio.create_task(run_producer(queue, state, config))
@@ -6924,6 +6955,20 @@ def test_remember_enqueued_indexes_rescue_music_and_skips_breaks(tmp_path):
     )
     _remember_enqueued(state, music, music_path)
     assert state.immediate_audio_index[music_path] == pytest.approx(180.0)
+
+    # Starter audio must remain direct-only; a metadata label cannot promote a
+    # package path into the generic continuity/reuse index.
+    starter_path = tmp_path / "starter-carefree.mp3"
+    starter_path.write_bytes(b"starter")
+    starter = Segment(
+        type=SegmentType.MUSIC,
+        path=starter_path,
+        duration_sec=180.0,
+        metadata={"source_kind": "starter", "rescue": True},
+    )
+    _remember_enqueued(state, starter, starter_path)
+    assert starter_path not in state.immediate_audio_index
+    assert state.last_music_file == music_path
 
     # An emergency-tone continuity break is not indexable music (audio_source guard).
     tone_path = tmp_path / "emergency_tone.mp3"

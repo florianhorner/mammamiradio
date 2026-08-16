@@ -38,6 +38,10 @@ load_dotenv()
 _TRUTHY = {"true", "1", "yes"}
 _FALSY = {"false", "0", "no"}
 
+# Bump only when the operator-facing non-commercial acknowledgement changes.
+# A stored acknowledgement from another revision is intentionally inert.
+JAMENDO_ACK_REVISION = "jamendo-api-terms-v1"
+
 # Canonical name of the local guest-host test balloon. Single source of truth —
 # scriptwriter imports this so the roster gate and the prompt logic can never
 # drift on the spelling. Disabled by dropping him from ``config.hosts`` at load
@@ -52,6 +56,13 @@ _ADDON_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("elevenlabs_api_key", "ELEVENLABS_API_KEY"),
 )
 _ADDON_PROVIDER_ENV_KEYS = tuple(env_key for _, env_key in _ADDON_PROVIDER_OPTIONS)
+_ADDON_MEDIA_SOURCE_ENV_KEYS = (
+    "JAMENDO_CLIENT_ID",
+    "MAMMAMIRADIO_JAMENDO_ENABLED",
+    "MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED",
+    "MAMMAMIRADIO_JAMENDO_ACK_REVISION",
+)
+_ADDON_SECRET_ENV_KEYS = (*_ADDON_PROVIDER_ENV_KEYS, *_ADDON_MEDIA_SOURCE_ENV_KEYS)
 
 PACING_BOUNDS: dict[str, tuple[int, int]] = {
     "songs_between_banter": (2, 60),
@@ -143,6 +154,9 @@ class PlaylistSection:
     artist_cooldown: int = 3
     max_artist_per_hour: int = 3
     jamendo_client_id: str = ""
+    jamendo_enabled: bool = False
+    jamendo_noncommercial_acknowledged: bool = False
+    jamendo_ack_revision: str = ""
     jamendo_tags: str = "pop"
     jamendo_country: str = ""
     jamendo_order: str = ""
@@ -1114,7 +1128,6 @@ def _apply_addon_options() -> None:
     env_map = {
         "station_name": "STATION_NAME",
         "admin_password": "ADMIN_PASSWORD",
-        "jamendo_client_id": "JAMENDO_CLIENT_ID",
     }
     for opt_key, env_key in env_map.items():
         val = options.get(opt_key, "")
@@ -1223,7 +1236,7 @@ def _read_addon_provider_secrets(path: Path) -> dict[str, str]:
         log.warning("Could not read /config/secrets.env")
         return {}
 
-    values, skipped = _parse_secret_env_lines(lines, _ADDON_PROVIDER_ENV_KEYS)
+    values, skipped = _parse_secret_env_lines(lines, _ADDON_SECRET_ENV_KEYS)
     for line_no, reason in skipped:
         log.warning("Ignoring /config/secrets.env line %s: %s", line_no, reason)
     return values
@@ -1458,9 +1471,17 @@ def _validate(config: StationConfig) -> None:
         errors.append(_err("persona.skip_bit_threshold", "must be >= 1"))
     if config.playlist.jamendo_client_id:
         config.playlist.jamendo_client_id = config.playlist.jamendo_client_id.strip()
-    if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]+$", config.playlist.jamendo_client_id):
+    if config.playlist.jamendo_client_id and not re.match(r"^[A-Za-z0-9_-]{8,128}$", config.playlist.jamendo_client_id):
         log.warning("Invalid jamendo_client_id format — Jamendo source disabled")
         config.playlist.jamendo_client_id = ""
+        config.playlist.jamendo_enabled = False
+    if config.playlist.jamendo_ack_revision != JAMENDO_ACK_REVISION:
+        config.playlist.jamendo_noncommercial_acknowledged = False
+    if config.playlist.jamendo_enabled and (
+        not config.playlist.jamendo_client_id or not config.playlist.jamendo_noncommercial_acknowledged
+    ):
+        log.warning("Jamendo enablement is incomplete — keeping transient expansion disabled")
+        config.playlist.jamendo_enabled = False
     if config.playlist.jamendo_country and not re.match(r"^[A-Z]{3}$", config.playlist.jamendo_country):
         errors.append(
             _err(
@@ -2251,6 +2272,16 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     playlist_raw = dict(raw.get("playlist", {}))
     if os.getenv("JAMENDO_CLIENT_ID") is not None:
         playlist_raw["jamendo_client_id"] = os.getenv("JAMENDO_CLIENT_ID", "").strip()
+    jamendo_enabled_env = os.getenv("MAMMAMIRADIO_JAMENDO_ENABLED")
+    if jamendo_enabled_env is not None:
+        playlist_raw["jamendo_enabled"] = coerce_bool(jamendo_enabled_env, False)
+    jamendo_ack_env = os.getenv("MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED")
+    jamendo_ack_revision = os.getenv("MAMMAMIRADIO_JAMENDO_ACK_REVISION", "").strip()
+    if jamendo_ack_env is not None:
+        playlist_raw["jamendo_noncommercial_acknowledged"] = (
+            coerce_bool(jamendo_ack_env, False) and jamendo_ack_revision == JAMENDO_ACK_REVISION
+        )
+    playlist_raw["jamendo_ack_revision"] = jamendo_ack_revision
     if os.getenv("JAMENDO_COUNTRY") is not None:
         playlist_raw["jamendo_country"] = os.getenv("JAMENDO_COUNTRY", "").strip()
     if os.getenv("JAMENDO_ORDER") is not None:
@@ -2342,7 +2373,10 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
         ha_token=ha_token,
         is_addon=addon_mode,
-        allow_ytdlp=os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes"),
+        # Both current HA add-ons deliberately omit extractor authority. Legacy
+        # options/env values are ignored there; standalone users need the
+        # optional external-media extra as well as this explicit opt-in.
+        allow_ytdlp=(not addon_mode and os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in ("true", "1", "yes")),
         super_italian_mode=coerce_bool(raw.get("super_italian_mode", True)),
     )
 

@@ -126,7 +126,9 @@ chmod +x "$MOCK_BIN/gh"
 { printf '#!%s\n' "$BASH_BIN"; cat <<'MOCK'
 echo "$*" >> "$PYTHON_MOCK_LOG"
 case "$1" in
+  "-c") exit 0 ;;
   "scripts/validate-release-beat.py") exit "${PYTHON_MOCK_RC:-0}" ;;
+  "scripts/media-proof.py") exit "${PYTHON_MEDIA_RC:-0}" ;;
   *) echo "MOCK python3: unexpected invocation '$*'" >&2; exit 99 ;;
 esac
 MOCK
@@ -207,6 +209,7 @@ never_created_pr() { ! grep -q "pr create" "$GH_MOCK_LOG"; }
 never_committed()  { ! grep -q "^commit" "$GIT_MOCK_LOG"; }
 never_pushed()     { ! grep -q "^push" "$GIT_MOCK_LOG"; }
 validator_called_for() { grep -q "scripts/validate-release-beat.py --channel edge --target-sha $1" "$PYTHON_MOCK_LOG"; }
+media_gate_called() { grep -q "scripts/media-proof.py --quick" "$PYTHON_MOCK_LOG"; }
 
 # Case 1: happy path — HEAD itself is the newest green build => pin HEAD, open PR.
 run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL"
@@ -216,6 +219,7 @@ created_pr                           || fail "happy path should open a PR"
 grep -q "cut edge release $MAIN_SHORT" "$GIT_MOCK_LOG" || fail "commit message should pin $MAIN_SHORT"
 grep -q "edge-release/$MAIN_SHORT" "$GIT_MOCK_LOG"     || fail "should branch on $MAIN_SHORT"
 validator_called_for "$MAIN_SHORT"                    || fail "happy path should validate release beat for $MAIN_SHORT"
+media_gate_called                                      || fail "happy path should run the strict media gate"
 pass "happy path pins HEAD and opens PR"
 
 # Case 2: tests-only HEAD — newest green build is the OLDER commit => pin OLDER.
@@ -330,6 +334,19 @@ never_committed      || fail "release-beat validation failure must not commit"
 never_created_pr     || fail "release-beat validation failure must not open a PR"
 never_pushed         || fail "release-beat validation failure must not push"
 pass "release-beat validation failure blocks edge cut before commit/push/PR"
+
+# Case 14: media proof failure is REPORT-ONLY on the edge cut while the starter
+# content is absent by design: the gate still runs and its missing-content
+# notice prints, but the cut proceeds to commit, push, and PR. The hard gate
+# stays in scripts/pre-release-check.sh section 10 on the release path.
+run_cut GH_MOCK_RUN_SHAS="$MAIN_FULL" PYTHON_MEDIA_RC=8
+[ "$RUN_RC" -eq 0 ]  || fail "media proof failure must stay report-only (got $RUN_RC): $RUN_OUT"
+media_gate_called     || fail "report-only media case should still run the gate"
+printf '%s' "$RUN_OUT" | grep -q "NOTICE: media-proof reported missing content" \
+                      || fail "report-only media case should print the missing-content notice"
+grep -q "^commit" "$GIT_MOCK_LOG" || fail "report-only media case should still commit"
+created_pr            || fail "report-only media case should still open a PR"
+pass "media proof failure reports the missing content and lets the edge cut proceed"
 
 # --------------------------------------------------------------------------
 # --target-sha: pin one exact commit instead of "newest built".

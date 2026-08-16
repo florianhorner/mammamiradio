@@ -1,4 +1,4 @@
-"""Playlist loading from charts, local files, or bundled demo tracks."""
+"""Playlist loading from the attributed starter catalog and operator sources."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Literal
 from urllib.error import URLError
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from mammamiradio.core.config import StationConfig
@@ -21,17 +21,9 @@ from mammamiradio.core.models import Heading, PlaylistSource, SourceReadinessEvi
 from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
 
-_DEMO_ASSETS_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
 _DEMO_ASSETS_RECOVERY_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "recovery"
 _MAX_LOCAL_TRACKS = 200
 _MAX_LOCAL_DIRECTORY_ENTRIES = 4096
-_JAMENDO_API_BASE_URL = "https://api.jamendo.com/v3.0/tracks/"
-_JAMENDO_REQUIRED_PARAMS = {
-    "cc_commercial": "1",
-    "cc_sharealike": "0",
-    "audioformat": "mp32",
-    "include": "musicinfo",
-}
 _CLASSIC_ERA_QUERIES: dict[str, tuple[str, int]] = {
     "70s": ("cantautori italiani anni 70 lucio battisti fabrizio de andre", 1975),
     "80s": ("canzoni italiane anni 80 vasco rossi eros ramazzotti celentano", 1985),
@@ -40,18 +32,10 @@ _CLASSIC_ERA_QUERIES: dict[str, tuple[str, int]] = {
 
 logger = logging.getLogger(__name__)
 
-DEMO_TRACKS = [
-    Track(title="OSSESSIONE", artist="Samurai Jay", duration_ms=210000, spotify_id="demo1"),
-    Track(title="TU MI PIACI TANTO", artist="Sayf", duration_ms=210000, spotify_id="demo2"),
-    Track(title="Che fastidio!", artist="ditonellapiaga", duration_ms=210000, spotify_id="demo3"),
-    Track(title="DAVVERODAVVERO", artist="Artie 5ive", duration_ms=210000, spotify_id="demo4"),
-    Track(title="Stupida sfortuna", artist="Fulminacci", duration_ms=210000, spotify_id="demo5"),
-    Track(title="Labirinto", artist="Luche", duration_ms=210000, spotify_id="demo6"),
-    Track(title="Per sempre si", artist="Sal da Vinci", duration_ms=210000, spotify_id="demo7"),
-    Track(title="Poesie Clandestine", artist="LDA & Aka 7even", duration_ms=210000, spotify_id="demo8"),
-    Track(title="AL MIO PAESE", artist="Serena Brancale, Levante & DELIA", duration_ms=210000, spotify_id="demo9"),
-    Track(title="CANZONE D'AMORE", artist="Geolier", duration_ms=210000, spotify_id="demo10"),
-]
+# Compatibility import for older callers. The unlicensed metadata-only demo
+# catalog is intentionally gone; runtime starter tracks derive solely from the
+# canonical attributed manifest once its evidence gate is complete.
+DEMO_TRACKS: list[Track] = []
 
 PERSISTED_SOURCE_FILENAME = "playlist_source.json"
 PERSISTED_HEADING_FILENAME = "heading.json"
@@ -62,8 +46,16 @@ class ExplicitSourceError(RuntimeError):
     """Raised when an explicit user-selected source cannot be loaded."""
 
 
+class LegacyJamendoSourceRetiredError(ExplicitSourceError):
+    """Raised for the removed persistent/download-style Jamendo source."""
+
+
+class ExternalMediaUnavailableError(ExplicitSourceError):
+    """Raised when an explicit source requires the optional extractor."""
+
+
 def _copy_tracks_with_source(
-    tracks: list[Track], source: Literal["youtube", "jamendo", "local", "demo", "classic"]
+    tracks: list[Track], source: Literal["youtube", "jamendo", "local", "demo", "classic", "starter"]
 ) -> list[Track]:
     """Return copies with a consistent source label for playlist-loaded tracks."""
     return [replace(track, source=source) for track in tracks]
@@ -94,49 +86,10 @@ def _attach_source_evidence(
     return source
 
 
-def _load_demo_asset_tracks() -> list[Track]:
-    """Return Track objects for MP3s bundled in demo_assets/music/.
-
-    Files are expected to be named ``Artist - Title.mp3`` or ``Title.mp3``.
-    The downloader finds them via title/cache_key substring match.
-    """
-    if not _DEMO_ASSETS_MUSIC_DIR.exists():
-        return []
-    tracks: list[Track] = []
-    for mp3 in sorted(_DEMO_ASSETS_MUSIC_DIR.glob("*.mp3")):
-        stem = mp3.stem.strip()
-        if " - " in stem:
-            artist_part, title_part = stem.split(" - ", 1)
-        else:
-            artist_part, title_part = "Unknown", stem
-        tracks.append(
-            Track(
-                title=title_part.strip(),
-                artist=artist_part.strip(),
-                duration_ms=210000,
-                spotify_id=f"demo_asset_{mp3.stem.lower().replace(' ', '_')}",
-                local_path=mp3,
-                source="demo",
-            )
-        )
-    return tracks
-
-
 def _shuffle_if_needed(config: StationConfig, tracks: list[Track]) -> list[Track]:
     if config.playlist.shuffle:
         random.shuffle(tracks)
     return tracks
-
-
-def _demo_source() -> PlaylistSource:
-    return PlaylistSource(
-        kind="demo",
-        source_id="demo",
-        label="Built-in modern Italian demo mix",
-        track_count=len(DEMO_TRACKS),
-        selected_at=time.time(),
-        url="",
-    )
 
 
 def _local_source(track_count: int) -> PlaylistSource:
@@ -158,32 +111,6 @@ def _charts_source(track_count: int) -> PlaylistSource:
         track_count=track_count,
         selected_at=time.time(),
         url=_APPLE_MUSIC_IT_CHARTS_URL,
-    )
-
-
-def _jamendo_request_url(*, tags: str, country: str = "", order: str = "") -> str:
-    params: dict[str, str] = {"tags": tags}
-    if country:
-        params["country"] = country
-    if order:
-        params["order"] = order
-    return f"jamendo://playlist?{urlencode(params)}"
-
-
-def _jamendo_source(track_count: int, *, tags: str, country: str = "", order: str = "") -> PlaylistSource:
-    label_parts: list[str] = ["Jamendo CC Music"]
-    if country:
-        label_parts.append(country)
-    label_parts.append(f"({tags})")
-    if order:
-        label_parts.append(f"[{order}]")
-    return PlaylistSource(
-        kind="jamendo",
-        source_id=tags,
-        label=" ".join(label_parts),
-        track_count=track_count,
-        selected_at=time.time(),
-        url=_jamendo_request_url(tags=tags, country=country, order=order),
     )
 
 
@@ -483,130 +410,6 @@ def _fetch_current_italy_charts(limit: int = 100, max_per_artist: int = 2) -> li
     return tracks
 
 
-def _jamendo_tags(config: StationConfig, source: PlaylistSource | None = None) -> str:
-    if source is not None:
-        persisted_tags = source.source_id.strip()
-        if persisted_tags:
-            return persisted_tags
-        parsed = urlparse(source.url or "")
-        if parsed.scheme == "jamendo":
-            tags = parse_qs(parsed.query).get("tags", [""])[0].strip()
-            if tags:
-                return tags
-    return (config.playlist.jamendo_tags or "pop").strip() or "pop"
-
-
-def _jamendo_country(config: StationConfig, source: PlaylistSource | None = None) -> str:
-    if source is not None:
-        parsed = urlparse(source.url or "")
-        if parsed.scheme == "jamendo":
-            country = parse_qs(parsed.query).get("country", [""])[0].strip()
-            if country:
-                return country
-    return (config.playlist.jamendo_country or "").strip()
-
-
-def _jamendo_order(config: StationConfig, source: PlaylistSource | None = None) -> str:
-    if source is not None:
-        parsed = urlparse(source.url or "")
-        if parsed.scheme == "jamendo":
-            order = parse_qs(parsed.query).get("order", [""])[0].strip()
-            if order:
-                return order
-    return (config.playlist.jamendo_order or "").strip()
-
-
-def _build_jamendo_url(
-    client_id: str,
-    *,
-    tags: str,
-    country: str = "",
-    order: str = "",
-    limit: int = 200,
-) -> str:
-    params: dict[str, str] = {
-        "client_id": client_id,
-        "format": "json",
-        "limit": str(limit),
-        "tags": tags,
-        **_JAMENDO_REQUIRED_PARAMS,
-    }
-    if country:
-        params["country"] = country
-    if order:
-        params["order"] = order
-    return f"{_JAMENDO_API_BASE_URL}?{urlencode(params)}"
-
-
-def _fetch_jamendo_playlist(
-    config: StationConfig,
-    *,
-    tags: str | None = None,
-    country: str | None = None,
-    order: str | None = None,
-    limit: int | None = None,
-) -> list[Track]:
-    """Fetch a Creative Commons playlist from Jamendo."""
-    client_id = (config.playlist.jamendo_client_id or "").strip()
-    if not client_id:
-        return []
-
-    requested_tags = (tags or config.playlist.jamendo_tags or "pop").strip() or "pop"
-    requested_country = (country if country is not None else config.playlist.jamendo_country or "").strip()
-    requested_order = (order if order is not None else config.playlist.jamendo_order or "").strip()
-    requested_limit = limit if limit is not None else config.playlist.jamendo_limit
-    url = _build_jamendo_url(
-        client_id,
-        tags=requested_tags,
-        country=requested_country,
-        order=requested_order,
-        limit=requested_limit,
-    )
-    try:
-        with urlopen(url, timeout=4.0) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        logger.warning("Jamendo playlist fetch failed: %s", exc)
-        return []
-
-    results = payload.get("results", [])
-    tracks: list[Track] = []
-    for item in results:
-        track_id = str(item.get("id", "")).strip()
-        title = str(item.get("name", "")).strip()
-        artist = str(item.get("artist_name", "")).strip()
-        # Use audiodownload only — this is the CC-licensed download URL.
-        # The `audio` field is a streaming-only URL without download rights.
-        direct_url = str(item.get("audiodownload") or "").strip()
-        if not track_id or not title or not artist or not direct_url:
-            continue
-        if not direct_url.startswith("https://"):
-            logger.warning("Jamendo track %s has non-https direct_url, skipping", track_id)
-            continue
-        try:
-            duration_ms = int(float(item.get("duration", 0) or 0) * 1000)
-        except (TypeError, ValueError):
-            duration_ms = 0
-        jamendo_id = f"jamendo_{track_id}"
-        tracks.append(
-            Track(
-                title=title,
-                artist=artist,
-                duration_ms=duration_ms or 210000,
-                spotify_id=jamendo_id,
-                youtube_id="",
-                direct_url=direct_url,
-                album_art=str(item.get("image", "") or ""),
-                album=str(item.get("album_name", "") or ""),
-                source="jamendo",
-            )
-        )
-
-    if not tracks:
-        logger.info("Jamendo returned zero playable tracks for tags '%s'", requested_tags)
-    return tracks
-
-
 def read_persisted_source(cache_dir: Path) -> PlaylistSource | None:
     """Read the last selected playlist source from cache, if present."""
     path = cache_dir / PERSISTED_SOURCE_FILENAME
@@ -748,46 +551,32 @@ def load_explicit_source(
 ) -> tuple[list[Track], PlaylistSource]:
     """Load a user-chosen source without any silent fallback."""
     evidence = readiness or _source_evidence_for_config(config)
-    if source.kind == "demo":
+    if source.kind in {"demo", "starter"}:
+        from mammamiradio.media.starter import (
+            StarterCatalogError,
+            load_starter_rotation_tracks,
+            starter_source,
+        )
+
         evidence.mark_attempted("demo")
-        demo_asset_tracks = _copy_tracks_with_source(_load_demo_asset_tracks(), "demo")
-        evidence.configure("demo", True, bundled=bool(demo_asset_tracks))
-        if demo_asset_tracks:
-            tracks = _shuffle_if_needed(config, demo_asset_tracks)
-        else:
-            tracks = _shuffle_if_needed(config, _copy_tracks_with_source(list(DEMO_TRACKS), "demo"))
+        try:
+            tracks = load_starter_rotation_tracks()
+        except StarterCatalogError as exc:
+            evidence.mark_failure("demo", "The bundled starter catalog is not ready to play")
+            raise ExplicitSourceError(f"Starter catalog is not release-ready: {exc}") from exc
+        evidence.configure("demo", True, bundled=bool(tracks))
         evidence.mark_candidates("demo", len(tracks))
-        if not demo_asset_tracks:
-            evidence.mark_failure("demo", "No bundled song library is present; demo entries still need a download")
-        resolved = _demo_source()
-        resolved.track_count = len(tracks)
-        return tracks, _attach_source_evidence(resolved, tracks, evidence)
+        return tracks, _attach_source_evidence(starter_source(len(tracks)), tracks, evidence)
 
     is_jamendo_request = source.kind == "jamendo" or (
         source.kind == "url" and urlparse(source.url or "").scheme == "jamendo"
     )
     if is_jamendo_request:
         evidence.mark_attempted("jamendo")
-        client_id = (config.playlist.jamendo_client_id or "").strip()
-        if not client_id:
-            evidence.mark_failure("jamendo", "Jamendo is not configured")
-            raise ExplicitSourceError("Jamendo source is not configured")
-        tags = _jamendo_tags(config, source)
-        country = _jamendo_country(config, source)
-        order = _jamendo_order(config, source)
-        tracks = _shuffle_if_needed(
-            config,
-            _copy_tracks_with_source(
-                _fetch_jamendo_playlist(config, tags=tags, country=country, order=order),
-                "jamendo",
-            ),
+        evidence.mark_failure("jamendo", "Saved Jamendo playlists were retired")
+        raise LegacyJamendoSourceRetiredError(
+            "Saved Jamendo playlists were retired. Enable the transient Jamendo source in Setup instead."
         )
-        if not tracks:
-            evidence.mark_failure("jamendo", "Jamendo returned no playable candidates")
-            raise ExplicitSourceError("Jamendo playlist is temporarily unavailable")
-        evidence.mark_candidates("jamendo", len(tracks))
-        resolved = _jamendo_source(len(tracks), tags=tags, country=country, order=order)
-        return tracks, _attach_source_evidence(resolved, tracks, evidence)
 
     is_classic_request = source.kind == "classic" or (
         source.kind == "url" and urlparse(source.url or "").scheme == "classic"
@@ -797,6 +586,13 @@ def load_explicit_source(
         # explicit evidence for this advanced source.
         evidence.set_current_rotation("classic", source.label or "Classic Italian")
         evidence.mark_attempted("classic")
+        from mammamiradio.playlist.downloader import external_media_enabled
+
+        if not external_media_enabled(config.allow_ytdlp):
+            evidence.mark_failure("classic", "External media support is not installed")
+            raise ExternalMediaUnavailableError(
+                "External media is unavailable. Standalone installs can add the external-media extra."
+            )
         era = _classic_era_from_source(source)
         tracks = _shuffle_if_needed(
             config,
@@ -811,6 +607,15 @@ def load_explicit_source(
     if source.kind in ("charts", "url"):
         # "url" kind comes from /api/playlist/load — treat as charts reload
         evidence.mark_attempted("charts")
+        from mammamiradio.playlist.downloader import external_media_enabled
+
+        if not external_media_enabled(config.allow_ytdlp):
+            evidence.mark_failure("charts", "External media support is not installed")
+            raise ExternalMediaUnavailableError(
+                "External media is unavailable. Standalone installs can add the external-media extra."
+            )
+        # Existing explicit chart/URL operations retain their standalone
+        # behavior behind the single effective capability gate.
         tracks = _load_chart_source_tracks(config)
         if not tracks:
             evidence.mark_failure("charts", "Live charts returned no candidates")
@@ -840,137 +645,72 @@ def load_explicit_source(
 def fetch_startup_playlist(
     config: StationConfig, persisted_source: PlaylistSource | None = None
 ) -> tuple[list[Track], PlaylistSource, str]:
-    """Load the startup playlist, degrading to demo when necessary."""
+    """Load an explicit base or the local/starter first-run rotation."""
     evidence = _source_evidence_for_config(config)
+    migrate_legacy_jamendo = False
     if persisted_source:
-        try:
-            tracks, source = load_explicit_source(config, persisted_source, readiness=evidence)
-            return tracks, source, ""
-        except ExplicitSourceError as exc:
-            logger.warning("Persisted source restore failed: %s", exc)
-            failure_kind = "charts" if persisted_source.kind == "url" else persisted_source.kind
-            evidence.mark_failure(failure_kind, "The saved source could not be restored")
-            error = str(exc)
+        migrate_legacy_jamendo = persisted_source.kind == "jamendo" or (
+            persisted_source.kind == "url" and urlparse(persisted_source.url or "").scheme == "jamendo"
+        )
+        if migrate_legacy_jamendo:
+            evidence.mark_failure("jamendo", "Saved Jamendo playlists were retired")
+            error = "Saved Jamendo playlist retired; selected the current base source."
+        else:
+            try:
+                tracks, source = load_explicit_source(config, persisted_source, readiness=evidence)
+                return tracks, source, ""
+            except ExplicitSourceError as exc:
+                logger.warning("Persisted source restore failed: %s", exc)
+                failure_kind = "charts" if persisted_source.kind == "url" else persisted_source.kind
+                evidence.mark_failure(failure_kind, "The saved source could not be restored")
+                error = str(exc)
     else:
         error = ""
 
-    charts_allowed = config.allow_ytdlp
-
-    if charts_allowed:
-        evidence.mark_attempted("charts")
-        chart_tracks = _load_chart_source_tracks(config)
-        if chart_tracks:
-            evidence.observe_tracks(chart_tracks)
-            jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
-            if jamendo_client_id:
-                evidence.mark_attempted("jamendo")
-                tags = _jamendo_tags(config)
-                country = _jamendo_country(config)
-                order = _jamendo_order(config)
-                jamendo_tracks = _shuffle_if_needed(
-                    config,
-                    _copy_tracks_with_source(
-                        _fetch_jamendo_playlist(config, tags=tags, country=country, order=order),
-                        "jamendo",
-                    ),
-                )
-                if jamendo_tracks:
-                    evidence.mark_candidates("jamendo", len(jamendo_tracks))
-                else:
-                    evidence.mark_failure("jamendo", "Jamendo returned no candidates")
-                existing_keys = {_normalized_track_key(track) for track in chart_tracks}
-                blended = []
-                for track in jamendo_tracks:
-                    track_key = _normalized_track_key(track)
-                    if track_key in existing_keys:
-                        continue
-                    existing_keys.add(track_key)
-                    blended.append(track)
-                if blended:
-                    chart_tracks = chart_tracks + blended
-                    logger.info(
-                        "Using live Italian charts blended with Jamendo (%d chart + %d Jamendo tracks)",
-                        len(chart_tracks) - len(blended),
-                        len(blended),
-                    )
-                    base_source = _charts_source(len(chart_tracks))
-                    source = replace(base_source, label=f"{base_source.label} + Jamendo")
-                    return chart_tracks, _attach_source_evidence(source, chart_tracks, evidence), error
-            logger.info("Using live Italian charts (%d tracks total)", len(chart_tracks))
-            return (
-                chart_tracks,
-                _attach_source_evidence(_charts_source(len(chart_tracks)), chart_tracks, evidence),
-                error,
-            )
-        evidence.mark_failure("charts", "Live charts returned no candidates")
-
-    jamendo_client_id = (config.playlist.jamendo_client_id or "").strip()
-    if jamendo_client_id:
-        evidence.mark_attempted("jamendo")
-        tags = _jamendo_tags(config)
-        country = _jamendo_country(config)
-        order = _jamendo_order(config)
-        jamendo_tracks = _shuffle_if_needed(
-            config,
-            _copy_tracks_with_source(
-                _fetch_jamendo_playlist(config, tags=tags, country=country, order=order),
-                "jamendo",
-            ),
-        )
-        if jamendo_tracks:
-            evidence.mark_candidates("jamendo", len(jamendo_tracks))
-            logger.info(
-                "Using Jamendo CC playlist (%d tracks, tags=%s, country=%s, order=%s)",
-                len(jamendo_tracks),
-                tags,
-                country or "any",
-                order or "default",
-            )
-            return (
-                jamendo_tracks,
-                _attach_source_evidence(
-                    _jamendo_source(len(jamendo_tracks), tags=tags, country=country, order=order),
-                    jamendo_tracks,
-                    evidence,
-                ),
-                error,
-            )
-        evidence.mark_failure("jamendo", "Jamendo returned no candidates")
-
-    # Local music/ files are a real source on their own — they don't need yt-dlp
-    # (yt-dlp only matters for downloading chart tracks). When the operator has
-    # dropped MP3s into music/, honor that intent even if MAMMAMIRADIO_ALLOW_YTDLP
-    # is off and Jamendo isn't configured. This used to be a warn-and-skip,
-    # which silently fell through to bundled demo assets and ignored the
-    # operator's actual files.
+    # Operator-owned local files remain the base when present. They are never
+    # blended with bundled files or assigned license claims by the application.
     evidence.mark_attempted("local")
     local_tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
     if local_tracks:
         logger.info("Using local music files from %s (%d tracks)", config.music_dir, len(local_tracks))
-        shuffled = _shuffle_if_needed(config, local_tracks)
-        evidence.mark_candidates("local", len(shuffled))
-        return shuffled, _attach_source_evidence(_local_source(len(shuffled)), shuffled, evidence), error
+        tracks = _shuffle_if_needed(config, local_tracks)
+        evidence.mark_candidates("local", len(tracks))
+        source = _local_source(len(tracks))
+        if migrate_legacy_jamendo:
+            try:
+                write_persisted_source(config.cache_dir, source)
+            except OSError:
+                logger.warning("Could not rewrite retired Jamendo base source", exc_info=True)
+        return tracks, _attach_source_evidence(source, tracks, evidence), error
     evidence.mark_failure("local", "No MP3 files were found in the configured music directory")
 
-    # Prefer real bundled MP3s over metadata-only demo placeholders.
-    # When demo_assets/music/ contains actual files, the queue fills with
-    # real audio instead of generated silence.
-    demo_asset_tracks = _copy_tracks_with_source(_load_demo_asset_tracks(), "demo")
-    evidence.mark_attempted("demo")
-    evidence.configure("demo", True, bundled=bool(demo_asset_tracks))
-    if demo_asset_tracks:
-        logger.info("Using bundled demo assets (%d tracks)", len(demo_asset_tracks))
-        tracks = _shuffle_if_needed(config, demo_asset_tracks)
-        src = _demo_source()
-        src.track_count = len(tracks)
-        evidence.mark_candidates("demo", len(tracks))
-        return tracks, _attach_source_evidence(src, tracks, evidence), error
+    from mammamiradio.media.starter import StarterCatalogError, load_starter_rotation_tracks, starter_source
 
-    logger.info("Using built-in modern Italian demo mix")
-    tracks = _shuffle_if_needed(config, _copy_tracks_with_source(list(DEMO_TRACKS), "demo"))
+    evidence.mark_attempted("demo")
+    try:
+        tracks = load_starter_rotation_tracks()
+    except StarterCatalogError as exc:
+        logger.error("Starter catalog is not release-ready: %s", exc)
+        evidence.mark_failure("demo", "The bundled starter catalog is not ready to play")
+        source = starter_source(0)
+        if migrate_legacy_jamendo:
+            try:
+                write_persisted_source(config.cache_dir, source)
+            except OSError:
+                logger.warning("Could not rewrite retired Jamendo base source", exc_info=True)
+        detail = f"Starter catalog is not release-ready: {exc}"
+        return [], _attach_source_evidence(source, [], evidence), f"{error}; {detail}".strip("; ")
+
+    evidence.configure("demo", True, bundled=bool(tracks))
     evidence.mark_candidates("demo", len(tracks))
-    evidence.mark_failure("demo", "No bundled song library is present; demo entries still need a download")
-    return tracks, _attach_source_evidence(_demo_source(), tracks, evidence), error
+    source = starter_source(len(tracks))
+    if migrate_legacy_jamendo:
+        try:
+            write_persisted_source(config.cache_dir, source)
+        except OSError:
+            logger.warning("Could not rewrite retired Jamendo base source", exc_info=True)
+    logger.info("Using attributed starter catalog (%d tracks)", len(tracks))
+    return tracks, _attach_source_evidence(source, tracks, evidence), error
 
 
 def fetch_chart_refresh(existing_ids: set[str]) -> list[Track]:

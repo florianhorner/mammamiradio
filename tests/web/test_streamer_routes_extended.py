@@ -23,7 +23,6 @@ from mammamiradio.playlist.playlist import ExplicitSourceError
 from mammamiradio.web.listener_requests import _download_listener_song
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
-    CLIP_DURATION_SECONDS,
     LiveStreamHub,
     _admin_track_id,
     _header_safe,
@@ -81,6 +80,23 @@ def _make_test_app(*, admin_password: str = "", admin_token: str = "", is_addon:
     app.state.station_state = state
     app.state.config = config
     app.state.start_time = time.time()
+    app.state.last_shareworthy_starter = {
+        "path": Path("/tmp/test-starter.mp3"),
+        "ended_monotonic": time.monotonic(),
+        "type": "starter",
+        "title": "Carefree",
+        "artist": "Kevin MacLeod",
+        "provider_track_id": "USUAN1400037",
+        "attribution": {
+            "provider": "incompetech",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+            "credit": '"Carefree" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.',
+            "modified": True,
+            "basis": "bundled_manifest",
+        },
+    }
     return app
 
 
@@ -973,7 +989,7 @@ async def test_add_track_preserves_album_art():
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_preserves_real_album_art(tmp_path):
+async def test_add_external_track_preserves_real_album_art(tmp_path, external_media_installed):
     """A real (non-YouTube) cover in the add-external payload is kept as-is — no lookup."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
@@ -1011,7 +1027,7 @@ def _cover_urlopen_mock(payload: dict) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path):
+async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path, external_media_installed):
     """The real-world path: a yt-dlp thumbnail is upgraded to a resolved iTunes cover
     on the background download path (the gate-True branch of _commit_external_download)."""
     app = _make_test_app()
@@ -1046,7 +1062,7 @@ async def test_add_external_track_upgrades_youtube_thumbnail(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_holds_longform_before_download(tmp_path):
+async def test_add_external_track_holds_longform_before_download(tmp_path, external_media_installed):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
@@ -1074,7 +1090,7 @@ async def test_add_external_track_holds_longform_before_download(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_rejects_non_music_before_download(tmp_path):
+async def test_add_external_track_rejects_non_music_before_download(tmp_path, external_media_installed):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
@@ -1102,7 +1118,7 @@ async def test_add_external_track_rejects_non_music_before_download(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_keeps_thumbnail_when_cover_lookup_misses(tmp_path):
+async def test_add_external_track_keeps_thumbnail_when_cover_lookup_misses(tmp_path, external_media_installed):
     """On an iTunes miss the track keeps its thumbnail rather than going blank —
     protects the now-playing tile from regressing to no image."""
     app = _make_test_app()
@@ -1781,8 +1797,9 @@ async def test_status_playlist_page_preserves_admin_status_contract():
 
 
 @pytest.mark.asyncio
-async def test_search_returns_playlist_and_external_results():
+async def test_search_returns_playlist_and_external_results(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     app.state.station_state.playlist[0].album_art = "https://img.example/song-a.jpg"
     app.state.station_state.playlist[0].source = "classic"
     app.state.station_state.playlist[0].year = 1984
@@ -1844,8 +1861,9 @@ async def test_search_playlist_results_are_paginated_with_absolute_indices():
 
 
 @pytest.mark.asyncio
-async def test_search_keeps_captured_revision_and_rows_across_slow_external_lookup():
+async def test_search_keeps_captured_revision_and_rows_across_slow_external_lookup(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     state = app.state.station_state
     captured_revision = state.playlist_revision
     search_started = Event()
@@ -1878,8 +1896,9 @@ async def test_search_keeps_captured_revision_and_rows_across_slow_external_look
 
 
 @pytest.mark.asyncio
-async def test_search_external_results_are_paginated_without_global_total():
+async def test_search_external_results_are_paginated_without_global_total(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     external_candidates = [
         {
             "youtube_id": f"ytid{i:07d}",
@@ -1930,8 +1949,9 @@ async def test_search_can_skip_external_lookup_after_external_results_exhausted(
 
 
 @pytest.mark.asyncio
-async def test_search_external_timeout_returns_playlist_results():
+async def test_search_external_timeout_returns_playlist_results(external_media_installed):
     app = _make_test_app()
+    app.state.config.allow_ytdlp = True
     captured_timeout = {}
 
     async def _timeout(awaitable, *args, **kwargs):
@@ -1990,7 +2010,7 @@ async def test_listener_request_valid_shoutout():
 
 
 @pytest.mark.asyncio
-async def test_listener_request_valid_song_starts_background_download():
+async def test_listener_request_valid_song_starts_background_download(external_media_installed):
     app = _make_test_app()
     app.state.config.allow_ytdlp = True  # song_request classification requires ytdlp enabled
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -2850,7 +2870,7 @@ async def test_listener_request_sanitizes_hostile_input():
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_success(tmp_path):
+async def test_add_external_track_success(tmp_path, external_media_installed):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     app.state.config.allow_ytdlp = True
@@ -2895,7 +2915,7 @@ async def test_add_external_track_success(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_sanitizes_invalid_album_art(tmp_path):
+async def test_add_external_track_sanitizes_invalid_album_art(tmp_path, external_media_installed):
     for bad_art in ("javascript:alert(1)", "data:image/png;base64,aaaa", "/relative-cover.jpg"):
         app = _make_test_app()
         app.state.config.cache_dir = tmp_path
@@ -2928,7 +2948,7 @@ async def test_add_external_track_sanitizes_invalid_album_art(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_preserves_pending_force_next(tmp_path):
+async def test_add_external_track_preserves_pending_force_next(tmp_path, external_media_installed):
     """A pending forced segment (e.g. operator-triggered banter) is not clobbered:
     the track still pins, but force_next keeps the existing directive."""
     app = _make_test_app()
@@ -2954,7 +2974,7 @@ async def test_add_external_track_preserves_pending_force_next(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_queued_behind_existing_pin(tmp_path):
+async def test_add_external_track_queued_behind_existing_pin(tmp_path, external_media_installed):
     """When the play-next slot is already taken, the track joins rotation and the
     admin gets an informational 'queued behind' notice (not a failure, not silent)."""
     from mammamiradio.core.models import Track
@@ -3021,7 +3041,7 @@ async def test_commit_external_waits_out_in_flight_source_switch(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
+async def test_add_external_track_background_failure_leaves_no_pin(tmp_path, external_media_installed):
     """Scenario 2 (download fails): no stale pin, playlist unchanged, stream intact."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
@@ -3049,7 +3069,7 @@ async def test_add_external_track_background_failure_leaves_no_pin(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_dropped_when_source_switches(tmp_path):
+async def test_add_external_track_dropped_when_source_switches(tmp_path, external_media_installed):
     """A real source switch mid-download → the stale pick is dropped, not pinned,
     and the admin gets a notice."""
     app = _make_test_app()
@@ -3082,7 +3102,7 @@ async def test_add_external_track_dropped_when_source_switches(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_external_track_survives_benign_playlist_revision_bump(tmp_path):
+async def test_add_external_track_survives_benign_playlist_revision_bump(tmp_path, external_media_installed):
     """A benign edit (enrich / move-to-next / festival) bumps playlist_revision
     but NOT source_revision, so an in-flight queued track must still land."""
     app = _make_test_app()
@@ -4564,6 +4584,8 @@ async def test_listener_share_reads_clip_error_body():
     assert js_resp.status_code == 200
     assert "const data = await res.json().catch(() => null);" in js_resp.text
     assert "if (!res.ok || !data || !data.ok)" in js_resp.text
+    assert "data.error_code === 'music_share_unavailable'" in js_resp.text
+    assert "A complete included track has to finish before it can be shared." in js_resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -5368,7 +5390,8 @@ def _clear_clip_rate():
     from mammamiradio.web.streamer import _clip_rate
 
     _clip_rate.clear()
-    yield
+    with patch("mammamiradio.web.streamer._read_validated_starter_share", return_value=b"\xff" * 8192):
+        yield
     _clip_rate.clear()
 
 
@@ -5399,41 +5422,41 @@ async def test_release_clip_stamp_only_pops_own_stamp():
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_create_empty_ring_buffer():
-    """POST /api/clip returns error when ring buffer is empty."""
+    """A ring buffer cannot make an incomplete window shareable."""
     app = _make_test_app()
     from collections import deque
 
     app.state.clip_ring_buffer = deque(maxlen=240)
+    app.state.last_shareworthy_starter = None
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/clip")
-    assert resp.status_code == 200
+    assert resp.status_code == 403
     body = resp.json()
     assert body["ok"] is False
-    # Structured code, not tech-lingo prose — the UI maps it to warm copy.
-    assert body["reason"] == "no_audio"
-    assert "error" not in body
+    assert body["error_code"] == "music_share_unavailable"
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_create_no_ring_buffer():
-    """POST /api/clip returns error when clip_ring_buffer is missing."""
+    """Missing ring state still fails with the locked share-boundary error."""
     app = _make_test_app()
+    app.state.last_shareworthy_starter = None
     # No clip_ring_buffer set at all
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/clip")
-    assert resp.status_code == 200
+    assert resp.status_code == 403
     body = resp.json()
     assert body["ok"] is False
-    assert body["reason"] == "no_audio"
+    assert body["error_code"] == "music_share_unavailable"
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_create_with_data(tmp_path):
-    """POST /api/clip extracts and saves a clip when buffer has data."""
+    """A complete starter snapshot is shared; unrelated ring bytes are ignored."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -5459,7 +5482,7 @@ async def test_clip_create_with_data(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_create_returns_no_audio_when_extract_returns_empty_bytes(tmp_path):
-    """POST /api/clip returns the no_audio code when extraction yields empty bytes."""
+    """The bundled-only endpoint never calls the rolling-window extractor."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -5471,20 +5494,19 @@ async def test_clip_create_returns_no_audio_when_extract_returns_empty_bytes(tmp
     app.state.clip_ring_buffer = ring
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b""):
+    with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b"") as extract:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/clip")
 
     assert resp.status_code == 200
-    assert resp.json() == {"ok": False, "reason": "no_audio"}
+    assert resp.json()["ok"] is True
+    extract.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_extract_failure_does_not_lock_out_retry(tmp_path):
-    """When extraction yields empty bytes (the second rollback site, with a
-    non-empty ring buffer so the cold-start site is bypassed), the rate-limit
-    stamp must be rolled back so an immediate retry succeeds rather than 429."""
+    """A denied incomplete share rolls its limiter stamp back for a later valid share."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -5494,17 +5516,17 @@ async def test_clip_extract_failure_does_not_lock_out_retry(tmp_path):
     ring = deque(maxlen=240)
     ring.append(b"\xff" * 4096)  # non-empty → skips the empty-ring-buffer rollback site
     app.state.clip_ring_buffer = ring
+    starter_snapshot = app.state.last_shareworthy_starter
+    app.state.last_shareworthy_starter = None
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b""):
-            first = await client.post("/api/clip")
-        # Immediate retry: the failed attempt must NOT have left a stamp behind.
-        with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b"\xff" * 4096):
-            second = await client.post("/api/clip")
+        first = await client.post("/api/clip")
+        app.state.last_shareworthy_starter = starter_snapshot
+        second = await client.post("/api/clip")
 
-    assert first.status_code == 200
-    assert first.json() == {"ok": False, "reason": "no_audio"}
+    assert first.status_code == 403
+    assert first.json()["error_code"] == "music_share_unavailable"
     assert second.status_code == 200
     assert second.json()["ok"] is True
 
@@ -5576,7 +5598,7 @@ async def test_clip_rate_limited_returns_retry_after(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_ad_segment_extends_duration(tmp_path):
-    """A live ad/banter segment extends the clip beyond the 30s music cap."""
+    """A live ad cannot enter the share artifact; the last complete starter can."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -5602,17 +5624,13 @@ async def test_clip_ad_segment_extends_duration(tmp_path):
             resp = await client.post("/api/clip")
 
     assert resp.status_code == 200 and resp.json()["ok"] is True
-    # elapsed≈100s, capped at min(180, 120)=120 → ~100s requested, well past the
-    # 30s music cap. Allow a small window for clock/ceil drift.
-    requested = mock_extract.call_args.kwargs["duration_seconds"]
-    assert 100 <= requested <= 120
-    assert requested > CLIP_DURATION_SECONDS
+    mock_extract.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_lookback_serves_recent_adbanter_snapshot(tmp_path):
-    """Music playing + a fresh ad/banter snapshot → the snapshot is served even with an empty ring."""
+    """A fresh ad/banter snapshot is not a shareable bundled-track window."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -5628,23 +5646,20 @@ async def test_clip_lookback_serves_recent_adbanter_snapshot(tmp_path):
         "type": "ad",
         "title": "Mausolea del Presidentissimo",
     }
+    app.state.last_shareworthy_starter = None
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/clip")
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["ok"] is True
-    # The sidecar names the clipped ad, not the current music track.
-    sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
-    assert sidecar["track_title"] == "Mausolea del Presidentissimo"
+    assert resp.status_code == 403
+    assert resp.json()["error_code"] == "music_share_unavailable"
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_lookback_ignored_when_stale(tmp_path):
-    """A snapshot older than the lookback window is ignored → empty ring yields no_audio."""
+    """An old nonstarter snapshot remains ineligible."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -5659,19 +5674,81 @@ async def test_clip_lookback_ignored_when_stale(tmp_path):
         "type": "ad",
         "title": "Old Ad",
     }
+    app.state.last_shareworthy_starter = None
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.post("/api/clip")
 
+    assert resp.status_code == 403
+    assert resp.json()["error_code"] == "music_share_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_shares_only_a_complete_manifested_starter_snapshot(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "metadata": {"source_kind": "jamendo", "title": "Current transient song"},
+    }
+    attribution = {
+        "provider": "incompetech",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://incompetech.com/music/royalty-free/",
+        "credit": "Starter Artist - Starter Song",
+        "modified": True,
+        "basis": "bundled_manifest",
+    }
+    app.state.last_shareworthy_starter = {
+        "path": tmp_path / "starter.mp3",
+        "ended_monotonic": time.monotonic(),
+        "type": "starter",
+        "title": "Starter Song",
+        "artist": "Starter Artist",
+        "provider_track_id": "USUAN0000000",
+        "attribution": attribution,
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._read_validated_starter_share", return_value=b"\xff" * 8192):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+
     assert resp.status_code == 200
-    assert resp.json() == {"ok": False, "reason": "no_audio"}
+    body = resp.json()
+    sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
+    assert sidecar["track_title"] == "Starter Song"
+    assert sidecar["track_artist"] == "Starter Artist"
+    assert sidecar["music_attribution"] == attribution
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
+@pytest.mark.parametrize("source_kind", ["jamendo", "local", "unknown"])
+async def test_clip_rejects_nonstarter_music(source_kind):
+    app = _make_test_app()
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "metadata": {"source_kind": source_kind},
+    }
+    app.state.last_shareworthy_starter = None
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/clip")
+
+    assert resp.status_code == 403
+    assert resp.json()["error_code"] == "music_share_unavailable"
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_banter_segment_extends_duration(tmp_path):
-    """A live banter segment also extends past the 30s cap (not just ad)."""
+    """Live banter is rejected when no complete starter snapshot exists."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
@@ -5689,38 +5766,44 @@ async def test_clip_banter_segment_extends_duration(tmp_path):
         "duration_sec": 90,
         "metadata": {"title": "Bit about the coffee machine"},
     }
+    app.state.last_shareworthy_starter = None
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     with patch("mammamiradio.scheduling.clip.extract_clip", return_value=b"\xff" * 4096) as mock_extract:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.post("/api/clip")
 
-    assert resp.status_code == 200 and resp.json()["ok"] is True
-    assert mock_extract.call_args.kwargs["duration_seconds"] > CLIP_DURATION_SECONDS
+    assert resp.status_code == 403
+    assert resp.json()["error_code"] == "music_share_unavailable"
+    mock_extract.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_no_audio_does_not_lock_out_retry(tmp_path):
-    """A no_audio no-op must not consume the rate-limit window (cold-start retry)."""
+    """An ineligible window does not consume the rate limit before a starter completes."""
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     app.state.config.cache_dir.mkdir()
     app.state.config.audio.bitrate = 192
     from collections import deque
 
-    app.state.clip_ring_buffer = deque(maxlen=240)  # empty → no_audio
+    app.state.clip_ring_buffer = deque(maxlen=240)
+    starter_snapshot = app.state.last_shareworthy_starter
+    app.state.last_shareworthy_starter = None
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         first = await client.post("/api/clip")
-        # Buffer fills a moment later; an immediate retry must NOT be rate-limited.
+        # A starter finishes a moment later; the immediate retry must be allowed.
         ring = app.state.clip_ring_buffer
         for _ in range(10):
             ring.append(b"\xff" * 4096)
+        app.state.last_shareworthy_starter = starter_snapshot
         second = await client.post("/api/clip")
 
-    assert first.json() == {"ok": False, "reason": "no_audio"}
+    assert first.status_code == 403
+    assert first.json()["error_code"] == "music_share_unavailable"
     assert second.status_code == 200 and second.json()["ok"] is True
 
 
@@ -5915,7 +5998,7 @@ async def test_create_clip_returns_share_url(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
 async def test_create_clip_writes_sidecar(tmp_path):
-    """POST /api/clip writes a {clip_id}.json sidecar with track metadata."""
+    """The sidecar identifies the manifested starter, not current banter metadata."""
     import json as _json
 
     app = _make_test_app()
@@ -5923,7 +6006,7 @@ async def test_create_clip_writes_sidecar(tmp_path):
     app.state.config.cache_dir.mkdir()
     app.state.config.audio.bitrate = 192
     app.state.station_state.now_streaming = {
-        "type": "music",
+        "type": "banter",
         "label": "Playing",
         "started": time.time(),
         "metadata": {"title": "Albachiara", "artist": "Vasco Rossi", "title_only": "Albachiara"},
@@ -5943,8 +6026,9 @@ async def test_create_clip_writes_sidecar(tmp_path):
     sidecar_path = app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json"
     assert sidecar_path.exists()
     sidecar = _json.loads(sidecar_path.read_text())
-    assert sidecar["track_title"] == "Albachiara"
-    assert sidecar["track_artist"] == "Vasco Rossi"
+    assert sidecar["track_title"] == "Carefree"
+    assert sidecar["track_artist"] == "Kevin MacLeod"
+    assert sidecar["music_attribution"]["basis"] == "bundled_manifest"
     # The sidecar name must come from the single resolver, not a stale literal.
     assert sidecar["station_name"] == app.state.config.display_station_name
     assert "created_at" in sidecar

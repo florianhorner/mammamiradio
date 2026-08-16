@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from mammamiradio.integrations.schema import StationBlock
 from mammamiradio.integrations.serializer import (
     SAFE_METADATA_KEYS,
@@ -57,6 +59,7 @@ def test_safe_metadata_keys_locked():
         "host",
         "year",
         "source_kind",
+        "music_attribution",
     }
     assert frozenset(expected) == SAFE_METADATA_KEYS
 
@@ -101,6 +104,174 @@ def test_serialize_live_music_segment():
     assert now["segment_class"] == "music"
     assert now["artist"] == "Domenico Modugno"
     assert now["external_ids"] == {"spotify": "v01"}
+
+
+def test_serialize_music_attribution_additively_without_schema_bump():
+    attribution = {
+        "provider": "incompetech",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://incompetech.com/music/royalty-free/music.html",
+        "credit": "Carefree by Kevin MacLeod, CC BY 4.0",
+        "modified": True,
+        "basis": "bundled_manifest",
+    }
+    payload = serialize_now_playing(
+        _make_snapshot(
+            now_streaming={
+                "type": "music",
+                "label": "Carefree",
+                "started": 1.0,
+                "duration_sec": 180.0,
+                "metadata": {"title": "Carefree", "music_attribution": attribution},
+            }
+        )
+    )
+
+    assert payload["schema_version"] == "1"
+    assert payload["now_playing"]["music_attribution"] == attribution
+
+
+def test_serialize_rejects_unsafe_music_attribution_urls():
+    payload = serialize_now_playing(
+        _make_snapshot(
+            now_streaming={
+                "type": "music",
+                "label": "Unsafe",
+                "started": 1.0,
+                "duration_sec": 180.0,
+                "metadata": {
+                    "music_attribution": {
+                        "provider": "jamendo",
+                        "license_id": "CC-BY-4.0",
+                        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                        "source_url": "https://user:secret@www.jamendo.com/track/1",
+                        "credit": "Artist - Track",
+                        "modified": True,
+                        "basis": "provider_reported",
+                    }
+                },
+            }
+        )
+    )
+
+    assert "music_attribution" not in payload["now_playing"]
+
+
+@pytest.mark.parametrize(
+    "attribution",
+    [
+        None,
+        {"basis": "legal_clearance"},
+        {
+            "provider": 123,
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://www.jamendo.com/track/1",
+            "credit": "Artist - Track",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+        {
+            "provider": "jamendo",
+            "license_id": "CC-BY-4.0",
+            "license_url": "",
+            "source_url": "https://www.jamendo.com/track/1",
+            "credit": "Artist - Track",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+        {
+            "provider": "jamendo",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org:bad/licenses/by/4.0/",
+            "source_url": "https://www.jamendo.com/track/1",
+            "credit": "Artist - Track",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+        {
+            "provider": "jamendo",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://www.jamendo.com/track/1#fragment",
+            "credit": "Artist - Track",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+        {
+            "provider": "jamendo",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://www.jamendo.com/track/../private",
+            "credit": "Artist - Track",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+    ],
+)
+def test_serialize_rejects_malformed_attribution_shapes(attribution):
+    payload = serialize_now_playing(
+        _make_snapshot(
+            now_streaming={
+                "type": "music",
+                "label": "Unsafe",
+                "started": 1.0,
+                "duration_sec": 180.0,
+                "metadata": {"music_attribution": attribution},
+            }
+        )
+    )
+
+    assert "music_attribution" not in payload["now_playing"]
+
+
+@pytest.mark.parametrize(
+    "attribution",
+    [
+        {
+            "provider": "jamendo",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://storage.jamendo.com/download/track.mp3?token=private",
+            "credit": "Artist - Track",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+        {
+            "provider": "jamendo",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://example.com/track/1",
+            "credit": "Artist - Track",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+        {
+            "provider": "incompetech",
+            "license_id": "CC-BY-3.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://incompetech.com/music/royalty-free/music.html",
+            "credit": "Carefree by Kevin MacLeod",
+            "modified": True,
+            "basis": "bundled_manifest",
+        },
+    ],
+)
+def test_serialize_rejects_noncanonical_attribution_links_and_license_pairs(attribution):
+    payload = serialize_now_playing(
+        _make_snapshot(
+            now_streaming={
+                "type": "music",
+                "label": "Unsafe",
+                "started": 1.0,
+                "duration_sec": 180.0,
+                "metadata": {"music_attribution": attribution},
+            }
+        )
+    )
+
+    assert "music_attribution" not in payload["now_playing"]
 
 
 def test_serialize_up_next_queued_items_marked_predicted_false():
