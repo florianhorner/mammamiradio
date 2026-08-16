@@ -5,13 +5,16 @@ from __future__ import annotations
 from mammamiradio.core.config import StationConfig
 from mammamiradio.core.models import Capabilities, StationState
 from mammamiradio.core.setup_status import home_context_availability
+from mammamiradio.playlist.downloader import external_media_enabled
 
 
 def get_capabilities(config: StationConfig, state: StationState) -> Capabilities:
     """Derive capability flags from static config and live runtime state.
 
     Three tiers: Demo Radio → Full AI Radio → Connected Home.
-    Music source is always available (local + yt-dlp + charts).
+    Bundled/local music remains available independently of optional external
+    media. Chart controls are advertised only when opt-in and installation are
+    both effective.
     """
     home_availability = home_context_availability(config, state)
     return Capabilities(
@@ -20,7 +23,7 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
         home_context_ready=home_availability.home_context_ready,
         home_context_enabled=home_availability.readiness != "disabled",
         jamendo=bool((config.playlist.jamendo_client_id or "").strip()),
-        charts_reload=bool(config.allow_ytdlp),
+        charts_reload=external_media_enabled(config.allow_ytdlp),
         tts_degraded=bool(getattr(config, "tts_degraded_voices", []))
         or any(
             (provider_class == "tts_provider" or provider_class.startswith("tts:")) and details.get("fallback_active")

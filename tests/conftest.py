@@ -3,8 +3,39 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
+from unittest.mock import MagicMock
 
 import pytest
+
+
+@pytest.fixture
+def external_media_installed(monkeypatch):
+    """Simulate the optional external-media module (yt-dlp) being importable.
+
+    The default distribution ships without the external-media extra, so ambient
+    importability differs between environments (a developer venv with the extra
+    vs. the clean CI install). Tests that assert present-path behavior request
+    this fixture instead of inheriting whatever the running interpreter has;
+    ``monkeypatch.setitem`` restores ``sys.modules`` afterwards, so nothing
+    leaks into other tests.
+    """
+    module = types.ModuleType("yt_dlp")
+    module.YoutubeDL = MagicMock()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "yt_dlp", module)
+    return module
+
+
+@pytest.fixture
+def external_media_missing(monkeypatch):
+    """Simulate the optional external-media module (yt-dlp) being uninstalled.
+
+    A ``None`` entry in ``sys.modules`` makes every import attempt raise
+    ``ImportError``, even in a venv that has the real package — so the
+    designed degrade path is testable deterministically everywhere.
+    """
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)
 
 
 @pytest.fixture(autouse=True, scope="session")

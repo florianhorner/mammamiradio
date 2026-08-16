@@ -7,6 +7,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEDIA_PYTHON="python3"
+if ! "$MEDIA_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+    if [ -x .venv/bin/python ]; then
+        MEDIA_PYTHON=".venv/bin/python"
+    else
+        MEDIA_PYTHON="python3.11"
+    fi
+fi
 
 PASS=0
 FAIL=0
@@ -62,7 +70,9 @@ else
     ok "producer recovery paths do not call generate_silence"
 fi
 
-if python3 "$SCRIPT_DIR/validate-spoken-assets.py"; then
+# One Python-3.9-compatible manifest/hash boundary validates both the demo
+# package and browser narration pack before the per-file package-reachability check.
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py"; then
     ok "packaged spoken assets are manifest-bound and listener-truth safe"
 else
     fail "packaged spoken asset manifest validation failed"
@@ -71,11 +81,7 @@ fi
 for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
     if python3 - "$asset_name" <<'PY'
 from importlib import resources
-from pathlib import Path
 import sys
-
-from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
-from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset
 
 name = sys.argv[1]
 resource = resources.files("mammamiradio").joinpath("assets", "demo", "recovery", name)
@@ -85,15 +91,11 @@ except (FileNotFoundError, IsADirectoryError, OSError) as exc:
     raise SystemExit(f"{name} is not readable through importlib.resources: {exc}") from exc
 if len(payload) <= 1024:
     raise SystemExit(f"{name} package resource is only {len(payload)} bytes")
-
-asset_path = Path(DEMO_ASSETS_DIR) / "recovery" / name
-if not is_approved_packaged_audio_asset(asset_path, assets_root=Path(DEMO_ASSETS_DIR)):
-    raise SystemExit(f"{name} is not approved by the packaged manifest/hash boundary")
 PY
     then
-        ok "$asset_name is package-reachable and manifest/hash approved"
+        ok "$asset_name is package-reachable and nontrivial"
     else
-        fail "$asset_name is not package-reachable or failed its manifest/hash check"
+        fail "$asset_name is not package-reachable or is too small"
     fi
 done
 
@@ -144,7 +146,7 @@ echo ""
 echo "5. HA Green fallback performance gates"
 
 QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
-if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'
+if "$MEDIA_PYTHON" - "$QUEUE_FALLBACK_WAIT" <<'PY'
 import sys
 value = float(sys.argv[1])
 raise SystemExit(0 if value <= 5.0 else 1)
@@ -177,10 +179,26 @@ fi
 echo ""
 echo "6. Release beat manifest"
 
-if python3 "$SCRIPT_DIR/validate-release-beat.py"; then
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py"; then
     ok "release beat manifest is absent, disabled, or schema-valid"
 else
     fail "release beat manifest validation failed"
+fi
+
+# ── 7. Media-rights report (report-only) ──────────────────────────────────────
+# Report-only while the twelve starter tracks are absent by design: the proof
+# runs on every PR and its verdict prints, but a missing-content failure does
+# not fail this script. Only this section is report-only — every other
+# invariant above stays hard. The release path keeps its own hard gate:
+# scripts/pre-release-check.sh section 10 fails hard on the same proof.
+echo ""
+echo "7. Media-rights report (report-only)"
+
+if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
+    ok "starter catalog evidence, bytes, audio, and packaging are release-ready"
+else
+    echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence) have not landed yet."
+    echo "NOTICE: report-only here; scripts/pre-release-check.sh keeps the hard media gate on the release path."
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -6785,6 +6785,67 @@ async def test_banter_security_boundary_preserved(config, state):
 
 
 @pytest.mark.asyncio
+async def test_banter_raw_home_context_forbids_counting_people(config, state):
+    """Raw per-resident home/away lines must not become "two people in the room".
+
+    Presence says neither how many people are in the house nor which room they are
+    in, so without this constraint the hosts air a guess about the listener's home
+    as fact.
+    """
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
+    state.ha_context = "Florian: a casa\nSabrina: a casa"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    assert "Never name or count the people in the home" in prompt
+    assert "never say which room anyone" in prompt
+    # The constraint is an instruction, so it must sit outside the data fence, which
+    # forbids following anything found inside it. Match on the opening tag's trailing
+    # newline: the bare tag name also appears in the instruction prose above.
+    fenced = prompt[prompt.index("<home_state_data>\n") : prompt.index("</home_state_data>")]
+    assert "Never name or count the people in the home" not in fenced
+
+
+@pytest.mark.asyncio
+async def test_ad_raw_home_context_forbids_counting_people(config, state):
+    """write_ad injects raw ha_context with no director in front of it."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    state.ha_context = "Florian: a casa\nSabrina: a casa"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "parts": [{"type": "voice", "text": "Gelato Infinito!", "role": "hammer"}],
+            "mood": "upbeat",
+            "summary": "Gelato ad",
+        }
+
+    brand = AdBrand(name="Gelato Infinito", tagline="Non finisce mai", category="food")
+    voices = {"hammer": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_ad(brand, voices, state, config)
+
+    prompt = captured["prompt"]
+    assert "Never name or count the people in the home" in prompt
+    fenced = prompt[prompt.index("<home_state_data>\n") : prompt.index("</home_state_data>")]
+    assert "Never name or count the people in the home" not in fenced
+
+
+@pytest.mark.asyncio
 async def test_write_banter_memory_commit_uses_empty_youtube_id_when_no_track_id(config, state, tmp_path):
     """When a track has no youtube_id, the deferred memory commit cannot file song cues."""
     config.super_italian_mode = True

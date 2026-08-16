@@ -55,6 +55,7 @@ from mammamiradio.web.streamer import (
     FIRST_BYTE_GRACE_SECONDS,
     QUEUE_FALLBACK_WAIT_SECONDS,
     SILENCE_FAILURE_SECONDS,
+    STREAM_LATE_THRESHOLD_SECONDS,
     STREAM_MAX_PACKET_SECONDS,
     STREAM_TARGET_LEAD_SECONDS,
     LiveStreamHub,
@@ -121,10 +122,19 @@ class _FakeMonotonic:
         self.now += max(0.0, seconds)
 
 
+# Short synthetic cushion; these tests assert ratios, not the shipped value.
+SHORT_TEST_LEAD_SECONDS = 0.5
+
+
 def _paced_send(pacer: StreamPacer, clock: _FakeMonotonic, chunk_bytes: int = 4096):
     decision = pacer.after_send(chunk_bytes)
     clock.advance(decision.sleep_seconds)
     return decision
+
+
+def _packets_to_fill_lead(pacer: StreamPacer, chunk_bytes: int) -> int:
+    """Packets a pacer must send before its send-ahead cushion is full."""
+    return round(pacer.target_lead_seconds * pacer.bytes_per_second / chunk_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +189,8 @@ def _make_test_app(
     app.state.first_listen_bootstrap_snapshot_authoritative = True
     # Drive run_playback_loop integration tests with a real-time pacer (no
     # send-ahead lead) so their queue/rescue timing assertions stay
-    # deterministic. The 500 ms delivery cushion itself is covered directly by
-    # the StreamPacer unit tests, not through these wall-clock loop tests.
+    # deterministic. The production delivery cushion itself is covered directly
+    # by the StreamPacer unit tests, not through these wall-clock loop tests.
     app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(bytes_per_second, target_lead_seconds=0.0)
     return app
 
@@ -222,19 +232,21 @@ def test_ha_green_queue_fallback_budget_is_shorter_than_health_failure():
     assert QUEUE_FALLBACK_WAIT_SECONDS < SILENCE_FAILURE_SECONDS
 
 
-def test_stream_pacer_builds_one_500ms_lead_and_keeps_natural_segments_on_the_same_timeline():
+def test_stream_pacer_builds_the_configured_lead_and_keeps_natural_segments_on_the_same_timeline():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    bytes_per_second = 24_000
+    chunk_size = _stream_chunk_size(bytes_per_second)
+    pacer = StreamPacer(bytes_per_second, monotonic=clock)
 
-    initial = [_paced_send(pacer, clock) for _ in range(4)]
+    initial = [_paced_send(pacer, clock, chunk_size) for _ in range(_packets_to_fill_lead(pacer, chunk_size))]
     assert all(decision.sleep_seconds >= 0 for decision in initial)
-    assert pacer.media_seconds - clock.now == pytest.approx(0.5, abs=0.001)
+    assert pacer.media_seconds - clock.now == pytest.approx(STREAM_TARGET_LEAD_SECONDS, abs=0.001)
 
     media_at_boundary = pacer.media_seconds
-    first_packet_of_next_natural_segment = _paced_send(pacer, clock)
+    first_packet_of_next_natural_segment = _paced_send(pacer, clock, chunk_size)
     assert pacer.reset_count == 0
-    assert pacer.media_seconds == pytest.approx(media_at_boundary + 4096 / 24_000)
-    assert first_packet_of_next_natural_segment.sleep_seconds == pytest.approx(4096 / 24_000)
+    assert pacer.media_seconds == pytest.approx(media_at_boundary + chunk_size / bytes_per_second)
+    assert first_packet_of_next_natural_segment.sleep_seconds == pytest.approx(chunk_size / bytes_per_second)
 
 
 def test_source_packet_cap_bounds_low_bitrate_delivery_lead():
@@ -245,7 +257,8 @@ def test_source_packet_cap_bounds_low_bitrate_delivery_lead():
     clock = _FakeMonotonic()
     pacer = StreamPacer(bytes_per_second, monotonic=clock)
     maximum_lead = 0.0
-    for _ in range(8):
+    # Fill the cushion, then run on into the steady state the cap governs.
+    for _ in range(_packets_to_fill_lead(pacer, chunk_size) + 8):
         decision = pacer.after_send(chunk_size)
         maximum_lead = max(maximum_lead, pacer.media_seconds - clock.now)
         clock.advance(decision.sleep_seconds)
@@ -253,9 +266,25 @@ def test_source_packet_cap_bounds_low_bitrate_delivery_lead():
     assert maximum_lead <= STREAM_TARGET_LEAD_SECONDS + STREAM_MAX_PACKET_SECONDS + 0.0001
 
 
+def test_stream_pacer_absorbs_the_measured_sonos_scheduler_stall_without_an_underrun():
+    clock = _FakeMonotonic()
+    bytes_per_second = 24_000
+    chunk_size = _stream_chunk_size(bytes_per_second)
+    pacer = StreamPacer(bytes_per_second, monotonic=clock)
+    for _ in range(_packets_to_fill_lead(pacer, chunk_size)):
+        _paced_send(pacer, clock, chunk_size)
+
+    clock.advance(1.781)
+    delayed = _paced_send(pacer, clock, chunk_size)
+
+    assert delayed.kind == "late"
+    assert delayed.deficit_seconds == 0
+    assert delayed.remaining_lead_seconds == pytest.approx(STREAM_TARGET_LEAD_SECONDS - 1.781, abs=0.001)
+
+
 def test_stream_pacer_records_100ms_lateness_without_moving_the_media_timeline():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    pacer = StreamPacer(24_000, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
     for _ in range(4):
         _paced_send(pacer, clock)
 
@@ -290,7 +319,7 @@ def test_stream_pacer_resets_only_for_named_transport_discontinuities(reason: st
 
 def test_stream_pacer_absorbs_sub_lead_pause_without_rebase_or_negative_sleep():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    pacer = StreamPacer(24_000, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
     for _ in range(4):
         _paced_send(pacer, clock)
 
@@ -304,7 +333,7 @@ def test_stream_pacer_absorbs_sub_lead_pause_without_rebase_or_negative_sleep():
 
 def test_stream_pacer_caps_overlong_pause_recovery_at_three_chunks_then_rebases_once():
     clock = _FakeMonotonic()
-    pacer = StreamPacer(24_000, monotonic=clock)
+    pacer = StreamPacer(24_000, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
     for _ in range(4):
         _paced_send(pacer, clock)
 
@@ -900,7 +929,7 @@ async def test_run_playback_loop_restarts_default_cushion_for_midsegment_reconne
 
         await asyncio.wait_for(second_packet_sent.wait(), timeout=1.0)
         pacer = created_pacers[0]
-        assert pacer.target_lead_seconds == pytest.approx(0.5)
+        assert pacer.target_lead_seconds == pytest.approx(STREAM_TARGET_LEAD_SECONDS)
         assert pacer.reset_count == 1
         assert await asyncio.wait_for(reconnected_queue.get(), timeout=0.1) == b"x" * _stream_chunk_size(4_000)
     finally:
@@ -917,7 +946,7 @@ async def test_run_playback_loop_records_bounded_recovery_after_scheduler_stall(
     created_pacers: list[StreamPacer] = []
 
     def _pacer(bytes_per_second: float) -> StreamPacer:
-        pacer = StreamPacer(bytes_per_second, monotonic=clock)
+        pacer = StreamPacer(bytes_per_second, monotonic=clock, target_lead_seconds=SHORT_TEST_LEAD_SECONDS)
         created_pacers.append(pacer)
         return pacer
 
@@ -939,8 +968,8 @@ async def test_run_playback_loop_records_bounded_recovery_after_scheduler_stall(
     async def _broadcast(chunk: bytes) -> None:
         nonlocal broadcasts
         broadcasts += 1
-        # Four packets establish the 500 ms cushion; the fifth normally waits
-        # one packet. Stall before the sixth send to exhaust that cushion.
+        # Four packets establish the short test cushion; the fifth waits one
+        # packet. Stall before the sixth to exhaust it.
         if broadcasts == 6:
             clock.advance(1.2)
         await real_broadcast(chunk)
@@ -966,6 +995,9 @@ async def test_run_playback_loop_records_bounded_recovery_after_scheduler_stall(
     delivery = app.state.station_state.stream_delivery_snapshot()
     assert delivery["session"] == {"late": 0, "underrun": 1, "overrun_rebased": 1, "total": 2}
     assert [event["kind"] for event in delivery["recent"]] == ["underrun", "overrun_rebased"]
+    # The diagnostic reports the pacer this loop actually built, not the shipped
+    # constant — otherwise it would describe a cushion nothing is running at.
+    assert delivery["target_lead_ms"] == round(SHORT_TEST_LEAD_SECONDS * 1000)
 
 
 @pytest.mark.asyncio
@@ -1143,6 +1175,54 @@ async def test_run_playback_loop_persists_music_only_after_segment_finishes(tmp_
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_never_feeds_music_into_generic_clip_ring(tmp_path):
+    """Transient/local music bytes cannot become share-ring snapshots."""
+    from collections import deque
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    app.state.stream_hub.subscribe()
+    app.state.clip_ring_buffer = deque(maxlen=2000)
+    app.state.last_shareworthy_clip = None
+
+    audio_path = tmp_path / "jamendo-transient.mp3"
+    audio_path.write_bytes(b"jamendo-bytes" * 512)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=audio_path,
+            metadata={
+                "title": "Transient",
+                "title_only": "Transient",
+                "artist": "Artist",
+                "source_kind": "jamendo",
+                "audio_source": "jamendo",
+            },
+            ephemeral=True,
+        )
+    )
+
+    with (
+        patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()) as persist_completed,
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(50):
+                if persist_completed.await_count:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    persist_completed.assert_awaited_once()
+    assert list(app.state.clip_ring_buffer) == []
+    assert app.state.last_shareworthy_clip is None
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_snapshots_banter_segment_for_lookback(tmp_path):
     """After an ad/banter segment streams, the loop saves a lookback snapshot."""
     from collections import deque
@@ -1232,11 +1312,19 @@ def test_playback_gap_rescue_asks_permissively_because_nothing_real_is_below_it(
     )
 
     source = inspect.getsource(run_playback_loop)
-    gap_call = next(
-        (line for line in source.splitlines() if "_select_norm_cache_rescue(" in line),
-        None,
-    )
-    assert gap_call is not None, "playback-gap rescue call site disappeared"
+    call_start = source.find("_select_norm_cache_rescue(")
+    assert call_start != -1, "playback-gap rescue call site disappeared"
+    depth = 0
+    gap_call = None
+    for offset, char in enumerate(source[call_start:]):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                gap_call = source[call_start : call_start + offset + 1]
+                break
+    assert gap_call is not None, "playback-gap rescue call site never closes"
     assert "allow_recent_repeat=True" in gap_call, (
         "the playback-gap rescue must ask permissively while nothing real sits below it"
     )
@@ -1263,7 +1351,9 @@ async def test_playback_gap_rescue_airs_a_recent_song_rather_than_looping_the_cl
     # rescue, which would leave recent_keys empty and make this test vacuous.
     on_air = tmp_path / "norm_only_song_192k.mp3"
     on_air.write_bytes(b"x" * 65536)
-    (tmp_path / "norm_only_song_192k.mp3.json").write_text('{"title": "Only Song", "artist": "Solo"}')
+    (tmp_path / "norm_only_song_192k.mp3.json").write_text(
+        '{"title": "Only Song", "artist": "Solo", "source_kind": "local"}'
+    )
     state.stream_log.append(
         SegmentLogEntry(
             type="music",
@@ -1594,6 +1684,55 @@ def test_audible_commit_logs_new_provider_events_when_object_ids_collide(caplog)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("accepted_counts", "expected_breaks"),
+    [
+        ([1, 1], 1),
+        ([1, 0], 0),
+        ([0, 1], 0),
+        ([0, 0], 0),
+    ],
+)
+async def test_ad_experiment_receipt_requires_every_chunk_to_reach_an_audience(
+    tmp_path,
+    accepted_counts,
+    expected_breaks,
+):
+    """Record a receipt only if every chunk reached a listener."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "carosello.mp3"
+    audio_path.write_bytes(b"x" * 8192)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.AD,
+            path=audio_path,
+            metadata={"brands": ["Prezzoforte", "TeleCuore"]},
+            ephemeral=False,
+        )
+    )
+    app.state.stream_hub.broadcast = AsyncMock(side_effect=accepted_counts)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=2.0)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    receipt = state.ad_experiment_snapshot()
+    assert receipt["completed_breaks"] == expected_breaks
+    assert receipt["completed_spots"] == expected_breaks * 2
+    outcome = state.stream_outcome_history[-1]
+    assert outcome["accepted_listener_count"] == max(accepted_counts)
+    assert outcome["result"] == ("aired" if max(accepted_counts) > 0 else "not_streamed")
+    assert app.state.stream_hub.broadcast.await_count == len(accepted_counts)
+
+
+@pytest.mark.asyncio
 async def test_continuity_reservation_reports_a_bridge_fire_from_the_send_loop(tmp_path):
     """Reserved safety audio reports a bridge ONLY once a listener has it.
 
@@ -1824,6 +1963,65 @@ async def test_run_playback_loop_skips_missing_file_and_survives(tmp_path):
     assert file_error["bytes_sent"] == 0
     assert file_error["accepted_listener_count"] == 0
     assert all(entry.label != "Vanished" for entry in app.state.station_state.stream_log)
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_denied_admission_releases_without_airing_and_continues(tmp_path):
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    _, listener_queue = app.state.stream_hub.subscribe()
+    events: list[str] = []
+
+    denied_path = tmp_path / "denied.mp3"
+    denied_bytes = b"denied-provider-audio" * 64
+    denied_path.write_bytes(denied_bytes)
+
+    def deny_admission() -> bool:
+        events.append("denied")
+        return False
+
+    denied = Segment(
+        type=SegmentType.MUSIC,
+        path=denied_path,
+        metadata={"title": "Denied", "title_only": "Denied", "artist": "Provider"},
+        playback_start_callback=deny_admission,
+        release_callback=lambda: events.append("released"),
+    )
+    good_path = tmp_path / "good.mp3"
+    good_bytes = b"admitted-base-audio" * 64
+    good_path.write_bytes(good_bytes)
+    good = Segment(
+        type=SegmentType.MUSIC,
+        path=good_path,
+        metadata={"title": "Base", "title_only": "Base", "artist": "Local"},
+    )
+    app.state.queue.put_nowait(denied)
+    app.state.queue.put_nowait(good)
+
+    with patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()) as persist:
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(100):
+                if persist.await_count:
+                    break
+                await asyncio.sleep(0.01)
+            assert persist.await_count == 1
+            assert not task.done()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    delivered_chunks: list[bytes] = []
+    while not listener_queue.empty():
+        chunk = listener_queue.get_nowait()
+        if isinstance(chunk, bytes):
+            delivered_chunks.append(chunk)
+    delivered = b"".join(delivered_chunks)
+    assert denied_bytes not in delivered
+    assert good_bytes in delivered
+    assert events == ["denied", "released"]
+    assert not denied_path.exists()
+    assert app.state.queue.qsize() == 0
 
 
 @pytest.mark.asyncio
@@ -2289,7 +2487,9 @@ async def test_run_playback_loop_timeout_serves_one_packaged_clip_then_norm_cach
     recovery_path.write_bytes(b"recovery-audio" * 512)
     norm_path = tmp_path / "norm_cached_song_192k.mp3"
     norm_path.write_bytes(b"cached-song" * 4096)
-    (tmp_path / "norm_cached_song_192k.mp3.json").write_text('{"title": "Cached Song", "artist": "Cache Artist"}')
+    (tmp_path / "norm_cached_song_192k.mp3.json").write_text(
+        '{"title": "Cached Song", "artist": "Cache Artist", "source_kind": "local"}'
+    )
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -2377,8 +2577,6 @@ async def test_run_playback_loop_repeats_clip_only_when_no_music_rescue_exists(t
 
     recovery_path = tmp_path / "continuity_1.mp3"
     recovery_path.write_bytes(b"recovery-audio" * 512)
-    empty_assets = tmp_path / "empty_assets"
-    empty_assets.mkdir()
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -2396,7 +2594,6 @@ async def test_run_playback_loop_repeats_clip_only_when_no_music_rescue_exists(t
         patch(
             "mammamiradio.web.streamer._runtime_monotonic", side_effect=_scripted_clock([100.0, 101.1, 103.0, 104.0])
         ),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -2428,8 +2625,6 @@ async def test_run_playback_loop_rung4_reclip_past_60s_does_not_also_force_bante
 
     recovery_path = tmp_path / "continuity_1.mp3"
     recovery_path.write_bytes(b"recovery-audio" * 512)
-    empty_assets = tmp_path / "empty_assets"
-    empty_assets.mkdir()
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -2449,7 +2644,6 @@ async def test_run_playback_loop_rung4_reclip_past_60s_does_not_also_force_bante
             "mammamiradio.web.streamer._runtime_monotonic",
             side_effect=_scripted_clock([100.0, 101.1, 165.0, 166.0, 167.0, 168.0]),
         ),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -2656,22 +2850,32 @@ async def test_playback_rejects_late_blocklisted_music_from_normal_queue(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_playback_rejects_blocklisted_demo_fallback_without_queue_task(tmp_path):
-    """A non-queue rescue obeys the ban fence without unbalancing task accounting."""
+async def test_playback_rejects_blocklisted_norm_rescue_without_queue_task(tmp_path):
+    """A non-queue rescue obeys the ban fence without unbalancing task accounting.
+
+    The rescue selector already drops pre-banned files; this simulates the
+    late-ban race (the operator bans after selection) so the last-mile fence in
+    the playback loop is what rejects the bytes.
+    """
     app = _make_test_app()
     app.state.config.audio.bitrate = 64
+    app.state.config.cache_dir = tmp_path
     _, listener_queue = app.state.stream_hub.subscribe()
     state = app.state.station_state
     state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
 
-    demo_dir = tmp_path / "demo" / "music"
-    demo_dir.mkdir(parents=True)
-    blocked_path = demo_dir / "Late Artist - Late Song.mp3"
-    blocked_audio = b"blocked-demo-audio" * 512
+    blocked_path = tmp_path / "norm_late_song_64k.mp3"
+    blocked_audio = b"blocked-cache-audio" * 512
     blocked_path.write_bytes(blocked_audio)
-    safe_path = demo_dir / "Safe Artist - Safe Song.mp3"
-    safe_audio = b"safe-demo-audio" * 512
+    (tmp_path / "norm_late_song_64k.mp3.json").write_text(
+        '{"title": "Late Song", "artist": "Late Artist", "source_kind": "local"}'
+    )
+    safe_path = tmp_path / "norm_safe_song_64k.mp3"
+    safe_audio = b"safe-cache-audio" * 512
     safe_path.write_bytes(safe_audio)
+    (tmp_path / "norm_safe_song_64k.mp3.json").write_text(
+        '{"title": "Safe Song", "artist": "Safe Artist", "source_kind": "local"}'
+    )
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -2681,13 +2885,11 @@ async def test_playback_rejects_blocklisted_demo_fallback_without_queue_task(tmp
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
-        patch("mammamiradio.web.streamer._select_norm_cache_rescue", return_value=None),
+        patch("mammamiradio.web.streamer._select_norm_cache_rescue", side_effect=[blocked_path, safe_path]),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
             side_effect=_scripted_clock([100.0, 101.1, 102.0, 103.1, 103.2]),
         ),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
-        patch("mammamiradio.web.streamer._random.choice", side_effect=[blocked_path, safe_path]),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -2749,8 +2951,6 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
     recovery_path.write_bytes(b"recovery-audio" * 512)
     real_song = tmp_path / "real_song.mp3"
     real_song.write_bytes(b"music-bytes" * 512)
-    empty_assets = tmp_path / "empty_assets"
-    empty_assets.mkdir()
 
     app.state.queue.put_nowait(
         Segment(
@@ -2781,7 +2981,6 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_scripted_wait)),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
         patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.7),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", empty_assets),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -3166,6 +3365,7 @@ async def test_run_playback_loop_timeout_uses_norm_cache_at_first_byte_grace(tmp
 
     rescue_path = tmp_path / "norm_rescue.mp3"
     rescue_path.write_bytes(b"x" * 4096)
+    (tmp_path / "norm_rescue.mp3.json").write_text('{"source_kind":"local"}')
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -3216,10 +3416,10 @@ async def test_run_playback_loop_norm_cache_rescue_status_exposes_progress_durat
     app.state.config.cache_dir = tmp_path
     app.state.stream_hub.subscribe()
 
-    rescue_path = tmp_path / "norm_jamendo_jamendo_1131121_192k.mp3"
+    rescue_path = tmp_path / "norm_local_status_track_192k.mp3"
     rescue_path.write_bytes(b"x" * 1_048_576)
-    (tmp_path / "norm_jamendo_jamendo_1131121_192k.mp3.json").write_text(
-        '{"title": "Miss Understanding", "artist": "Sam Brown"}'
+    (tmp_path / "norm_local_status_track_192k.mp3.json").write_text(
+        '{"title": "Miss Understanding", "artist": "Sam Brown", "source_kind": "local"}'
     )
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
@@ -3279,7 +3479,9 @@ async def test_run_playback_loop_rescue_reads_sidecar_metadata(tmp_path, caplog)
     # Write the sidecar the way producer.save_track_metadata would.
     import json
 
-    (tmp_path / "norm_rescue.mp3.json").write_text(json.dumps({"title": "Esibizionista", "artist": "Annalisa"}))
+    (tmp_path / "norm_rescue.mp3.json").write_text(
+        json.dumps({"title": "Esibizionista", "artist": "Annalisa", "source_kind": "local"})
+    )
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -3329,7 +3531,7 @@ async def test_run_playback_loop_rescue_strips_foreign_station_name_from_sidecar
     import json
 
     (tmp_path / "norm_rescue.mp3.json").write_text(
-        json.dumps({"title": "Be Without U", "artist": "Radio Sabrina Sensatione"})
+        json.dumps({"title": "Be Without U", "artist": "Radio Sabrina Sensatione", "source_kind": "local"})
     )
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
@@ -3383,7 +3585,13 @@ async def test_run_playback_loop_rescue_strips_foreign_station_prefix_from_title
 
     # artist is clean; the foreign name is baked into the title prefix.
     (tmp_path / "norm_rescue_title.mp3.json").write_text(
-        json.dumps({"title": "Radio Sabrina Sensatione – Be Without U", "artist": "Mario Biondi"})
+        json.dumps(
+            {
+                "title": "Radio Sabrina Sensatione – Be Without U",
+                "artist": "Mario Biondi",
+                "source_kind": "local",
+            }
+        )
     )
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
@@ -3418,8 +3626,8 @@ async def test_run_playback_loop_rescue_strips_foreign_station_prefix_from_title
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, caplog):
-    """Malformed sidecar JSON must not crash; rescue falls back to humanize (Item 20)."""
+async def test_run_playback_loop_malformed_sidecar_fails_closed(tmp_path, caplog):
+    """Malformed provenance cannot make unknown cache bytes eligible for rescue."""
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
@@ -3440,29 +3648,29 @@ async def test_run_playback_loop_rescue_handles_malformed_sidecar(tmp_path, capl
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
+            side_effect=_scripted_clock([100.0, 160.5, 160.6, 160.7, 160.8, 160.9]),
         ),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
             deadline = time.monotonic() + 3.0
-            while app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "norm_cache":
+            while app.state.station_state.force_next is None:
                 if time.monotonic() > deadline:
-                    raise AssertionError("playback loop did not rescue from norm cache")
+                    raise AssertionError("malformed cache did not reach the safe forced-banter fallback")
                 await asyncio.sleep(0.01)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    now_meta = app.state.station_state.now_streaming.get("metadata", {})
-    assert now_meta.get("title") == "Busted", (
-        f"malformed sidecar should fall back to humanize; got {now_meta.get('title')!r}"
-    )
+    assert app.state.station_state.force_next is SegmentType.BANTER
+    assert app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_norm_cache"
+    assert rescue_path.exists()
+    assert not any("rescuing with norm cache" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, caplog):
-    """Scenario 2 (empty fallback): no canned clips, no norm cache — demo assets must rescue."""
+async def test_run_playback_loop_ignores_unmanifested_demo_music(tmp_path, caplog):
+    """A future file under assets/demo/music must never become implicit music."""
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
     app.state.config.cache_dir = tmp_path
@@ -3471,8 +3679,8 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
 
     demo_dir = tmp_path / "demo" / "music"
     demo_dir.mkdir(parents=True)
-    rescue_mp3 = demo_dir / "Pino Daniele - Napule E.mp3"
-    rescue_mp3.write_bytes(b"x" * 4096)
+    unmanifested = demo_dir / "Pino Daniele - Napule E.mp3"
+    unmanifested.write_bytes(b"x" * 4096)
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -3484,45 +3692,25 @@ async def test_run_playback_loop_timeout_uses_demo_assets_after_30s(tmp_path, ca
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
+            side_effect=_scripted_clock([100.0, 160.5, 160.6, 160.7, 160.8, 160.9]),
         ),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
             deadline = time.monotonic() + 3.0
-            while (
-                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
-            ):
+            while app.state.station_state.force_next is None:
                 if time.monotonic() > deadline:
-                    raise AssertionError("playback loop did not rescue from demo assets")
+                    raise AssertionError("playback loop did not reach the safe forced-banter fallback")
                 await asyncio.sleep(0.01)
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    assert app.state.station_state.queue_empty_since is None
-    assert any("rescuing with demo asset" in record.message for record in caplog.records)
-
-    now_meta = app.state.station_state.now_streaming.get("metadata", {})
-    assert now_meta.get("title") == "Napule E", (
-        f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got title={now_meta.get('title')!r}"
-    )
-    assert now_meta.get("artist") == "Pino Daniele", (
-        f"demo-asset rescue must parse 'Artist - Title.mp3' stems; got artist={now_meta.get('artist')!r}"
-    )
-    assert app.state.station_state.now_streaming["duration_sec"] > 0
-    assert now_meta["duration_ms"] == round(app.state.station_state.now_streaming["duration_sec"] * 1000)
-
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        public_status = (await client.get("/public-status")).json()
-        admin_status = (await client.get("/status")).json()
-
-    for body in (public_status, admin_status):
-        assert body["now_streaming"]["metadata"]["audio_source"] == "fallback_demo_asset"
-        assert body["now_streaming"]["duration_sec"] > 0
-        assert body["current_duration_sec"] > 0
+    assert app.state.station_state.force_next is SegmentType.BANTER
+    assert app.state.station_state.queue_empty_since is not None
+    assert unmanifested.exists()
+    assert app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
+    assert not any("rescuing with demo asset" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -3533,8 +3721,8 @@ async def test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s(
     Regression guard for the 1-2s INSTANT AUDIO promise: the loop used to block
     the full 5s queue-fallback wait before reaching for any rescue audio (first
     byte at ~5.9s). Here elapsed is ~1s (< the 5s producer-stall threshold), yet
-    the demo-asset rescue must already fire — proving rescue is not re-gated
-    behind the 5s wait. This is the cold-start path the launch smoke exercises.
+    the approved continuity rescue must already fire — proving rescue is not
+    re-gated behind the 5s wait. This is the cold-start path the launch smoke exercises.
     """
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200
@@ -3542,9 +3730,8 @@ async def test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s(
     app.state.stream_hub.subscribe()
     caplog.set_level(logging.WARNING)
 
-    demo_dir = tmp_path / "demo" / "music"
-    demo_dir.mkdir(parents=True)
-    (demo_dir / "Pino Daniele - Napule E.mp3").write_bytes(b"x" * 4096)
+    recovery = tmp_path / "continuity.mp3"
+    recovery.write_bytes(b"x" * 4096)
 
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
@@ -3554,20 +3741,18 @@ async def test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s(
     wait_for = AsyncMock(side_effect=_forced_timeout)
     with (
         patch("mammamiradio.web.streamer.asyncio.wait_for", new=wait_for),
-        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=recovery),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=1.0),
         # elapsed = 101.0 - 100.0 = 1.0s, well under QUEUE_FALLBACK_WAIT_SECONDS.
         patch(
             "mammamiradio.web.streamer._runtime_monotonic",
             side_effect=_scripted_clock([100.0, 101.0, 101.1, 101.2, 101.3, 101.4]),
         ),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
             deadline = time.monotonic() + 3.0
-            while (
-                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
-            ):
+            while not app.state.station_state.now_streaming.get("metadata", {}).get("rescue"):
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not rescue at the first-byte grace")
                 await asyncio.sleep(0.01)
@@ -3582,7 +3767,8 @@ async def test_run_playback_loop_serves_rescue_at_first_byte_grace_not_after_5s(
     assert wait_for.call_args.kwargs["timeout"] <= 2.0
     assert wait_for.call_args.kwargs["timeout"] == FIRST_BYTE_GRACE_SECONDS
     assert FIRST_BYTE_GRACE_SECONDS < QUEUE_FALLBACK_WAIT_SECONDS
-    assert any("rescuing with demo asset" in record.message for record in caplog.records)
+    assert app.state.station_state.now_streaming.get("metadata", {}).get("title") == "Station continuity"
+    assert not any("rescuing with demo asset" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -3591,12 +3777,13 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
     must air from the queue, not get pre-empted by the rescue ladder."""
     app = _make_test_app()
     app.state.config.audio.bitrate = 64
-    app.state.stream_hub.subscribe()
+    _, listener_queue = app.state.stream_hub.subscribe()
     state = app.state.station_state
     state.queued_segments = [{"type": "music", "label": "Normal Grace"}]
 
     audio_path = tmp_path / "normal-grace.mp3"
-    audio_path.write_bytes(b"x" * 8192)
+    normal_audio = b"x" * 8192
+    audio_path.write_bytes(normal_audio)
     segment = Segment(
         type=SegmentType.MUSIC,
         path=audio_path,
@@ -3622,6 +3809,7 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
                 if time.monotonic() > deadline:
                     raise AssertionError("playback loop did not stream queued segment inside the grace window")
                 await asyncio.sleep(0.01)
+            heard = listener_queue.get_nowait()
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -3630,8 +3818,8 @@ async def test_run_playback_loop_queued_segment_arriving_within_first_byte_grace
     assert now_meta.get("title") == "Normal Grace"
     assert now_meta.get("fallback") is not True
     assert now_meta.get("audio_source") not in {"norm_cache", "fallback_demo_asset"}
-    assert state.queue_empty_since is None
     assert state.queued_segments == []
+    assert normal_audio.startswith(heard)
     pick_canned_clip.assert_not_called()
     select_norm_cache_rescue.assert_not_called()
 
@@ -3666,6 +3854,7 @@ async def test_run_playback_loop_post_restart_rejects_blocked_slot_and_serves_re
     rescue_path = tmp_path / "norm_rescue.mp3"
     rescue_audio = b"restart-rescue-audio" * 256
     rescue_path.write_bytes(rescue_audio)
+    (tmp_path / "norm_rescue.mp3.json").write_text('{"source_kind":"local"}')
 
     # Tiny real grace keeps the test fast while exercising the real wait_for /
     # resume_event timing (no wait_for mock, so the resume path is genuine).
@@ -3700,55 +3889,6 @@ async def test_run_playback_loop_post_restart_rejects_blocked_slot_and_serves_re
 
 
 @pytest.mark.asyncio
-async def test_run_playback_loop_demo_asset_strips_foreign_station_name_from_stem(tmp_path, caplog):
-    """Illusion guard on the demo-asset rescue path: a demo file whose stem parses
-    to a foreign "Radio X" artist must not surface that artist on the now-playing
-    label. The artist falls back to "Unknown" instead of airing a competitor."""
-    app = _make_test_app()
-    app.state.config.audio.bitrate = 3200
-    app.state.config.cache_dir = tmp_path
-    app.state.stream_hub.subscribe()
-    caplog.set_level(logging.WARNING)
-
-    demo_dir = tmp_path / "demo" / "music"
-    demo_dir.mkdir(parents=True)
-    rescue_mp3 = demo_dir / "Radio Sabrina Sensatione - Be Without U.mp3"
-    rescue_mp3.write_bytes(b"x" * 4096)
-
-    async def _forced_timeout(awaitable, *_args, **_kwargs):
-        awaitable.close()
-        await asyncio.sleep(0)
-        raise TimeoutError
-
-    with (
-        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_forced_timeout)),
-        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
-        patch(
-            "mammamiradio.web.streamer._runtime_monotonic",
-            side_effect=_scripted_clock([100.0, 130.5, 130.6, 130.7, 130.8, 130.9]),
-        ),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", tmp_path),
-    ):
-        task = asyncio.create_task(run_playback_loop(app))
-        try:
-            deadline = time.monotonic() + 3.0
-            while (
-                app.state.station_state.now_streaming.get("metadata", {}).get("audio_source") != "fallback_demo_asset"
-            ):
-                if time.monotonic() > deadline:
-                    raise AssertionError("playback loop did not rescue from demo assets")
-                await asyncio.sleep(0.01)
-        finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-    now_meta = app.state.station_state.now_streaming.get("metadata", {})
-    got_artist = now_meta.get("artist")
-    assert got_artist == "Unknown", f"foreign station artist should fall back; got {got_artist!r}"
-    assert "Radio Sabrina Sensatione" not in (now_meta.get("title") or "")
-
-
-@pytest.mark.asyncio
 async def test_run_playback_loop_rejects_blocked_slot_in_fully_empty_container_and_forces_banter(tmp_path, caplog):
     """Scenario 2 (fully empty): a banned slot and no usable rescue assets.
 
@@ -3767,9 +3907,6 @@ async def test_run_playback_loop_rejects_blocked_slot_in_fully_empty_container_a
         reservation_id="fully-empty-blocked-slot",
     )
 
-    empty_pkg = tmp_path / "empty_pkg"
-    empty_pkg.mkdir()
-
     async def _forced_timeout(awaitable, *_args, **_kwargs):
         awaitable.close()
         await asyncio.sleep(0)
@@ -3783,7 +3920,6 @@ async def test_run_playback_loop_rejects_blocked_slot_in_fully_empty_container_a
             "mammamiradio.web.streamer._runtime_monotonic",
             side_effect=_scripted_clock([200.0, 260.5, 260.6, 260.7, 260.8, 260.9]),
         ),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", empty_pkg),
     ):
         task = asyncio.create_task(run_playback_loop(app))
         try:
@@ -3805,7 +3941,7 @@ async def test_run_playback_loop_rejects_blocked_slot_in_fully_empty_container_a
         "queue_empty_since must stay set so /readyz keeps reporting 503 starting until real audio resumes"
     )
     assert not any("rescuing with demo asset" in record.message for record in caplog.records), (
-        "demo-asset rescue fired despite empty _ASSETS_DIR"
+        "unmanifested demo-music rescue unexpectedly fired"
     )
 
 
@@ -4488,8 +4624,8 @@ async def test_stream_delivery_diagnostics_are_bounded_anonymous_and_admin_only(
         public = (await client.get("/public-status")).json()
 
     delivery = admin["runtime_status"]["stream_delivery"]
-    assert delivery["target_lead_ms"] == 500
-    assert delivery["late_threshold_ms"] == 50
+    assert delivery["target_lead_ms"] == round(STREAM_TARGET_LEAD_SECONDS * 1000)
+    assert delivery["late_threshold_ms"] == round(STREAM_LATE_THRESHOLD_SECONDS * 1000)
     assert delivery["session"]["late"] == 1
     assert len(delivery["recent"]) == 1
     assert len(delivery["recent_stream_outcomes"]) == 20
@@ -4822,6 +4958,7 @@ async def test_status_includes_station_mode():
 @pytest.mark.asyncio
 async def test_status_includes_direct_cast_diagnostics_and_public_status_omits_them():
     app = _make_test_app()
+    app.state.config.allow_ytdlp = False
     app.state.config.ads.cast_report = SimpleNamespace(
         excluded_brands=frozenset({"Broken Campaign"}),
         warnings=("Broken Campaign has no approved direct character",),
@@ -4836,6 +4973,8 @@ async def test_status_includes_direct_cast_diagnostics_and_public_status_omits_t
         "warnings": ["Broken Campaign has no approved direct character"],
     }
     assert "ad_cast" not in public
+    assert admin["external_extractors"] == {"state": "disabled"}
+    assert "external_extractors" not in public
 
 
 def test_ad_cast_status_payload_rejects_unexpected_report_shapes():
@@ -6416,7 +6555,6 @@ async def test_assetless_running_station_synthesizes_through_producer_queue_play
     with (
         patch("mammamiradio.scheduling.producer._DEMO_ASSETS_DIR", missing_assets),
         patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", missing_assets),
-        patch("mammamiradio.web.streamer._ASSETS_DIR", missing_assets),
         patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
         patch("mammamiradio.scheduling.producer.select_norm_cache_rescue", return_value=None),
         patch("mammamiradio.scheduling.producer._blocklist_safe_last_music", return_value=None),
@@ -7576,7 +7714,7 @@ async def test_capabilities_loopback_returns_flags():
 
 
 @pytest.mark.asyncio
-async def test_capabilities_exposes_jamendo_and_charts_reload_flags():
+async def test_capabilities_exposes_jamendo_and_charts_reload_flags(external_media_installed):
     app = _make_test_app()
     app.state.config.playlist.jamendo_client_id = "jamendo-client"
     app.state.config.allow_ytdlp = True
@@ -9721,6 +9859,47 @@ async def test_home_context_setup_routes_reject_invalid_json_and_missing_ha_acce
     assert missing_access.json()["error"]["code"] == "ha_access_missing"
     assert invalid_choice.status_code == 422
     assert invalid_choice.json()["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_addon", [True, False], ids=["addon", "standalone"])
+async def test_find_speakers_way_out_matches_how_the_station_runs(tmp_path, is_addon):
+    """A standalone run has no add-on options page to send the operator to.
+
+    Same failure, same code, but "check the add-on's Home Assistant access" is a
+    dead end when there is no add-on. Only the wording moves; consumers branching
+    on the error code see no difference.
+    """
+    from mammamiradio.home.ha_playback import HAPlaybackError, HAPlaybackReason
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.is_addon = is_addon
+    service = SimpleNamespace(
+        discover=AsyncMock(side_effect=HAPlaybackError(HAPlaybackReason.HA_ACCESS_MISSING)),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post("/api/setup/first-listen/players", json={})
+
+    body = response.json()["error"]
+    assert response.status_code == 409
+    assert body["code"] == "ha_access_missing"
+    assert body["retryable"] is True
+
+    if is_addon:
+        assert "add-on" in body["message"]
+        assert ".env" not in body["message"]
+    else:
+        # Names something that exists on this install, and says the station still works.
+        assert "HA_URL" in body["message"] and "HA_TOKEN" in body["message"]
+        assert "skip this step" in body["message"]
+        assert "add-on" not in body["message"]
 
 
 @pytest.mark.asyncio

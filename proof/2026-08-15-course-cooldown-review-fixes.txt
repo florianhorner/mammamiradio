@@ -1,0 +1,58 @@
+mammamiradio — pre-ship verification
+branch: florianhorner/valencia-v3-review-fixes (off main after #966 merged)
+host:   local (make check)
+
+$ make check
+All checks passed!
+Success: no issues found in 312 source files
+6420 passed, 4 skipped, 23 deselected, 1 warning in 196.74s (0:03:16)
+All checks passed
+
+$ bash scripts/check-release-invariants.sh
+All invariants passed.
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ python tests/integrations/golden/generate_fixture.py --check
+golden fixture matches serializer output
+
+PR #968 bot follow-up — 2026-08-16
+reviewed code head: 7beb7b98be71082065b023b73f7425e4a02b1f29
+
+$ PATH="$PWD/.venv/bin:$PATH" python -m pytest tests/core/test_models.py tests/scheduling/test_scheduler.py tests/home/test_scene_namer.py -q
+212 passed in 3.72s
+
+$ PATH="$PWD/.venv/bin:$PATH" make check
+All checks passed!
+Success: no issues found in 312 source files
+6426 passed, 4 skipped, 23 deselected, 1 warning in 244.65s (0:04:04)
+Required test coverage of 92.0% reached. Total coverage: 92.34%
+All checks passed
+
+$ python tests/integrations/golden/generate_fixture.py --check
+golden fixture matches serializer output
+
+$ bash scripts/check-docs-safety.sh
+Docs safety clean.
+
+$ bash scripts/check-release-invariants.sh
+16 passed, 0 failed. All invariants passed.
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ git diff --check
+Clean.
+
+Player QA: PASS on local / at exact code head (desktop 1440x900, mobile
+390x844, play/pause, local /stream HTTP 200, schedule navigation, no console
+errors). Admin QA not applicable. Home Assistant and .context/ were not used.
+
+$ bash scripts/check-preship-evidence.sh
+check-preship-evidence: OK — review @
+7beb7b98be71082065b023b73f7425e4a02b1f29 is an ancestor of 7beb7b98
+
+Exact-head review: no finding in the approved bot-fix scope. One broader,
+pre-existing informational limitation remains intentionally out of scope:
+spelled headcounts above ten are not enumerated by the bounded bilingual guard.

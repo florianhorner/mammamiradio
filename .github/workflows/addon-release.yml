@@ -25,6 +25,12 @@ jobs:
       publish_latest: ${{ steps.latest.outputs.publish_latest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
 
       - name: Require tag ref
         run: |
@@ -108,6 +114,21 @@ jobs:
           fi
           echo "Cut contract confirmed at $TAG_VERSION: config.yaml, manifest.json, pyproject.toml, both CHANGELOGs"
 
+      - name: Validate physical HA Green release evidence
+        run: |
+          python scripts/validate-ha-green-release-evidence.py \
+            --release-version "${{ steps.semver.outputs.version }}" \
+            --current-commit "$(git rev-parse HEAD^{commit})" \
+            --output ha-green-release-proof.json
+
+      - name: Upload HA Green release proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ha-green-release-proof-stable-${{ github.sha }}
+          path: ha-green-release-proof.json
+          if-no-files-found: error
+
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -142,9 +163,67 @@ jobs:
             fi
           done
 
+  media-proof:
+    runs-on: ubuntu-latest
+    needs: pre-flight
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install full media-proof dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install uv==0.10.11
+          python -m pip install -e . -r requirements-dev.txt
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull both prebuilt SHA images explicitly
+        env:
+          AMD64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+          AARCH64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-aarch64:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$AMD64_IMAGE"
+          docker pull --platform linux/arm64 "$AARCH64_IMAGE"
+
+      - name: Prove source, packages, and both prebuilt SHA images
+        env:
+          AMD64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-amd64:${{ github.sha }}
+          AARCH64_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-aarch64:${{ github.sha }}
+        run: |
+          python scripts/media-proof.py \
+            --amd64-image "$AMD64_IMAGE" \
+            --aarch64-image "$AARCH64_IMAGE" \
+            --output media-proof.json
+
+      - name: Upload stable-promotion media proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: media-proof-stable-${{ github.sha }}
+          path: media-proof.json
+          if-no-files-found: error
+
   smoke-prebuilt:
     runs-on: ${{ matrix.runner }}
-    needs: pre-flight
+    needs: [pre-flight, media-proof]
     permissions:
       contents: read
       packages: read
@@ -223,7 +302,7 @@ jobs:
 
   promote:
     runs-on: ubuntu-latest
-    needs: [pre-flight, smoke-prebuilt]
+    needs: [pre-flight, media-proof, smoke-prebuilt]
     if: github.repository == 'florianhorner/mammamiradio'
     permissions:
       contents: read

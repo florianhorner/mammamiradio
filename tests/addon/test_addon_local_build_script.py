@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -89,6 +90,33 @@ def test_addon_run_sh_respects_home_assistant_toggle():
     assert "export HA_ENABLED" in run_sh
     assert 'if [ "${HA_ENABLED:-true}" != "false" ]; then' in run_sh
     assert "Home Assistant integration disabled by add-on option" in run_sh
+
+
+def test_both_addon_channels_share_an_extractor_free_image_contract():
+    run_sh = (REPO_ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
+    dockerfile = (REPO_ROOT / "ha-addon" / "mammamiradio" / "Dockerfile").read_text()
+    stable = (REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml").read_text()
+    edge = (REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml").read_text()
+
+    assert 'export MAMMAMIRADIO_ALLOW_YTDLP="false"' in run_sh
+    assert 'export MAMMAMIRADIO_ALLOW_YTDLP="true"' not in run_sh
+    assert ".[external-media]" not in dockerfile
+    stable_image = re.search(r"(?m)^image:\s*(\S+)$", stable)
+    edge_image = re.search(r"(?m)^image:\s*(\S+)$", edge)
+    assert stable_image and edge_image
+    assert stable_image.group(1) == edge_image.group(1)
+
+
+def test_ytdlp_is_only_in_the_standalone_external_media_extra():
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]
+    assert all(not dependency.startswith("yt-dlp") for dependency in project["dependencies"])
+    assert any(dependency.startswith("yt-dlp") for dependency in project["optional-dependencies"]["external-media"])
+    requirements = (REPO_ROOT / "requirements.txt").read_text()
+    assert not re.search(r"(?im)^\s*yt[-_.]dlp(?:\W|$)", requirements)
+
+    validator = (REPO_ROOT / "scripts" / "validate-addon.sh").read_text()
+    assert "Installed add-on image omits yt-dlp distribution, module, and executable" in validator
+    assert "Direct yt_dlp import found outside playlist/downloader.py" in validator
 
 
 def test_addon_run_sh_uses_guarded_file_backed_provider_secrets_parser():

@@ -57,15 +57,19 @@ Or by hand: **Settings → Apps → App store → ⋮ → Repositories**, paste 
 No AI key is required for your first listen: without one, the hosts use stock
 copy and fallback voices. The packaged 27-second First Listen mini-show makes
 the original music bed, station identity, and Marco/Giulia opening audible
-immediately, but it is not a song library.
-A reachable music source is still required for a normal rotation. If music is
-not ready yet, packaged recovery audio can keep proving the speaker transport without
-pretending that the source is healthy. The app
-tries live charts by default, which need outbound network access; for a
-predictable Home Assistant alternative, configure a Jamendo client ID in the
-app's advanced options. Operator-supplied MP3s can also live in `/data/music`
-in the add-on; standalone/Docker installs can point elsewhere with
-`MAMMAMIRADIO_MUSIC_DIR`.
+immediately, but it is not the song library. Normal rotation starts with the
+offline, attributed twelve-track Incompetech starter collection, so no provider
+account or network music source is required. Open the listener and use **Music
+credits** to see the exact source, license, and modification notice for what is
+playing. Operator-supplied MP3s can also live in `/data/music` in the add-on;
+standalone/Docker installs can point elsewhere with `MAMMAMIRADIO_MUSIC_DIR`.
+
+Jamendo is an optional, default-off transient expansion for acknowledged
+non-commercial API use while provider confirmation is pending. Configure it
+later in **Motore -> Setup -> Music sources**; starter music keeps playing while
+it prepares one track at a time. Packaged recovery audio can still prove the
+speaker transport without pretending that a damaged music source is healthy.
+See [Music sources and rights boundaries](docs/music-sources.md).
 
 First audio is separate from home context. On every fresh install, the
 **Host home context** choice is omitted and remains off until you hear the
@@ -103,7 +107,14 @@ cp .env.example .env
 docker compose up      # ADMIN_TOKEN auto-generates if unset
 ```
 
-Open `http://localhost:8000`. No AI key is required; add one when you want generated hosts. The stock Docker quickstart uses live charts for music and needs outbound access. Its persistent music path is `/data/music`; set `MAMMAMIRADIO_MUSIC_DIR` when running outside the supplied container layout. (Also: macOS one-click `./setup-mac.sh`, or `./start.sh` in a venv. Conductor users get `scripts/conductor-*.sh` lifecycle hooks for free.)
+Open `http://localhost:8000`. The bundled starter collection works offline and
+needs no AI or music-provider key; add an AI key when you want generated hosts.
+The stock Docker quickstart keeps external extraction off. A standalone install
+may deliberately add the `external-media` extra, but technical access is not a
+rights claim. Its persistent music path is `/data/music`; set
+`MAMMAMIRADIO_MUSIC_DIR` when running outside the supplied container layout.
+(Also: macOS one-click `./setup-mac.sh`, or `./start.sh` in a venv. Conductor
+users get `scripts/conductor-*.sh` lifecycle hooks for free.)
 
 </details>
 
@@ -149,13 +160,17 @@ It starts in layers, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | No AI key; live charts, Jamendo, or local MP3s for normal rotation | Demo Radio uses stock host copy and fallback voices. Recovery cover can prove the speaker path while a music source is repaired. |
+| **Hear it first** | Nothing | The First Listen mini-show proves the speaker path, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
 | **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
 | **Give your home a voice** | AI host key plus prompt-safe Home Assistant context | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 
-"Demo Radio" is the no-AI-key tier, not a bundled song library. The first step lets you hear the station before you trust it with your house. The last step is the point.
+"Demo Radio" is the no-AI-key host tier; music still begins with the bundled,
+attributed starter collection. The first step lets you hear the station before
+you trust it with your house. The last step is the point.
 
-Once the station has playable audio, recovery clips and cached tracks bridge many provider hiccups and thin-queue moments. The bundled recovery clip is cover audio, not a full music rotation.
+The starter collection is the dependable first-run rotation. Recovery clips
+and eligible local cache can still bridge thin-queue moments, but Jamendo is
+never a recovery or restart source.
 
 It runs on your hardware with your own AI keys: no account, no servers of ours, no telemetry. In the add-on, saved keys live in `/config/secrets.env`; the UI never echoes them. When Host home context is on and an AI host key is ready, the admin preview shows the filtered context that may go to the AI you picked for host writing and for post-air memory extraction after generated banter streams cleanly. Mute any entity there to keep it out of future host/context use. Turning Host home context off cancels Home-derived generation and post-air extraction, removes unstarted Home-derived breaks, clears public Home moments, and stops Home/timer polling. Audio already on air may finish so privacy revocation does not create dead air, but it cannot publish post-air Home memory afterward. The Home Assistant integration remains separate, so entity publishing can stay on while Host home context is off; running without script-provider credentials also prevents host context from reaching an AI provider.
 
@@ -165,7 +180,7 @@ It runs on your hardware with your own AI keys: no account, no servers of ours, 
 
 ## Docs
 
-[Product status](docs/status-quo.md) · [Architecture](docs/architecture.md) · [Troubleshooting](docs/troubleshooting.md) · [Operations & deploy](docs/operations.md) · [Repo map](docs/REPO_MAP.md)
+[Product status](docs/status-quo.md) · [Architecture](docs/architecture.md) · [Music sources & rights boundaries](docs/music-sources.md) · [Troubleshooting](docs/troubleshooting.md) · [Operations & deploy](docs/operations.md) · [Repo map](docs/REPO_MAP.md)
 
 ## Contributing
 
@@ -173,6 +188,10 @@ Issues and PRs welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). First-tim
 
 ## License
 
-The code is [Apache-2.0](LICENSE). That does not grant rights to the music the station plays or the AI-generated banter and ads. You are responsible for whatever your station plays and says.
+The code is [Apache-2.0](LICENSE). Bundled audio keeps its own attributed CC BY
+4.0 licenses; Jamendo facts are provider-reported; local and externally resolved
+media remain the operator's responsibility. See the canonical [music-source
+boundaries](docs/music-sources.md). You are also responsible for what your
+station says.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=florianhorner/mammamiradio&type=Date)](https://star-history.com/#florianhorner/mammamiradio&Date)

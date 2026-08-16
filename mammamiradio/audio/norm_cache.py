@@ -7,7 +7,7 @@ import re
 import time
 from pathlib import Path
 
-from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
+from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_cache_source, load_track_metadata
 from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.downloader import is_rejected_cache_key
 
@@ -91,6 +91,20 @@ def _norm_cache_key(path: Path) -> str:
     if not match:
         return ""
     return match.group("cache_key")
+
+
+def norm_cache_origin_is_eligible(path: Path, *, allow_external_media: bool = False) -> bool:
+    """Return whether a persisted normalized artifact has a playable origin.
+
+    Operator-local origins are always eligible. Starter artifacts play directly
+    from the canonical package and must never be impersonated by a cache sidecar.
+    Extractor origins remain coupled to the effective optional capability, while
+    legacy unknown, demo, and persistent Jamendo origins fail closed.
+    """
+    allowed_sources = {"local"}
+    if allow_external_media:
+        allowed_sources.update({"classic", "youtube"})
+    return load_track_cache_source(path) in allowed_sources
 
 
 def _rescue_identity(path: Path) -> str:
@@ -291,6 +305,8 @@ def select_norm_cache_rescue(
     state: StationState,
     *,
     allow_recent_repeat: bool,
+    require_known_origin: bool = False,
+    allow_external_media: bool = False,
 ) -> Path | None:
     """Pick a cache rescue clip without replaying the current/recent song first.
 
@@ -317,6 +333,12 @@ def select_norm_cache_rescue(
     bridge came to queue the on-air song back-to-back with nothing in between.
     """
     norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    if require_known_origin:
+        norm_files = [
+            path
+            for path in norm_files
+            if norm_cache_origin_is_eligible(path, allow_external_media=allow_external_media)
+        ]
     norm_files = [path for path in norm_files if not is_rejected_cache_key(_norm_cache_key(path))]
     blocklist = getattr(state, "blocklist", None)
     if blocklist:

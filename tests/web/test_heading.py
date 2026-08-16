@@ -331,7 +331,7 @@ async def test_direction_sets_existing_track_heading_and_persists(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_direction_queues_resolved_targets_without_pin(tmp_path):
+async def test_direction_queues_resolved_targets_without_pin(tmp_path, external_media_installed):
     app = _make_app(tmp_path)
     app.state.config.allow_ytdlp = True
     expansion = DirectionExpansion(
@@ -553,7 +553,7 @@ async def test_direction_empty_text_returns_422_without_state(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path, caplog):
+async def test_direction_mixed_case_confirmed_count_and_failure_notice(tmp_path, caplog, external_media_installed):
     """Existing match keeps the course live; a failed new download surfaces a notice
     and is NOT counted as an aired song (added = confirmed only)."""
     existing = _track("Toxic", "Britney Spears", "base")
@@ -740,7 +740,9 @@ def test_serialize_heading_resolving_before_tracks_tagged(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_direction_all_new_timeout_keeps_course_and_still_downloading(tmp_path, monkeypatch):
+async def test_direction_all_new_timeout_keeps_course_and_still_downloading(
+    tmp_path, monkeypatch, external_media_installed
+):
     """When the first-commit wait times out, the course stays live and the response
     reports it's still downloading (never blocks, never rolls back — leadership #2/#5)."""
     app = _make_app(tmp_path)
@@ -787,7 +789,9 @@ async def test_direction_all_new_timeout_keeps_course_and_still_downloading(tmp_
 
 
 @pytest.mark.asyncio
-async def test_direction_all_new_timeout_clears_when_background_downloads_all_fail(tmp_path, monkeypatch):
+async def test_direction_all_new_timeout_clears_when_background_downloads_all_fail(
+    tmp_path, monkeypatch, external_media_installed
+):
     """A timed-out all-new hunt must not stay stuck resolving after its batch fails."""
     app = _make_app(tmp_path)
     app.state.config.allow_ytdlp = True

@@ -580,7 +580,7 @@ wheels = [
 
 [[package]]
 name = "mammamiradio"
-version = "2.17.0"
+version = "2.18.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -596,6 +596,10 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
+]
+
+[package.optional-dependencies]
+external-media = [
     { name = "yt-dlp" },
 ]
 
@@ -615,8 +619,9 @@ requires-dist = [
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
     { name = "websockets", specifier = ">=13" },
-    { name = "yt-dlp", specifier = ">=2026.6.9" },
+    { name = "yt-dlp", marker = "extra == 'external-media'", specifier = ">=2026.6.9" },
 ]
+provides-extras = ["external-media"]
 
 [[package]]
 name = "markupsafe"

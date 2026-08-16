@@ -18,6 +18,7 @@ from mammamiradio.core.models import (
     SourceReadinessEvidence,
     StationState,
     Track,
+    safe_media_attribution_dict,
 )
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
@@ -198,6 +199,10 @@ def _source_readiness_status(config, state: StationState) -> dict:
         "programming_ready": programming_ready,
         "recovery_cover_available": sources["recovery"]["status"] in {"on_air", "cover_only"},
         "recovery_on_air": recovery_on_air,
+        # Continuity is a usable transport path, not proof that primary music
+        # is healthy. Consumers can therefore allow First Listen to finish
+        # without painting the primary source green.
+        "continuity_available": programming_ready or sources["recovery"]["status"] in {"on_air", "cover_only"},
         "transport_only": recovery_on_air and not programming_ready,
     }
 
@@ -309,8 +314,8 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         "blocking": True,
         "headline": "No playable music source yet." if any_configured else "No music source configured.",
         "detail": (
-            "Recovery cover can keep the route audible, but a music source still needs attention."
-            if readiness["recovery_on_air"]
+            "Backup audio is ready to keep the route audible, but primary music still needs attention."
+            if readiness["recovery_cover_available"]
             else "Enable live charts, configure Jamendo, or add local MP3 files."
         ),
         "steps": [
@@ -628,7 +633,32 @@ def _serialize_track(track: Track, *, preferences: object | None = None) -> dict
     }
     if preferences is not None:
         payload["preference"] = _track_preference_score(track, preferences)
+    attribution = safe_media_attribution_dict(track.attribution)
+    if attribution is not None:
+        payload["music_attribution"] = attribution
     return payload
+
+
+def _public_starter_catalog() -> list[dict[str, object]]:
+    """Return only release-ready manifest facts for the listener credits dialog."""
+    try:
+        from mammamiradio.media.starter import load_starter_catalog
+
+        catalog = load_starter_catalog(require_complete=True)
+    except (OSError, ValueError, RuntimeError):
+        return []
+    return [
+        {
+            "title": entry.title,
+            "artist": entry.artist,
+            "isrc": entry.isrc,
+            "license_id": entry.license_id,
+            "license_url": entry.license_url,
+            "official_piece_url": entry.official_piece_url,
+            "modification_notice": entry.modification_notice,
+        }
+        for entry in catalog.entries
+    ]
 
 
 def _paginated_tracks(
@@ -699,6 +729,20 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         # metadata-only source swap. It is operational bookkeeping, not part of
         # the public or frozen now-playing contract.
         SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+        # Provider operation identity is intentionally process-private.  The
+        # validated music_attribution object below is the only provider fact
+        # added to public now-playing metadata.
+        "provider_track_id",
+        "lease_id",
+        "operation_id",
+        "boot_id",
+        "provider_epoch",
+        "client_id_fingerprint",
+        "artifact_path",
+        "artifact_sha256",
+        "source_revision",
+        "fetched_at",
+        "transform_description",
     }
 )
 
@@ -722,7 +766,16 @@ def _public_segment_metadata(metadata: object) -> dict:
         return copy.deepcopy(value)
 
     public = _without_internal(metadata)
-    return public if isinstance(public, dict) else {}
+    if not isinstance(public, dict):
+        return {}
+    if "music_attribution" in public:
+        raw_attribution = public.get("music_attribution")
+        attribution = safe_media_attribution_dict(raw_attribution if isinstance(raw_attribution, dict) else None)
+        if attribution is None:
+            public.pop("music_attribution", None)
+        else:
+            public["music_attribution"] = attribution
+    return public
 
 
 def _public_now_streaming_payload(now_streaming: dict | None) -> dict:

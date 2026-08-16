@@ -18,7 +18,15 @@ Click Start. Watch the log for:
 - `[mammamiradio] Home Assistant API access configured via Supervisor`
 - `Producer started`
 
-First boot can take 30-90 seconds while chart tracks are downloaded and cached. No AI key is required: without one, the hosts use stock copy and fallback voices. A normal music rotation is a separate requirement — live charts need outbound access, Jamendo needs a client ID in the app's advanced options, and operator-supplied MP3s can be placed in the persistent `/data/music` directory. Packaged recovery audio can prove the speaker transport while music is repaired, but it is not reported as a healthy source. A successful process start shows `Producer started` in the log. `/readyz` remains HTTP `503` with `status: "starting"` until a listener actually accepts audio; queued work and elapsed startup time do not make the station ready by themselves.
+The add-on starts from its attributed 12-track starter catalog: no music
+provider key, download, or outbound network is required. Without an AI key, the
+hosts use stock copy and fallback voices. Operator-supplied MP3s can also live
+in persistent `/data/music`, and packaged recovery audio can prove the speaker
+transport while a damaged music source is repaired without reporting that
+source as healthy. A successful process start shows `Producer started` in the
+log. `/readyz` remains HTTP `503` with `status: "starting"` until a listener
+actually accepts audio; queued work and elapsed startup time do not make the
+station ready by themselves.
 
 ### 3. Install the HACS integration
 
@@ -119,7 +127,7 @@ The Home Assistant controls are separate too. **Enable Home Assistant Integratio
 The admin stores provider credentials in `/config/secrets.env` inside the add-on config folder. Supported keys are
 `ANTHROPIC_API_KEY` (AI banter and ads), `OPENAI_API_KEY` (AI banter, ads, and OpenAI
 TTS voices), `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION` (official Azure Italian voices), and
-`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). Provider fields no
+`ELEVENLABS_API_KEY` (custom ElevenLabs voices when configured in `radio.toml`). AI/TTS provider fields no
 longer appear in the add-on Configuration tab; keys saved there by older versions are recovered from
 the add-on's stored settings and moved into `/config/secrets.env` automatically the first time the
 updated add-on starts.
@@ -147,7 +155,30 @@ The command writes clips and a `manifest.json` under `tmp/voice-auditions/`.
 Providers without credentials are listed as skipped instead of being hidden by
 the runtime Edge fallback.
 
-Without an AI key, the station runs in Demo Mode: host writing falls back to stock copy and fallback voices. The First Listen mini-show makes the station identity and both stock hosts audible immediately, but Demo Mode still does not promise a bundled song library; in the Home Assistant app, rotation music comes from reachable charts, Jamendo, or MP3s in `/data/music`. The bundled recovery clip covers thin-queue moments but is not a rotation.
+Without an AI key, the station runs in Demo Mode: host writing falls back to
+stock copy and fallback voices over the complete offline starter catalog. The
+First Listen mini-show makes the station identity and both stock hosts audible
+immediately; the bundled recovery clip covers thin-queue moments but is not a
+rotation.
+
+### Optional Jamendo music
+
+Open **Motore → Setup → Music sources** to configure Jamendo. It is off by
+default and is not required for a complete rotation. Enabling it requires a
+client ID and the current non-commercial-use acknowledgement. A legacy client
+ID is migrated into the private settings file once, but remains disabled until
+the acknowledgement is made in the app; the client ID is absent from both
+add-on Configuration schemas.
+
+Jamendo preparation is deliberately transient: the add-on holds at most one
+lease and one audio artifact, inserts at most one prepared track after two
+starter/local tracks, and deletes that artifact after play or cancellation.
+Jamendo bytes and lease metadata do not enter `/data/cache`, SQLite, rescue,
+handoff, clip, derivative, or restart state. License and source facts shown by
+the app are provider-reported rather than a clearance verdict. Provider
+confirmation for this station model remains pending; an adverse written reply
+disables the integration pending reassessment. See the canonical
+[music-source and rights guide](../../docs/music-sources.md).
 
 ## Architecture
 
@@ -163,12 +194,16 @@ HA Supervisor
   |           |
   |           +-- producer task (generates segments: music, banter, ads)
   |           +-- playback task (streams segments to listeners)
+  |           +-- packaged starter catalog (read-only, attributed music)
   |
   +-- /data/ (persistent across restarts)
-        +-- cache/   (downloaded track audio — survives restarts)
+        +-- cache/   (eligible local/generated audio — survives restarts)
         +-- music/   (operator-supplied MP3s)
         +-- tmp/     (rendered segments — ephemeral)
 ```
+
+Jamendo's one prepared artifact is transient and is excluded from both
+persistent paths above.
 
 Supervisor's stored app options are the sole durable authority for Super
 Italian, Chaos, Festival, AI Quality, On-Air Sound, and pacing. Control-room
@@ -205,14 +240,24 @@ its files by hand.
 
 1. Supervisor materializes the read-only `/data/options.json` startup projection; `run.sh` reads it, overlays provider secrets from `/config/secrets.env`, and exports env vars for the addon runtime.
 2. `run.sh` maps `SUPERVISOR_TOKEN` to `HA_TOKEN`, sets `HA_URL=http://supervisor/core`, maps **Enable Home Assistant Integration** to `HA_ENABLED`, and maps the separate Host home context options to `MAMMAMIRADIO_HA_CONTEXT_ENABLED` / `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`. A missing `ha_context_enabled` key remains omitted so a fresh install can start with context off until Setup records the operator's choice.
-3. `run.sh` enables yt-dlp (`MAMMAMIRADIO_ALLOW_YTDLP=true`), sets `MAMMAMIRADIO_MUSIC_DIR=/data/music`, and starts uvicorn.
-4. `mammamiradio/main.py` loads `radio.toml` and validates config.
-5. `fetch_playlist()` downloads Italian chart tracks via yt-dlp (first boot: slow, cached after).
-6. Producer and playback tasks start once the first segment is ready.
+3. `run.sh` forces external extraction off and starts uvicorn. Both Stable and
+   Edge omit the `yt-dlp` distribution, module, and executable; legacy
+   enablement settings are ignored.
+4. `mammamiradio/main.py` loads `radio.toml`, validates the packaged starter
+   manifest, and makes its direct pre-normalized files available.
+5. Producer and playback tasks start from starter/local music. All twelve
+   starter tracks complete before any starter track repeats.
+6. If Jamendo was explicitly enabled and acknowledged, its bounded preparation
+   may run in the background without delaying base music.
 
-**Startup timeout**: `config.yaml` sets `timeout: 240`. First boot can take 60–120 seconds on slower hardware (Raspberry Pi + yt-dlp download + FFmpeg transcode). If the addon is killed during startup, check the log for `Container terminated` — usually means the download took too long.
+**Startup timeout**: `config.yaml` sets `timeout: 240`. Starter playback does
+not wait on an external music provider. If the add-on is killed during startup,
+collect the log around `Container terminated` and the starter-manifest/audio
+validation messages before changing runtime files.
 
-**Recovery**: If startup times out, restart the addon. Subsequent boots are fast because tracks are cached in `/data/cache/`.
+**Recovery**: Leave the running add-on, media gate, container filesystem, and
+`/data/cache` intact while collecting diagnostics. A released starter catalog
+is packaged in the image rather than repaired by a network download.
 
 ## Failure modes and recovery
 
@@ -249,14 +294,20 @@ checks in
 
 ### Stream is repeatedly playing recovery audio
 
-**Symptom**: Ingress URL loads, but logs show repeated source-acquisition failures and recovery/continuity clips rather than music.
+**Symptom**: Ingress URL loads, but logs show repeated starter admission
+failures and recovery/continuity clips rather than music.
 
 **Causes**:
-1. yt-dlp rate-limited or denied by YouTube — the failed track is marked unavailable and the station uses its non-silent recovery ladder
-2. FFmpeg not found on PATH
-3. Network blocks outbound connections to YouTube
+1. the packaged starter file does not match its manifest hash or evidence entry
+2. FFmpeg/FFprobe is missing or rejects a packaged audio file
+3. an incomplete or wrong-architecture image was installed
 
-**Recovery**: Keep the add-on running while you collect the relevant log lines. Check that Home Assistant can reach the configured music source, and install the latest released add-on update if one is available. If the problem needs a code fix, share the logs with the project; the supported path is `branch → PR → merge → CI builds image → add-on update`. When Home Assistant offers that image, choose **Update** once at a planned moment.
+**Recovery**: Keep the add-on running while you collect the relevant log lines,
+including the reported manifest track ID and validation failure. Install the
+latest released add-on update if one is available. If the problem needs a code
+fix, share the logs with the project; the supported path is `branch → PR → merge
+→ CI builds image → add-on update`. When Home Assistant offers that image,
+choose **Update** once at a planned moment.
 
 Please leave the running add-on intact: do not SSH in to edit container or runtime files, bypass the audio quality gate, delete its live cache, or restart it repeatedly as an experiment. Those changes disappear on the next update and can turn a recoverable audio problem into a longer interruption.
 
@@ -332,30 +383,40 @@ Inputs to run.sh
   |
   +-- Supervisor stored app options (durable authority)
   |     +-- /data/options.json (generated, read-only startup projection)
-  |           STATION_NAME, MAMMAMIRADIO_QUALITY, ADMIN_TOKEN, HA_ENABLED,
-  |           MAMMAMIRADIO_HA_CONTEXT_ENABLED,
-  |           MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL,
-  |           MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH,
-  |           MAMMAMIRADIO_SUPER_ITALIAN, MAMMAMIRADIO_CHAOS_MODE,
-  |           MAMMAMIRADIO_FESTIVAL_MODE, MAMMAMIRADIO_BROADCAST_CHAIN,
-  |           MAMMAMIRADIO_GUEST_HOST, pacing variables, JAMENDO_CLIENT_ID
+  |           STATION_NAME, MAMMAMIRADIO_QUALITY (from quality_profile, default balanced),
+  |           ADMIN_TOKEN (blank => LAN-trusted, no token required),
+  |           HA_ENABLED (from enable_home_assistant; master HA integration switch),
+  |           MAMMAMIRADIO_HA_CONTEXT_ENABLED (from ha_context_enabled;
+  |             turn off to stop AI prompt-context polling while keeping HA integration),
+  |           MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL (default 300 seconds),
+  |           MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH, MAMMAMIRADIO_SUPER_ITALIAN,
+  |           MAMMAMIRADIO_CHAOS_MODE, MAMMAMIRADIO_FESTIVAL_MODE,
+  |           MAMMAMIRADIO_BROADCAST_CHAIN, MAMMAMIRADIO_GUEST_HOST,
+  |           MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER,
+  |           MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS,
+  |           MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK
   |
-  +-- /config/secrets.env (provider secrets, preferred)
+  +-- /config/secrets.env (provider secrets and private Jamendo intent)
+  |     run.sh reads supported KEY=VALUE lines and exports non-empty values:
   |     ANTHROPIC_API_KEY, OPENAI_API_KEY,
-  |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY
-  |     Legacy schema-removed values are recovered once from
-  |     Supervisor /addons/self/info and persisted here.
+  |     AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, ELEVENLABS_API_KEY,
+  |     JAMENDO_CLIENT_ID, MAMMAMIRADIO_JAMENDO_ENABLED,
+  |     MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED,
+  |     MAMMAMIRADIO_JAMENDO_ACK_REVISION
+  |     Supervisor drops schema-removed provider keys from /data/options.json on start;
+  |     saved by older versions are recovered once via the Supervisor API
+  |     (/addons/self/info) and persisted into /config/secrets.env at first boot.
   |
   +-- SUPERVISOR_TOKEN
   |
   +-- run.sh maps Supervisor token
   |     SUPERVISOR_TOKEN -> HA_TOKEN, HA_URL=http://supervisor/core
   |
-  +-- run.sh sets add-on defaults
+  +-- run.sh sets add-on containment and runtime defaults
   |     MAMMAMIRADIO_MUSIC_DIR=/data/music
   |     MAMMAMIRADIO_BIND_HOST=0.0.0.0, MAMMAMIRADIO_PORT=8000,
   |     MAMMAMIRADIO_CACHE_DIR=/data/cache, MAMMAMIRADIO_TMP_DIR=/data/tmp,
-  |     MAMMAMIRADIO_ALLOW_YTDLP=true
+  |     MAMMAMIRADIO_ALLOW_YTDLP=false
   |
   +-- config.py reads the exported environment and applies add-on overrides
         homeassistant.url -> http://supervisor/core
@@ -468,6 +529,6 @@ The dashboard shows one of three tiers based on your configuration:
 
 | Tier | What you hear | What it needs |
 |------|--------------|---------------|
-| Demo Radio | Stock host copy and fallback voices over any available music source | No AI key; reachable charts or Jamendo still provide the music |
-| Full AI Radio | Live AI banter and ads over the configured music source | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env`, plus reachable charts or Jamendo |
+| Demo Radio | Stock host copy and fallback voices over the offline attributed starter catalog | No key or network required for music |
+| Full AI Radio | Live AI banter and ads over starter/local music, with optional transient Jamendo tracks | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `/config/secrets.env`; Jamendo remains optional |
 | Connected Home | Above + home-aware banter | AI host key + prompt-safe Home Assistant context available |

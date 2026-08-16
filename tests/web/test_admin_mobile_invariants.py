@@ -15,6 +15,7 @@ from mammamiradio.core.config import _contrast_ratio, _hex_to_rgb, _relative_lum
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_HTML = REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
+FIRST_LISTEN_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "first-listen.css"
 TOKENS_CSS = REPO_ROOT / "mammamiradio" / "web" / "static" / "tokens.css"
 
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -166,6 +167,21 @@ def _effective_px(declarations: dict[str, str], *properties: str) -> float:
 
 def _assert_touch_target(selector: str) -> None:
     declarations = _declarations_for_selector(_admin_css(), selector)
+    _assert_touch_target_declarations(selector, declarations)
+
+
+def _assert_touch_target_in_stylesheet(stylesheet: Path, selector: str) -> None:
+    text = _COMMENT_RE.sub("", stylesheet.read_text(encoding="utf-8"))
+    selector_token = re.compile(rf"(?<![\w-]){re.escape(selector)}(?![\w-])")
+    declarations: dict[str, str] = {}
+    for selector_block, body in _iter_top_level_css_rules(text):
+        if selector_token.search(selector_block):
+            declarations.update({prop.strip(): value.strip() for prop, value in _CSS_DECL_RE.findall(body)})
+    assert declarations, f"{stylesheet.name} must style {selector}."
+    _assert_touch_target_declarations(selector, declarations)
+
+
+def _assert_touch_target_declarations(selector: str, declarations: dict[str, str]) -> None:
     width = _effective_px(declarations, "width", "min-width")
     height = _effective_px(declarations, "height", "min-height")
     assert width >= 44, f"{selector} must expose at least a 44px wide touch target; got {width}px."
@@ -564,7 +580,6 @@ def test_rotation_uses_hunt_first_markup_with_capability_safe_library_recovery()
     assert "data-heading-kind" not in rotation
     assert "enrichPlaylistSource('classic_" not in rotation
     assert 'id="sourceChartsBtn"' in tools
-    assert 'id="sourceJamendoBtn"' in tools
     assert 'id="purgePoolBtn"' in tools
     assert 'id="emptyPoolRecovery"' in rotation
     assert 'id="emptyPoolLibraryBtn"' in rotation
@@ -830,11 +845,14 @@ def test_more_upcoming_row_not_card_styled_on_phone() -> None:
 
 
 def test_playlist_source_controls_are_non_destructive_by_default() -> None:
-    """Era/Jamendo controls should enrich rotation, not replace the live queue."""
+    """Era controls enrich rotation; transient Jamendo is never a quick-add source."""
     text = _read_admin_html()
     assert "enrichPlaylistSource(" in text
     assert "loadPlaylistSource(" not in text
     assert "'/api/playlist/enrich'" in text
+    assert 'id="sourceJamendoBtn"' not in text
+    assert "jamendo://default" not in text
+    assert 'id="jamendoSourceRow"' in text
 
 
 def test_purge_pool_toast_is_honest_when_source_clear_is_not_persisted() -> None:
@@ -1110,9 +1128,9 @@ def test_rotation_grip_and_preset_controls_have_44px_touch_targets() -> None:
 def test_setup_guided_controls_have_44px_touch_targets() -> None:
     _assert_touch_target(".setup-strip-action")
     _assert_touch_target(".setup-advanced summary")
-    _assert_touch_target(".ha-preview-action")
-    _assert_touch_target(".setup-home-preview-action")
-    _assert_touch_target(".setup-recheck-action")
+    _assert_touch_target_in_stylesheet(FIRST_LISTEN_CSS, ".ha-preview-action")
+    _assert_touch_target_in_stylesheet(FIRST_LISTEN_CSS, ".setup-home-preview-action")
+    _assert_touch_target_in_stylesheet(FIRST_LISTEN_CSS, ".setup-recheck-action")
 
 
 def test_conduttori_sliders_keep_44px_touch_box_with_compact_track() -> None:
