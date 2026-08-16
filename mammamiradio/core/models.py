@@ -10,7 +10,7 @@ import random
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Collection, Iterator
+from collections.abc import Callable, Collection, Iterator, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -93,6 +93,15 @@ class GenerationWasteReason:
     LISTENER_SESSION_STALE = "listener_session_stale"
 
 
+class StarterCycleReservationPendingError(RuntimeError):
+    """The current starter cycle is fully reserved by queued segments.
+
+    This is a transient scheduling condition, not an unavailable-media error:
+    the producer must wait for one queued starter to begin playback or be
+    released instead of filling the next cycle early.
+    """
+
+
 class SegmentType(Enum):
     """Kinds of segments that can appear on the station timeline."""
 
@@ -141,6 +150,131 @@ class InterruptSpec:
     cooldown: int = 60  # seconds before this entity can fire again
 
 
+@dataclass(frozen=True)
+class MediaAttribution:
+    """Immutable, listener-safe music provenance facts.
+
+    This describes what a source or committed manifest reports; it is not a
+    legal-clearance verdict. Provider-private stream URLs and credentials never
+    belong in this object.
+    """
+
+    provider: str
+    license_id: str
+    license_url: str
+    source_url: str
+    credit: str
+    modified: bool
+    basis: Literal["bundled_manifest", "provider_reported"]
+
+    def to_dict(self) -> dict[str, str | bool]:
+        """Return the stable additive shape used by public serializers."""
+        return asdict(self)
+
+
+def safe_media_attribution_dict(value: MediaAttribution | Mapping | None) -> dict[str, str | bool] | None:
+    """Validate and bound one attribution object before it crosses a public boundary.
+
+    Attribution links are clickable on unauthenticated surfaces.  Keep the
+    currently supported provider contracts explicit here so a malformed
+    segment cannot turn an audio download URL, token-bearing link, or arbitrary
+    HTTPS host into a listener-facing link.
+    """
+    raw = value.to_dict() if isinstance(value, MediaAttribution) else value
+    if not isinstance(raw, Mapping):
+        return None
+    basis = raw.get("basis")
+    if basis not in {"bundled_manifest", "provider_reported"}:
+        return None
+
+    def _text(name: str, limit: int) -> str | None:
+        candidate = raw.get(name)
+        if not isinstance(candidate, str):
+            return None
+        candidate = candidate.strip()
+        return candidate if 0 < len(candidate) <= limit else None
+
+    def _url(name: str) -> tuple[str, object] | None:
+        candidate = _text(name, 512)
+        if candidate is None:
+            return None
+        try:
+            parsed = urlsplit(candidate)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.fragment
+                or parsed.port not in (None, 443)
+                or "\\" in candidate
+                or any(ord(char) < 32 for char in candidate)
+                or "%2e" in parsed.path.lower()
+                or any(part == ".." for part in parsed.path.split("/"))
+            ):
+                return None
+        except ValueError:
+            return None
+        return candidate, parsed
+
+    provider = _text("provider", 64)
+    license_id = _text("license_id", 64)
+    credit = _text("credit", 512)
+    license_result = _url("license_url")
+    source_result = _url("source_url")
+    modified = raw.get("modified")
+    if (
+        None in {provider, license_id, credit}
+        or license_result is None
+        or source_result is None
+        or not isinstance(modified, bool)
+    ):
+        return None
+    assert provider is not None
+    assert license_id is not None
+    assert credit is not None
+    license_url, _license_parts = license_result
+    source_url, source_parts = source_result
+
+    allowed_licenses = {
+        "https://creativecommons.org/licenses/by/3.0/": "CC-BY-3.0",
+        "https://creativecommons.org/licenses/by/4.0/": "CC-BY-4.0",
+    }
+    if allowed_licenses.get(license_url) != license_id:
+        return None
+
+    source_host = str(getattr(source_parts, "hostname", "") or "").lower().rstrip(".")
+    source_path = str(getattr(source_parts, "path", "") or "")
+    source_query = str(getattr(source_parts, "query", "") or "")
+    if provider == "incompetech" and basis == "bundled_manifest":
+        if (
+            source_host not in {"incompetech.com", "www.incompetech.com"}
+            or not source_path.startswith("/music/royalty-free/")
+            or (source_query and re.fullmatch(r"isrc=[A-Z0-9]{12}", source_query) is None)
+            or license_id != "CC-BY-4.0"
+        ):
+            return None
+    elif provider == "jamendo" and basis == "provider_reported":
+        if (
+            source_host not in {"jamendo.com", "www.jamendo.com"}
+            or not source_path.startswith("/track/")
+            or source_query
+        ):
+            return None
+    else:
+        return None
+
+    return {
+        "provider": provider,
+        "license_id": license_id,
+        "license_url": license_url,
+        "source_url": source_url,
+        "credit": credit,
+        "modified": modified,
+        "basis": basis,
+    }
+
+
 @dataclass
 class Track:
     """A playable track sourced from charts, cache, or local files."""
@@ -158,8 +292,10 @@ class Track:
     explicit: bool = False
     popularity: int = 0
     year: int = 0
-    source: Literal["youtube", "jamendo", "local", "demo", "classic"] = "youtube"
+    source: Literal["youtube", "jamendo", "local", "demo", "classic", "starter"] = "youtube"
     heading_id: str = ""
+    provider_track_id: str = ""
+    attribution: MediaAttribution | None = None
 
     @staticmethod
     def _slugify_cache_value(raw: str, *, max_length: int = 160) -> str:
@@ -188,7 +324,7 @@ class Track:
         if self.youtube_id:
             return self._slugify_cache_value(f"youtube|{self.youtube_id}")
         if self.source == "jamendo":
-            jamendo_id = self.spotify_id.strip()
+            jamendo_id = self.provider_track_id.strip()
             if jamendo_id:
                 return self._slugify_cache_value(f"jamendo|{jamendo_id}")
             if self.direct_url:
@@ -708,6 +844,55 @@ class Segment:
         default_factory=dict,
         repr=False,
     )
+    # Provider-owned single-use resources are released only through this hook;
+    # queue mutation and playback finalizers call ``release()`` exactly once.
+    playback_start_callback: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    release_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _playback_started: bool = field(default=False, init=False, repr=False, compare=False)
+    _released: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def mark_playback_started(self) -> bool:
+        """Synchronously admit a segment and notify its provider before airing.
+
+        Ordinary segments have no admission callback and remain admitted by
+        default. Provider-owned segments fail closed when their callback denies
+        admission or raises; their release hook is run immediately.
+        """
+        if self._released:
+            return False
+        if self._playback_started:
+            return True
+        callback = self.playback_start_callback
+        if callback is None:
+            self._playback_started = True
+            return True
+        try:
+            admitted = callback()
+        except Exception:
+            logger.debug("Segment playback admission callback failed", exc_info=True)
+            admitted = False
+        if admitted is not True:
+            self.release()
+            return False
+        self._playback_started = True
+        self.playback_start_callback = None
+        return True
+
+    def release(self) -> None:
+        """Idempotently release any provider-owned resource carried by this segment."""
+        if self._released:
+            return
+        self._released = True
+        self.playback_start_callback = None
+        callback = self.release_callback
+        self.release_callback = None
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            # Cleanup must never interrupt queue restoration or playback.
+            logger.debug("Segment release callback failed for %s", self.path, exc_info=True)
 
 
 def segment_track_key(segment: Segment) -> tuple[str, str]:
@@ -925,6 +1110,18 @@ class StationState:
     source_revision: int = 0
     played_tracks: deque[Track] = field(default_factory=lambda: deque(maxlen=50))
     played_track_log: deque[PlayedEntry] = field(default_factory=lambda: deque(maxlen=100))
+    # Automatic starter rotation consumes every manifest track once before any
+    # starter repeat. Queue admission reserves an identity; only playback start
+    # consumes it from the cycle. Local/operator tracks may interleave without
+    # resetting the cycle.
+    starter_cycle_remaining: set[str] = field(default_factory=set, repr=False)
+    starter_cycle_catalog: set[str] = field(default_factory=set, repr=False)
+    starter_cycle_reserved: set[str] = field(default_factory=set, repr=False)
+    music_admission_reservations: dict[str, Track] = field(default_factory=dict, repr=False)
+    music_admission_changed: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    # Jamendo is eligible only after two starter/local tracks actually begin
+    # playback. Queued reservations never advance this counter.
+    jamendo_base_music_since_last: int = 0
     songs_since_banter: int = 0
     songs_since_ad: int = 0
     songs_since_news: int = 0
@@ -1990,6 +2187,12 @@ class StationState:
         self.songs_since_banter = 0
         self.songs_since_ad = 0
         self.songs_since_news = 0
+        self.starter_cycle_remaining.clear()
+        self.starter_cycle_catalog.clear()
+        self.starter_cycle_reserved.clear()
+        self.music_admission_reservations.clear()
+        self.music_admission_changed.set()
+        self.jamendo_base_music_since_last = 0
         # Clear play history so diversity filters start fresh for the new
         # playlist context.  Without this, a 20-track playlist loops after
         # ~30-40 min because the deque fills and recency weights flatten.
@@ -2247,6 +2450,89 @@ class StationState:
         self.playlist.append(track)
         return track
 
+    def _sync_starter_cycle(self) -> set[str]:
+        """Refresh the manifest identity bag without crossing a queued boundary."""
+        catalog = {track.cache_key for track in self.playlist if track.source == "starter"}
+        if catalog != self.starter_cycle_catalog:
+            self.starter_cycle_catalog = catalog
+            self.starter_cycle_remaining = set(catalog)
+            self.starter_cycle_reserved.intersection_update(catalog)
+        elif catalog and not self.starter_cycle_remaining and not self.starter_cycle_reserved:
+            # A new cycle may begin only after the last reservation in the old
+            # cycle actually started (commit) or was removed (rollback).
+            self.starter_cycle_remaining = set(catalog)
+        return catalog
+
+    def reserve_music_admission(self, reservation_id: str, track: Track) -> bool:
+        """Reserve queue ownership without counting the track as aired.
+
+        Reservations are idempotent by queue identity and fail closed for a
+        duplicate starter identity or a second queued Jamendo lease.
+        """
+        token = reservation_id.strip()
+        if not token:
+            return False
+        existing = self.music_admission_reservations.get(token)
+        if existing is not None:
+            return existing is track
+
+        if track.source == "starter":
+            self._sync_starter_cycle()
+            key = track.cache_key
+            if key not in self.starter_cycle_remaining or key in self.starter_cycle_reserved:
+                return False
+            self.starter_cycle_reserved.add(key)
+        elif track.source == "jamendo" and any(
+            reserved.source == "jamendo" for reserved in self.music_admission_reservations.values()
+        ):
+            return False
+
+        self.music_admission_reservations[token] = track
+        return True
+
+    def commit_music_admission(self, reservation_id: str) -> bool:
+        """Count one reserved track exactly when it is admitted to playback."""
+        track = self.music_admission_reservations.pop(reservation_id, None)
+        if track is None:
+            return False
+        if track.source == "starter":
+            self.starter_cycle_reserved.discard(track.cache_key)
+            self.starter_cycle_remaining.discard(track.cache_key)
+            self.jamendo_base_music_since_last += 1
+        elif track.source == "local":
+            self.jamendo_base_music_since_last += 1
+        elif track.source == "jamendo":
+            self.jamendo_base_music_since_last = 0
+        self.music_admission_changed.set()
+        return True
+
+    def rollback_music_admission(self, reservation_id: str) -> bool:
+        """Release a queued reservation without advancing cycle or cadence."""
+        track = self.music_admission_reservations.pop(reservation_id, None)
+        if track is None:
+            return False
+        if track.source == "starter":
+            self.starter_cycle_reserved.discard(track.cache_key)
+        self.music_admission_changed.set()
+        return True
+
+    def jamendo_insert_eligible(self) -> bool:
+        """Return whether cadence permits exactly one new transient insert."""
+        return self.jamendo_base_music_since_last >= 2 and not any(
+            track.source == "jamendo" for track in self.music_admission_reservations.values()
+        )
+
+    async def wait_for_music_admission_change(self, *, timeout: float = 1.0) -> None:
+        """Wait without spinning while a full starter lookahead owns the cycle."""
+        self.music_admission_changed.clear()
+        self._sync_starter_cycle()
+        if self.starter_cycle_remaining - self.starter_cycle_reserved:
+            return
+        try:
+            await asyncio.wait_for(self.music_admission_changed.wait(), timeout=timeout)
+        except TimeoutError:
+            pass
+
     def select_next_track(
         self,
         *,
@@ -2267,18 +2553,52 @@ class StationState:
             raise RuntimeError("Playlist is empty")
 
         excluded = set(excluded_cache_keys or ())
+        starter_catalog = self._sync_starter_cycle()
 
         if self.pinned_track is not None:
             track = self.pinned_track
-            self.pinned_track = None
-            if track.cache_key not in excluded:
-                return track
-            if not any(candidate.cache_key not in excluded for candidate in self.playlist):
-                raise RuntimeError("Playlist has no eligible tracks")
+            starter_blocked = track.source == "starter" and (
+                track.cache_key not in self.starter_cycle_remaining or track.cache_key in self.starter_cycle_reserved
+            )
+            if not starter_blocked:
+                self.pinned_track = None
+                if track.cache_key not in excluded:
+                    return track
+                if not any(candidate.cache_key not in excluded for candidate in self.playlist):
+                    raise RuntimeError("Playlist has no eligible tracks")
 
         pool = [track for track in self.playlist if track.cache_key not in excluded]
         if not pool:
             raise RuntimeError("Playlist has no eligible tracks")
+
+        # Fail closed on automatic starter repeats: a queued starter identity is
+        # reserved, then removed from the cycle only when playback begins. A
+        # failed render remains selectable and a queued identity cannot be
+        # selected twice merely to fill lookahead.
+        if starter_catalog:
+            pool = [
+                track
+                for track in pool
+                if track.source != "starter"
+                or (
+                    track.cache_key in self.starter_cycle_remaining
+                    and track.cache_key not in self.starter_cycle_reserved
+                )
+            ]
+            if not pool:
+                if self.starter_cycle_remaining and self.starter_cycle_remaining <= self.starter_cycle_reserved:
+                    raise StarterCycleReservationPendingError(
+                        "Starter cycle is waiting for queued tracks to begin playback"
+                    )
+                raise RuntimeError("Playlist has no eligible tracks in the current starter cycle")
+            if self.playlist_source is not None and self.playlist_source.kind == "starter":
+                # Startup supplied one manifest-digest-pinned bag cycle in
+                # playlist order. Honor that order; reserve after queue
+                # admission and consume only at playback start, so a render
+                # failure retries rather than skipping an entry.
+                for starter_track in self.playlist:
+                    if starter_track in pool and starter_track.source == "starter":
+                        return starter_track
 
         # Build all filter/weight data in a single pass over played_tracks.
         # Each track is visited once; sets and counters are accumulated per-index.
@@ -2321,10 +2641,21 @@ class StationState:
         heading_recent_keys: set[str] = set()
         active_heading = self.heading
         if active_heading is not None and active_heading.id:
-            course_keys = {t.cache_key for t in pool if t.heading_id == active_heading.id}
+            # Size the set from what could actually be picked. An explicit course track
+            # under allow_explicit=False is not selectable, so counting it would let the
+            # cooldown exclude every track that is.
+            course_keys = {
+                track.cache_key
+                for track in pool
+                if track.heading_id == active_heading.id and (allow_explicit or not track.explicit)
+            }
             if len(course_keys) > 1:
+                # Match history against course_keys, not the heading id: a course track
+                # that has since been banned or dropped from the pool is not something
+                # the set can cycle back to, so it must not consume a cooldown slot and
+                # let a current track return early.
                 for played in reversed(self.played_tracks):
-                    if played.heading_id != active_heading.id:
+                    if played.cache_key not in course_keys:
                         continue
                     heading_recent_keys.add(played.cache_key)
                     if len(heading_recent_keys) >= len(course_keys) - 1:
@@ -2437,7 +2768,13 @@ class StationState:
         return selected
 
     def after_music(self, track: Track) -> None:
-        """Advance state after successfully queuing a music segment."""
+        """Advance queue-scheduling state after a music segment is admitted.
+
+        Starter-cycle and Jamendo cadence accounting deliberately live in
+        ``commit_music_admission`` because those rights-sensitive facts advance
+        only when playback begins. The remaining counters preserve the
+        producer's established lookahead and pacing semantics.
+        """
         self.played_tracks.append(track)
         self.current_track = track
         heading = self.heading
@@ -2556,7 +2893,8 @@ class Capabilities:
     """Runtime capability flags derived from config + live state.
 
     Three-tier system: Demo Radio → Full AI Radio → Connected Home.
-    Music source is no longer a tier gate (always available via local + yt-dlp + charts).
+    Music source is not an AI tier gate: starter/local music is independent of
+    the optional standalone external-media resolver.
     """
 
     llm: bool = False

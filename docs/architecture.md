@@ -15,16 +15,18 @@ straight to the live hub.
 ## Runtime overview
 
 ```text
-Charts / Jamendo / classic eras / local files / demo tracks
-                |
-                v
-           playlist.py
+operator local files -----\
+                           +-> local-or-starter base playlist
+attributed starter catalog/
+                           ^
+standalone external-media-/  (optional; absent from both add-ons)
                 |
                 v
           StationState + scheduler.py
                 |
                 v
-        producer.py renders Segment files
+        producer.py renders/adopts Segment files <--- transient Jamendo provider
+                |                                  (optional; one lease/artifact)
                 |
                 v
           asyncio.Queue[Segment]
@@ -67,10 +69,14 @@ rematerializes an older Supervisor value.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
 3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
-5. Restores persisted source selection from `cache/playlist_source.json`, then fetches the playlist by walking the priority chain (charts → Jamendo → local `music/` → bundled demo assets → built-in `DEMO_TRACKS`) and falling through to the next source whenever a tier is gated off, unconfigured, or empty.
+5. Restores an eligible persisted base selection. A retired `jamendo://` source is rewritten to the current base; add-on-external selections cannot restore extractor authority. Without an eligible selection, operator-owned local `music/` files win when present, otherwise the hash-pinned attributed starter catalog is the offline base.
 6. Initializes the clip ring buffer for WTF clip sharing.
 7. Restores `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or the HA add-on's Supervisor-generated, read-only `/data/options.json` startup projection without arming a first strike.
-8. Creates shared app state, then synchronously admits any safe `cache/restart_handoff/` music segments straight into the queue (see "Restart handoff spool" below) — before the background producer/playback tasks start, so a listener connecting right after an update can reach an already-normalized track instead of an empty queue.
+8. Creates shared app state, then synchronously admits any safe, receipted,
+   non-Jamendo `cache/restart_handoff/` music segments straight into the queue
+   (see "Restart handoff spool" below) — before the background producer/playback
+   tasks start, so a listener connecting right after an update can reach an
+   already-normalized track instead of an empty queue.
 9. Launches:
    - `run_producer()` to fill the lookahead queue
    - `run_playback_loop()` to stream queued audio
@@ -136,18 +142,21 @@ transport is audible; it never makes `programming_ready` true by itself.
 The admin Rotazione tab can steer the next stretch of music without replacing the
 base playlist:
 
-- `POST /api/heading {"seed": "classic://italian/80s"}` loads one of the existing
-  classic Italian era sources, filters the operator blocklist, dedupes against the
-  live pool, tags newly blended tracks with the active `Heading.id`, and bumps
-  `playlist_revision` once. A zero-result import returns warm operator copy and
-  does not arm narration.
+- `POST /api/heading {"seed": "classic://italian/80s"}` may load one of the
+  external classic-era sources only in a standalone install with the effective
+  `external-media` capability. It filters the operator blocklist, dedupes against
+  the live pool, tags newly blended tracks with the active `Heading.id`, and bumps
+  `playlist_revision` once. Both add-ons omit that capability and return the
+  locked actionable `403` boundary instead of starting an extractor.
 - `POST /api/direction {"text": "2000s female vocals"}` (also accepted as
   `/api/heading` with `text`) expands operator text into concrete `{artist,title}`
-  targets, searches yt-dlp metadata, and starts audio downloads in background via
-  the same `_commit_external_download` boundary used by listener/admin external
-  songs. It never pins, purges, or blocks the live queue. Existing matching tracks
-  are retagged immediately; resolved new targets join rotation only if the source
-  revision and active heading still match when the download finishes.
+  targets and first searches the current local/base playlist. Matching tracks are
+  retagged immediately. Only an effective standalone `external-media` capability
+  may continue into metadata resolution and background downloads through
+  `_commit_external_download`; add-ons keep the local matching behavior without
+  acquiring external bytes. It never pins, purges, or blocks the live queue, and
+  a late standalone download commits only if the source revision and active
+  heading still match.
 - `POST /api/heading/clear` is manual Back to auto. It clears `StationState.heading`
   and deletes `cache/heading.json`; already blended tracks remain in rotation and
   age out naturally. There is no purge and no audio interruption.
@@ -174,11 +183,12 @@ counts, and Record Hunt narration throttle fields. Restore splits by kind to hon
 INSTANT AUDIO: a **seed** heading still restores synchronously during startup
 (re-fetch the source, re-tag matching tracks, blend new ones at the back of the
 rotation; on empty/failure it deletes `heading.json` and continues in auto). A
-**text direction** does NOT re-search yt-dlp on the boot path — startup re-tags any
-target already present in the freshly-fetched pool and marks the course active
-immediately, then defers the network target re-search + downloads to a background
-task (`_restore_direction_targets_background`) dispatched *after* the
-producer/playback tasks start, so a slow search can never delay first audio. Until
+**text direction** does not perform network resolution on the boot path — startup
+re-tags any target already present in the freshly-fetched base and marks the course
+active immediately. In a standalone process with effective `external-media`, it
+may defer target resolution and downloads to a background task
+(`_restore_direction_targets_background`) dispatched *after* the producer/playback
+tasks start; add-ons never schedule that extractor work. Until
 that background resolve lands its first track, the course reports `phase:
 "hunting"` / `resolving: true` (the admin banner shows the station hunting
 records); if the background resolve yields no playable track, it clears the heading
@@ -220,9 +230,10 @@ always remains best-effort and never blocks or delays audio.
 `producer.py` turns that pacing decision into actual audio files:
 
 - `MUSIC`
-  - uses local `music/` files, then `yt-dlp` for chart tracks; when all candidates fail the audio quality gate, recycles the last-known-good music norm file, then drops the track and lets the playback rescue path handle the gap — silent audio is never queued
-  - normalizes output before queueing
-  - after each music segment lands, launches a background prefetch that normalizes the predicted next track so it's already cached by the time the current one finishes (~3-4 min), avoiding the 75s Pi stall on queue drain. A running prefetch is left to finish rather than cancelled and replaced — cancelling can't stop its in-flight executor FFmpeg, which would keep holding the background admission slot (see [Egress FX pipeline](#egress-fx-pipeline-the-transmitter-applied-last)) while a replacement parks another thread behind it; the next music segment just retries with a fresh candidate
+  - plays the packaged starter derivatives directly (they are already normalized and hash-verified), or normalizes operator-owned local files before queueing; all twelve starter tracks complete before a starter repeat
+  - may accept a one-play Jamendo artifact only from the transient provider's lease boundary. A miss falls through immediately to local/starter music; the artifact is deleted after playback or cancellation and is never cache/rescue/handoff material
+  - uses chart/classic/external candidates only in a standalone install with the effective `external-media` extra. Both add-ons omit the distribution, module, and executable
+  - after eligible non-starter music lands, may launch a background prefetch that normalizes the predicted next track so it is ready before queue drain. A running prefetch is left to finish rather than cancelled and replaced — cancelling cannot stop its in-flight executor FFmpeg, which would keep holding the background admission slot (see [Egress FX pipeline](#egress-fx-pipeline-the-transmitter-applied-last)) while a replacement parks another thread behind it; the next music segment retries with a fresh candidate
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
@@ -280,9 +291,12 @@ ceiling. The admission gate caps gated call sites at 2 ordinary/background jobs 
 1 rescue render in the steady state; that rescue cap is best-effort, not hard — a
 wedged rescue render lets every subsequent rescue call proceed ungated too, so
 concurrent rescue jobs aren't bounded at 1 for the duration of the wedge (see
-`mammamiradio/audio/admission.py`). yt-dlp's own extract-audio ffmpeg runs outside
-the gate (wrapping the download would hold a slot across a network fetch), so a
-chart download can add one transient process on top of that ceiling.
+`mammamiradio/audio/admission.py`). The transient Jamendo provider holds a
+background admission slot while HTTP bytes stream directly into its single
+FFmpeg worker and normalized partial file. A standalone `yt-dlp` extract-audio
+FFmpeg remains outside that gate because wrapping its network fetch would hold a
+slot across download; it can add one transient process only when the operator has
+installed and enabled `external-media`. Neither add-on has that process surface.
 
 The pipeline is **best-effort and instant-audio-safe**: a stage failure leaves the
 prior audio in place and never raises, and emergency / bridge / rescue fills skip the
@@ -617,11 +631,14 @@ Two features create the illusion of a live radio studio:
 
 ### Clip sharing
 
-A rolling `deque[bytes]` ring buffer on `app.state` records up to `CLIP_MAX_SEGMENT_SECONDS` (180s) of raw MP3 chunks during the playback loop. `POST /api/clip` extracts a shareable file into `{cache_dir}/clips/`: for a live ad or banter segment it captures the whole segment so far (operator-authored content, no copyright cap); for music it captures the last 30 seconds. When an ad/banter segment ends, the playback loop snapshots it so a tap within `CLIP_LOOKBACK_SECONDS` (15s) after it ends still grabs the whole bit. Clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back on a `no_audio` no-op so a cold-start listener can retry) and a 50-clip disk cap prevent abuse. On failure the route returns structured codes (`retry_after` seconds, or `reason: "no_audio"`) — never prose — which the listener UI maps to warm copy.
+`POST /api/clip` can publish only one complete bundled starter track whose path, hash, identity, and attribution still match the canonical manifest. The playback loop records that snapshot only after a clean full-track send; the endpoint revalidates the package file before copying it into `{cache_dir}/clips/`. Jamendo, local, mixed, partial, unknown, ad, and banter windows fail closed with `403 music_share_unavailable`; none of their bytes can enter the public clip store. Eligible clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back when no eligible starter window exists) and a 50-clip disk cap prevent abuse. The listener maps the structured failure code to actionable copy.
 
-### Periodic chart refresh
+### Optional standalone chart refresh
 
-When the playlist source is charts, the producer checks every 90 minutes and merges new chart entries into the live playlist without resetting `played_tracks` history. This prevents long sessions from looping the same track set.
+When a standalone operator has deliberately enabled `external-media` and selected
+charts as the base, the producer may check every 90 minutes and merge new chart
+entries without resetting `played_tracks` history. This path is absent from both
+add-ons and never substitutes for the offline starter release floor.
 
 ## Playback and fanout
 
@@ -686,11 +703,12 @@ External integrations should call `GET /public-status` before playback and read
 `mime_type` and `bitrate_kbps` when declaring `/stream`.
 
 `audio_format` is the station's **canonical/target encoding** — the format the
-normalizer produces and the `/stream` response headers advertise. Bundled demo
-and canned fallback assets are not guaranteed to be re-encoded to this format,
-so players must rely on MP3 frame self-description for exact decode parameters
-on a per-frame basis. The contract `audio_format` provides is the nominal one,
-which is the same contract every ICY-headered internet radio publishes.
+normalizer produces, the starter-media gate verifies, and the `/stream` response
+headers advertise. Packaged speech/recovery assets are not all guaranteed to be
+re-encoded to this format, so players must rely on MP3 frame self-description for
+exact decode parameters on a per-frame basis. The contract `audio_format`
+provides is the nominal one, which is the same contract every ICY-headered
+internet radio publishes.
 
 The canonical metadata is built once per response by
 `mammamiradio/audio/stream_format.py::stream_audio_metadata(config)` and is the
@@ -713,23 +731,63 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 
 ## Music sources
 
-`fetch_startup_playlist()` (in `mammamiradio/playlist/playlist.py`) walks this priority chain at boot and returns the first source that yields tracks. Each tier is independently gated; falling through to the next is silent (logged at INFO, not a warning).
+`fetch_startup_playlist()` (in `mammamiradio/playlist/playlist.py`) chooses one
+durable base; Jamendo is deliberately outside this function:
 
-1. **Persisted source** (any prior `cache/playlist_source.json` selection). Restored verbatim if loadable.
-2. **Charts + local blend** (when `MAMMAMIRADIO_ALLOW_YTDLP=true`): up to 100 tracks fetched from Apple Music Italy RSS. MP3s in `music/` are merged in and deduplicated by `spotify_id`. Total catalog typically 100-300 tracks. `source_id="apple_music_it_top_100"`.
-3. **Jamendo CC** (when `radio.toml` `[playlist].jamendo_client_id` is set): CC-licensed tracks via the Jamendo API. Default radio.toml ships `jamendo_country = "ITA"` + `jamendo_order = "popularity_week"`, so the resulting fetch is "Italian-trending" (artist nationality = ITA, sorted by current week popularity), and `jamendo_limit = 200` to keep the rotation pool deep. These fields are optional — empty country = no nationality filter; empty order = Jamendo's default sort; limit must be `1`-`200`. Fields are also overridable via `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` env vars. `source_id` is the tag string; the persisted source URL `jamendo://playlist?tags=…&country=…&order=…` encodes the source identity (tags, country, order) so reload via `/api/playlist/load` restores the same playlist selection. `limit` is NOT encoded in the persisted URL — it always comes from the active `radio.toml` / `JAMENDO_LIMIT` config at fetch time.
-4. **Classic Italian eras** (explicit admin selection only): `classic://italian/70s`, `classic://italian/80s`, and `classic://italian/90s` resolve through yt-dlp search queries for cantautori/classic-pop eras. Each era stamps fetched tracks with a `year` hint (`1975`, `1985`, `1995`) so the admin playlist can render decade badges. Because this is an operator-selected source, failure raises an explicit toast instead of silently falling through.
-5. **Local `music/` files** (always available when MP3s exist on disk): operator-supplied MP3s in `music/`. Loaded as a first-class source — yt-dlp is not required, and this branch fires whether or not Jamendo is configured. `source_id="local_music_dir"`.
-6. **Bundled demo assets**: pre-shipped MP3s in `mammamiradio/assets/demo/music/`. Empty by default; populated optionally per the demo-asset contract.
-7. **Built-in `DEMO_TRACKS`**: metadata-only Italian-flavored placeholder list. Last-resort fallback so the station always boots with something.
+1. **Eligible persisted base.** A prior local or effectively enabled standalone
+   external selection may restore. A legacy `jamendo://` selection is retired and
+   rewritten to the current base. Both add-ons reject any persisted selection that
+   would require extractor authority.
+2. **Operator local files.** MP3s under `music/` become the base when present.
+   They receive no project license claim; the operator owns their provenance and
+   permitted use.
+3. **Bundled starter catalog.** With no local base, runtime loads the twelve
+   hash-pinned Kevin MacLeod/Incompetech derivatives from the canonical manifest.
+   They play directly without normalization and complete one full cycle before a
+   starter repeat. A release fails unless the exact 12 tracks, at least 45 minutes,
+   complete human audition evidence, and no more than 75 MiB pass media proof.
 
-The admin Music & Coda controls expose reload buttons for charts/Jamendo when their capabilities are available and unconditional decade buttons for Anni '70, Anni '80, and Anni '90. `/status` returns a bounded playlist window (default 80 tracks, max 200) plus a `playlist_page` metadata envelope `{total, offset, limit, has_more, revision}`; the dedicated `GET /api/playlist` endpoint handles lazy load-more. Track objects carry `album_art`, `source`, `year`, and `youtube_id` so the browser can render thumbnails, source chips, and era pills without another round trip.
+Two optional expansions sit outside that base:
 
-Once playback is running, the producer's recovery layers (packaged recovery clip, last-known-good music recycle, emergency tone, forced banter) keep the queue from starvation if a source disappears mid-session. Silent audio is never queued intentionally.
+- **Jamendo transient provider.** Explicitly off by default; enabling requires an
+  operator client ID and the current non-commercial-use acknowledgement while
+  provider confirmation remains pending. It reads the API's streaming `audio`
+  field with `audioformat=mp32`, admits only validated CC BY 3.0/4.0 candidates,
+  and owns one in-memory lease plus one normalized partial/final artifact total.
+  At most one prepared track can follow every two local/starter tracks. Bytes and
+  lease metadata never enter cache, SQLite, rescue, handoff, clips, derivatives,
+  or restart state, and the artifact is deleted after play or cancellation.
+- **Standalone `external-media`.** The optional package extra supplies `yt-dlp`
+  for operator-enabled charts, classic eras, and other supported sites. Technical
+  access is reported as `operator_enabled`, not cleared. Stable and Edge add-on
+  images omit the distribution, module, and executable and ignore legacy
+  enablement; external-only actions return actionable `403` responses.
+
+The admin Rotazione panel shows a persistent ready starter/local row and the
+five-state Jamendo row; it does not present Jamendo as a playlist import. `/status`
+returns a bounded playlist window plus redacted Jamendo operational facts. Public
+status exposes only safe now-playing attribution. See
+[Music sources and rights boundaries](music-sources.md) for the normative
+provider, attribution, and release contract.
+
+Once playback is running, protected recovery uses only admitted non-transient
+media, packaged recovery audio, the emergency tone, or forced banter. Jamendo is
+never eligible for rescue, and silent audio is never queued intentionally.
 
 ### Operator song blocklist
 
-Because every source above is re-fetched fresh on startup, an in-memory "remove" would reappear after a restart. The operator blocklist makes a ban durable. It persists to `cache_dir/blocklist.json` as `{serialized_key: {display, banned_by, banned_at}}`, keyed by the single canonical identity `normalized_track_key(track) = (artist.strip().lower(), title.strip().lower())` (the same key used for playlist dedup, so a ban holds across sources even when the per-source track id differs). The store is best-effort and corrupt-tolerant: a missing or malformed file loads as empty and never raises into the audio path; writes are atomic (`tmp` + `os.replace`).
+Base sources are reconstructed on startup, so an in-memory "remove" could
+otherwise reappear. The operator blocklist makes a ban durable. It persists to
+`cache_dir/blocklist.json` as `{serialized_key: {display, banned_by, banned_at}}`,
+keyed by the single canonical identity `normalized_track_key(track) =
+(artist.strip().lower(), title.strip().lower())` (the same key used for playlist
+dedup, so a ban holds across sources). The store is best-effort and
+corrupt-tolerant: a missing or malformed file loads as empty and never raises into
+the audio path; writes are atomic (`tmp` + `os.replace`).
+
+Chart refresh and external/listener download doorways mentioned below exist only
+in an effective standalone `external-media` process. Add-ons retain local search,
+turn listener music requests into shout-outs, and never enter those commits.
 
 Enforcement is a single primitive, `playlist.filter_blocklisted(tracks, blocklist)`, applied at every doorway where tracks enter `state.playlist`: startup (`main.py`), source switch (`_apply_loaded_source`), the mid-session chart refresh (`fetch_chart_refresh`), and the external/listener download commit (`_commit_external_download`). The norm-cache **rescue** path is a separate doorway — it serves cached audio directly without passing through `state.playlist`, so `select_norm_cache_rescue` (in `audio/norm_cache.py`) drops blocklisted cache files itself, matching each file's `{title, artist}` sidecar against `state.blocklist`; a banned song never re-airs even when the queue starves and recovery kicks in (if every cache file is banned the rescue degrades to the next layer — canned clip / forced banter — never to a banned song). The external/listener commit returns a distinct `"banned"` status (not `"dropped"`): the admin gets an honest "it's banned" notice and a listener request fails loudly (`song_error`) instead of spinning on "searching…". Bulk `/api/playlist/enrich` honors the blocklist; only an explicit single `/api/playlist/add` bypasses it as an intentional override. Banning (`POST /api/track/ban`, or the per-row `/api/playlist/remove`) also clears a matching `pinned_track` and synchronously drops any not-yet-started queued segment of the song — the currently-airing segment finishes untouched, so a ban never causes dead air. Dropping a segment can expose a different queue tail; `_apply_ban` and manual `/api/queue/remove` both re-verify that newly exposed tail (`_reconcile_queue_tail_adjacency`) rather than trust it blindly, since only rescue/recycled music can safely re-anchor speech-bed adjacency — ordinary rendered music may carry an egress-processed path. A last-mile fence in the playback loop itself covers the remaining race, where a banned track was already pulled off the queue before a ban's synchronous purge reached it: playback discards that segment immediately, before any bytes reach air, and runs the same tail-adjacency reconciliation. Recovery paths carry a matching guard one level up: error recovery, the quality-gate circuit breaker's last-known-good recycling, and speech-bed adjacency selection all resolve their candidate through `_blocklist_safe_last_music`, which requires a durable `{artist, title}` identity and rejects it outright — even when unidentified — while any ban is active, so none of those paths can reintroduce an operator-banned song through a cached or adjacency-based route. The one path that **does** interrupt the airing song is the on-air console's **Ban** button (`POST /api/track/ban-now-playing`): it resolves identity from `now_streaming.metadata` (`artist`/`title_only`, falling back to parsing the `Artist — Title` label, so it bans even a rescue-cache or one-off song that never entered `state.playlist`), runs `_apply_ban` to purge queued copies, then reuses the exact skip path (`_request_skip`: listener-skip record, a bridge to forced music whenever no immediately playable runway remains — not just an empty queue, `skip_event`, `now_streaming → skipping`). Ban precedes skip so the bridge sees the post-purge, playback-verified runway state and still force-bridges to music if nothing left in the queue can actually play — never dead air. It is starvation-exempt like the per-row ✕ Ban. A bulk ban that would leave fewer than `MIN_ROTATION_AFTER_BAN` songs (or that would empty an already-small pool) is refused with a warm message rather than starving the pool onto the rescue path; a single per-row removal stays exempt. The persist call is best-effort — when `blocklist.json` can't be written the ban still holds for the session and the API echoes `persisted: false` so the admin UI says "banned for now, may come back after a restart" instead of promising permanence. `POST /api/track/unban` and `GET /api/track/banlist` back the admin "Banned" manager. Listener thumbs-down voting is a separate later slice; this layer is operator-only.
 
@@ -942,15 +1000,19 @@ already-wired surface is the listener PWA MediaSession (`web/static/listener.js`
 which shows the cover on the phone lock screen, CarPlay, and Control Center; Home
 Assistant's `entity_picture` (above) is a secondary surface.
 
-- **Chart tracks** read their cover straight from the Apple charts RSS feed item
-  (`artworkUrl100`, upscaled to 600px) in `playlist.py` — no extra network call.
-- **Searched/added and listener-requested tracks** carry a YouTube thumbnail from
-  the yt-dlp search; `playlist/cover_art.py` upgrades it to a real cover via the
-  iTunes Search API (`country=IT`) on the background download path
-  (`_commit_external_download`), off the event loop. Results are cached to
-  `cache_dir/cover_art_cache.json` (hashed key; definitive misses cached with a TTL,
-  transient failures never cached). Resolution is best-effort and never raises into
-  the audio or HA-push path; a miss falls back to the existing art or the station logo.
+- **Starter/local tracks** use any admitted track artwork already present, then
+  fall back to the station identity; artwork never substitutes for source/license
+  attribution.
+- **Jamendo tracks** may expose only provider-reported public artwork metadata for
+  the current single-use lease. The private stream URL and lease facts never enter
+  artwork cache or public status.
+- **Standalone external tracks** may read chart artwork from Apple RSS or carry a
+  search thumbnail; `playlist/cover_art.py` can upgrade it through the iTunes
+  Search API on `_commit_external_download`, off the event loop. Results are cached
+  to `cache_dir/cover_art_cache.json` (hashed key; definitive misses cached with a
+  TTL, transient failures never cached). This entire download path is absent from
+  both add-ons. Resolution is best-effort and a miss falls back to existing art or
+  the station logo.
 
 This is opportunistic context, not a hard dependency. Failures there should not stop the station.
 
@@ -1052,7 +1114,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/stop` | POST | Admin | Persist the stop marker first, then invalidate stale work, cut, purge, and pause producer until `/api/resume`; persistence failure changes nothing |
 | `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
-| `/api/clip` | POST | Public | Capture a shareable clip (full ad/banter segment, or last 30s of music) |
+| `/api/clip` | POST | Public | Capture eligible material; music requires a complete bundled-starter-only window, otherwise `403 music_share_unavailable` |
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |
@@ -1060,11 +1122,13 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/listener-requests` | GET | Admin | List pending listener requests (full record including `request_id`, `status`, `evict_after`) |
 | `/api/listener-requests/dismiss` | POST | Admin | Dismiss a pending listener request by `ts` (legacy) or `request_id` (canonical) |
 | `/api/playlist` | GET | Admin | Paginated playlist window; `?offset=0&limit=80` (max 200); returns `{tracks, total, offset, limit, has_more, revision}` with each admin track carrying an opaque row `id` and its current `preference` score |
-| `/api/search` | GET | Admin | Search playlist and external sources; pagination via `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`; `include_external=false` skips yt-dlp when the client has exhausted web results; every response (including an empty query) returns the playlist `revision` captured with the local snapshot before any external lookup, and each local result carries its opaque row `id` |
-| `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`); no queue purge |
-| `/api/direction` | POST | Admin | Free-text alias for heading direction (`{"text": "sunday morning italian"}`); expands to song targets, searches metadata, and downloads targets in background |
+| `/api/search` | GET | Admin | Always searches the local/base playlist; pagination uses `offset`/`limit` (max 50 local, max 10 external) and `external_offset`/`external_limit`. With standalone `external-media`, external results may be included and `include_external=false` skips yt-dlp after the client exhausts them; add-ons return no extractor results. Every response (including an empty query) returns the playlist `revision` captured with the local snapshot before any external lookup, and each local result carries its opaque row `id` |
+| `/api/heading` | POST | Admin | Steer the next music stretch with an era seed (`{"seed": "classic://italian/80s"}`) or free text (`{"text": "2000s female vocals"}`), without purging the queue. Matching base tracks work everywhere; an era import requires standalone `external-media`, with add-ons failing external-only work closed |
+| `/api/direction` | POST | Admin | Free-text alias for heading direction (`{"text": "sunday morning italian"}`) over matching base tracks; only standalone `external-media` may expand, search, and download new targets in the background |
 | `/api/heading/clear` | POST | Admin | Clear the active heading/direction and return to automatic rotation without removing blended tracks |
-| `/api/playlist/add-external` | POST | Admin | Add external track from search results; accepts optional `album_art` URL (http/https only, validated server-side) |
+| `/api/playlist/add-external` | POST | Admin | Standalone-only external add; add-ons return actionable `403 external_media_unavailable_in_addon` |
+| `/api/media-sources/jamendo` | PUT | Admin | Retain/replace/clear the client ID and persist explicit enabled + non-commercial acknowledgement intent; returns redacted status |
+| `/api/media-sources/jamendo/retry` | POST | Admin | Coalesce a transient-provider retry (`202` enabled; `409 jamendo_retry_disabled` when off) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
 
@@ -1147,7 +1211,13 @@ This repo is biased toward "keep the station on air."
 - script generation failures fall back to OpenAI when configured, then to stock copy; a temporary Anthropic overload or rate limit briefly benches its writer (respecting a bounded `Retry-After` when present) so affected later segments go straight to OpenAI, then retry Anthropic automatically after the short cooldown
 - chaos first-strike script failures use subtype-specific stock lines and report `provider_health.chaos.last_degraded_reason = "script_fallback"`; chaos audio failures are counted separately as `audio_failure`
 - required speech fails closed: if every configured provider and Edge fallback is unavailable, partial files are removed and `TTSUnavailableError` reaches the producer rescue ladder; owned dialogue, ID, time-check, and ad fan-outs settle before scratch cleanup, while optional promo tags may still be omitted
-- missing yt-dlp falls back to local files or demo tracks
+- missing or disabled `external-media` leaves the local-or-starter base untouched;
+  external-only standalone operations report the capability boundary, and
+  add-ons return the locked actionable `403` without importing or executing
+  `yt-dlp`
+- Jamendo discovery, license, URL, network, normalization, timeout, race,
+  cancellation, or restart failures destroy the single-use artifact/lease and
+  immediately continue with local/starter music
 - missing Home Assistant context is ignored
 - missing ad brands disables ads rather than killing startup
 - a missing, stale, or corrupt restart handoff manifest (`cache/restart_handoff/`) is a silent no-op — startup falls through to the normal cold-start rescue ladder instead of failing
@@ -1166,8 +1236,10 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/core/first_listen.py` | Durable policy-free First Listen receipt and feature-era install-origin witnesses |
 | `mammamiradio/core/first_listen_show.py` | Packaged client-local mini-show eligibility and chunk iteration |
 | `mammamiradio/core/sync.py` | SQLite database initialization and schema migration |
-| `mammamiradio/playlist/playlist.py` | Charts, local, and demo playlist loading |
-| `mammamiradio/playlist/downloader.py` | local-file, yt-dlp, and unavailable-source music handling |
+| `mammamiradio/media/starter.py` | Canonical starter-manifest loading, release readiness, attribution, and cycle construction |
+| `mammamiradio/playlist/playlist.py` | Local-or-starter base loading plus optional standalone external source compatibility |
+| `mammamiradio/playlist/downloader.py` | Local/starter resolution plus capability-gated standalone external handling |
+| `mammamiradio/playlist/jamendo_transient.py` | One-lease/one-artifact Jamendo discovery, streaming normalization, and destruction lifecycle |
 | `mammamiradio/hosts/memory_extractor.py` | Post-air banter memory extraction for persona updates and LLM reaction cues |
 | `mammamiradio/playlist/song_cues.py` | Machine-derived per-track memory: anthem detection, skip-bit detection, stored reaction cues |
 | `mammamiradio/playlist/track_rationale.py` | "Why this track?" rationale generation for listener UI |

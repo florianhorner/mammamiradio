@@ -450,6 +450,41 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 }
 .setup-group-body { margin-top: 12px; }
 .setup-pre { margin-top: 8px; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: 11px; color: rgba(245,237,216,0.82); }
+.music-sources { display: grid; gap: 8px; margin-bottom: 14px; }
+.music-source-row {
+  display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center;
+  min-height: 64px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 8px; background: rgba(20,17,15,0.28);
+}
+.music-source-row[data-state="ready"] { border-color: rgba(37,99,235,0.35); }
+.music-source-row[data-state="working"] { border-color: rgba(244,208,72,0.32); }
+.music-source-row[data-state="degraded"] { border-color: rgba(217,119,6,0.42); }
+.music-source-row[data-state="blocked"] { border-color: rgba(196,74,74,0.44); }
+.music-source-copy { min-width: 0; }
+.music-source-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; font-weight: 800; color: var(--cream); }
+.music-source-detail { margin-top: 3px; font-size: 11px; line-height: 1.45; color: rgba(245,237,216,0.65); }
+.music-source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.music-source-actions .btn { min-width: 44px; min-height: 44px; }
+.music-source-note { margin: 0 2px; font-size: 11px; line-height: 1.45; color: rgba(245,237,216,0.58); }
+.jamendo-settings { display: grid; gap: 10px; margin: 8px 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(20,17,15,0.22); }
+.jamendo-secret-state { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.jamendo-secret-saved { font-size: 12px; font-weight: 700; color: var(--ok-text); }
+.jamendo-secret-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.jamendo-checkbox { min-height: 44px; display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; font-size: 12px; line-height: 1.45; color: var(--cream-dk); cursor: pointer; }
+.jamendo-checkbox input { width: 20px; height: 20px; margin-top: 1px; accent-color: var(--sun2); flex: 0 0 auto; }
+.jamendo-help { font-size: 11px; line-height: 1.55; color: rgba(245,237,216,0.64); }
+.jamendo-help a { min-height: 44px; display: inline-flex; align-items: center; color: var(--sun); text-decoration: underline; text-underline-offset: 3px; }
+.jamendo-form-message { min-height: 20px; font-size: 11px; line-height: 1.45; color: var(--cream-dk); }
+.jamendo-form-message[data-state="degraded"] { color: var(--warning); }
+.jamendo-form-message[data-state="blocked"] { color: var(--error); }
+.jamendo-form-message[data-state="ready"] { color: var(--ok-text); }
+@media(max-width:720px){
+  .music-source-row { grid-template-columns: 1fr; }
+  .music-source-actions { justify-content: stretch; }
+  .music-source-actions .btn { flex: 1; }
+  .jamendo-secret-actions { width: 100%; }
+  .jamendo-secret-actions .btn { flex: 1; }
+}
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* ── PLAYLIST / SEARCH ── */
@@ -2045,6 +2080,23 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
         <h2>Rotazione</h2>
         <div class="sub" id="plMeta"></div>
       </header>
+      <div class="music-sources" aria-label="Music sources">
+        <div class="music-source-row" id="jamendoSourceRow" data-state="idle">
+          <div class="music-source-copy">
+            <div class="music-source-title"><span id="jamendoSourceChip"><span class="status-chip idle" aria-label="status: idle"><span class="shape" aria-hidden="true">○</span>idle</span></span><span id="jamendoSourceLabel">Jamendo off</span></div>
+            <div class="music-source-detail" id="jamendoSourceDetail">Starter and local music continue.</div>
+          </div>
+          <div class="music-source-actions" id="jamendoSourceActions"></div>
+        </div>
+        <p class="music-source-note">License information is reported by Jamendo. Provider confirmation for this station model is pending.</p>
+        <div id="jamendoStateAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+        <div class="music-source-row" id="starterSourceRow" data-state="blocked">
+          <div class="music-source-copy">
+            <div class="music-source-title"><span id="starterSourceChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span><span id="starterSourceLabel">Starter collection unavailable</span></div>
+            <div class="music-source-detail" id="starterSourceDetail">The verified twelve-track package is not available.</div>
+          </div>
+        </div>
+      </div>
       <section class="record-hunt" aria-labelledby="recordHuntHeading">
         <p class="record-hunt-label">Record Hunt</p>
         <p class="record-hunt-copy" id="recordHuntHeading">Steer what the station <strong>becomes next.</strong></p>
@@ -2091,7 +2143,6 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <p class="rotation-library-label">Add a source</p>
             <div class="quick-actions" id="playlistSourceControls">
               <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
-              <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
             </div>
           </section>
           <section class="library-tools-group" id="playlistPoolControls">
@@ -2610,6 +2661,45 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               </div>
             </section>
             <div class="sr-only" id="firstListenLiveRegion" role="status" aria-live="polite" aria-atomic="true"></div>
+
+            <section class="first-listen-surface setup-music-sources" id="setupMusicSources" aria-labelledby="jamendoSetupHeading">
+              <div class="setup-subhead" id="jamendoSetupHeading" tabindex="-1">Music sources</div>
+              <div class="music-sources">
+                <div class="music-source-row" id="starterSetupRow" data-state="blocked">
+                  <div class="music-source-copy">
+                    <div class="music-source-title" id="starterSetupLabel">Starter collection unavailable</div>
+                    <div class="music-source-detail" id="starterSetupDetail">The verified twelve-track package is not available.</div>
+                  </div>
+                  <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span>
+                </div>
+              </div>
+              <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
+                <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
+                  <span class="jamendo-secret-saved">✓ Client ID saved</span>
+                  <div class="jamendo-secret-actions">
+                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="replaceJamendoClientId()">Replace</button>
+                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="clearJamendoClientId(this)">Clear</button>
+                  </div>
+                </div>
+                <div id="jamendoClientField">
+                  <label class="setup-title" for="jamendoClientId">Jamendo client ID</label>
+                  <input class="input" id="jamendoClientId" type="password" autocomplete="off" spellcheck="false" aria-describedby="jamendoHelp" placeholder="Enter your own client ID">
+                </div>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoEnabled">
+                  <span><strong>Enable Jamendo live rotation</strong></span>
+                </label>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoNoncommercialAck">
+                  <span>I confirm this station's Jamendo API use is non-commercial and understand that Mamma Mi Radio does not certify broadcast rights.</span>
+                </label>
+                <p class="jamendo-help" id="jamendoHelp">Optional. Uses your Jamendo API client ID for non-commercial API use. Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
+                <div class="jamendo-form-message" id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"></div>
+                <div class="setup-actions">
+                  <button type="button" class="btn btn-trigger" id="jamendoSaveBtn" data-stopped-exempt onclick="saveJamendoSettings(this)">Save and check</button>
+                </div>
+              </div>
+            </section>
           </div>
         </details>
 
@@ -2647,10 +2737,8 @@ let _pendingPurge=false;
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
 const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
 const CHARTS_SENTINEL_URL='https://rss.applemarketingtools.com/api/v2/it/music/most-played/100/songs.json';
-const JAMENDO_SENTINEL_URL='jamendo://default';
 const _SOURCE_DISPATCH={
   charts:{url:CHARTS_SENTINEL_URL,toast:'Charts added to rotation'},
-  jamendo:{url:JAMENDO_SENTINEL_URL,toast:'Jamendo added to rotation'},
   classic_70s:{url:'classic://italian/70s',toast:"70s added to rotation"},
   classic_80s:{url:'classic://italian/80s',toast:"80s added to rotation"},
   classic_90s:{url:'classic://italian/90s',toast:"90s added to rotation"},
@@ -2664,6 +2752,7 @@ const SOURCE_CHIPS={
   classic:{label:'classici',cls:'classic'},
   youtube:{label:'charts',cls:'charts'},
   charts:{label:'charts',cls:'charts'},
+  starter:{label:'starter',cls:'local'},
   jamendo:{label:'jamendo',cls:'jamendo'},
   local:{label:'locali',cls:'local'},
   demo:{label:'demo',cls:'local'},
@@ -4297,6 +4386,234 @@ function setupRow(label, detail, status){
 }
 function openListener(){
   window.open((_base||'')+'/listen','_blank','noopener');
+}
+let _lastJamendoAnnouncementKey='';
+let _jamendoFormDirty=false;
+let _jamendoReplaceMode=false;
+const JAMENDO_ERROR_COPY={
+  jamendo_invalid_request:'Review the Jamendo fields and try again.',
+  jamendo_client_id_invalid:'Enter a valid Jamendo client ID.',
+  jamendo_client_id_conflict:'Replace or clear the client ID, not both.',
+  jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
+  jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
+  jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
+  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check add-on storage and try again.',
+};
+function jamendoFailureHint(code){
+  return {
+    api_failed:'provider response unavailable',
+    license_rejected:'license did not match the accepted CC BY policy',
+    invalid_url:'provider returned an unusable link',
+    lease_invalid:'prepared audio did not pass admission',
+    late:'preparation finished after its slot',
+    cancelled:'preparation was cancelled after a newer choice',
+  }[code]||'';
+}
+function jamendoPresentation(status){
+  const s=status&&typeof status==='object'?status:{};
+  const internal=String(s.state||'disabled');
+  if(internal==='playing'&&!s.enabled)return{state:'working',shape:'●',label:'Jamendo track finishing',detail:'Jamendo is off. This track will finish and then be deleted.',actions:[],announcement:'Jamendo track finishing'};
+  if(!s.enabled||internal==='disabled')return{state:'idle',shape:'○',label:'Jamendo off',detail:'Starter and local music continue.',actions:['setup'],announcement:''};
+  if(internal==='needs_config')return{state:'blocked',shape:'✗',label:'Finish Jamendo setup',detail:'Add a client ID and confirm non-commercial use.',actions:['setup'],announcement:'Jamendo setup needed'};
+  if(['idle','discovering','fetching','normalizing','queued','playing','consumed'].includes(internal)){
+    let detail='Starter and local music continue.';
+    const rejected=Number(s.rejected_count||0);
+    if(rejected>0){
+      const reason=jamendoFailureHint(s.last_failure_code);
+      detail+=` ${rejected} candidate${rejected===1?'':'s'} skipped${reason?' — '+reason:''}.`;
+    }
+    return{state:'working',shape:'●',label:'Preparing one Jamendo track',detail,actions:[],announcement:'Preparing one Jamendo track'};
+  }
+  if(internal==='ready')return{state:'ready',shape:'✓',label:'One Jamendo track ready',detail:'Single use; deleted after play.',actions:[],announcement:'One Jamendo track ready'};
+  if(internal==='degraded')return{state:'degraded',shape:'△',label:'Jamendo temporarily unavailable',detail:'Starter and local music continue.',actions:['retry'],announcement:'Jamendo temporarily unavailable'};
+  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:'Starter and local music continue.',actions:['retry','off'],announcement:''};
+}
+function mediaSourceStatusChip(state,shape){
+  const chip=document.createElement('span');
+  chip.className='status-chip '+state;
+  chip.setAttribute('aria-label','status: '+state);
+  const mark=document.createElement('span');
+  mark.className='shape';
+  mark.setAttribute('aria-hidden','true');
+  mark.textContent=shape;
+  chip.append(mark,document.createTextNode(state));
+  return chip;
+}
+function renderStarterCatalogStatus(status){
+  const catalog=Array.isArray(status&&status.starter_catalog)?status.starter_catalog:[];
+  const ready=catalog.length===12;
+  const state=ready?'ready':'blocked';
+  const shape=ready?'✓':'✗';
+  const label=ready?'Starter collection on air':'Starter collection unavailable';
+  const detail=ready
+    ?'Twelve attributed bundled tracks are the offline rotation floor.'
+    :'The verified twelve-track package is not available.';
+  for(const id of ['starterSourceRow','starterSetupRow']){
+    const row=document.getElementById(id);
+    if(row)row.dataset.state=state;
+  }
+  for(const id of ['starterSourceChip','starterSetupChip']){
+    const holder=document.getElementById(id);
+    if(holder)holder.replaceChildren(mediaSourceStatusChip(state,shape));
+  }
+  for(const id of ['starterSourceLabel','starterSetupLabel']){
+    const node=document.getElementById(id);
+    if(node)node.textContent=label;
+  }
+  for(const id of ['starterSourceDetail','starterSetupDetail']){
+    const node=document.getElementById(id);
+    if(node)node.textContent=detail;
+  }
+}
+function jamendoStatusChip(presentation){
+  const chip=document.createElement('span');
+  chip.className='status-chip '+presentation.state;
+  chip.setAttribute('aria-label','status: '+presentation.state);
+  const shape=document.createElement('span');
+  shape.className='shape';
+  shape.setAttribute('aria-hidden','true');
+  shape.textContent=presentation.shape;
+  chip.append(shape,document.createTextNode(presentation.state));
+  return chip;
+}
+function jamendoAction(label,handler){
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='btn btn-util';
+  button.dataset.stoppedExempt='';
+  button.textContent=label;
+  button.addEventListener('click',handler);
+  return button;
+}
+function renderJamendoStatus(status){
+  const row=document.getElementById('jamendoSourceRow');
+  const chipWrap=document.getElementById('jamendoSourceChip');
+  const label=document.getElementById('jamendoSourceLabel');
+  const detail=document.getElementById('jamendoSourceDetail');
+  const actions=document.getElementById('jamendoSourceActions');
+  if(!row||!chipWrap||!label||!detail||!actions)return;
+  const presentation=jamendoPresentation(status);
+  row.dataset.state=presentation.state;
+  chipWrap.replaceChildren(jamendoStatusChip(presentation));
+  label.textContent=presentation.label;
+  detail.textContent=presentation.detail;
+  actions.replaceChildren();
+  presentation.actions.forEach(action=>{
+    if(action==='setup')actions.appendChild(jamendoAction(status?.state==='needs_config'?'Configure':'Set up',openJamendoSetup));
+    else if(action==='retry')actions.appendChild(jamendoAction('Check again',retryJamendo));
+    else if(action==='off')actions.appendChild(jamendoAction('Turn off',turnOffJamendo));
+  });
+  const announcementKey=presentation.state+':'+presentation.label;
+  if(_lastJamendoAnnouncementKey&&announcementKey!==_lastJamendoAnnouncementKey&&presentation.announcement){
+    const live=document.getElementById('jamendoStateAnnouncement');
+    if(live)live.textContent=presentation.announcement;
+  }
+  _lastJamendoAnnouncementKey=announcementKey;
+  renderJamendoSettings(status,false);
+}
+function openJamendoSetup(){
+  openSetupPanel();
+  const heading=document.getElementById('jamendoSetupHeading');
+  setTimeout(()=>{
+    heading?.scrollIntoView({block:'center',behavior:'smooth'});
+    heading?.focus();
+  },80);
+}
+function setJamendoFormMessage(message,state='idle'){
+  const el=document.getElementById('jamendoFormMessage');
+  if(!el)return;
+  el.dataset.state=state;
+  el.textContent=message||'';
+}
+function renderJamendoSettings(status,force){
+  if(!status||typeof status!=='object'||(_jamendoFormDirty&&!force))return;
+  const enabled=document.getElementById('jamendoEnabled');
+  const ack=document.getElementById('jamendoNoncommercialAck');
+  const secret=document.getElementById('jamendoSecretState');
+  const field=document.getElementById('jamendoClientField');
+  if(enabled)enabled.checked=Boolean(status.enabled);
+  if(ack)ack.checked=Boolean(status.noncommercial_acknowledged);
+  const configured=Boolean(status.client_id_configured);
+  if(secret)secret.hidden=!configured;
+  if(field)field.hidden=configured&&!_jamendoReplaceMode;
+}
+async function mediaSourceRequest(method,path,payload){
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),10000);
+  try{
+    const response=await fetch(_base+path,{method,headers:H(),body:payload===undefined?undefined:JSON.stringify(payload),signal:controller.signal});
+    const data=await response.json().catch(()=>({}));
+    return{ok:response.ok,status:response.status,data:data&&typeof data==='object'?data:{}};
+  }finally{clearTimeout(timeout);}
+}
+function jamendoErrorMessage(data){
+  return JAMENDO_ERROR_COPY[data?.error_code]||"Jamendo settings did not change. Starter and local music continue; try again.";
+}
+function applyJamendoResponse(result,successCopy){
+  if(!result.ok||!result.data?.ok){
+    const message=jamendoErrorMessage(result.data);
+    setJamendoFormMessage(message,result.status>=500?'degraded':'blocked');
+    return false;
+  }
+  if(result.data.status){
+    _st.jamendo=result.data.status;
+    renderJamendoStatus(result.data.status);
+  }
+  _jamendoFormDirty=false;
+  _jamendoReplaceMode=false;
+  const input=document.getElementById('jamendoClientId');
+  if(input)input.value='';
+  renderJamendoSettings(result.data.status||_st.jamendo,true);
+  setJamendoFormMessage(successCopy,'ready');
+  toast(successCopy);
+  return true;
+}
+async function saveJamendoSettings(button){
+  const enabled=Boolean(document.getElementById('jamendoEnabled')?.checked);
+  const acknowledged=Boolean(document.getElementById('jamendoNoncommercialAck')?.checked);
+  const clientId=(document.getElementById('jamendoClientId')?.value||'').trim();
+  const payload={enabled,noncommercial_acknowledged:acknowledged};
+  if(clientId)payload.client_id=clientId;
+  button.disabled=true;
+  setJamendoFormMessage('Saving Jamendo settings…','working');
+  try{
+    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',payload);
+    applyJamendoResponse(result,'Jamendo settings saved. Starter and local music stayed on air.');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' Starter and local music continue.','degraded');}
+  finally{button.disabled=false;}
+}
+function replaceJamendoClientId(){
+  _jamendoReplaceMode=true;
+  _jamendoFormDirty=true;
+  const field=document.getElementById('jamendoClientField');
+  if(field)field.hidden=false;
+  document.getElementById('jamendoClientId')?.focus();
+}
+async function clearJamendoClientId(button){
+  if(!confirm('Clear the saved Jamendo client ID and turn Jamendo off? Starter and local music will continue.'))return;
+  button.disabled=true;
+  const acknowledged=Boolean(document.getElementById('jamendoNoncommercialAck')?.checked);
+  try{
+    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',{enabled:false,noncommercial_acknowledged:acknowledged,clear_client_id:true});
+    applyJamendoResponse(result,'Jamendo client ID cleared. Starter and local music continue.');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' The saved settings were not changed.','degraded');}
+  finally{button.disabled=false;}
+}
+async function retryJamendo(){
+  setJamendoFormMessage('Checking Jamendo again…','working');
+  try{
+    const result=await mediaSourceRequest('POST','/api/media-sources/jamendo/retry');
+    if(!result.ok){setJamendoFormMessage(jamendoErrorMessage(result.data),'blocked');return;}
+    if(result.data.status){_st.jamendo=result.data.status;renderJamendoStatus(result.data.status);}
+    setJamendoFormMessage(result.data.already_in_progress?'Jamendo preparation is already in progress.':'Jamendo check started. Starter and local music continue.','ready');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' Starter and local music continue.','degraded');}
+}
+async function turnOffJamendo(){
+  const acknowledged=Boolean(_st.jamendo?.noncommercial_acknowledged);
+  try{
+    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',{enabled:false,noncommercial_acknowledged:acknowledged});
+    applyJamendoResponse(result,'Jamendo turned off. Starter and local music continue.');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' The saved setting was not changed.','degraded');}
 }
 function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
@@ -6006,13 +6323,12 @@ function playlistRenderSignature(page){
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
   return {
-    jamendo:Boolean(capabilities.jamendo),
     charts_reload:Boolean(capabilities.charts_reload),
   };
 }
 function emptyPoolRecoveryState(st,caps,capsState){
   const visibility=sourceControlVisibility(caps);
-  const sourcesAvailable=visibility.jamendo||visibility.charts_reload;
+  const sourcesAvailable=visibility.charts_reload;
   if(capsState==='checking'){
     return {action:'setup',message:'The rotation is empty. Checking available music sources…'};
   }
@@ -6036,13 +6352,11 @@ function emptyPoolRecoveryState(st,caps,capsState){
   return {action:'setup',message:`The rotation is empty. ${detail}`};
 }
 function updateSourceControls(st,caps){
-  const jamBtn=document.getElementById('sourceJamendoBtn');
   const chartsBtn=document.getElementById('sourceChartsBtn');
   const sourceGroup=document.getElementById('sourceImportGroup');
   const visibility=sourceControlVisibility(caps);
-  if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
-  if(sourceGroup)sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload;
+  if(sourceGroup)sourceGroup.hidden=!visibility.charts_reload;
   updateEmptyPoolRecovery(st,caps);
 }
 function openLibraryTools(){
@@ -7561,6 +7875,8 @@ async function refreshFast(){
     updateMoments(_st);
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
+    renderStarterCatalogStatus(_st);
+    renderJamendoStatus(_st.jamendo||{enabled:false,state:'disabled'});
     updateChaosState(_st.chaos_mode);
     if(!_paceOk&&_st.pacing){_paceOk=true;applyPacingResponse(_st.pacing);}
   }catch(e){
@@ -7634,6 +7950,9 @@ async function refreshSlow(){
 async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 refresh();
+['jamendoClientId','jamendoEnabled','jamendoNoncommercialAck'].forEach(id=>{
+  document.getElementById(id)?.addEventListener('input',()=>{_jamendoFormDirty=true;setJamendoFormMessage('Settings changed. Save and check when ready.','idle');});
+});
 loadSuperItalianToggle();
 loadBroadcastChainToggle();
 loadQuality();

@@ -8,6 +8,7 @@ disabled-is-silent, and that a broken ledger never raises into the stream.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -73,6 +74,64 @@ def test_disabled_ledger_records_nothing():
     state = SimpleNamespace(ledger=led)
     _emit_stream_result(state, _segment({}), bytes_sent=10, was_skipped=False, listeners=1)
     assert led.rows == []
+
+
+def test_jamendo_stream_result_keeps_observability_in_memory_and_out_of_ledger(tmp_path):
+    from mammamiradio.core.ledger import ProvenanceLedger
+
+    ledger = ProvenanceLedger(tmp_path / "ledger", enabled=True)
+    state = StationState()
+    state.ledger = ledger
+    ledger.start()
+    try:
+        _emit_stream_result(
+            state,
+            _segment({"ledger_segment_id": "control", "title": "Control banter"}),
+            bytes_sent=2048,
+            was_skipped=False,
+            listeners=1,
+        )
+        _emit_stream_result(
+            state,
+            _segment(
+                {
+                    "title": "Private Jamendo title",
+                    "artist": "Private Jamendo artist",
+                    "provider_track_id": "987654",
+                    "source_kind": "jamendo",
+                    "audio_source": "jamendo_transient",
+                    "music_attribution": {
+                        "provider": "jamendo",
+                        "source_url": "https://www.jamendo.com/track/987654/private",
+                    },
+                },
+                seg_type=SegmentType.MUSIC,
+            ),
+            bytes_sent=4096,
+            was_skipped=False,
+            listeners=1,
+        )
+    finally:
+        ledger.stop()
+
+    outcome = list(state.stream_outcome_history)[-1]
+    assert outcome["segment_type"] == "music"
+    assert outcome["result"] == "aired"
+
+    ledger_files = list((tmp_path / "ledger").glob("provenance-*.jsonl"))
+    assert len(ledger_files) == 1
+    ledger_text = ledger_files[0].read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in ledger_text.splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Control banter"
+    for private_fact in (
+        "jamendo",
+        "Private Jamendo title",
+        "Private Jamendo artist",
+        "987654",
+        "https://www.jamendo.com/track/987654/private",
+    ):
+        assert private_fact not in ledger_text
 
 
 def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():

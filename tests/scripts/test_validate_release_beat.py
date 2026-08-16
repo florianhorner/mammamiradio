@@ -240,6 +240,8 @@ def test_release_scripts_call_target_aware_validator() -> None:
     cut_edge = (ROOT / "scripts/cut-edge-release.sh").read_text()
     pre_release = (ROOT / "scripts/pre-release-check.sh").read_text()
 
-    assert 'python3 "$SCRIPT_DIR/validate-release-beat.py"' in check_invariants
+    assert '"$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py"' in check_invariants
     assert 'python3 scripts/validate-release-beat.py --channel edge --target-sha "$SHA"' in cut_edge
-    assert 'python3 "$SCRIPT_DIR/validate-release-beat.py" --channel stable --semver "$ADDON_VER"' in pre_release
+    assert (
+        '"$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py" --channel stable --semver "$ADDON_VER"' in pre_release
+    )

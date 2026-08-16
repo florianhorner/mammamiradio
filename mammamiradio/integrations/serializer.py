@@ -15,9 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from mammamiradio.core.models import SegmentType
+from mammamiradio.core.models import SegmentType, safe_media_attribution_dict
 from mammamiradio.integrations.schema import (
     AudioFormat,
+    MusicAttributionBlock,
     NowPlayingBlock,
     NowPlayingResponse,
     SegmentClass,
@@ -42,6 +43,7 @@ SAFE_METADATA_KEYS: frozenset[str] = frozenset(
         "host",
         "year",
         "source_kind",
+        "music_attribution",
     }
 )
 
@@ -108,6 +110,12 @@ def _external_ids_from_metadata(safe_meta: dict) -> dict[str, str]:
     return result
 
 
+def _safe_music_attribution(value: object) -> MusicAttributionBlock | None:
+    """Validate the additive public attribution shape at the serializer boundary."""
+    safe = safe_media_attribution_dict(value if isinstance(value, dict) else None)
+    return cast(MusicAttributionBlock, safe) if safe is not None else None
+
+
 def _title_for_segment(now: dict, safe_meta: dict) -> str | None:
     """Pick the cleanest display title for the current segment."""
     for key in ("title_only", "title"):
@@ -162,6 +170,9 @@ def _build_now_playing(now: dict) -> NowPlayingBlock:
         if isinstance(year, int) and year > 0:
             block["year"] = year
         block["external_ids"] = _external_ids_from_metadata(safe_meta)
+        attribution = _safe_music_attribution(safe_meta.get("music_attribution"))
+        if attribution is not None:
+            block["music_attribution"] = attribution
     elif seg_class == "voice":
         host = safe_meta.get("host")
         if isinstance(host, str) and host.strip():

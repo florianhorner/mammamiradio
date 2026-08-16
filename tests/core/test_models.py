@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
@@ -19,13 +20,16 @@ from mammamiradio.core.models import (
     Heading,
     HostPersonality,
     ListenerProfile,
+    MediaAttribution,
     PlaylistSource,
     Segment,
     SegmentType,
     SourceReadinessEvidence,
+    StarterCycleReservationPendingError,
     StationState,
     Track,
     normalized_track_key,
+    safe_media_attribution_dict,
     segment_track_key,
 )
 from mammamiradio.playlist.preferences import PREFERENCE_UP_WEIGHT
@@ -937,6 +941,315 @@ def test_track_display():
     assert t.display == "Artist 1 – Song 1"
 
 
+def test_media_attribution_object_serializes_through_the_public_validator() -> None:
+    attribution = MediaAttribution(
+        provider="incompetech",
+        license_id="CC-BY-4.0",
+        license_url="https://creativecommons.org/licenses/by/4.0/",
+        source_url="https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+        credit="Carefree by Kevin MacLeod",
+        modified=True,
+        basis="bundled_manifest",
+    )
+
+    assert safe_media_attribution_dict(attribution) == attribution.to_dict()
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"basis": "unknown"},
+        {"provider": None},
+        {"license_url": None},
+        {"license_url": "https://creativecommons.org:bad/licenses/by/4.0/"},
+        {"source_url": "https://incompetech.com/%2e%2e/private"},
+        {"source_url": "https://incompetech.com/music/royalty-free/index.html?token=secret"},
+        {"provider": "jamendo", "basis": "bundled_manifest"},
+    ],
+)
+def test_media_attribution_rejects_malformed_or_mismatched_public_facts(override) -> None:
+    raw = {
+        "provider": "incompetech",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+        "credit": "Carefree by Kevin MacLeod",
+        "modified": True,
+        "basis": "bundled_manifest",
+        **override,
+    }
+
+    assert safe_media_attribution_dict(raw) is None
+
+
+def test_track_cache_keys_cover_transient_identity_and_url_normalization() -> None:
+    identified = Track(
+        title="Transient",
+        artist="Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="track-123",
+    )
+    url_only = Track(
+        title="Transient",
+        artist="Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        direct_url="HTTPS://storage.jamendo.com:443/path/",
+    )
+    root_url = Track(
+        title="Transient",
+        artist="Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        direct_url="https://storage.jamendo.com/",
+    )
+
+    assert identified.cache_key == "jamendo_track_123"
+    assert url_only.cache_key == "jamendo_https_storage_jamendo_com_443_path"
+    assert root_url.cache_key == "jamendo_https_storage_jamendo_com"
+
+
+def test_segment_release_callback_runs_exactly_once():
+    events: list[str] = []
+
+    def admit() -> bool:
+        events.append("started")
+        return True
+
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/single-use.mp3"),
+        playback_start_callback=admit,
+        release_callback=lambda: events.append("released"),
+    )
+
+    assert segment.mark_playback_started() is True
+    assert segment.mark_playback_started() is True
+    segment.release()
+    segment.release()
+    assert segment.mark_playback_started() is False
+
+    assert events == ["started", "released"]
+
+
+def test_segment_denied_playback_releases_provider_resource():
+    events: list[str] = []
+
+    def deny() -> bool:
+        events.append("denied")
+        return False
+
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/denied-single-use.mp3"),
+        playback_start_callback=deny,
+        release_callback=lambda: events.append("released"),
+    )
+
+    assert segment.mark_playback_started() is False
+    assert segment.mark_playback_started() is False
+    segment.release()
+
+    assert events == ["denied", "released"]
+
+
+def test_segment_provider_callback_exceptions_fail_closed_without_escaping() -> None:
+    def reject_with_exception() -> bool:
+        raise RuntimeError("provider admission failed")
+
+    def release_with_exception() -> None:
+        raise OSError("provider cleanup failed")
+
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/provider-callback-failure.mp3"),
+        playback_start_callback=reject_with_exception,
+        release_callback=release_with_exception,
+    )
+
+    assert segment.mark_playback_started() is False
+    assert segment.mark_playback_started() is False
+    segment.release()
+
+
+def _starter_track(index: int) -> Track:
+    return Track(
+        title=f"Starter {index:02d}",
+        artist="Catalog Artist",
+        duration_ms=240_000,
+        source="starter",
+        local_path=Path(f"/catalog/starter-{index:02d}.mp3"),
+    )
+
+
+def test_starter_reservations_fill_lookahead_without_counting_as_air() -> None:
+    tracks = [_starter_track(index) for index in range(12)]
+    state = StationState(playlist=tracks, playlist_source=PlaylistSource(kind="starter"))
+
+    reserved: list[Track] = []
+    for index in range(12):
+        track = state.select_next_track()
+        assert state.reserve_music_admission(f"queue-{index}", track) is True
+        reserved.append(track)
+
+    assert len({track.cache_key for track in reserved}) == 12
+    assert list(state.played_tracks) == []
+    assert state.current_track is None
+    assert state.jamendo_base_music_since_last == 0
+    with pytest.raises(StarterCycleReservationPendingError):
+        state.select_next_track()
+
+    for index in range(11):
+        assert state.commit_music_admission(f"queue-{index}") is True
+    with pytest.raises(StarterCycleReservationPendingError):
+        state.select_next_track()
+
+    assert state.commit_music_admission("queue-11") is True
+    assert state.select_next_track().cache_key == tracks[0].cache_key
+
+
+def test_starter_reservation_rollback_restores_identity_without_advancing_cycle() -> None:
+    tracks = [_starter_track(0), _starter_track(1)]
+    state = StationState(playlist=tracks, playlist_source=PlaylistSource(kind="starter"))
+    selected = state.select_next_track()
+
+    assert state.reserve_music_admission("removed-before-playback", selected) is True
+    assert state.rollback_music_admission("removed-before-playback") is True
+    assert state.rollback_music_admission("removed-before-playback") is False
+
+    assert state.select_next_track() is selected
+    assert state.jamendo_base_music_since_last == 0
+    assert list(state.played_tracks) == []
+
+
+def test_jamendo_cadence_counts_playback_starts_not_queue_reservations() -> None:
+    starter = _starter_track(0)
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    jamendo = Track(
+        title="Transient",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-1",
+    )
+    state = StationState(playlist=[starter, local])
+
+    assert state.reserve_music_admission("starter", starter) is True
+    assert state.reserve_music_admission("local", local) is True
+    assert state.jamendo_insert_eligible() is False
+
+    assert state.commit_music_admission("starter") is True
+    assert state.jamendo_insert_eligible() is False
+    assert state.commit_music_admission("local") is True
+    assert state.jamendo_insert_eligible() is True
+
+    assert state.reserve_music_admission("jamendo-removed", jamendo) is True
+    assert state.jamendo_insert_eligible() is False
+    assert state.rollback_music_admission("jamendo-removed") is True
+    assert state.jamendo_insert_eligible() is True
+
+    assert state.reserve_music_admission("jamendo-started", jamendo) is True
+    assert state.commit_music_admission("jamendo-started") is True
+    assert state.jamendo_base_music_since_last == 0
+    assert state.jamendo_insert_eligible() is False
+
+
+def test_music_admission_rejects_invalid_duplicate_and_missing_reservations() -> None:
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    other_local = Track(
+        title="Other Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/other.mp3"),
+    )
+    jamendo_one = Track(
+        title="Transient One",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-1",
+    )
+    jamendo_two = Track(
+        title="Transient Two",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-2",
+    )
+    ordinary = _track(99)
+    state = StationState(playlist=[local, other_local])
+
+    assert state.reserve_music_admission("   ", local) is False
+    assert state.reserve_music_admission("local", local) is True
+    assert state.reserve_music_admission("local", local) is True
+    assert state.reserve_music_admission("local", other_local) is False
+    assert state.commit_music_admission("missing") is False
+
+    assert state.reserve_music_admission("jamendo-one", jamendo_one) is True
+    assert state.reserve_music_admission("jamendo-two", jamendo_two) is False
+    assert state.rollback_music_admission("jamendo-one") is True
+
+    state.jamendo_base_music_since_last = 2
+    assert state.reserve_music_admission("ordinary", ordinary) is True
+    assert state.commit_music_admission("ordinary") is True
+    assert state.jamendo_base_music_since_last == 2
+
+
+@pytest.mark.asyncio
+async def test_music_admission_wait_returns_on_capacity_signal_and_timeout() -> None:
+    starter = _starter_track(0)
+    state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))
+
+    await state.wait_for_music_admission_change(timeout=0)
+    assert state.reserve_music_admission("starter", starter) is True
+
+    asyncio.get_running_loop().call_soon(state.music_admission_changed.set)
+    await state.wait_for_music_admission_change(timeout=0.1)
+    await state.wait_for_music_admission_change(timeout=0)
+
+
+def test_reserved_pinned_starter_falls_through_to_local_track() -> None:
+    starter = _starter_track(0)
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="starter"))
+    state.pinned_track = starter
+    assert state.reserve_music_admission("starter", starter) is True
+
+    assert state.select_next_track() is local
+    assert state.pinned_track is starter
+
+
+def test_exhausted_starter_cycle_without_available_reservation_fails_closed() -> None:
+    starter = _starter_track(0)
+    state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))
+    state.starter_cycle_catalog = {starter.cache_key}
+    state.starter_cycle_remaining.clear()
+    state.starter_cycle_reserved = {starter.cache_key}
+
+    with pytest.raises(RuntimeError, match="current starter cycle"):
+        state.select_next_track()
+
+
 def test_switch_playlist_clears_listener_request_state():
     state = StationState(playlist=[_track(1)])
     state.pending_requests.append({"request_id": "req-1", "name": "Luca", "message": "ciao", "type": "shoutout"})
@@ -1425,6 +1738,53 @@ def test_course_track_blocked_past_the_plain_repeat_cooldown():
     assert course[0] not in eligible_course
     assert course[2] in eligible_course
     assert course[3] in eligible_course
+
+
+def test_course_cooldown_ignores_a_course_track_no_longer_in_the_pool():
+    # A banned or dropped course track cannot be cycled back to, so it must not
+    # consume a cooldown slot and let a current track return before the set has
+    # actually worked through.
+    heading = _heading()
+    course = [_track(n) for n in range(3)]
+    for track in course:
+        track.heading_id = heading.id
+    dropped = _track(50)
+    dropped.heading_id = heading.id  # tagged, but never in the playlist
+    normals = [_track(100 + n) for n in range(3)]
+    state = StationState(playlist=course + normals, heading=heading)
+    # The stale track sits between two current course plays.
+    state.played_tracks = [course[0], dropped, course[1]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    # course_keys is 3, so the last 2 *current* course plays are excluded. Without
+    # filtering history to the pool the stale track fills a slot and course[0] returns.
+    assert [c for c in candidates if c.heading_id == heading.id] == [course[2]]
+
+
+def test_course_cooldown_sizes_itself_to_selectable_tracks_only():
+    # Under allow_explicit=False an explicit course track is not selectable. Counting
+    # it inflates the set to 3, so the cooldown excludes the last 2 course plays —
+    # every track that could actually air — and steering silently stops.
+    heading = _heading()
+    clean = [_track(n) for n in range(2)]
+    explicit = _track(9)
+    explicit.explicit = True
+    for track in [*clean, explicit]:
+        track.heading_id = heading.id
+    normals = [_track(100 + n) for n in range(2)]
+    state = StationState(playlist=[*clean, explicit, *normals], heading=heading)
+    state.played_tracks = [clean[0], clean[1]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, allow_explicit=False, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    # Sized to the 2 selectable tracks, only the most recent is cooled, so the course
+    # still has a runner. Sized to 3, both are excluded and only normals remain.
+    assert [c for c in candidates if c.heading_id == heading.id] == [clean[0]]
 
 
 def test_single_track_course_is_not_cooled_against_itself():
