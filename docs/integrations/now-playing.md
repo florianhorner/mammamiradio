@@ -94,10 +94,11 @@ The stable bucket your UI branches on. Three classes, plus a sentinel:
 | `interstitial` | Ad, station ID, time check, sweeper. Title-only. | Render a station card (no track shape). |
 | `unavailable` | Transient: skipping, unknown future segment type. | Render a generic "on air" state without trying to populate music fields. |
 
-A `voice` segment with `host` absent is a pre-recorded clip that claims no
-speaker. Do not fill that gap from `station.hosts`. The roster lists everyone
-configured, including hosts who were not in the exchange, so the substitution
-credits people who never spoke. Fall back to the station name.
+A `voice` segment whose `host` is `null` is a pre-recorded clip that claims no
+speaker. The key is always present, like every other optional field. Do not fill
+that gap from `station.hosts`. The roster lists everyone configured, including
+hosts who were not in the exchange, so the substitution credits people who never
+spoke. Fall back to the station name.
 
 ### `segment_type` — raw internal subtype (diagnostic)
 

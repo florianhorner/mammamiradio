@@ -1,0 +1,18 @@
+mammamiradio — pre-ship verification
+branch: florianhorner/valencia-v3-review-fixes (off main after #966 merged)
+host:   local (make check)
+
+$ make check
+All checks passed!
+Success: no issues found in 312 source files
+6420 passed, 4 skipped, 23 deselected, 1 warning in 196.74s (0:03:16)
+All checks passed
+
+$ bash scripts/check-release-invariants.sh
+All invariants passed.
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ python tests/integrations/golden/generate_fixture.py --check
+golden fixture matches serializer output

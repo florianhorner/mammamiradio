@@ -452,6 +452,15 @@ async def test_scene_naming_a_resident_keeps_ladder(config, state, monkeypatch):
         "one person awake",
         "tre ospiti stasera",
         "four guests arriving",
+        # Singular masculine: "un" alone, and the singular noun forms.
+        "un ospite in salotto",
+        "un invitato stasera",
+        "una gente strana",
+        # Past six, in both languages.
+        "sette persone in salotto",
+        "dieci ospiti stasera",
+        "seven people at home",
+        "ten guests arriving",
     ],
 )
 def test_validate_scene_rejects_a_headcount(scene):
