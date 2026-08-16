@@ -426,6 +426,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
 .setup-strip-chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 8px;border:1px solid rgba(245,237,216,0.14);border-radius:8px;font-size:11px;color:rgba(245,237,216,0.82);background:rgba(245,237,216,0.04)}
 .setup-strip-chip[data-s="ready"]{border-color:rgba(37,99,235,0.35);color:var(--ok-text)}
+.setup-strip-chip[data-s="degraded"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
 .setup-strip-chip[data-s="missing"],.setup-strip-chip[data-s="checking"],.setup-strip-chip[data-s="waiting_ai"],.setup-strip-chip[data-s="empty"],.setup-strip-chip[data-s="stale"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
 .setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
 .setup-strip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
@@ -2418,6 +2419,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <h4 class="benefit-heading">Hear the full Mamma Mi Radio opening.</h4>
                   <p class="use-copy">You’ll hear Marco and Giulia, then the music starts.</p>
                   <div class="first-listen-status" id="firstListenSourceRepair"></div>
+                  <div class="first-listen-actions" id="firstListenSourceActions" hidden>
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
+                  </div>
                 </div>
               </section>
 
@@ -2577,18 +2581,28 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                     </div>
                     <form id="setupKeysForm" onsubmit="event.preventDefault();setupSaveKeys(event.submitter)">
                       <div class="setup-note safety-note"><strong>Saved keys stay hidden.</strong> Leave a field empty to keep its current value.</div>
-                      <div class="setup-keys">
-                        <label class="key-field"><span>Anthropic API key</span><input class="input" id="setupAnthropicKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Anthropic API key" oninput="updateFirstListenKeySaveState()"></label>
-                        <label class="key-field"><span>OpenAI API key</span><input class="input" id="setupOpenaiKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="OpenAI API key" oninput="updateFirstListenKeySaveState()"></label>
-                        <details class="setup-advanced" id="setupPremiumVoices">
-                          <summary>Voice providers</summary>
-                          <div class="setup-note">These change the voices. They do not add new conversations.</div>
+                      <div class="setup-sound-lanes">
+                        <section class="setup-sound-lane" aria-labelledby="setupConversationsHeading">
+                          <h4 id="setupConversationsHeading">Conversations</h4>
+                          <p>Choose which service can write new host moments between songs.</p>
                           <div class="setup-keys">
-                            <label class="key-field"><span>Azure Speech key</span><input class="input" id="setupAzureSpeechKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Azure Speech key" oninput="updateFirstListenKeySaveState()"></label>
-                            <label class="key-field"><span>Azure Speech region</span><input class="input" id="setupAzureSpeechRegion" type="text" placeholder="Leave blank to keep saved region" autocomplete="off" aria-label="Azure Speech region" oninput="updateFirstListenKeySaveState()"></label>
-                            <label class="key-field"><span>ElevenLabs API key</span><input class="input" id="setupElevenlabsKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="ElevenLabs API key" oninput="updateFirstListenKeySaveState()"></label>
+                            <label class="key-field"><span>Anthropic API key</span><input class="input" id="setupAnthropicKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Anthropic API key" oninput="updateFirstListenKeySaveState()"></label>
+                            <label class="key-field"><span>OpenAI API key</span><input class="input" id="setupOpenaiKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="OpenAI API key" oninput="updateFirstListenKeySaveState()"></label>
                           </div>
-                        </details>
+                        </section>
+                        <section class="setup-sound-lane" aria-labelledby="setupVoiceQualityHeading">
+                          <h4 id="setupVoiceQualityHeading">Voice quality</h4>
+                          <p>Choose the clarity, warmth, and presence of Marco and Giulia.</p>
+                          <details class="setup-advanced" id="setupPremiumVoices">
+                            <summary>Voice providers</summary>
+                            <div class="setup-note">These providers shape how the hosts sound when they speak.</div>
+                            <div class="setup-keys">
+                              <label class="key-field"><span>Azure Speech key</span><input class="input" id="setupAzureSpeechKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Azure Speech key" oninput="updateFirstListenKeySaveState()"></label>
+                              <label class="key-field"><span>Azure Speech region</span><input class="input" id="setupAzureSpeechRegion" type="text" placeholder="Leave blank to keep saved region" autocomplete="off" aria-label="Azure Speech region" oninput="updateFirstListenKeySaveState()"></label>
+                              <label class="key-field"><span>ElevenLabs API key</span><input class="input" id="setupElevenlabsKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="ElevenLabs API key" oninput="updateFirstListenKeySaveState()"></label>
+                            </div>
+                          </details>
+                        </section>
                       </div>
                       <div class="setup-actions" style="margin-top:10px">
                         <button type="submit" class="btn btn-trigger" id="setupSaveBtn" data-stopped-exempt disabled>Save changes</button>
@@ -2602,12 +2616,12 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               <details class="setup-advanced technical-details" id="setupAdvancedDetails">
                 <summary>Technical details and help</summary>
                 <div class="technical-body" aria-hidden="true" inert>
-                  <section class="technical-group"><h3>Music after the welcome</h3><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
+                  <section class="technical-group technical-group-wide"><h3>Music after the welcome</h3><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
                   <section class="technical-group"><h3>Exact Home Assistant source</h3><p><code>media-source://mammamiradio/live</code></p><p>Exactly one selected <code>media_player</code>. No automatic room choice or volume change.</p></section>
                   <section class="technical-group"><h3>Identity</h3><div class="setup-list" id="setupIdentity"></div></section>
                   <section class="technical-group"><h3>Original setup evidence</h3><ul class="setup-steps" id="setupSteps"></ul></section>
                   <section class="technical-group"><h3>First Listen timing</h3><p id="firstListenTiming">Measured in this browser after the media source is ready. No telemetry leaves this browser.</p></section>
-                  <section class="technical-group"><h3>Requirements</h3><div class="setup-list" id="setupEssentials"></div><div class="setup-list" id="setupChecks"></div></section>
+                  <section class="technical-group technical-group-wide"><h3>Requirements</h3><div class="setup-list" id="setupEssentials"></div><div class="setup-list" id="setupChecks"></div></section>
                   <details class="setup-advanced" id="setupCachedContextDiagnostics">
                     <summary>Cached Home context diagnostics</summary>
                     <div class="setup-note">This view may be old and cannot unlock Home context.</div>
@@ -2638,7 +2652,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 <h2 id="firstListenSuccessTitle" tabindex="-1">Your station is on air.</h2>
                 <p class="success-copy" id="firstListenSuccessCopy">You heard Marco and Giulia, and your privacy choice is saved.</p>
                 <div class="success-receipt" aria-label="Saved First Listen choices"><div><span>Heard in</span><strong id="firstListenSuccessSpeaker">Your speaker</strong></div><div><span>Home choice</span><strong id="firstListenSuccessPrivacy">Home stays private</strong></div></div>
-                <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openFirstListenStation()">Open your station</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
+                <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openFirstListenStation()">Open your station</button><button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Repair music source</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
                 <div class="guide-audio" data-guide="success">
                   <button type="button" class="guide-audio-play" data-guide-key="success" aria-describedby="guideSuccessNote" onclick="toggleFirstListenGuide('success',this)">Play the celebration</button>
                   <p class="guide-audio-copy" id="guideSuccessNote"><strong>9 seconds on this device</strong><span>This celebration plays only on this device.</span></p>
@@ -2749,7 +2763,7 @@ const FIRST_LISTEN_ERRORS={
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then find speakers again.'},
   ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
   ha_unreachable:{title:'We can’t reach Home Assistant',message:'The station could not connect in time.',action:'Check that Home Assistant is online, then try again.'},
-  media_source_missing:{title:'Mamma Mi Radio Live is not loaded',message:'Home Assistant cannot see the Mamma Mi Radio media source.',action:'Check HACS, restart Home Assistant if the integration was just installed, then confirm its config entry and recheck.'},
+  media_source_missing:{title:'Mamma Mi Radio Live is not loaded',message:'Home Assistant cannot see the exact Mamma Mi Radio Live media source yet.',action:'Confirm the Mammami Radio integration is loaded, then choose “Check Home Assistant again.”'},
   ambiguous_station:{title:'More than one station is connected',message:'The stable Live source cannot safely choose between multiple Mamma Mi Radio entries.',action:'Keep one active integration entry, then find speakers again.'},
   no_players:{title:'No ready speaker was found',message:'No other media player currently reports that it can play media.',action:'Bring a speaker online in Home Assistant, then find speakers again.'},
   player_unavailable:{title:'That speaker is not available now',message:'The selected player changed or went offline.',action:'Find speakers again and choose an available target.'},
@@ -4601,8 +4615,13 @@ async function turnOffJamendo(){
     applyJamendoResponse(result,'Jamendo turned off. Starter and local music continue.');
   }catch(_){setJamendoFormMessage(offlineMsg()+' The saved setting was not changed.','degraded');}
 }
-function openSetupPanel(){
+function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
+  if(focus==='source'){
+    _firstListenUi.showSuccess=false;
+    updateFirstListenSuccess();
+    document.body.dataset.firstListenFocus='source';
+  }
   showAdminTab('setup',{render:true,persist:true});
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
@@ -4610,8 +4629,20 @@ function openSetupPanel(){
   const firstListenRequired=document.body.dataset.firstListenEntry==='required';
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
-    if(firstListenRequired)focusCurrentFirstListenStep();
+    if(focus==='source')focusFirstListenStep('source');
+    else if(firstListenRequired)focusCurrentFirstListenStep();
     else summary?.focus({preventScroll:true});
+  },50);
+}
+function openMusicSourceTools(){
+  showAdminTab('rotazione',{render:true,persist:true});
+  setTimeout(()=>{
+    const tools=document.getElementById('libraryTools');
+    if(tools){
+      tools.open=true;
+      tools.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+    }
+    document.getElementById('sourceChartsBtn')?.focus({preventScroll:true});
   },50);
 }
 function firstListenInstallNeedsOnboarding(first){
@@ -4621,7 +4652,7 @@ function firstListenInstallNeedsOnboarding(first){
 function firstListenEntryRequired(setup){
   const first=setup?.guided_setup?.first_listen||{};
   const needsOnboarding=firstListenInstallNeedsOnboarding(first);
-  return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete);
+  return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete&&first.continuity_available);
 }
 function resolveFirstListenLanding(setup){
   const first=setup?.guided_setup?.first_listen||{};
@@ -4652,7 +4683,10 @@ function renderGuidedSetupStrip(setup){
   const primaryKind=primary.kind||'review_setup';
   const primaryLabel=primary.label||'Review setup';
   const primaryTarget=primary.target||(primaryKind==='open_listener'?'listen':'setup');
-  const primaryHandler=(primaryTarget==='listen'||primaryKind==='open_listener')?'openListener()':'openSetupPanel()';
+  const primaryFocus=primary.focus||'';
+  const primaryHandler=(primaryTarget==='listen'||primaryKind==='open_listener')
+    ?'openListener()'
+    :primaryFocus==='source'?"openSetupPanel('source')":'openSetupPanel()';
   actions.innerHTML=`<button type="button" class="btn btn-util setup-strip-action" data-stopped-exempt onclick="${primaryHandler}">${esc(primaryLabel)}</button>`;
 }
 function firstListenSetChip(id,state,label){
@@ -4722,6 +4756,23 @@ function focusCurrentFirstListenStep(){
   if(heading){heading.focus();return true}
   return false;
 }
+function focusFirstListenStep(key){
+  const step=Object.entries(FIRST_LISTEN_STEP_KEYS).find(([,value])=>value===key)?.[0];
+  const section=step?document.getElementById(step):null;
+  if(!section)return false;
+  const review=section.querySelector(':scope > .first-listen-head > .first-listen-review');
+  if(section.dataset.state==='complete'&&review&&!review.hidden){
+    toggleFirstListenReview(key,review);
+    return true;
+  }
+  const heading=section.querySelector('.first-listen-heading');
+  if(heading){
+    heading.focus({preventScroll:true});
+    heading.scrollIntoView({block:'center',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+    return true;
+  }
+  return false;
+}
 function closeFirstListenExpansion({restoreFocus=true}={}){
   const trigger=_firstListenUi.reviewTrigger;
   _firstListenUi.reviewStep='';
@@ -4773,14 +4824,20 @@ function updateFirstListenSuccess(){
   success.toggleAttribute('inert',!show);
   if(!show){success.classList.remove('is-celebrating');return}
   const projection=firstListenProjection();
+  const sourceState=firstListenSourceState(projection);
   const speaker=_firstListenUi.selectedName||'your saved speaker';
   const privacy=projection.privacyEnabled?'Home context is on':'Home stays private';
   const copy=document.getElementById('firstListenSuccessCopy');
   const speakerEl=document.getElementById('firstListenSuccessSpeaker');
   const privacyEl=document.getElementById('firstListenSuccessPrivacy');
-  if(copy)copy.textContent=`You heard Marco and Giulia on ${speaker}. Your privacy choice is saved.`;
+  const repair=document.getElementById('firstListenSuccessRepair');
+  const backupFollowUp=sourceState.continuityAvailable&&!sourceState.healthy;
+  if(copy)copy.textContent=backupFollowUp
+    ?`You heard Marco and Giulia on ${speaker}. Backup audio is keeping the station playing; primary music still needs attention.`
+    :`You heard Marco and Giulia on ${speaker}. Your privacy choice is saved.`;
   if(speakerEl)speakerEl.textContent=speaker;
   if(privacyEl)privacyEl.textContent=privacy;
+  if(repair)repair.hidden=!backupFollowUp;
   if(wasVisible)return;
   success.classList.remove('is-celebrating');
   void success.offsetWidth;
@@ -4788,7 +4845,9 @@ function updateFirstListenSuccess(){
   success.scrollIntoView({block:'start'});
   document.getElementById('firstListenSuccessTitle')?.focus({preventScroll:true});
   const live=document.getElementById('firstListenLiveRegion');
-  if(live)live.textContent='First Listen complete. Your station is on air.';
+  if(live)live.textContent=backupFollowUp
+    ?'First Listen complete. Backup audio is keeping the station playing; primary music still needs attention.'
+    :'First Listen complete. Your station is on air.';
 }
 function reviewFirstListenChoices(){
   _firstListenUi.showSuccess=false;
@@ -4869,8 +4928,8 @@ const FIRST_LISTEN_SOURCE_ROWS=[
 function firstListenSourceStatus(kind,status){
   const value=String(status||'checking').toLowerCase();
   if(kind==='recovery'){
-    if(value==='on_air')return{state:'degraded',label:'On air as cover'};
-    if(value==='playable'||value==='cover_only')return{state:'degraded',label:'Speaker-test cover'};
+    if(value==='on_air')return{state:'degraded',label:'Backup audio playing'};
+    if(value==='playable'||value==='cover_only')return{state:'degraded',label:'Backup audio available'};
   }
   const values={
     on_air:{state:'ready',label:'On air'},
@@ -4891,6 +4950,16 @@ function firstListenSourceRows(source){
     const found=supplied.find(row=>required.aliases.includes(String(row?.kind||row?.id||'').toLowerCase()));
     return{...required,row:found||{status:'checking',detail:'Waiting for source evidence.'}};
   });
+}
+function firstListenSourceState(projection){
+  const source=projection?.guided?.source_readiness||{};
+  const normalized=firstListenSourceRows(source);
+  const healthy=source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
+  const recoveryRow=normalized.find(item=>item.kind==='recovery')?.row||{};
+  const recoveryStatus=String(recoveryRow.status||recoveryRow.state||'');
+  const recoveryOnAir=source.recovery_on_air===true||recoveryStatus==='on_air';
+  const recoveryAvailable=recoveryOnAir||source.recovery_cover_available===true||['playable','cover_only'].includes(recoveryStatus);
+  return{source,normalized,healthy,recoveryOnAir,recoveryAvailable,continuityAvailable:source.continuity_available===true||healthy||recoveryAvailable};
 }
 function renderFirstListenSources(source){
   const box=document.getElementById('firstListenSources');
@@ -5020,15 +5089,12 @@ function firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable}){
 }
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
-  const source=projection.guided.source_readiness||{};
+  const sourceState=firstListenSourceState(projection);
+  const source=sourceState.source;
   const sourceRows=Array.isArray(source.rows)?source.rows:[];
-  const normalized=firstListenSourceRows(source);
+  const normalized=sourceState.normalized;
   const sourceKnown=sourceRows.length>0;
-  const healthy=source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
-  const recoveryRow=normalized.find(item=>item.kind==='recovery')?.row||{};
-  const recoveryStatus=String(recoveryRow.status||recoveryRow.state||'');
-  const recoveryOnAir=source.recovery_on_air===true||recoveryStatus==='on_air';
-  const recoveryAvailable=recoveryOnAir||source.recovery_cover_available===true||['playable','cover_only'].includes(recoveryStatus);
+  const {healthy,recoveryOnAir,recoveryAvailable,continuityAvailable}=sourceState;
   renderFirstListenSources(source);
 
   const priorInstall=projection.legacy||projection.first.install_origin==='existing';
@@ -5042,7 +5108,8 @@ function renderFirstListenProgress(){
   renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,recoveryAvailable,priorInstall});
   const privacyMilestone=projection.privacyReviewed;
   const sourceMilestone=sourceKnown||listenAccepted||listenComplete||privacyMilestone||priorInstall;
-  firstListenSetStep('firstListenSourceStep',sourceMilestone?'complete':'current');
+  const sourceComplete=sourceMilestone&&continuityAvailable;
+  firstListenSetStep('firstListenSourceStep',sourceComplete?'complete':'current');
   firstListenSetStep('firstListenSpeakerStep',listenAccepted?'complete':sourceMilestone?'current':'upcoming');
   firstListenSetStep('firstListenVerifyStep',listenComplete?'complete':receiptRepairRequired||listenAccepted?'current':'upcoming');
   firstListenSetStep('firstListenPrivacyStep',privacyMilestone?'complete':existingPrivacyReview||listenComplete?'current':'upcoming');
@@ -5052,7 +5119,7 @@ function renderFirstListenProgress(){
   const progressLine=document.getElementById('firstListenProgressLine');
   const currentStep=document.querySelector('.first-listen-step[data-state="current"]');
   const currentNumber=currentStep?Number(currentStep.querySelector('.first-listen-number')?.textContent||0):0;
-  const nextLabels={1:'choose one room',2:'check the sound',3:'choose whether the hosts can use Home details',4:'optional new conversations'};
+  const nextLabels={1:sourceKnown&&!continuityAvailable?'repair the music source':'choose one room',2:'check the sound',3:'choose whether the hosts can use Home details',4:'optional new conversations'};
   if(surface)surface.dataset.currentStep=currentNumber?String(currentNumber):'complete';
   if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of 5. Next: ${nextLabels[currentNumber]||'finish'}.`:'First Listen complete. Review any choice below.';
 
@@ -5069,16 +5136,18 @@ function renderFirstListenProgress(){
   }else if(recoveryOnAir){
     firstListenSetChip('firstListenSourceChip','degraded','Backup playing');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup music will keep the station playing.';
-    if(sourceRepair)sourceRepair.textContent='You can continue. Backup music will play after the welcome. Technical details below show what needs attention.';
+    if(sourceRepair)sourceRepair.textContent='You can continue and finish First Listen. Backup music will play after the welcome. Primary music still needs attention.';
   }else if(recoveryAvailable){
-    firstListenSetChip('firstListenSourceChip','degraded','Backup ready');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup music will keep the station playing.';
-    if(sourceRepair)sourceRepair.textContent='You can continue. Backup music is ready after the welcome. Technical details below show what needs attention.';
+    firstListenSetChip('firstListenSourceChip','degraded','Backup audio available');
+    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup audio can keep the station playing while primary music is repaired.';
+    if(sourceRepair)sourceRepair.textContent='You can continue and finish First Listen with backup audio. Backup music is ready after the welcome. Primary music still needs attention; open music source tools when you are ready.';
   }else{
-    firstListenSetChip('firstListenSourceChip','degraded','Music missing');
+    firstListenSetChip('firstListenSourceChip','degraded','Music still needed');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready, but music cannot continue afterward yet.';
-    if(sourceRepair)sourceRepair.textContent='The welcome can still play. Open Technical details below to repair the music that follows it.';
+    if(sourceRepair)sourceRepair.textContent='The welcome can still play, but there is no audio ready afterward. Open music source tools to continue.';
   }
+  const sourceActions=document.getElementById('firstListenSourceActions');
+  if(sourceActions)sourceActions.hidden=!sourceKnown||healthy;
 
   const findBtn=document.getElementById('firstListenFindPlayersBtn');
   const select=document.getElementById('firstListenPlayerSelect');
@@ -5090,7 +5159,7 @@ function renderFirstListenProgress(){
   const speakerBusy=_firstListenUi.discovery==='finding'||_firstListenUi.dispatch==='starting'||_firstListenUi.receiptSaving;
   const browserGuidePlaying=firstListenGuideLocksRoomProof();
   const deliberateRetry=_firstListenUi.verification==='not_yet'&&!listenComplete;
-  const discoveryLabel=_firstListenUi.discovery==='finding'?'Finding speakers…':_firstListenUi.players.length?'Search again':'Find my speakers';
+  const discoveryLabel=_firstListenUi.discovery==='finding'?'Finding speakers…':_firstListenUi.discovery==='error'?'Check Home Assistant again':_firstListenUi.players.length?'Search again':'Find my speakers';
   if(findBtn){findBtn.hidden=false;findBtn.disabled=!sourceKnown||speakerBusy;findBtn.textContent=discoveryLabel;firstListenSetActionTone(findBtn,!_firstListenUi.players.length&&!listenAccepted);}
   if(select)select.disabled=!sourceKnown||!_firstListenUi.players.length||speakerBusy;
   if(choices)choices.disabled=!sourceKnown||speakerBusy;
@@ -5155,7 +5224,7 @@ function renderFirstListenProgress(){
     if(verifySummary)verifySummary.textContent='Your existing speaker choice still stands. Review your Home details next.';
   }else if(listenComplete){
     firstListenSetChip('firstListenVerifyChip','ready','Heard');
-    if(verifySummary)verifySummary.textContent=healthy?'Bella — Mamma Mi Radio is in the room.':recoveryOnAir?'The station is in the room. Backup music follows the opening.':recoveryAvailable?'The station is in the room. Backup music is ready, but the main music still needs attention.':'The opening reached the room; the music still needs attention.';
+    if(verifySummary)verifySummary.textContent=healthy?'Bella — Mamma Mi Radio is in the room.':recoveryOnAir?'The station is in the room. Backup music follows the opening.':recoveryAvailable?'The station is in the room. Backup audio is available, but primary music still needs attention.':'The opening reached the room; the music still needs attention.';
     firstListenSetStatus('firstListenVerifyStatus',`You heard the station on ${_firstListenUi.selectedName||'your saved speaker'}.`,'ready');
   }else if(receiptRepairRequired){
     firstListenSetChip('firstListenVerifyChip','degraded','Save check');
@@ -5252,7 +5321,7 @@ function renderFirstListenProgress(){
   const activeGuideButton=_firstListenUi.guideButton;
   if(activeGuideButton&&(activeGuideButton.closest('[hidden]')||activeGuideButton.closest('[inert]')))stopFirstListenGuide();
   updateFirstListenSuccess();
-  return{healthy,recoveryOnAir,recoveryAvailable,sourceKnown,needsAction:!listenMilestone||!projection.privacyReviewed};
+  return{healthy,recoveryOnAir,recoveryAvailable,continuityAvailable,sourceKnown,needsAction:!listenMilestone||!projection.privacyReviewed};
 }
 function shouldShowHomeContextPreview(setup){
   const guided=setup?.guided_setup||{};
@@ -5690,7 +5759,8 @@ async function chooseFirstListenPrivacy(enabled,el){
   const priorInstall=projection.legacy||projection.first.install_origin==='existing';
   const reviewingPrivacy=_firstListenUi.reviewStep==='privacy';
   const reviewTrigger=_firstListenUi.reviewTrigger;
-  const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy;
+  const continuityAvailable=firstListenSourceState(projection).continuityAvailable;
+  const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy&&continuityAvailable;
   let focusTarget='';
   _firstListenUi.privacySaving=true;
   renderFirstListenProgress();
@@ -5975,8 +6045,11 @@ function renderSetup(setup){
 }
 async function setupRecheck(el){
   flash(el);
+  const focusSource=document.body.dataset.firstListenFocus==='source';
+  delete document.body.dataset.firstListenFocus;
   const data=await api('POST','/api/setup/recheck',{});
   renderSetup(data);
+  if(focusSource)setTimeout(()=>focusFirstListenStep('source'),50);
   toast('Configuration re-check complete');
 }
 function firstListenKeyValues(){

@@ -153,6 +153,18 @@ def _stream_status(config: StationConfig, state: StationState, golden_path: dict
     # The golden-path source probe is authoritative when available; runtime
     # pause/queue/selection state is surfaced separately by /status.
     if golden_path is not None:
+        source_readiness = golden_path.get("source_readiness")
+        if isinstance(source_readiness, dict) and source_readiness:
+            if source_readiness.get("programming_ready") is True:
+                return "ready"
+            if (
+                source_readiness.get("continuity_available") is True
+                or source_readiness.get("recovery_cover_available") is True
+                or source_readiness.get("recovery_on_air") is True
+            ):
+                # Backup audio keeps First Listen usable, but it must remain an
+                # amber follow-up rather than pretending primary music is ready.
+                return "degraded"
         return "blocked" if golden_path.get("blocking") else "ready"
     from mammamiradio.playlist.downloader import external_media_enabled
 
@@ -176,6 +188,8 @@ def _legacy_home_context_status(has_llm: bool, availability: HomeContextAvailabi
 def _setup_status_shape(status: str) -> dict[str, str]:
     if status == "ready":
         return {"tone": "ok", "shape": "ok", "display_status": "Ready"}
+    if status == "degraded":
+        return {"tone": "warn", "shape": "warn", "display_status": "Backup audio available"}
     if status == "not_configured":
         return {"tone": "info", "shape": "info", "display_status": "Optional"}
     if status in {"blocked", "rejected"}:
@@ -219,7 +233,12 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
         if status in {"ready", "not_configured"}:
             continue
         primary_action = {
-            "fix_stream": {"kind": "fix_stream", "label": "Fix stream", "target": "setup"},
+            "repair_music_source": {
+                "kind": "repair_music_source",
+                "label": "Repair music source",
+                "target": "setup",
+                "focus": "source",
+            },
             "add_ai_key": {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"},
             "find_speaker": {"kind": "find_speaker", "label": "Find speaker", "target": "setup"},
             "verify_audio": {"kind": "verify_audio", "label": "Did you hear it?", "target": "setup"},
@@ -330,6 +349,7 @@ def first_listen_onboarding_active(
     audio_complete: bool,
     privacy_complete: bool,
     ha_access_available: bool = True,
+    continuity_available: bool = True,
 ) -> bool:
     """Return whether the operator still needs the speaker-check onboarding sequence."""
     # Without Home Assistant access the speaker check can never complete, so a
@@ -342,7 +362,12 @@ def first_listen_onboarding_active(
     # Only a proven pre-feature install gets the compatibility bypass. Treat
     # malformed or future origin values like ``unknown`` so privacy and audible
     # proof cannot fail open when origin evidence drifts.
-    return not (audio_complete and privacy_complete)
+    # A fresh run is complete only after the operator has heard the opening,
+    # made the privacy choice, and the station has either primary music or a
+    # usable recovery cover to continue with. The default keeps the helper's
+    # legacy callers fail-closed while live projections pass explicit source
+    # evidence.
+    return not (audio_complete and privacy_complete and continuity_available)
 
 
 def build_guided_setup(
@@ -364,17 +389,38 @@ def build_guided_setup(
     ai_status = _llm_key_status(config, provider_health)
     home_status = _legacy_home_context_status(has_llm, home_availability)
 
+    source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
+    source_readiness_present = bool(source_readiness)
+    primary_music_ready = bool(source_readiness.get("programming_ready", False))
+    recovery_available = bool(
+        source_readiness.get("recovery_cover_available", False) or source_readiness.get("recovery_on_air", False)
+    )
+    # A legacy projection without source rows only has the old stream boolean
+    # to work from. Once source evidence exists, do not infer continuity from a
+    # non-blocking flag: fallback and primary readiness are distinct truths.
+    continuity_available = (
+        primary_music_ready or recovery_available or (not source_readiness_present and stream_status == "ready")
+    )
+
     stream = {
         "id": "stream",
         "status": stream_status,
         "label": "Stream",
-        "headline": "Demo Radio is ready to hear." if stream_status == "ready" else "Stream needs attention.",
+        "headline": (
+            "Demo Radio is ready to hear."
+            if stream_status == "ready"
+            else "Backup audio is keeping the station playing."
+            if stream_status == "degraded"
+            else "Music needs attention."
+        ),
         "detail": (
             "Open the listener and hear the station before adding keys."
             if stream_status == "ready"
+            else "Primary music still needs attention. Repair it from First Listen when you are ready."
+            if stream_status == "degraded"
             else "Start the station or add a music source before continuing."
         ),
-        "action": "open_listener" if stream_status == "ready" else "fix_stream",
+        "action": "open_listener" if stream_status == "ready" else "repair_music_source",
     }
     ai_hosts = {
         "id": "ai_hosts",
@@ -412,13 +458,6 @@ def build_guided_setup(
     accepted_attempt_id = str(getattr(first_listen_receipt, "accepted_attempt_id", "") or "")
     selected_entity_id = str(getattr(first_listen_receipt, "selected_entity_id", "") or "")
     fresh_install = install_origin == "fresh"
-    onboarding_active = first_listen_onboarding_active(
-        install_origin,
-        audio_complete=audio_complete,
-        privacy_complete=privacy_complete,
-        ha_access_available=has_ha_access,
-    )
-    source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
     source_map = source_readiness.get("sources") if isinstance(source_readiness.get("sources"), dict) else {}
     source_rows = []
     for kind, fallback_label in (
@@ -448,23 +487,32 @@ def build_guided_setup(
         **source_readiness,
         "rows": source_rows,
         "healthy": bool(source_readiness.get("programming_ready", False)),
+        "continuity_available": continuity_available,
         # Recovery transport truth comes only from on-air source evidence.
         # Human confirmation proves the selected speaker path, not that the
         # recovery ladder is currently carrying audio.
         "transport_audible": bool(source_readiness.get("recovery_on_air", False)),
     }
+    onboarding_active = first_listen_onboarding_active(
+        install_origin,
+        audio_complete=audio_complete,
+        privacy_complete=privacy_complete,
+        ha_access_available=has_ha_access,
+        continuity_available=continuity_available,
+    )
     first_listen = {
         "install_origin": install_origin,
         "fresh_install": fresh_install,
         "audio_complete": audio_complete,
         "privacy_complete": privacy_complete,
+        "continuity_available": continuity_available,
         "setup_reviewed": privacy_complete,
         "accepted_attempt_id": accepted_attempt_id,
         "selected_entity_id": selected_entity_id,
         "accepted_at": getattr(first_listen_receipt, "accepted_at", None),
         "heard_at": getattr(first_listen_receipt, "heard_at", None),
         "privacy_reviewed_at": getattr(first_listen_receipt, "privacy_reviewed_at", None),
-        "show_ai": bool(not onboarding_active or (audio_complete and privacy_complete)),
+        "show_ai": bool(not onboarding_active or (audio_complete and privacy_complete and continuity_available)),
     }
     speaker = {
         "status": "verified"
@@ -507,8 +555,14 @@ def build_guided_setup(
         source_stage = {
             "id": "source_readiness",
             "label": "Music sources",
-            "status": "ready" if source_readiness["healthy"] else "blocked",
-            "action": "fix_stream" if not source_readiness["healthy"] else "review",
+            "status": (
+                "ready"
+                if source_readiness["healthy"]
+                else "degraded"
+                if source_readiness["continuity_available"]
+                else "blocked"
+            ),
+            "action": "review" if source_readiness["healthy"] else "repair_music_source",
             "primary_priority": 40,
         }
         speaker_stage = {
@@ -866,6 +920,7 @@ def build_setup_status(
         audio_complete=guided_setup["first_listen"]["audio_complete"],
         privacy_complete=guided_setup["first_listen"]["privacy_complete"],
         ha_access_available=bool(guided_setup["privacy"]["homeassistant_access"]),
+        continuity_available=bool(guided_setup["first_listen"].get("continuity_available", False)),
     )
     onboarding_required = not stream_ready or first_listen_active
 
@@ -907,6 +962,8 @@ def build_setup_status(
             if first_listen_active and not guided_setup["first_listen"]["audio_complete"]
             else "Review the filtered Home context preview, then enable it or keep it off."
             if first_listen_active and not guided_setup["first_listen"]["privacy_complete"]
+            else "Repair the primary music source; backup audio is keeping the station playing."
+            if not stream_ready and guided_setup["source_readiness"].get("continuity_available")
             else "Fix stream readiness before setup continues."
             if not stream_ready
             else "Add an AI key to unlock full station behavior."

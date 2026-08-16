@@ -224,7 +224,12 @@ def test_guided_setup_primary_action_prioritizes_stream_attention():
     guided = build_guided_setup(config, state)
 
     assert guided["stream"]["status"] == "blocked"
-    assert guided["strip"]["primary_action"] == {"kind": "fix_stream", "label": "Fix stream", "target": "setup"}
+    assert guided["strip"]["primary_action"] == {
+        "kind": "repair_music_source",
+        "label": "Repair music source",
+        "target": "setup",
+        "focus": "source",
+    }
 
 
 def test_guided_setup_primary_action_prompts_ai_key_when_stream_ready():
@@ -662,6 +667,14 @@ def test_setup_status_shape_does_not_classify_runtime_pause_as_setup_failure():
     }
 
 
+def test_setup_status_shape_describes_backup_audio_without_calling_it_ready():
+    assert _setup_status_shape("degraded") == {
+        "tone": "warn",
+        "shape": "warn",
+        "display_status": "Backup audio available",
+    }
+
+
 def test_build_setup_status_identity_preview_uses_station_name(monkeypatch):
     monkeypatch.setenv("STATION_NAME", "Radio Test")
     config = load_config()
@@ -728,14 +741,18 @@ def test_playlist_is_demo_none():
     assert _playlist_is_demo(state) is True
 
 
-def _first_listen_source_projection(*, jamendo_status: str = "not_configured") -> dict:
+def _first_listen_source_projection(
+    *, jamendo_status: str = "not_configured", recovery_status: str = "cover_only"
+) -> dict:
+    programming_ready = jamendo_status in {"playable", "on_air"}
+    recovery_on_air = recovery_status == "on_air"
     sources = {}
     for kind, status in (
         ("charts", "unavailable"),
         ("jamendo", jamendo_status),
         ("local", "not_configured"),
         ("demo", "not_bundled"),
-        ("recovery", "cover_only"),
+        ("recovery", recovery_status),
     ):
         sources[kind] = {
             "kind": kind,
@@ -754,11 +771,89 @@ def _first_listen_source_projection(*, jamendo_status: str = "not_configured") -
         "sources": sources,
         "current_rotation": {},
         "advanced": None,
-        "programming_ready": jamendo_status in {"playable", "on_air"},
-        "recovery_cover_available": True,
-        "recovery_on_air": False,
-        "transport_only": False,
+        "programming_ready": programming_ready,
+        "recovery_cover_available": recovery_status in {"cover_only", "on_air"},
+        "recovery_on_air": recovery_on_air,
+        "transport_only": recovery_on_air and not programming_ready,
     }
+
+
+def test_stream_status_keeps_primary_music_amber_when_recovery_is_available():
+    config = load_config()
+    config.allow_ytdlp = False
+
+    status = _stream_status(
+        config,
+        StationState(),
+        golden_path={
+            "blocking": True,
+            "source_readiness": {
+                "programming_ready": False,
+                "recovery_cover_available": True,
+            },
+        },
+    )
+
+    assert status == "degraded"
+
+
+def test_fresh_completed_milestones_stay_active_without_continuity():
+    config = load_config()
+    config.is_addon = True
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = False
+    config.ha_token = "supervisor-token"
+    receipt = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="accepted-attempt-1234",
+        accepted_at=100.0,
+        heard_at=101.0,
+        privacy_reviewed_at=102.0,
+    )
+
+    guided = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path={
+            "blocking": True,
+            "source_readiness": _first_listen_source_projection(recovery_status="unavailable"),
+        },
+        first_listen_receipt=receipt,
+        install_origin="fresh",
+        context_choice_explicit=True,
+    )
+
+    assert guided["first_listen"]["continuity_available"] is False
+    assert guided["first_listen"]["show_ai"] is False
+    assert guided["strip"]["items"][0]["status"] == "blocked"
+    assert guided["strip"]["primary_action"]["kind"] == "repair_music_source"
+
+
+def test_recommended_next_action_reassures_on_backup_audio_after_onboarding():
+    """Regression: this branch was reachable but had zero test coverage.
+
+    Once First Listen onboarding is already behind an install (or never
+    required), a degraded stream backed by a usable recovery cover must get
+    the reassuring "backup audio" copy, not the generic "fix stream
+    readiness" fallback meant for a station with no audio at all.
+    """
+    config = load_config()
+    config.allow_ytdlp = False
+
+    setup = build_setup_status(
+        config,
+        StationState(),
+        golden_path={
+            "blocking": True,
+            "source_readiness": _first_listen_source_projection(recovery_status="cover_only"),
+        },
+        install_origin="existing",
+    )
+
+    assert setup["guided_setup"]["stream"]["status"] == "degraded"
+    assert setup["recommended_next_action"] == (
+        "Repair the primary music source; backup audio is keeping the station playing."
+    )
 
 
 def test_fresh_no_key_setup_orders_speaker_and_privacy_before_optional_ai():
@@ -990,7 +1085,8 @@ def test_fresh_recovery_strip_advances_through_audio_and_privacy_before_repair()
         context_choice_explicit=True,
     )
     assert repair["strip"]["primary_action"] == {
-        "kind": "fix_stream",
-        "label": "Fix stream",
+        "kind": "repair_music_source",
+        "label": "Repair music source",
         "target": "setup",
+        "focus": "source",
     }
