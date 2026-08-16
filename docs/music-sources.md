@@ -97,7 +97,9 @@ separate authorization from Jamendo. Read the
 [Jamendo API terms](https://devportal.jamendo.com/api_terms_of_use) before
 enabling it.
 
-Configure it in **Motore -> Setup -> Music sources**. Saving applies live and
+Configure it in **Motore -> Setup -> Music sources**. On a fresh install the
+card appears after the First Listen journey is finished, so the guided setup
+keeps a single obvious action. Saving applies live and
 does not restart or interrupt the station. A client ID saved by an older
 version is imported to owner-only secrets where possible, remains disabled,
 and requires a fresh acknowledgement before use. The admin UI never echoes the

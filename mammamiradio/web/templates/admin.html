@@ -2599,43 +2599,6 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               </section>
               </div>
 
-            <div class="setup-subhead" id="jamendoSetupHeading" tabindex="-1">Music sources</div>
-            <div class="music-sources">
-              <div class="music-source-row" id="starterSetupRow" data-state="blocked">
-                <div class="music-source-copy">
-                  <div class="music-source-title" id="starterSetupLabel">Starter collection unavailable</div>
-                  <div class="music-source-detail" id="starterSetupDetail">The verified twelve-track package is not available.</div>
-                </div>
-                <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span>
-              </div>
-            </div>
-            <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
-              <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
-                <span class="jamendo-secret-saved">✓ Client ID saved</span>
-                <div class="jamendo-secret-actions">
-                  <button type="button" class="btn btn-util" data-stopped-exempt onclick="replaceJamendoClientId()">Replace</button>
-                  <button type="button" class="btn btn-util" data-stopped-exempt onclick="clearJamendoClientId(this)">Clear</button>
-                </div>
-              </div>
-              <div id="jamendoClientField">
-                <label class="setup-title" for="jamendoClientId">Jamendo client ID</label>
-                <input class="input" id="jamendoClientId" type="password" autocomplete="off" spellcheck="false" aria-describedby="jamendoHelp" placeholder="Enter your own client ID">
-              </div>
-              <label class="jamendo-checkbox">
-                <input type="checkbox" id="jamendoEnabled">
-                <span><strong>Enable Jamendo live rotation</strong></span>
-              </label>
-              <label class="jamendo-checkbox">
-                <input type="checkbox" id="jamendoNoncommercialAck">
-                <span>I confirm this station's Jamendo API use is non-commercial and understand that Mamma Mi Radio does not certify broadcast rights.</span>
-              </label>
-              <p class="jamendo-help" id="jamendoHelp">Optional. Uses your Jamendo API client ID for non-commercial API use. Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
-              <div class="jamendo-form-message" id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"></div>
-              <div class="setup-actions">
-                <button type="button" class="btn btn-trigger" id="jamendoSaveBtn" data-stopped-exempt onclick="saveJamendoSettings(this)">Save and check</button>
-              </div>
-            </div>
-
               <details class="setup-advanced technical-details" id="setupAdvancedDetails">
                 <summary>Technical details and help</summary>
                 <div class="technical-body" aria-hidden="true" inert>
@@ -2684,6 +2647,45 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               </div>
             </section>
             <div class="sr-only" id="firstListenLiveRegion" role="status" aria-live="polite" aria-atomic="true"></div>
+
+            <section class="first-listen-surface setup-music-sources" id="setupMusicSources" aria-labelledby="jamendoSetupHeading">
+              <div class="setup-subhead" id="jamendoSetupHeading" tabindex="-1">Music sources</div>
+              <div class="music-sources">
+                <div class="music-source-row" id="starterSetupRow" data-state="blocked">
+                  <div class="music-source-copy">
+                    <div class="music-source-title" id="starterSetupLabel">Starter collection unavailable</div>
+                    <div class="music-source-detail" id="starterSetupDetail">The verified twelve-track package is not available.</div>
+                  </div>
+                  <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span>
+                </div>
+              </div>
+              <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
+                <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
+                  <span class="jamendo-secret-saved">✓ Client ID saved</span>
+                  <div class="jamendo-secret-actions">
+                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="replaceJamendoClientId()">Replace</button>
+                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="clearJamendoClientId(this)">Clear</button>
+                  </div>
+                </div>
+                <div id="jamendoClientField">
+                  <label class="setup-title" for="jamendoClientId">Jamendo client ID</label>
+                  <input class="input" id="jamendoClientId" type="password" autocomplete="off" spellcheck="false" aria-describedby="jamendoHelp" placeholder="Enter your own client ID">
+                </div>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoEnabled">
+                  <span><strong>Enable Jamendo live rotation</strong></span>
+                </label>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoNoncommercialAck">
+                  <span>I confirm this station's Jamendo API use is non-commercial and understand that Mamma Mi Radio does not certify broadcast rights.</span>
+                </label>
+                <p class="jamendo-help" id="jamendoHelp">Optional. Uses your Jamendo API client ID for non-commercial API use. Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
+                <div class="jamendo-form-message" id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"></div>
+                <div class="setup-actions">
+                  <button type="button" class="btn btn-trigger" id="jamendoSaveBtn" data-stopped-exempt onclick="saveJamendoSettings(this)">Save and check</button>
+                </div>
+              </div>
+            </section>
           </div>
         </details>
 

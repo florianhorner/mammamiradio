@@ -207,6 +207,14 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
   display: none;
 }
 
+/* Optional music-source settings are not part of the guided journey. While
+ * First Listen still needs finishing, the journey keeps its one obvious
+ * action; the Music sources card returns once the journey completes. The
+ * card lives inside the setup tabpanel, so no active-tab guard is needed. */
+body[data-first-listen-entry="required"] .setup-music-sources {
+  display: none;
+}
+
 /* ── One opaque First Listen surface ────────────────────────────────────── */
 
 .first-listen-panel {
@@ -245,6 +253,12 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
 
 .first-listen-panel .first-listen-surface[hidden]::before {
   content: none;
+}
+
+/* The post-journey Music sources card shares the surface treatment; journey
+ * sections pad themselves, so this card carries its own padding. */
+.first-listen-panel .setup-music-sources {
+  padding: var(--space-5) var(--space-6) var(--space-6);
 }
 
 /* The old diagnostic wrapper remains a mount boundary, not another card. */
