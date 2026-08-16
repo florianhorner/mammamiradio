@@ -699,6 +699,8 @@ def test_playlist_is_demo_none():
 def _first_listen_source_projection(
     *, jamendo_status: str = "not_configured", recovery_status: str = "cover_only"
 ) -> dict:
+    programming_ready = jamendo_status in {"playable", "on_air"}
+    recovery_on_air = recovery_status == "on_air"
     sources = {}
     for kind, status in (
         ("charts", "unavailable"),
@@ -724,10 +726,10 @@ def _first_listen_source_projection(
         "sources": sources,
         "current_rotation": {},
         "advanced": None,
-        "programming_ready": jamendo_status in {"playable", "on_air"},
+        "programming_ready": programming_ready,
         "recovery_cover_available": recovery_status in {"cover_only", "on_air"},
-        "recovery_on_air": False,
-        "transport_only": False,
+        "recovery_on_air": recovery_on_air,
+        "transport_only": recovery_on_air and not programming_ready,
     }
 
 

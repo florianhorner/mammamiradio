@@ -107,7 +107,7 @@ async (page) => {
           selected_entity_id: selectedEntityId,
           heard_at: audio ? 101 : null,
           privacy_reviewed_at: privacy ? 102 : null,
-          show_ai: resolvedInstallOrigin === 'existing' || (audio && privacy),
+          show_ai: resolvedInstallOrigin === 'existing' || (audio && privacy && continuityAvailable),
           receipt_recovery: {
             available: Boolean(receiptRecoveryEntity),
             entity_id: receiptRecoveryEntity,
