@@ -2641,10 +2641,21 @@ class StationState:
         heading_recent_keys: set[str] = set()
         active_heading = self.heading
         if active_heading is not None and active_heading.id:
-            course_keys = {t.cache_key for t in pool if t.heading_id == active_heading.id}
+            # Size the set from what could actually be picked. An explicit course track
+            # under allow_explicit=False is not selectable, so counting it would let the
+            # cooldown exclude every track that is.
+            course_keys = {
+                track.cache_key
+                for track in pool
+                if track.heading_id == active_heading.id and (allow_explicit or not track.explicit)
+            }
             if len(course_keys) > 1:
+                # Match history against course_keys, not the heading id: a course track
+                # that has since been banned or dropped from the pool is not something
+                # the set can cycle back to, so it must not consume a cooldown slot and
+                # let a current track return early.
                 for played in reversed(self.played_tracks):
-                    if played.heading_id != active_heading.id:
+                    if played.cache_key not in course_keys:
                         continue
                     heading_recent_keys.add(played.cache_key)
                     if len(heading_recent_keys) >= len(course_keys) - 1:
