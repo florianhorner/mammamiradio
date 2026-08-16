@@ -61,9 +61,10 @@ _SCENE_SHAPE_RE = re.compile(r"^[^\W\d_]+(?:[ '’\-][^\W\d_]+){0,5}$")
 # as naming a resident. _SCENE_SHAPE_RE already rejects digits, so a count can only
 # arrive spelled out.
 _PERSON_COUNT_RE = re.compile(
-    r"\b(?:un[ao]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci"
+    r"(?:\b(?:un[ao]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci"
     r"|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
-    r"(?:person[ae]|gente|ospit[ei]|invitat[io]|people|persons?|guests?|humans?)\b",
+    r"(?:person[ae]|gente|ospit[ei]|invitat[aeio]|people|persons?|guests?|humans?)\b"
+    r"|\bun['’](?:ospite|invitata)\b)",
     re.IGNORECASE,
 )
 # Unicode categories dropped before validation: C0/C1 controls (Cc), format

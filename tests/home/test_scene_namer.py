@@ -456,6 +456,13 @@ async def test_scene_naming_a_resident_keeps_ladder(config, state, monkeypatch):
         "un ospite in salotto",
         "un invitato stasera",
         "una gente strana",
+        # Feminine and elided Italian forms, with both apostrophe styles.
+        "una invitata in salotto",
+        "due invitate a casa",
+        "un'ospite in salotto",
+        "un’ospite in salotto",
+        "un'invitata stasera",
+        "un’invitata stasera",
         # Past six, in both languages.
         "sette persone in salotto",
         "dieci ospiti stasera",
