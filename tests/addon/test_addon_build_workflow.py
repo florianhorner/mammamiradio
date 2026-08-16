@@ -349,6 +349,14 @@ def test_ci_emits_strict_quick_media_proof_before_build() -> None:
 
 
 def test_ci_proves_both_unpushed_images_before_any_publish() -> None:
+    """The full both-image proof runs and uploads its report before any push.
+
+    While the twelve starter-catalog tracks are absent by design the job is
+    report-only (missing content prints a NOTICE instead of failing, so image
+    publish and the edge channel keep flowing); the stable promotion media-proof
+    job in addon-release.yml and scripts/pre-release-check.sh section 10 keep
+    the hard gate on the release path.
+    """
     text = _workflow_text()
     build_block = _extract_job_block(text, "build")
     proof_block = _extract_job_block(text, "media-proof")
@@ -365,6 +373,7 @@ def test_ci_proves_both_unpushed_images_before_any_publish() -> None:
     assert "--amd64-image" in proof_block
     assert "--aarch64-image" in proof_block
     assert "--output media-proof.json" in proof_block
+    assert "NOTICE: media-proof reported missing content" in proof_block
     assert "name: media-proof-full-${{ github.sha }}" in proof_block
     assert "needs: [validate, media-proof]" in push_block
     assert "packages: write" in push_block
