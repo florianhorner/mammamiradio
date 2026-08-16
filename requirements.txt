@@ -1609,7 +1609,3 @@ yarl==1.24.5 \
     --hash=sha256:ff405d91509d88e8d44129cd87b18d70acd1f0c1aeabd7bc3c46792b1fe2acba \
     --hash=sha256:ffcd54362564dc1a30fb74d8b8a6e5a6b11ebd5e27266adc3b7427a21a6c9104
     # via aiohttp
-yt-dlp==2026.7.4 \
-    --hash=sha256:b094813404f87a9dd2186f00815231df32e5fd8a5403be0f807b3bb2d21a4432 \
-    --hash=sha256:f11f2b11d5a8ac4059f9bdf29fa4407dc7c6bb00c5097e95ca22a7a9db518266
-    # via mammamiradio (pyproject.toml)

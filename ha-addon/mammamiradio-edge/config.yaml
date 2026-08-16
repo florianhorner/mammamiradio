@@ -70,4 +70,3 @@ schema:
   songs_between_ads: int(1,60)?
   ad_spots_per_break: int(1,5)?
   norm_cache_mb: int(200,8000)?
-  jamendo_client_id: password?

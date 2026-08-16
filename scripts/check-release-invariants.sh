@@ -7,6 +7,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEDIA_PYTHON="python3"
+if ! "$MEDIA_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+    if [ -x .venv/bin/python ]; then
+        MEDIA_PYTHON=".venv/bin/python"
+    else
+        MEDIA_PYTHON="python3.11"
+    fi
+fi
 
 PASS=0
 FAIL=0
@@ -64,7 +72,7 @@ fi
 
 # One Python-3.9-compatible manifest/hash boundary validates both the demo
 # package and browser narration pack before the per-file package-reachability check.
-if python3 "$SCRIPT_DIR/validate-spoken-assets.py"; then
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-spoken-assets.py"; then
     ok "packaged spoken assets are manifest-bound and listener-truth safe"
 else
     fail "packaged spoken asset manifest validation failed"
@@ -138,7 +146,7 @@ echo ""
 echo "5. HA Green fallback performance gates"
 
 QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
-if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'
+if "$MEDIA_PYTHON" - "$QUEUE_FALLBACK_WAIT" <<'PY'
 import sys
 value = float(sys.argv[1])
 raise SystemExit(0 if value <= 5.0 else 1)
@@ -171,10 +179,26 @@ fi
 echo ""
 echo "6. Release beat manifest"
 
-if python3 "$SCRIPT_DIR/validate-release-beat.py"; then
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py"; then
     ok "release beat manifest is absent, disabled, or schema-valid"
 else
     fail "release beat manifest validation failed"
+fi
+
+# ── 7. Media-rights report (report-only) ──────────────────────────────────────
+# Report-only while the twelve starter tracks are absent by design: the proof
+# runs on every PR and its verdict prints, but a missing-content failure does
+# not fail this script. Only this section is report-only — every other
+# invariant above stays hard. The release path keeps its own hard gate:
+# scripts/pre-release-check.sh section 10 fails hard on the same proof.
+echo ""
+echo "7. Media-rights report (report-only)"
+
+if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
+    ok "starter catalog evidence, bytes, audio, and packaging are release-ready"
+else
+    echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence) have not landed yet."
+    echo "NOTICE: report-only here; scripts/pre-release-check.sh keeps the hard media gate on the release path."
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

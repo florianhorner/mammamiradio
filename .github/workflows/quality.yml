@@ -37,6 +37,27 @@ jobs:
           pip install -e .
           pip install -r requirements-dev.txt
 
+      # Report-only while the twelve starter tracks are absent by design: the
+      # proof still runs and uploads its report, but this lane does not fail on
+      # the missing content. The hard gate stays in scripts/pre-release-check.sh
+      # (section 10), so release remains blocked until the content lands.
+      - name: Media-rights report (report-only)
+        run: |
+          if python scripts/media-proof.py --quick --output media-proof.json; then
+            echo "media-proof: PASS"
+          else
+            echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence under mammamiradio/assets/starter/) have not landed yet."
+            echo "NOTICE: this lane is report-only; scripts/pre-release-check.sh still fails hard on this proof on the release path."
+          fi
+
+      - name: Upload strict media proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: media-proof-quality-${{ github.sha }}
+          path: media-proof.json
+          if-no-files-found: error
+
       - name: Set up Node.js for browser smoke
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

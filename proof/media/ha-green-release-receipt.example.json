@@ -1,0 +1,27 @@
+{
+  "$schema": "./ha-green-release-receipt.schema.json",
+  "schema_version": 1,
+  "evidence_kind": "example",
+  "release_version": "0.0.0",
+  "source_commit": "0000000000000000000000000000000000000000",
+  "run_id": "00000000-0000-4000-8000-000000000000",
+  "recorded_at": "2000-01-01T00:00:00.000000Z",
+  "hardware": {
+    "model": "Home Assistant Green (example only; not release evidence)",
+    "machine": "aarch64",
+    "detected_from": "/proc/device-tree/model"
+  },
+  "timing": {
+    "metric": "listener_connection_to_first_accepted_non_silent_manifest_starter_byte",
+    "boot_to_tcp_ms": 0.0,
+    "connection_to_first_byte_ms": 0.0
+  },
+  "assertions": {
+    "cache_empty": true,
+    "outbound_network_blocked": true,
+    "manifest_attributed_starter": true,
+    "non_silent": true,
+    "provider": "incompetech",
+    "basis": "bundled_manifest"
+  }
+}
