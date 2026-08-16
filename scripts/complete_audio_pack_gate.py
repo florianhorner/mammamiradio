@@ -28,7 +28,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -60,6 +60,7 @@ FORMAT = {"codec": "mp3", "sample_rate_hz": 48_000, "channels": 2, "bitrate_kbps
 STAGE = "complete-audio-pack-selection"
 SCHEMA_VERSION = 2
 RECEIPT_SCHEMA_VERSION = 1
+RUNTIME_INVENTORY_SCHEMA_VERSION = 1
 TARGET = "Mac + small speaker + Wohnzimmer Sonos Arc"
 CANDIDATE_ID = "modern-night-drive-complete"
 DECISION_FIELDS = {"content_digest", "status", "mac", "small_speaker", "sonos_arc", "notes"}
@@ -167,20 +168,37 @@ _MANIFEST_FIELDS = frozenset(
         "stage",
         "generated_at",
         "release_ready",
-        "design_direction",
         "upstream_core",
-        "production_contract",
-        "sources",
-        "assets",
-        "recipes",
+        "runtime_projection",
         "previews",
-        "quality_guard_allowlist",
-        "pack_digest",
         "limitations",
         "board_files",
         "content_digest",
         "listening_receipt",
     }
+)
+_RUNTIME_MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "pack",
+        "provenance",
+        "generated_at",
+        "design_direction",
+        "production_contract",
+        "sources",
+        "assets",
+        "recipes",
+        "quality_guard_allowlist",
+        "pack_digest",
+        "inventory",
+    }
+)
+_RUNTIME_PROJECTION_FIELDS = frozenset({"path", "manifest_sha256", "pack_digest", "inventory_digest"})
+RUNTIME_MANIFEST_PATH = "pack/manifest.json"
+RUNTIME_PACK_NAME = "Mamma Mi Radio — Modern Night Drive"
+RUNTIME_PROVENANCE = (
+    "Project-authored deterministic masters with exact layer provenance, retained generator inputs, "
+    "and a digest-bound complete-pack listening gate."
 )
 _ASSET_FIELDS = frozenset(
     {
@@ -234,6 +252,7 @@ FORBIDDEN_SONIC_TERMS = frozenset({"brass", "trumpet"})
 # modules imported directly by this script.
 GENERATOR_DEPENDENCIES = (
     "scripts/complete_audio_pack_gate.py",
+    "scripts/promote_complete_audio_pack.py",
     "scripts/core_cadence_gate.py",
     "scripts/freeze_core_cadence_speech.py",
     "scripts/sonic_treatment_gate.py",
@@ -1362,54 +1381,77 @@ def _design_direction_contract() -> dict[str, object]:
     }
 
 
+def _production_contract(mid_proof: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "format": FORMAT,
+        "runtime_audio": dict(RUNTIME_AUDIO_CONTRACT),
+        "audio_quality": dict(AUDIO_QUALITY_CONTRACT),
+        "station_and_sweeper_are_runtime_underlays": True,
+        "ad_bumper_roles": ["in", "mid", "out"],
+        "mid_runtime_fit": dict(mid_proof),
+        "recipe_preview_helpers": [
+            "loop_audio_bed",
+            "mix_with_bed",
+            "mix_oneshot_layers",
+            "normalize_ad",
+        ],
+        "talk_bed_preview_helpers": [
+            "ImagingLibrary.pick_talk_bed",
+            "mix_voice_with_bed",
+        ],
+    }
+
+
+def _build_runtime_manifest(
+    *,
+    generated_at: str,
+    sources: list[dict[str, object]],
+    assets: list[dict[str, object]],
+    recipes: list[dict[str, object]],
+    mid_proof: Mapping[str, object],
+) -> dict[str, object]:
+    pack_digest = _generic_pack_digest(assets)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "pack": RUNTIME_PACK_NAME,
+        "provenance": RUNTIME_PROVENANCE,
+        "generated_at": generated_at,
+        "design_direction": _design_direction_contract(),
+        "production_contract": _production_contract(mid_proof),
+        "sources": sources,
+        "assets": assets,
+        "recipes": recipes,
+        "quality_guard_allowlist": _quality_guard_allowlist(),
+        "pack_digest": pack_digest,
+        "inventory": {
+            "schema_version": RUNTIME_INVENTORY_SCHEMA_VERSION,
+            "files": [],
+            "digest": hashlib.sha256().hexdigest(),
+        },
+    }
+
+
 def _build_manifest(
     *,
     generated_at: str,
     core_manifest_path: Path,
     core_digest: str,
-    sources: list[dict[str, object]],
-    assets: list[dict[str, object]],
-    recipes: list[dict[str, object]],
+    runtime_projection: Mapping[str, object],
     previews: list[dict[str, object]],
-    mid_proof: Mapping[str, object],
 ) -> dict[str, object]:
     core_path, core_path_kind = _core._path_record(core_manifest_path)
-    pack_digest = _generic_pack_digest(assets)
     return {
         "schema_version": SCHEMA_VERSION,
         "stage": STAGE,
         "generated_at": generated_at,
         "release_ready": False,
-        "design_direction": _design_direction_contract(),
         "upstream_core": {
             "manifest_path": core_path,
             "manifest_path_kind": core_path_kind,
             "pack_digest": core_digest,
         },
-        "production_contract": {
-            "format": FORMAT,
-            "runtime_audio": dict(RUNTIME_AUDIO_CONTRACT),
-            "audio_quality": dict(AUDIO_QUALITY_CONTRACT),
-            "station_and_sweeper_are_runtime_underlays": True,
-            "ad_bumper_roles": ["in", "mid", "out"],
-            "mid_runtime_fit": dict(mid_proof),
-            "recipe_preview_helpers": [
-                "loop_audio_bed",
-                "mix_with_bed",
-                "mix_oneshot_layers",
-                "normalize_ad",
-            ],
-            "talk_bed_preview_helpers": [
-                "ImagingLibrary.pick_talk_bed",
-                "mix_voice_with_bed",
-            ],
-        },
-        "sources": sources,
-        "assets": assets,
-        "recipes": recipes,
+        "runtime_projection": dict(runtime_projection),
         "previews": previews,
-        "quality_guard_allowlist": _quality_guard_allowlist(),
-        "pack_digest": pack_digest,
         "limitations": list(_LIMITATIONS),
     }
 
@@ -1464,7 +1506,7 @@ code{{color:var(--accent)}}
 <p class="lede">The approved core remains byte-for-byte unchanged. Review every compatibility cue and all nine
 runtime-faithful advertising worlds on Mac, a small speaker, and the Wohnzimmer Sonos Arc.</p>
 <p>Content digest: <code id="content-digest">loading from validated manifest…</code></p>{"".join(sections)}
-<script>fetch('pack/manifest.json',{{cache:'no-store'}}).then(r=>r.json()).then(m=>{{
+<script>fetch('manifest.json',{{cache:'no-store'}}).then(r=>r.json()).then(m=>{{
 document.getElementById('content-digest').textContent=m.content_digest;
 }}).catch(()=>{{document.getElementById('content-digest').textContent='manifest unavailable';}});</script>
 </main></body></html>"""
@@ -1477,7 +1519,7 @@ def _render_board(run_root: Path, manifest: Mapping[str, object]) -> None:
 def _handoff_text() -> str:
     return """# Modern Night Drive complete-pack listening gate
 
-The candidate content digest is displayed from the validated `pack/manifest.json`
+The candidate content digest is displayed from the validated root `manifest.json`
 when the board opens.
 
 This candidate does **not** modify packaged imaging, start the station, deploy,
@@ -1513,6 +1555,90 @@ def _write_handoff(run_root: Path) -> None:
 
 def _board_file_records(run_root: Path) -> list[dict[str, str]]:
     return [{"path": filename, "sha256": _sha256(run_root / filename)} for filename in ("index.html", "README.md")]
+
+
+def _runtime_readme_text() -> str:
+    return """# Modern Night Drive imaging pack
+
+This is Mamma Mi Radio's bundled radio-imaging library. Its Neon Relay station
+signature carries the atmospheric character of Velvet Horizon; the signature
+appears only in the station ID and sweeper. Music-to-speech and
+speech-to-music handoffs are separate, and advertising uses distinct `in`,
+`mid`, and `out` bumpers.
+
+The pack contains 47 delivery assets and nine semantic advertising recipes.
+All material is project-authored deterministic audio: no trumpet or novelty
+mandolin recording is part of the delivered sound. Compatibility filenames
+remain stable for operators, while sounds such as `startup_synth` are genuinely
+electronic.
+
+## Provenance and approval
+
+`manifest.json` is the self-contained runtime contract. It records every
+asset, retained source master, exact layer timing/gain/DSP/license fact, and an
+exact file inventory. `ATTRIBUTION.md` is generated from that manifest. The
+separate candidate board and its digest-bound listening receipt authorize this
+exact immutable runtime projection before promotion.
+
+Validate the installed pack offline with:
+
+```bash
+.venv/bin/python scripts/validate_audio_asset_pack.py
+```
+
+The recovery and First Listen audio under `mammamiradio/assets/demo/` and the
+web static tree are separate and are not replaced by this pack.
+"""
+
+
+def _write_runtime_readme(pack_dir: Path) -> None:
+    (pack_dir / "README.md").write_text(_runtime_readme_text(), encoding="utf-8")
+
+
+def _runtime_inventory_digest(files: Sequence[Mapping[str, object]]) -> str:
+    digest = hashlib.sha256()
+    for record in files:
+        digest.update(str(record["path"]).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(record["sha256"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _runtime_inventory(pack_dir: Path) -> dict[str, object]:
+    pack_dir = pack_dir.resolve(strict=True)
+    records: list[dict[str, str]] = []
+    for path in sorted(pack_dir.rglob("*"), key=lambda item: item.relative_to(pack_dir).as_posix()):
+        relative = path.relative_to(pack_dir).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"Runtime pack inventory cannot contain a symlink: {relative}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError(f"Runtime pack inventory cannot contain a special entry: {relative}")
+        if relative == "manifest.json":
+            continue
+        pure = PurePosixPath(relative)
+        if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != relative:
+            raise ValueError(f"Runtime pack inventory path is not canonical: {relative}")
+        records.append({"path": relative, "sha256": _sha256(path)})
+    return {
+        "schema_version": RUNTIME_INVENTORY_SCHEMA_VERSION,
+        "files": records,
+        "digest": _runtime_inventory_digest(records),
+    }
+
+
+def _runtime_projection(pack_dir: Path, runtime_manifest: Mapping[str, object]) -> dict[str, object]:
+    inventory = runtime_manifest.get("inventory")
+    if not isinstance(inventory, Mapping) or not isinstance(inventory.get("digest"), str):
+        raise ValueError("Runtime pack has no exact inventory digest")
+    return {
+        "path": RUNTIME_MANIFEST_PATH,
+        "manifest_sha256": _sha256(pack_dir / "manifest.json"),
+        "pack_digest": runtime_manifest["pack_digest"],
+        "inventory_digest": inventory["digest"],
+    }
 
 
 CORE_PACK_ASSETS: tuple[tuple[str, str, str, str, tuple[str, ...], str], ...] = (
@@ -1904,25 +2030,39 @@ def _render_complete_pack_in_place(
         "runtime_output_sha256": actual_runtime_mid,
         "approved_core_output_sha256": expected_runtime_mid,
     }
+    runtime_manifest = _build_runtime_manifest(
+        generated_at=generated_at,
+        sources=sources,
+        assets=assets,
+        recipes=recipes,
+        mid_proof=mid_proof,
+    )
+    runtime_manifest_path = pack_dir / "manifest.json"
+    provisional_runtime_manifest = dict(runtime_manifest)
+    provisional_runtime_manifest.pop("inventory")
+    _write_json(runtime_manifest_path, provisional_runtime_manifest)
+    report = _validator.validate_audio_asset_pack(pack_dir, manifest_path=runtime_manifest_path)
+    _validator.write_attribution(report)
+    _write_runtime_readme(pack_dir)
+    runtime_manifest["inventory"] = _runtime_inventory(pack_dir)
+    _write_json(runtime_manifest_path, runtime_manifest)
+    report = _validator.validate_audio_asset_pack(pack_dir, manifest_path=runtime_manifest_path)
+    _validator.check_attribution(report)
+
     manifest = _build_manifest(
         generated_at=generated_at,
         core_manifest_path=core_manifest_path,
         core_digest=core_digest,
-        sources=sources,
-        assets=assets,
-        recipes=recipes,
+        runtime_projection=_runtime_projection(pack_dir, runtime_manifest),
         previews=previews,
-        mid_proof=mid_proof,
     )
     _render_board(run_root, manifest)
     _write_handoff(run_root)
     manifest["board_files"] = _board_file_records(run_root)
     content_digest = _json_digest(_content_digest_payload(manifest))
     manifest["content_digest"] = content_digest
-    manifest["listening_receipt"] = _receipt(str(manifest["pack_digest"]), content_digest)
-    _write_json(pack_dir / "manifest.json", manifest)
-    report = _validator.validate_audio_asset_pack(pack_dir)
-    _validator.write_attribution(report)
+    manifest["listening_receipt"] = _receipt(str(runtime_manifest["pack_digest"]), content_digest)
+    _write_json(run_root / "manifest.json", manifest)
     return manifest
 
 
@@ -2309,7 +2449,8 @@ def _validate_receipt(manifest: Mapping[str, object], *, now: datetime | None = 
         raise ValueError("Complete-pack listening receipt has an invalid field set")
     if receipt.get("schema_version") != RECEIPT_SCHEMA_VERSION:
         raise ValueError("Complete-pack listening receipt has the wrong schema")
-    if receipt.get("pack_digest") != manifest.get("pack_digest"):
+    projection = manifest.get("runtime_projection")
+    if not isinstance(projection, Mapping) or receipt.get("pack_digest") != projection.get("pack_digest"):
         raise ValueError("Complete-pack listening receipt is stale for the asset digest")
     if receipt.get("content_digest") != manifest.get("content_digest"):
         raise ValueError("Complete-pack listening receipt is stale for the content digest")
@@ -2363,26 +2504,56 @@ def validate_complete_audio_pack(manifest_path: Path) -> tuple[dict[str, Any], t
     manifest = _read_manifest(manifest_path)
     if manifest.get("schema_version") != SCHEMA_VERSION or manifest.get("stage") != STAGE:
         raise ValueError("Complete-pack manifest has the wrong schema or stage")
-    if manifest.get("quality_guard_allowlist") != _quality_guard_allowlist():
-        raise ValueError("Complete-pack perceptual-overlap allowlist differs from the reviewed contract")
     expected_content = _json_digest(_content_digest_payload(manifest))
     if manifest.get("content_digest") != expected_content:
         raise ValueError("Complete-pack content digest differs from manifest semantics")
     if set(manifest) != _MANIFEST_FIELDS:
         raise ValueError("Complete-pack manifest has an invalid top-level field set")
-    if manifest.get("design_direction") != _design_direction_contract():
-        raise ValueError("Complete-pack design direction differs from the approved contract")
     if manifest.get("limitations") != list(_LIMITATIONS):
         raise ValueError("Complete-pack limitations differ from the approved contract")
-    pack_dir = manifest_path.parent
-    run_root = pack_dir.parent
-    report = _validator.validate_audio_asset_pack(
-        pack_dir,
-        require_listening_approval=manifest.get("listening_receipt", {}).get("status") == "approved"
-        if isinstance(manifest.get("listening_receipt"), Mapping)
-        else False,
-    )
+
+    run_root = manifest_path.parent
+    pack_dir = run_root / "pack"
+    projection = manifest.get("runtime_projection")
+    if not isinstance(projection, Mapping) or set(projection) != _RUNTIME_PROJECTION_FIELDS:
+        raise ValueError("Complete-pack board has an invalid runtime projection")
+    if projection.get("path") != RUNTIME_MANIFEST_PATH:
+        raise ValueError("Complete-pack board points at the wrong runtime manifest")
+    raw_runtime_manifest_path = run_root / RUNTIME_MANIFEST_PATH
+    if raw_runtime_manifest_path.is_symlink():
+        raise ValueError("Complete-pack runtime manifest must not be a symlink")
+    runtime_manifest_path = raw_runtime_manifest_path.resolve(strict=True)
+    if runtime_manifest_path.parent != pack_dir.resolve(strict=True):
+        raise ValueError("Complete-pack runtime manifest escapes the promotable pack")
+    if projection.get("manifest_sha256") != _sha256(runtime_manifest_path):
+        raise ValueError("Complete-pack runtime projection manifest hash is stale")
+    runtime_manifest = _read_manifest(runtime_manifest_path)
+    if set(runtime_manifest) != _RUNTIME_MANIFEST_FIELDS:
+        raise ValueError("Complete-pack runtime manifest has an invalid top-level field set")
+    if runtime_manifest.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("Complete-pack runtime manifest has the wrong schema")
+    if runtime_manifest.get("pack") != RUNTIME_PACK_NAME or runtime_manifest.get("provenance") != RUNTIME_PROVENANCE:
+        raise ValueError("Complete-pack runtime manifest has stale public identity")
+    if runtime_manifest.get("generated_at") != manifest.get("generated_at"):
+        raise ValueError("Complete-pack runtime projection generation timestamp is stale")
+    if runtime_manifest.get("design_direction") != _design_direction_contract():
+        raise ValueError("Complete-pack design direction differs from the approved contract")
+    if runtime_manifest.get("quality_guard_allowlist") != _quality_guard_allowlist():
+        raise ValueError("Complete-pack perceptual-overlap allowlist differs from the reviewed contract")
+    runtime_inventory = runtime_manifest.get("inventory")
+    if not isinstance(runtime_inventory, Mapping):
+        raise ValueError("Complete-pack runtime projection has no exact inventory")
+    if projection.get("pack_digest") != runtime_manifest.get("pack_digest"):
+        raise ValueError("Complete-pack runtime projection asset digest is stale")
+    if projection.get("inventory_digest") != runtime_inventory.get("digest"):
+        raise ValueError("Complete-pack runtime projection inventory digest is stale")
+    if runtime_inventory != _runtime_inventory(pack_dir):
+        raise ValueError("Complete-pack runtime projection inventory differs from the pack tree")
+    report = _validator.validate_audio_asset_pack(pack_dir, manifest_path=runtime_manifest_path)
     _validator.check_attribution(report)
+    runtime_readme = pack_dir / "README.md"
+    if runtime_readme.is_symlink() or runtime_readme.read_text(encoding="utf-8") != _runtime_readme_text():
+        raise ValueError("Complete-pack runtime README differs from the public pack contract")
 
     upstream = manifest.get("upstream_core")
     if not isinstance(upstream, Mapping):
@@ -2396,7 +2567,7 @@ def validate_complete_audio_pack(manifest_path: Path) -> tuple[dict[str, Any], t
     core_manifest, _core_paths = _core.validate_core_cadence_gate(core_manifest_path)
     artifacts = _core_artifacts(core_manifest)
 
-    raw_assets = manifest.get("assets")
+    raw_assets = runtime_manifest.get("assets")
     if not isinstance(raw_assets, list) or not all(isinstance(item, Mapping) for item in raw_assets):
         raise ValueError("Complete pack has an invalid asset inventory")
     assets = {str(item["id"]): item for item in raw_assets}
@@ -2470,7 +2641,7 @@ def validate_complete_audio_pack(manifest_path: Path) -> tuple[dict[str, Any], t
         if _sha256(delivered) != _sha256(expected) or assets[asset_id].get("sha256") != _sha256(expected):
             raise ValueError(f"Complete-pack core asset differs from approved artifact: {asset_id}")
 
-    production = manifest.get("production_contract")
+    production = runtime_manifest.get("production_contract")
     if not isinstance(production, Mapping) or production.get("station_and_sweeper_are_runtime_underlays") is not True:
         raise ValueError("Complete pack does not declare the runtime-underlay identity contract")
     if set(production) != {
@@ -2526,7 +2697,7 @@ def validate_complete_audio_pack(manifest_path: Path) -> tuple[dict[str, Any], t
     if dict(mid_proof) != expected_mid_proof:
         raise ValueError("Complete-pack ad-mid runtime proof has stale helper settings")
 
-    raw_recipes = manifest.get("recipes")
+    raw_recipes = runtime_manifest.get("recipes")
     if raw_recipes != _expected_recipes():
         raise ValueError("Complete pack does not contain the exact nine recipe definitions")
     assert isinstance(raw_recipes, list)
@@ -2560,7 +2731,7 @@ def validate_complete_audio_pack(manifest_path: Path) -> tuple[dict[str, Any], t
 
     # No rejected sonic material may be relabeled in provenance. The legacy
     # compatibility filename/id is the sole unavoidable historical symbol.
-    raw_sources = manifest.get("sources")
+    raw_sources = runtime_manifest.get("sources")
     if (
         not isinstance(raw_sources, list)
         or not raw_sources
@@ -2790,7 +2961,9 @@ def validate_complete_audio_pack(manifest_path: Path) -> tuple[dict[str, Any], t
         raise ValueError("Complete-pack ready marker does not match the content digest")
 
     expected_files = {
+        "manifest.json",
         "pack/manifest.json",
+        "pack/README.md",
         "pack/ATTRIBUTION.md",
         ".ready",
         *(str(item["path"]) for item in expected_board_files),
@@ -2857,7 +3030,7 @@ def render_complete_audio_pack(
             generated_at=generated_at,
         )
         (staging / ".ready").write_text(str(manifest["content_digest"]) + "\n", encoding="utf-8")
-        validate_complete_audio_pack(staging / "pack" / "manifest.json")
+        validate_complete_audio_pack(staging / "manifest.json")
         os.replace(staging, output_root)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -2866,7 +3039,7 @@ def render_complete_audio_pack(
 
 
 def _complete_evidence_snapshot(manifest_path: Path) -> dict[str, str]:
-    run_root = manifest_path.parent.parent
+    run_root = manifest_path.parent
     snapshot: dict[str, str] = {}
     for path in run_root.rglob("*"):
         relative = path.relative_to(run_root).as_posix()
@@ -2892,7 +3065,7 @@ def record_complete_listening_receipt(
     if manifest_path.is_symlink():
         raise ValueError("Complete-pack manifest must not be a symlink")
     manifest_path = manifest_path.resolve(strict=True)
-    run_root = manifest_path.parent.parent
+    run_root = manifest_path.parent
     lock_path = run_root.parent / f".{run_root.name}.complete-listening-receipt.lock"
     try:
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -2919,10 +3092,13 @@ def record_complete_listening_receipt(
         notes = decision.get("notes")
         if not isinstance(notes, str) or not notes.strip():
             raise ValueError("Complete-pack decision requires listening notes")
+        projection = manifest.get("runtime_projection")
+        if not isinstance(projection, Mapping) or not isinstance(projection.get("pack_digest"), str):
+            raise ValueError("Complete-pack decision has no immutable runtime pack digest")
         decided_receipt = {
             "schema_version": RECEIPT_SCHEMA_VERSION,
             "status": status,
-            "pack_digest": manifest["pack_digest"],
+            "pack_digest": projection["pack_digest"],
             "content_digest": manifest["content_digest"],
             "approved_candidate_id": CANDIDATE_ID if status == "approved" else None,
             "target": TARGET,
@@ -2999,7 +3175,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "validate":
             manifest, previews = validate_complete_audio_pack(args.manifest)
-            print(f"Complete audio pack OK: {len(manifest['assets'])} assets, {len(manifest['recipes'])} recipes")
+            runtime_manifest = _read_manifest(args.manifest.resolve(strict=True).parent / RUNTIME_MANIFEST_PATH)
+            print(
+                f"Complete audio pack OK: {len(runtime_manifest['assets'])} assets, "
+                f"{len(runtime_manifest['recipes'])} recipes"
+            )
             print(f"Content digest: {manifest['content_digest']}")
             print(f"Previews: {len(previews)}")
             return 0
@@ -3014,7 +3194,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(f"Complete pack gate: {output_root}")
-    print(f"Manifest: {output_root / 'pack' / 'manifest.json'}")
+    print(f"Listening manifest: {output_root / 'manifest.json'}")
+    print(f"Runtime manifest: {output_root / 'pack' / 'manifest.json'}")
     print(f"Listening page: {output_root / 'index.html'}")
     print(f"Handoff: {output_root / 'README.md'}")
     print(f"Content digest: {manifest['content_digest']}")

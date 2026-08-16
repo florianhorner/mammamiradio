@@ -123,8 +123,10 @@ class Candidate:
     run_root: Path
     pack_dir: Path
     manifest_path: Path
+    runtime_manifest_path: Path
     core_manifest_path: Path
     manifest: dict[str, Any]
+    runtime_manifest: dict[str, Any]
     generator: dict[str, Any]
     speech_paths: dict[str, Path]
     core_paths: dict[str, Path]
@@ -140,7 +142,7 @@ class Candidate:
         return self.run_root.parent / f".{self.run_root.name}.complete-listening-receipt.lock"
 
     def asset(self, asset_id: str) -> dict[str, Any]:
-        return next(item for item in self.manifest["assets"] if item["id"] == asset_id)
+        return next(item for item in self.runtime_manifest["assets"] if item["id"] == asset_id)
 
     def preview(self, preview_id: str) -> dict[str, Any]:
         return next(item for item in self.manifest["previews"] if item["id"] == preview_id)
@@ -150,7 +152,7 @@ class Candidate:
         delivered = self.pack_dir / asset["path"]
         delivered.write_bytes(content)
         asset["sha256"] = gate._sha256(delivered)
-        source = next(item for item in self.manifest["sources"] if item["id"] == asset["source_ids"][0])
+        source = next(item for item in self.runtime_manifest["sources"] if item["id"] == asset["source_ids"][0])
         master = (self.pack_dir / source["original_path"]).resolve()
         master.write_bytes(content)
         source["source_sha256"] = gate._sha256(master)
@@ -166,15 +168,20 @@ class Candidate:
             gate._render_board(self.run_root, self.manifest)
             gate._write_handoff(self.run_root)
             self.manifest["board_files"] = gate._board_file_records(self.run_root)
-        self.manifest["pack_digest"] = gate._generic_pack_digest(self.manifest["assets"])
+        gate._write_runtime_readme(self.pack_dir)
+        self.runtime_manifest["pack_digest"] = gate._generic_pack_digest(self.runtime_manifest["assets"])
+        gate._write_json(self.runtime_manifest_path, self.runtime_manifest)
+        self.runtime_manifest["inventory"] = gate._runtime_inventory(self.pack_dir)
+        gate._write_json(self.runtime_manifest_path, self.runtime_manifest)
+        self.manifest["runtime_projection"] = gate._runtime_projection(self.pack_dir, self.runtime_manifest)
         self.manifest["content_digest"] = gate._json_digest(gate._content_digest_payload(self.manifest))
         receipt = self.manifest.get("listening_receipt")
         if isinstance(receipt, dict):
-            receipt["pack_digest"] = self.manifest["pack_digest"]
+            receipt["pack_digest"] = self.runtime_manifest["pack_digest"]
             receipt["content_digest"] = self.manifest["content_digest"]
         else:
             self.manifest["listening_receipt"] = gate._receipt(
-                self.manifest["pack_digest"], self.manifest["content_digest"]
+                self.runtime_manifest["pack_digest"], self.manifest["content_digest"]
             )
         gate._write_json(self.manifest_path, self.manifest)
         if refresh_ready:
@@ -185,7 +192,7 @@ class Candidate:
         self.manifest["listening_receipt"] = {
             "schema_version": gate.RECEIPT_SCHEMA_VERSION,
             "status": "approved",
-            "pack_digest": self.manifest["pack_digest"],
+            "pack_digest": self.runtime_manifest["pack_digest"],
             "content_digest": self.manifest["content_digest"],
             "approved_candidate_id": "modern-night-drive-complete",
             "target": gate.TARGET,
@@ -595,14 +602,12 @@ def candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Candidate:
 
     raw_mid = pack_dir / "bumpers" / "ad_mid.mp3"
     mid_sha = gate._sha256(raw_mid)
-    manifest = gate._build_manifest(
-        generated_at=(datetime.now(UTC) - timedelta(minutes=1)).strftime("%Y%m%dT%H%M%SZ"),
-        core_manifest_path=core_manifest_path,
-        core_digest=core_digest,
+    generated_at = (datetime.now(UTC) - timedelta(minutes=1)).strftime("%Y%m%dT%H%M%SZ")
+    runtime_manifest = gate._build_runtime_manifest(
+        generated_at=generated_at,
         sources=sources,
         assets=assets,
         recipes=gate._expected_recipes(),
-        previews=previews,
         mid_proof={
             "raw_pack_path": "bumpers/ad_mid.mp3",
             "raw_sha256": mid_sha,
@@ -615,13 +620,27 @@ def candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Candidate:
         },
     )
     _write(pack_dir / "ATTRIBUTION.md", b"fixture attribution\n")
-    manifest_path = pack_dir / "manifest.json"
+    gate._write_runtime_readme(pack_dir)
+    runtime_manifest_path = pack_dir / "manifest.json"
+    gate._write_json(runtime_manifest_path, runtime_manifest)
+    runtime_manifest["inventory"] = gate._runtime_inventory(pack_dir)
+    gate._write_json(runtime_manifest_path, runtime_manifest)
+    manifest = gate._build_manifest(
+        generated_at=generated_at,
+        core_manifest_path=core_manifest_path,
+        core_digest=core_digest,
+        runtime_projection=gate._runtime_projection(pack_dir, runtime_manifest),
+        previews=previews,
+    )
+    manifest_path = run_root / "manifest.json"
     result = Candidate(
         run_root=run_root,
         pack_dir=pack_dir,
         manifest_path=manifest_path,
+        runtime_manifest_path=runtime_manifest_path,
         core_manifest_path=core_manifest_path,
         manifest=manifest,
+        runtime_manifest=runtime_manifest,
         generator=generator,
         speech_paths=speech_paths,
         core_paths=core_paths,
@@ -717,6 +736,7 @@ def test_runtime_mid_uses_public_imaging_seam(tmp_path: Path, monkeypatch: pytes
 def test_generator_dependencies_are_the_exact_runtime_input_set() -> None:
     expected = {
         "scripts/complete_audio_pack_gate.py",
+        "scripts/promote_complete_audio_pack.py",
         "scripts/core_cadence_gate.py",
         "scripts/freeze_core_cadence_speech.py",
         "scripts/sonic_treatment_gate.py",
@@ -928,6 +948,26 @@ def test_valid_pending_candidate_validates_but_does_not_pass_listening_gate(cand
         gate.assert_complete_listening_gate(candidate.manifest_path)
 
 
+def test_listening_manifest_binds_one_self_contained_runtime_projection(candidate: Candidate) -> None:
+    assert set(candidate.manifest) == gate._MANIFEST_FIELDS
+    assert set(candidate.runtime_manifest) == gate._RUNTIME_MANIFEST_FIELDS
+    assert not {
+        "upstream_core",
+        "previews",
+        "board_files",
+        "content_digest",
+        "listening_receipt",
+        "release_ready",
+        "limitations",
+    } & set(candidate.runtime_manifest)
+    assert candidate.runtime_manifest["pack"] == gate.RUNTIME_PACK_NAME
+    assert candidate.runtime_manifest["inventory"] == gate._runtime_inventory(candidate.pack_dir)
+    assert candidate.manifest["runtime_projection"] == gate._runtime_projection(
+        candidate.pack_dir, candidate.runtime_manifest
+    )
+    assert (candidate.pack_dir / "README.md").read_text(encoding="utf-8") == gate._runtime_readme_text()
+
+
 def test_board_audio_urls_are_content_addressed(candidate: Candidate) -> None:
     board = (candidate.run_root / "index.html").read_text(encoding="utf-8")
 
@@ -1051,7 +1091,7 @@ def test_asset_and_layer_field_sets_are_exact_after_redigest(candidate: Candidat
 
 def test_retained_source_master_path_is_exact(candidate: Candidate) -> None:
     asset = candidate.asset("compat.ding")
-    source = next(item for item in candidate.manifest["sources"] if item["id"] == asset["source_ids"][0])
+    source = next(item for item in candidate.runtime_manifest["sources"] if item["id"] == asset["source_ids"][0])
     original = candidate.pack_dir / source["original_path"]
     renamed = original.with_name("renamed-ding.mp3")
     original.rename(renamed)
@@ -1069,7 +1109,7 @@ def test_retained_source_master_path_is_exact(candidate: Candidate) -> None:
 )
 def test_retained_source_metadata_is_exact(candidate: Candidate, field: str) -> None:
     asset = candidate.asset("compat.ding")
-    source = next(item for item in candidate.manifest["sources"] if item["id"] == asset["source_ids"][0])
+    source = next(item for item in candidate.runtime_manifest["sources"] if item["id"] == asset["source_ids"][0])
     if field == "generator":
         source["generator"] = copy.deepcopy(source["generator"])
         source["generator"]["runtime"]["ffmpeg"] = "different generator evidence"
@@ -1128,6 +1168,7 @@ def test_current_generator_dependency_hash_drift_invalidates_recorded_candidate(
 @pytest.mark.parametrize(
     "dependency_path",
     [
+        "scripts/promote_complete_audio_pack.py",
         "scripts/sonic_treatment_gate.py",
         "scripts/audition_tts_voices.py",
         "mammamiradio/audio/admission.py",
@@ -1137,6 +1178,7 @@ def test_current_generator_dependency_hash_drift_invalidates_recorded_candidate(
         "mammamiradio/hosts/fallbacks.py",
     ],
     ids=[
+        "complete-pack-promoter",
         "sonic-treatment-gate",
         "tts-audition-gate",
         "ffmpeg-admission",
@@ -1189,7 +1231,7 @@ def test_unrelated_revision_with_identical_dependency_hashes_keeps_candidate_val
 
 @pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "wrong-path", "wrong-kind"])
 def test_asset_inventory_is_exact(candidate: Candidate, mutation: str) -> None:
-    assets = candidate.manifest["assets"]
+    assets = candidate.runtime_manifest["assets"]
     if mutation == "missing":
         assets.pop()
     elif mutation == "extra":
@@ -1218,7 +1260,7 @@ def test_asset_inventory_is_exact(candidate: Candidate, mutation: str) -> None:
 
 
 def test_recipe_definitions_are_exact(candidate: Candidate) -> None:
-    candidate.manifest["recipes"][0]["cues"][0]["gain_db"] = -99.0
+    candidate.runtime_manifest["recipes"][0]["cues"][0]["gain_db"] = -99.0
     candidate.save()
 
     with pytest.raises(ValueError, match="exact nine recipe definitions"):
@@ -1228,7 +1270,9 @@ def test_recipe_definitions_are_exact(candidate: Candidate) -> None:
 def test_advertising_cues_require_unique_project_authored_foreground_sources(candidate: Candidate) -> None:
     first = candidate.asset("ad-cue.espresso_glint")
     second = candidate.asset("ad-cue.crowd_lift")
-    first_source = next(source for source in candidate.manifest["sources"] if source["id"] == first["source_ids"][0])
+    first_source = next(
+        source for source in candidate.runtime_manifest["sources"] if source["id"] == first["source_ids"][0]
+    )
     second["source_ids"] = list(first["source_ids"])
     second["layers"][0]["source_id"] = first["source_ids"][0]
     second["layers"][0]["source_sha256"] = first_source["source_sha256"]
@@ -1437,12 +1481,12 @@ def test_ad_mid_must_byte_regenerate_after_all_raw_hashes_are_refreshed(candidat
     raw_mid.write_bytes(b"tampered-raw-mid")
     asset = candidate.asset("bumper.ad-mid")
     asset["sha256"] = gate._sha256(raw_mid)
-    source = next(item for item in candidate.manifest["sources"] if item["id"] == asset["source_ids"][0])
+    source = next(item for item in candidate.runtime_manifest["sources"] if item["id"] == asset["source_ids"][0])
     master = (candidate.pack_dir / source["original_path"]).resolve()
     master.write_bytes(raw_mid.read_bytes())
     source["source_sha256"] = gate._sha256(master)
     asset["layers"][0]["source_sha256"] = source["source_sha256"]
-    candidate.manifest["production_contract"]["mid_runtime_fit"]["raw_sha256"] = gate._sha256(raw_mid)
+    candidate.runtime_manifest["production_contract"]["mid_runtime_fit"]["raw_sha256"] = gate._sha256(raw_mid)
     candidate.save()
 
     with pytest.raises(ValueError, match="ad-mid does not reproduce"):
@@ -1450,7 +1494,7 @@ def test_ad_mid_must_byte_regenerate_after_all_raw_hashes_are_refreshed(candidat
 
 
 def test_ad_mid_proof_rejects_the_stale_normalizer_helper(candidate: Candidate) -> None:
-    candidate.manifest["production_contract"]["mid_runtime_fit"]["helper"] = (
+    candidate.runtime_manifest["production_contract"]["mid_runtime_fit"]["helper"] = (
         "mammamiradio.audio.normalizer.fit_audio_oneshot"
     )
     candidate.save()
@@ -1487,7 +1531,7 @@ def test_ready_marker_is_required_digest_bound_and_regular(candidate: Candidate,
     ("kind", "message"),
     [
         ("preview", "preview must not be a symlink"),
-        ("source", "source master must not be a symlink"),
+        ("source", r"source master must not be a symlink|Runtime pack inventory cannot contain a symlink"),
         ("surface", "listening surface differs"),
     ],
 )
@@ -1497,7 +1541,7 @@ def test_candidate_evidence_symlinks_are_rejected(
     if kind == "preview":
         raw_path = candidate.run_root / candidate.preview("preview.recipe.cafe_testimonial")["path"]
     elif kind == "source":
-        source = candidate.manifest["sources"][0]
+        source = candidate.runtime_manifest["sources"][0]
         raw_path = candidate.pack_dir / source["original_path"]
     else:
         raw_path = candidate.run_root / "index.html"
@@ -1520,10 +1564,10 @@ def test_candidate_evidence_paths_cannot_escape(candidate: Candidate, tmp_path: 
         preview["path"] = os.path.relpath(outside, candidate.run_root)
         preview["sha256"] = gate._sha256(outside)
     else:
-        source = candidate.manifest["sources"][0]
+        source = candidate.runtime_manifest["sources"][0]
         source["original_path"] = os.path.relpath(outside, candidate.pack_dir)
         source["source_sha256"] = gate._sha256(outside)
-        asset = next(item for item in candidate.manifest["assets"] if item["source_ids"] == [source["id"]])
+        asset = next(item for item in candidate.runtime_manifest["assets"] if item["source_ids"] == [source["id"]])
         asset["layers"][0]["source_sha256"] = source["source_sha256"]
     candidate.save()
 
@@ -1542,7 +1586,10 @@ def test_board_file_inventory_is_exact(candidate: Candidate, mode: str) -> None:
     else:
         os.mkfifo(candidate.run_root / "unexpected.fifo")
 
-    with pytest.raises(ValueError, match=r"board (?:directory )?inventory differs|special filesystem entries"):
+    with pytest.raises(
+        ValueError,
+        match=r"board (?:directory )?inventory differs|special filesystem entries|runtime projection inventory differs",
+    ):
         gate.validate_complete_audio_pack(candidate.manifest_path)
 
 
@@ -1565,7 +1612,7 @@ def test_manifest_semantic_contract_is_exact_after_redigest(candidate: Candidate
         candidate.manifest["claimed_approval"] = True
         message = "invalid top-level field set"
     elif mutation == "design-direction":
-        candidate.manifest["design_direction"]["signature"] = "rejected-trumpet-direction"
+        candidate.runtime_manifest["design_direction"]["signature"] = "rejected-trumpet-direction"
         message = "design direction differs"
     else:
         candidate.manifest["limitations"] = []
@@ -1577,10 +1624,10 @@ def test_manifest_semantic_contract_is_exact_after_redigest(candidate: Candidate
 
 
 def test_manifest_semantic_change_without_new_content_digest_is_stale(candidate: Candidate) -> None:
-    candidate.manifest["design_direction"]["signature"] = "changed-without-redigest"
-    gate._write_json(candidate.manifest_path, candidate.manifest)
+    candidate.runtime_manifest["design_direction"]["signature"] = "changed-without-redigest"
+    gate._write_json(candidate.runtime_manifest_path, candidate.runtime_manifest)
 
-    with pytest.raises(ValueError, match="content digest differs"):
+    with pytest.raises(ValueError, match="runtime projection manifest hash is stale"):
         gate.validate_complete_audio_pack(candidate.manifest_path)
 
 
@@ -1592,14 +1639,20 @@ def test_preview_label_drift_fails_before_a_stale_board_can_be_accepted(candidat
         gate.validate_complete_audio_pack(candidate.manifest_path)
 
 
-def test_generic_validator_and_attribution_seam_tracks_receipt_status(
+def test_generic_validator_and_attribution_seam_uses_immutable_runtime_projection(
     candidate: Candidate, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[Path, bool, object]] = []
     checked_reports: list[object] = []
 
-    def validate(pack_dir: Path, *, require_listening_approval: bool = False) -> object:
+    def validate(
+        pack_dir: Path,
+        *,
+        manifest_path: Path | None = None,
+        require_listening_approval: bool = False,
+    ) -> object:
         report = object()
+        assert manifest_path == candidate.runtime_manifest_path
         calls.append((pack_dir, require_listening_approval, report))
         return report
 
@@ -1624,7 +1677,7 @@ def test_generic_validator_and_attribution_seam_tracks_receipt_status(
 
     assert [(pack_dir, required) for pack_dir, required, _report in calls] == [
         (candidate.pack_dir, False),
-        (candidate.pack_dir, True),
+        (candidate.pack_dir, False),
         (candidate.pack_dir, False),
     ]
     assert checked_reports == [report for _pack_dir, _required, report in calls]
@@ -1817,8 +1870,8 @@ def test_failed_post_write_validation_rolls_back_and_removes_lock(
     assert candidate.manifest_path.read_bytes() == original
     assert calls == 3
     assert not candidate.receipt_lock_path.exists()
-    assert not list(candidate.pack_dir.glob(".manifest.json.*.tmp"))
-    assert not list(candidate.pack_dir.glob(".manifest.json.*.rollback"))
+    assert not list(candidate.run_root.glob(".manifest.json.*.tmp"))
+    assert not list(candidate.run_root.glob(".manifest.json.*.rollback"))
 
 
 def test_manifest_symlink_is_rejected_before_resolution(candidate: Candidate) -> None:
@@ -1848,11 +1901,11 @@ def test_render_writes_ready_before_validation_and_publishes_atomically(
     validated_staging: list[Path] = []
 
     def render(_core_manifest: Path, staging: Path, *, generated_at: str) -> dict[str, object]:
-        gate._write_json(staging / "pack" / "manifest.json", {"content_digest": content_digest})
+        gate._write_json(staging / "manifest.json", {"content_digest": content_digest})
         return {"content_digest": content_digest, "generated_at": generated_at}
 
     def validate(manifest_path: Path) -> tuple[dict[str, Any], tuple[Path, ...]]:
-        staging = manifest_path.parent.parent
+        staging = manifest_path.parent
         assert not output_root.exists()
         assert (staging / ".ready").read_text(encoding="utf-8") == f"{content_digest}\n"
         validated_staging.append(staging)
@@ -1893,11 +1946,11 @@ def test_render_validation_failure_removes_staging_directory(tmp_path: Path, mon
 
     def render(_core_manifest: Path, staging: Path, *, generated_at: str) -> dict[str, object]:
         assert generated_at == generated_at_value
-        gate._write_json(staging / "pack" / "manifest.json", {"content_digest": content_digest})
+        gate._write_json(staging / "manifest.json", {"content_digest": content_digest})
         return {"content_digest": content_digest}
 
     def fail_validation(manifest_path: Path) -> tuple[dict[str, Any], tuple[Path, ...]]:
-        assert (manifest_path.parent.parent / ".ready").is_file()
+        assert (manifest_path.parent / ".ready").is_file()
         raise RuntimeError("forced render failure")
 
     generated_at_value = generated_at

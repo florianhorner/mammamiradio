@@ -6,6 +6,7 @@ import array
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -144,6 +145,33 @@ def _declared_pack_digest(payload: dict[str, object]) -> str:
         digest.update(str(asset["sha256"]).encode("ascii"))
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def _inventory_digest(files: list[dict[str, str]]) -> str:
+    digest = hashlib.sha256()
+    for item in sorted(files, key=lambda record: record["path"]):
+        digest.update(item["path"].encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(item["sha256"].encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _runtime_inventory(pack_dir: Path) -> dict[str, object]:
+    files = [
+        {
+            "path": path.relative_to(pack_dir).as_posix(),
+            "sha256": _sha256(path.read_bytes()),
+        }
+        for path in pack_dir.rglob("*")
+        if path.is_file() and not path.is_symlink() and path.relative_to(pack_dir).as_posix() != validator.MANIFEST_NAME
+    ]
+    files.sort(key=lambda item: item["path"])
+    return {
+        "schema_version": 1,
+        "files": files,
+        "digest": _inventory_digest(files),
+    }
 
 
 def _pcm_samples(count: int = 1_200, *, seed: int = 0xA341316C) -> list[int]:
@@ -697,6 +725,157 @@ def test_exact_duplicate_outputs_are_rejected_even_with_distinct_asset_ids(tmp_p
 
     with pytest.raises(validator.AudioAssetPackValidationError, match="exact duplicate output SHA-256"):
         validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_optional_runtime_inventory_is_an_exact_digest_bound_file_projection(tmp_path: Path, fake_probe: None) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    auxiliary = pack_dir / "provenance" / "source-master.bin"
+    auxiliary.parent.mkdir()
+    auxiliary.write_bytes(b"runtime projection fixture")
+    payload["inventory"] = _runtime_inventory(pack_dir)
+    _write_manifest(pack_dir, payload)
+
+    validator.validate_audio_asset_pack(pack_dir)
+
+    inventory = payload["inventory"]
+    assert isinstance(inventory, dict)
+    files = inventory["files"]
+    assert isinstance(files, list)
+    assert [item["path"] for item in files] == [
+        "beds/night_bed.mp3",
+        "provenance/source-master.bin",
+        "sfx/applause_short.mp3",
+    ]
+    assert validator.MANIFEST_NAME not in {item["path"] for item in files}
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("schema", "inventory.schema_version must be 1"),
+        ("unsorted", "inventory.files must be sorted by path"),
+        ("duplicate", "duplicates inventory path"),
+        ("noncanonical", "must be a canonical safe relative POSIX path"),
+        ("dot", "must be a canonical safe relative POSIX path"),
+        ("traversal", "must be a canonical safe relative POSIX path"),
+        ("missing", "inventory.files is missing pack files"),
+        ("extra", "inventory.files contains unexpected paths"),
+        ("manifest", "inventory.files contains unexpected paths: manifest.json"),
+        ("sha256", "SHA-256 differs from delivered bytes"),
+        ("digest", "inventory.digest differs from the declared file ledger"),
+    ],
+)
+def test_runtime_inventory_rejects_malformed_or_stale_projection(
+    tmp_path: Path,
+    fake_probe: None,
+    mutation: str,
+    message: str,
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    inventory = _runtime_inventory(pack_dir)
+    files = inventory["files"]
+    assert isinstance(files, list)
+
+    if mutation == "schema":
+        inventory["schema_version"] = True
+    elif mutation == "unsorted":
+        files.reverse()
+    elif mutation == "duplicate":
+        files.append(dict(files[0]))
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "noncanonical":
+        files[0]["path"] = f"./{files[0]['path']}"
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "dot":
+        files[0]["path"] = "."
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "traversal":
+        files[0]["path"] = f"../{files[0]['path']}"
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "missing":
+        files.pop()
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "extra":
+        files.append({"path": "unexpected.mp3", "sha256": "f" * 64})
+        files.sort(key=lambda item: item["path"])
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "manifest":
+        files.append({"path": validator.MANIFEST_NAME, "sha256": "f" * 64})
+        files.sort(key=lambda item: item["path"])
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "sha256":
+        files[0]["sha256"] = "f" * 64
+        inventory["digest"] = _inventory_digest(files)
+    elif mutation == "digest":
+        inventory["digest"] = "f" * 64
+    else:  # pragma: no cover - parametrization invariant
+        raise AssertionError(mutation)
+    payload["inventory"] = inventory
+    _write_manifest(pack_dir, payload)
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match=re.escape(message)):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+@pytest.mark.parametrize("entry_kind", ["symlink", "fifo"])
+def test_runtime_inventory_rejects_non_regular_pack_entries(tmp_path: Path, fake_probe: None, entry_kind: str) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    payload["inventory"] = _runtime_inventory(pack_dir)
+    if entry_kind == "symlink":
+        (pack_dir / "linked.mp3").symlink_to("sfx/applause_short.mp3")
+        message = "pack inventory contains symlink: linked.mp3"
+    else:
+        os.mkfifo(pack_dir / "runtime.pipe")
+        message = "pack inventory contains special filesystem entry: runtime.pipe"
+    _write_manifest(pack_dir, payload)
+
+    with pytest.raises(validator.AudioAssetPackValidationError, match=re.escape(message)):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_declared_pack_digest_is_validated_without_quality_or_listening_metadata(
+    tmp_path: Path, fake_probe: None
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    payload["pack_digest"] = _declared_pack_digest(payload)
+    _write_manifest(pack_dir, payload)
+
+    validator.validate_audio_asset_pack(pack_dir)
+
+    payload["pack_digest"] = "f" * 64
+    _write_manifest(pack_dir, payload)
+    with pytest.raises(
+        validator.AudioAssetPackValidationError, match="pack_digest differs from delivered asset ledger"
+    ):
+        validator.validate_audio_asset_pack(pack_dir)
+
+
+def test_quality_metadata_without_receipt_is_auditionable_but_cannot_pass_release_gate(
+    tmp_path: Path, fake_probe: None
+) -> None:
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    payload = _manifest(pack_dir)
+    _enable_quality_contract(payload)
+    payload.pop("release_ready")
+    payload.pop("listening_receipt")
+    _write_manifest(pack_dir, payload)
+
+    validator.validate_audio_asset_pack(pack_dir)
+
+    with pytest.raises(validator.AudioAssetPackValidationError) as caught:
+        validator.validate_audio_asset_pack(pack_dir, require_listening_approval=True)
+    message = str(caught.value)
+    assert "release_ready must be a boolean" in message
+    assert "listening_receipt must be an object" in message
 
 
 def test_pending_receipt_is_auditionable_but_release_gate_requires_complete_approval(

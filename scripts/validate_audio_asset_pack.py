@@ -50,6 +50,7 @@ DEFAULT_PACK_DIR = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
 MANIFEST_NAME = "manifest.json"
 ATTRIBUTION_NAME = "ATTRIBUTION.md"
 SCHEMA_VERSION = RECIPE_MANIFEST_SCHEMA_VERSION
+INVENTORY_SCHEMA_VERSION = 1
 ALLOWED_LICENSES = frozenset({"CC0-1.0", "CC-BY-4.0"})
 LICENSE_LABELS = {
     "CC0-1.0": "CC0 1.0 Universal",
@@ -1033,6 +1034,148 @@ def _pack_digest(assets: Iterable[AssetRecord]) -> str:
         digest.update(asset.sha256.encode("ascii"))
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def _validate_pack_digest(
+    manifest: dict[str, Any],
+    assets: tuple[AssetRecord, ...],
+    errors: list[str],
+    *,
+    required: bool,
+) -> None:
+    """Validate a declared asset-ledger digest independently of listening state."""
+    if "pack_digest" not in manifest and not required:
+        return
+    expected_digest = _pack_digest(assets)
+    declared_digest = _sha256(manifest.get("pack_digest"), "pack_digest", errors)
+    if declared_digest is not None and declared_digest != expected_digest:
+        errors.append(f"pack_digest differs from delivered asset ledger ({declared_digest} != {expected_digest})")
+
+
+def _inventory_digest(files: Iterable[tuple[str, str]]) -> str:
+    """Return the v1 runtime-file inventory digest in canonical path order."""
+    digest = hashlib.sha256()
+    for path, sha256 in sorted(files):
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(sha256.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _canonical_inventory_path(value: Any, label: str, errors: list[str]) -> str | None:
+    """Accept only one canonical, traversal-free relative POSIX spelling."""
+    path = _nonempty_text(value, label, errors)
+    if path is None:
+        return None
+    relative = PurePosixPath(path)
+    if (
+        value != path
+        or "\\" in path
+        or "\0" in path
+        or ":" in path
+        or path == "."
+        or relative.is_absolute()
+        or any(part in {".", ".."} for part in relative.parts)
+        or relative.as_posix() != path
+    ):
+        errors.append(f"{label} must be a canonical safe relative POSIX path")
+        return None
+    return path
+
+
+def _scan_pack_inventory(pack_dir: Path, errors: list[str]) -> dict[str, str]:
+    """Hash every regular pack file except the self-describing manifest."""
+    files: dict[str, str] = {}
+    try:
+        entries = sorted(pack_dir.rglob("*"), key=lambda item: item.relative_to(pack_dir).as_posix())
+    except OSError as exc:
+        errors.append(f"cannot enumerate pack inventory: {exc}")
+        return files
+
+    for entry in entries:
+        relative_path = entry.relative_to(pack_dir).as_posix()
+        try:
+            if entry.is_symlink():
+                errors.append(f"pack inventory contains symlink: {relative_path}")
+                continue
+            if entry.is_dir():
+                continue
+            if not entry.is_file():
+                errors.append(f"pack inventory contains special filesystem entry: {relative_path}")
+                continue
+        except OSError as exc:
+            errors.append(f"cannot inspect pack inventory entry {relative_path!r}: {exc}")
+            continue
+        if relative_path == MANIFEST_NAME:
+            continue
+        try:
+            files[relative_path] = _sha256_file(entry)
+        except OSError as exc:
+            errors.append(f"cannot hash pack inventory file {relative_path!r}: {exc}")
+    return files
+
+
+def _validate_inventory(pack_dir: Path, value: Any, errors: list[str]) -> None:
+    """Validate the optional exact runtime projection of all delivered files."""
+    if not isinstance(value, dict):
+        errors.append("inventory must be an object")
+        return
+    supported_fields = {"schema_version", "files", "digest"}
+    for field in sorted(set(value) - supported_fields):
+        errors.append(f"inventory contains unsupported field {field!r}")
+
+    schema_version = value.get("schema_version")
+    if isinstance(schema_version, bool) or schema_version != INVENTORY_SCHEMA_VERSION:
+        errors.append(f"inventory.schema_version must be {INVENTORY_SCHEMA_VERSION}")
+
+    raw_files = value.get("files")
+    declared_records: list[tuple[str, str]] = []
+    declared_files: dict[str, str] = {}
+    if not isinstance(raw_files, list):
+        errors.append("inventory.files must be a list")
+    else:
+        for index, raw in enumerate(raw_files):
+            label = f"inventory.files[{index}]"
+            if not isinstance(raw, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            for field in sorted(set(raw) - {"path", "sha256"}):
+                errors.append(f"{label} contains unsupported field {field!r}")
+            path = _canonical_inventory_path(raw.get("path"), f"{label}.path", errors)
+            sha256 = _sha256(raw.get("sha256"), f"{label}.sha256", errors)
+            if path is None or sha256 is None:
+                continue
+            declared_records.append((path, sha256))
+            if path in declared_files:
+                errors.append(f"{label}.path duplicates inventory path {path!r}")
+                continue
+            declared_files[path] = sha256
+        declared_paths = [path for path, _sha256_value in declared_records]
+        if declared_paths != sorted(declared_paths):
+            errors.append("inventory.files must be sorted by path")
+
+    declared_digest = _sha256(value.get("digest"), "inventory.digest", errors)
+    expected_declared_digest = _inventory_digest(declared_records)
+    if declared_digest is not None and declared_digest != expected_declared_digest:
+        errors.append(
+            f"inventory.digest differs from the declared file ledger ({declared_digest} != {expected_declared_digest})"
+        )
+
+    actual_files = _scan_pack_inventory(pack_dir, errors)
+    missing = sorted(set(actual_files) - set(declared_files))
+    extra = sorted(set(declared_files) - set(actual_files))
+    if missing:
+        errors.append(f"inventory.files is missing pack files: {', '.join(missing)}")
+    if extra:
+        errors.append(f"inventory.files contains unexpected paths: {', '.join(extra)}")
+    for path in sorted(set(actual_files) & set(declared_files)):
+        actual_sha256 = actual_files[path]
+        declared_sha256 = declared_files[path]
+        if declared_sha256 != actual_sha256:
+            errors.append(
+                f"inventory file {path!r} SHA-256 differs from delivered bytes ({declared_sha256} != {actual_sha256})"
+            )
 
 
 def _validate_quality_allowlist(
@@ -2159,10 +2302,6 @@ def _validate_listening_receipt(
     require_listening_approval: bool,
 ) -> None:
     expected_digest = _pack_digest(assets)
-    declared_digest = _sha256(manifest.get("pack_digest"), "pack_digest", errors)
-    if declared_digest is not None and declared_digest != expected_digest:
-        errors.append(f"pack_digest differs from delivered asset ledger ({declared_digest} != {expected_digest})")
-
     release_ready = manifest.get("release_ready")
     if not isinstance(release_ready, bool):
         errors.append("release_ready must be a boolean")
@@ -2416,12 +2555,12 @@ def validate_audio_asset_pack(
 
     if manifest.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
+    if "inventory" in manifest:
+        _validate_inventory(pack_dir, manifest.get("inventory"), errors)
     quality_enabled = QUALITY_GUARD_KEY in manifest
-    companion_fields = {"pack_digest", "release_ready", "listening_receipt"}
-    if not quality_enabled and companion_fields & manifest.keys():
-        errors.append(
-            f"{QUALITY_GUARD_KEY} is required when pack_digest, release_ready, or listening_receipt is declared"
-        )
+    listening_fields = {"release_ready", "listening_receipt"}
+    if not quality_enabled and listening_fields & manifest.keys():
+        errors.append(f"{QUALITY_GUARD_KEY} is required when release_ready or listening_receipt is declared")
     if require_listening_approval and not quality_enabled:
         errors.append(f"{QUALITY_GUARD_KEY} is required when listening approval is required")
     sources = _validate_source_records(manifest.get("sources"), errors, require_quality_metadata=quality_enabled)
@@ -2429,12 +2568,15 @@ def validate_audio_asset_pack(
     _validate_source_originals(pack_dir, sources, errors)
     measured_durations = _validate_assets(pack_dir, sources, assets, errors)
     _validate_exact_duplicate_outputs(assets, errors)
+    listening_validation_required = require_listening_approval or bool(listening_fields & manifest.keys())
+    _validate_pack_digest(manifest, assets, errors, required=listening_validation_required)
     if quality_enabled:
         allowlist = _validate_quality_allowlist(manifest.get(QUALITY_GUARD_KEY), sources, assets, errors)
         _validate_layer_provenance(sources, assets, errors)
         _validate_source_concentration(assets, allowlist, errors)
         _validate_startup_synth_semantics(sources, assets, errors)
         _validate_perceptual_overlaps(pack_dir, assets, allowlist, errors)
+    if listening_validation_required:
         _validate_listening_receipt(
             manifest,
             assets,
