@@ -231,15 +231,6 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
         if status in {"ready", "not_configured"}:
             continue
         primary_action = {
-            # Both legacy and new source actions land on the same existing
-            # First Listen source step. The explicit destination prevents the
-            # old "Fix stream" action from opening Setup without a next move.
-            "fix_stream": {
-                "kind": "repair_music_source",
-                "label": "Repair music source",
-                "target": "setup",
-                "focus": "source",
-            },
             "repair_music_source": {
                 "kind": "repair_music_source",
                 "label": "Repair music source",
@@ -513,9 +504,6 @@ def build_guided_setup(
         "audio_complete": audio_complete,
         "privacy_complete": privacy_complete,
         "continuity_available": continuity_available,
-        "music_follow_up_required": bool(
-            source_readiness_present and continuity_available and not source_readiness["healthy"]
-        ),
         "setup_reviewed": privacy_complete,
         "accepted_attempt_id": accepted_attempt_id,
         "selected_entity_id": selected_entity_id,

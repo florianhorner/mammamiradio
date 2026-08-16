@@ -426,7 +426,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
 .setup-strip-chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 8px;border:1px solid rgba(245,237,216,0.14);border-radius:8px;font-size:11px;color:rgba(245,237,216,0.82);background:rgba(245,237,216,0.04)}
 .setup-strip-chip[data-s="ready"]{border-color:rgba(37,99,235,0.35);color:var(--ok-text)}
-.setup-strip-chip[data-s="degraded"]{border-color:rgba(208,161,72,0.42);color:var(--warning)}
+.setup-strip-chip[data-s="degraded"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
 .setup-strip-chip[data-s="missing"],.setup-strip-chip[data-s="checking"],.setup-strip-chip[data-s="waiting_ai"],.setup-strip-chip[data-s="empty"],.setup-strip-chip[data-s="stale"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
 .setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
 .setup-strip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
@@ -5729,6 +5729,7 @@ function renderSetup(setup){
 async function setupRecheck(el){
   flash(el);
   const focusSource=document.body.dataset.firstListenFocus==='source';
+  delete document.body.dataset.firstListenFocus;
   const data=await api('POST','/api/setup/recheck',{});
   renderSetup(data);
   if(focusSource)setTimeout(()=>focusFirstListenStep('source'),50);

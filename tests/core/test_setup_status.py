@@ -782,6 +782,33 @@ def test_fresh_completed_milestones_stay_active_without_continuity():
     assert guided["strip"]["primary_action"]["kind"] == "repair_music_source"
 
 
+def test_recommended_next_action_reassures_on_backup_audio_after_onboarding():
+    """Regression: this branch was reachable but had zero test coverage.
+
+    Once First Listen onboarding is already behind an install (or never
+    required), a degraded stream backed by a usable recovery cover must get
+    the reassuring "backup audio" copy, not the generic "fix stream
+    readiness" fallback meant for a station with no audio at all.
+    """
+    config = load_config()
+    config.allow_ytdlp = False
+
+    setup = build_setup_status(
+        config,
+        StationState(),
+        golden_path={
+            "blocking": True,
+            "source_readiness": _first_listen_source_projection(recovery_status="cover_only"),
+        },
+        install_origin="existing",
+    )
+
+    assert setup["guided_setup"]["stream"]["status"] == "degraded"
+    assert setup["recommended_next_action"] == (
+        "Repair the primary music source; backup audio is keeping the station playing."
+    )
+
+
 def test_fresh_no_key_setup_orders_speaker_and_privacy_before_optional_ai():
     config = load_config()
     config.is_addon = True
