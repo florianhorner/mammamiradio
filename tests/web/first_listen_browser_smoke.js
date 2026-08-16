@@ -129,6 +129,15 @@ async (page) => {
       },
     };
   };
+  const currentSourceOptions = () => {
+    const rows = setupStatusProjection?.guided_setup?.source_readiness?.rows || [];
+    const primary = rows.find((row) => row.kind !== 'recovery' && row.status) || {};
+    const recovery = rows.find((row) => row.kind === 'recovery') || {};
+    return {
+      primary: primary.status || 'playable',
+      recovery: recovery.status || 'cover_only',
+    };
+  };
   let setupStatusProjection = setupProjection();
 
   const bodyOf = (route) => {
@@ -498,6 +507,7 @@ async (page) => {
       privacy: true,
       privacyEnabled: body.enabled === true,
       onboardingRequired: false,
+      ...currentSourceOptions(),
     });
     await fulfillJson(route, {
       ok: true,
@@ -822,9 +832,28 @@ async (page) => {
 
     await resetUi(setupProjection({ primary: 'unavailable', recovery: 'cover_only' }));
     await assertUnfinished('firstListenSpeakerStep', 'firstListenFindPlayersBtn');
-    assert((await page.locator('#firstListenSourceChip').innerText()) === 'BACKUP READY', 'degraded source lost its honest runtime status');
-    assert((await page.locator('#firstListenSourceSummary').innerText()).includes('Backup music'), 'degraded source did not explain what the listener gets');
+    assert((await page.locator('#firstListenSourceChip').innerText()) === 'BACKUP AUDIO AVAILABLE', 'degraded source lost its honest runtime status');
+    assert((await page.locator('#firstListenSourceSummary').innerText()).includes('Backup audio'), 'degraded source did not explain what the listener gets');
     assert((await page.locator('#firstListenSourceRepair').innerText()).includes('continue'), 'degraded source blocked an otherwise usable First Listen');
+
+    const fallbackCompletion = setupProjection({ primary: 'unavailable', recovery: 'cover_only', audio: true });
+    setupStatusProjection = fallbackCompletion;
+    await resetUi(fallbackCompletion, audioReadyOverrides());
+    await assertUnfinished('firstListenPrivacyStep', 'firstListenKeepOffBtn');
+    await page.locator('#firstListenKeepOffBtn').click();
+    await page.waitForFunction(() => _firstListenUi.showSuccess === true && !_firstListenUi.privacySaving);
+    assert(await page.locator('#firstListenSuccess').isVisible(), 'backup audio did not allow First Listen to complete');
+    assert((await page.locator('#firstListenSuccessCopy').innerText()).includes('Backup audio is keeping the station playing'), 'backup completion hid the continuity explanation');
+    assert((await page.locator('#firstListenSuccessCopy').innerText()).includes('primary music still needs attention'), 'backup completion hid the repair follow-up');
+    assert(await page.locator('#firstListenSuccessRepair').isVisible(), 'backup completion hid its primary-music repair action');
+
+    const noContinuity = setupProjection({ primary: 'unavailable', recovery: 'unavailable', audio: true });
+    setupStatusProjection = noContinuity;
+    await resetUi(noContinuity, audioReadyOverrides());
+    await page.locator('#firstListenKeepOffBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyChoice === false && !_firstListenUi.privacySaving);
+    assert(await page.locator('#firstListenSuccess').isHidden(), 'missing continuity falsely exposed the success screen');
+    await assertUnfinished('firstListenSourceStep', 'firstListenRepairMusicBtn');
 
     await resetUi(setupProjection());
     await page.locator('#firstListenFindPlayersBtn').click();
@@ -1436,6 +1465,25 @@ async (page) => {
     await resetUi(setupProjection());
     await page.locator('#firstListenFindPlayersBtn').click();
     await page.waitForFunction(() => _firstListenUi.discovery === 'ready' && !_firstListenUi.busy);
+    await page.locator('#setupAdvancedDetails > summary').click();
+    const technicalColumns = await page.evaluate(() => {
+      const body = document.querySelector('#setupAdvancedDetails > .technical-body');
+      return [...(body?.children || [])].map((child) => ({
+        id: child.id || child.className,
+        fullWidth: child.classList.contains('technical-group-wide'),
+        start: getComputedStyle(child).gridColumnStart,
+        end: getComputedStyle(child).gridColumnEnd,
+      }));
+    });
+    for (const child of technicalColumns.filter((entry) => (
+      entry.fullWidth
+        || String(entry.id).includes('setupCachedContextDiagnostics')
+        || String(entry.id).includes('setup-actions')
+        || String(entry.id).includes('setup-snippet')
+    ))) {
+      assert(child.start === '1' && child.end === '-1', `technical detail child was left in an implicit grid column: ${JSON.stringify(child)}`);
+    }
+    await page.locator('#setupAdvancedDetails > summary').click();
     const viewportResults = [];
     for (const [width, height] of [[320, 568], [375, 667], [430, 932], [768, 1024], [1024, 768], [1440, 900]]) {
       await page.setViewportSize({ width, height });
@@ -1472,6 +1520,18 @@ async (page) => {
           height: element.getBoundingClientRect().height,
         }));
         const surfaceRect = surface.getBoundingClientRect();
+        const headOverlaps = [...surface.querySelectorAll('.first-listen-head')].flatMap((head) => {
+          const status = head.querySelector(':scope > .status-chip');
+          const review = head.querySelector(':scope > .first-listen-review');
+          if (!status?.getClientRects().length || !review?.getClientRects().length) return [];
+          const statusRect = status.getBoundingClientRect();
+          const reviewRect = review.getBoundingClientRect();
+          const overlaps = statusRect.left < reviewRect.right - 0.5
+            && statusRect.right > reviewRect.left + 0.5
+            && statusRect.top < reviewRect.bottom - 0.5
+            && statusRect.bottom > reviewRect.top + 0.5;
+          return overlaps ? [head.closest('.first-listen-step')?.id || 'unknown'] : [];
+        });
         const escapedRects = [...surface.querySelectorAll('*')].filter((element) => {
           if (!element.getClientRects().length || element.classList.contains('sr-only')) return false;
           const rect = element.getBoundingClientRect();
@@ -1489,6 +1549,7 @@ async (page) => {
           viewport: root.clientWidth,
           documentWidth: root.scrollWidth,
           clipped,
+          headOverlaps,
           smallTargets,
           escapedRects,
           touchTargetProbes,
@@ -1497,6 +1558,7 @@ async (page) => {
       viewportResults.push({ width, ...geometry });
       assert(geometry.documentWidth <= geometry.viewport + 1, `${width}px page overflowed horizontally: ${JSON.stringify(geometry)}`);
       assert(geometry.clipped.length === 0, `${width}px clipped a control: ${JSON.stringify(geometry.clipped)}`);
+      assert(geometry.headOverlaps.length === 0, `${width}px status/review controls overlap: ${JSON.stringify(geometry.headOverlaps)}`);
       assert(geometry.escapedRects.length === 0, `${width}px visible journey content escaped its surface: ${JSON.stringify(geometry.escapedRects)}`);
       if (width <= 430) {
         assert(geometry.smallTargets.length === 0, `${width}px exposed a target below 44px: ${JSON.stringify(geometry.smallTargets)}`);

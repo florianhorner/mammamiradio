@@ -438,7 +438,7 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 1.875rem minmax(0, 1fr) auto;
+  grid-template-columns: 1.875rem minmax(0, 1fr) auto auto;
   grid-template-rows: auto auto;
   gap: var(--space-1) 0.6875rem;
   align-items: start;
@@ -537,7 +537,7 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
 }
 
 .first-listen-panel .first-listen-review {
-  grid-column: 3;
+  grid-column: 4;
   grid-row: 1 / span 2;
   align-self: start;
   display: inline-flex;
@@ -706,6 +706,45 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
   color: var(--text-secondary);
   font-size: 0.75rem;
   line-height: 1.35;
+}
+
+.first-listen-panel .setup-sound-lanes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  min-width: 0;
+  margin-top: var(--space-3);
+}
+
+.first-listen-panel .setup-sound-lane {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 22%, transparent);
+}
+
+.first-listen-panel .setup-sound-lane h4 {
+  margin: 0;
+  color: var(--cream);
+  font-size: 0.8125rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.first-listen-panel .setup-sound-lane > p {
+  margin: 0.3125rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.first-listen-panel .setup-sound-lane .setup-keys {
+  margin-top: var(--space-2);
+}
+
+.first-listen-panel .setup-sound-lane .setup-advanced {
+  margin-top: var(--space-2);
 }
 
 /* ── Spoken guide component ─────────────────────────────────────────────── */
@@ -1314,6 +1353,14 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
   padding: 0 var(--space-6) 1.375rem;
 }
 
+.first-listen-panel .technical-body > .technical-group-wide,
+.first-listen-panel .technical-body > #setupCachedContextDiagnostics,
+.first-listen-panel .technical-body > .setup-actions,
+.first-listen-panel .technical-body > .setup-snippet {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .first-listen-panel .technical-group {
   min-width: 0;
   padding-top: 0.625rem;
@@ -1863,6 +1910,7 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
 
   .first-listen-panel .first-listen-head {
     grid-template-columns: 1.75rem minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
     gap: var(--space-1) var(--space-2);
     padding: 0.625rem var(--space-3);
   }
@@ -1874,10 +1922,16 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
     min-height: 1.5rem;
   }
 
-  .first-listen-panel .first-listen-head > .status-chip,
-  .first-listen-panel .first-listen-review {
+  .first-listen-panel .first-listen-head > .status-chip {
     grid-column: 2;
     grid-row: 3;
+    justify-self: start;
+    margin-top: 0.1875rem;
+  }
+
+  .first-listen-panel .first-listen-review {
+    grid-column: 2;
+    grid-row: 4;
     justify-self: start;
     min-width: 4.625rem;
     margin-top: 0.1875rem;
@@ -1919,6 +1973,7 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
   }
 
   .first-listen-panel :is(.first-listen-fields, .setup-keys),
+  .first-listen-panel .setup-sound-lanes,
   .first-listen-panel .technical-body,
   .first-listen-panel .ha-preview-row {
     grid-template-columns: minmax(0, 1fr);
@@ -1934,6 +1989,10 @@ body:has(.first-listen-station-controls)[data-first-listen-entry="required"]:is(
 
   .first-listen-panel .technical-body {
     padding: 0 0.9375rem 1.125rem;
+  }
+
+  .first-listen-panel .setup-sound-lane {
+    padding: var(--space-3) var(--space-2);
   }
 
   .first-listen-panel :is(.first-listen-success, .success-surface) {

@@ -269,7 +269,11 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     assert "/api/setup/first-listen/play',{entity_id" not in setup + progress
 
     choice = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
-    assert "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy" in choice
+    assert "const continuityAvailable=firstListenSourceState(projection).continuityAvailable" in choice
+    assert (
+        "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy"
+        "&&continuityAvailable" in choice
+    )
 
     preview_gate = _function("shouldShowHomeContextPreview", "previewRows")
     assert "first.install_origin==='existing'" in preview_gate
@@ -870,6 +874,28 @@ def test_existing_setup_inventory_stays_under_advanced_details() -> None:
     assert "details.addEventListener('toggle',sync)" in init
     assert "body.setAttribute('aria-hidden',details.open?'false':'true')" in init
     assert "body.toggleAttribute('inert',!details.open)" in init
+
+
+def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actionable() -> None:
+    html = _html()
+    assert 'id="firstListenSourceActions"' in html
+    assert 'onclick="openMusicSourceTools()"' in html
+    assert 'id="firstListenSuccessRepair"' in html
+    assert 'id="setupConversationsHeading"' in html
+    assert 'id="setupVoiceQualityHeading"' in html
+    assert "Choose the clarity, warmth, and presence" in html
+    assert "These providers shape how the hosts sound" in html
+    assert "They do not add new conversations" not in html
+
+    strip = _function("renderGuidedSetupStrip", "shouldShowHomeContextPreview")
+    assert "primary.focus" in strip
+    assert "openSetupPanel('source')" in strip
+
+    source_state = _function("firstListenSourceState", "renderFirstListenSources")
+    assert "continuity_available===true" in source_state
+    progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
+    assert "const sourceComplete=sourceMilestone&&continuityAvailable" in progress
+    assert "sourceKnown&&!continuityAvailable?'repair the music source'" in progress
 
 
 def test_post_hacs_timing_is_local_and_ends_only_on_heard_confirmation() -> None:

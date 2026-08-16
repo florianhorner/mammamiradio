@@ -338,6 +338,7 @@ def test_source_readiness_reports_only_terminal_candidate_exhaustion_as_unavaila
     assert charts["detail"] == "No found track could be prepared as playable audio."
     assert exhausted["sources"]["recovery"]["status"] == "on_air"
     assert exhausted["programming_ready"] is False
+    assert exhausted["continuity_available"] is True
     assert exhausted["transport_only"] is True
 
     monkeypatch.setattr(status_payload, "_golden_path_cache", None)
@@ -345,6 +346,7 @@ def test_source_readiness_reports_only_terminal_candidate_exhaustion_as_unavaila
     monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
     golden_path = status_payload._golden_path_status(_source_config(allow_ytdlp=True), state)
     assert golden_path["stage"] == "needs_music_source"
+    assert "Backup audio is ready" in golden_path["detail"]
 
 
 def test_recovery_on_air_proves_transport_but_not_source_health():

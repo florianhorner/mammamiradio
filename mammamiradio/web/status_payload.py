@@ -198,6 +198,10 @@ def _source_readiness_status(config, state: StationState) -> dict:
         "programming_ready": programming_ready,
         "recovery_cover_available": sources["recovery"]["status"] in {"on_air", "cover_only"},
         "recovery_on_air": recovery_on_air,
+        # Continuity is a usable transport path, not proof that primary music
+        # is healthy. Consumers can therefore allow First Listen to finish
+        # without painting the primary source green.
+        "continuity_available": programming_ready or sources["recovery"]["status"] in {"on_air", "cover_only"},
         "transport_only": recovery_on_air and not programming_ready,
     }
 
@@ -309,8 +313,8 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         "blocking": True,
         "headline": "No playable music source yet." if any_configured else "No music source configured.",
         "detail": (
-            "Recovery cover can keep the route audible, but a music source still needs attention."
-            if readiness["recovery_on_air"]
+            "Backup audio is ready to keep the route audible, but primary music still needs attention."
+            if readiness["recovery_cover_available"]
             else "Enable live charts, configure Jamendo, or add local MP3 files."
         ),
         "steps": [
