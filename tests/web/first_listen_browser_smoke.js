@@ -66,6 +66,8 @@ async (page) => {
   } = {}) => {
     const rows = sources ? sourceRows({ primary, recovery }) : [];
     const healthy = ['playable', 'on_air'].includes(primary);
+    const recoveryCoverAvailable = recovery === 'cover_only' || recovery === 'on_air';
+    const continuityAvailable = healthy || recoveryCoverAvailable;
     const resolvedInstallOrigin = fresh ? 'fresh' : 'existing';
     const acceptedAttemptId = durableAttemptId || (audio ? 'browser-attempt-server' : '');
     const selectedEntityId = durableEntityId || (audio ? 'media_player.mac_lab_speaker' : '');
@@ -99,6 +101,7 @@ async (page) => {
           bootstrap_ready: true,
           audio_complete: audio,
           privacy_complete: privacy,
+          continuity_available: continuityAvailable,
           setup_reviewed: privacy,
           accepted_attempt_id: acceptedAttemptId,
           selected_entity_id: selectedEntityId,
@@ -113,8 +116,9 @@ async (page) => {
         source_readiness: {
           rows,
           healthy,
-          recovery_cover_available: recovery === 'cover_only' || recovery === 'on_air',
+          recovery_cover_available: recoveryCoverAvailable,
           recovery_on_air: recovery === 'on_air',
+          continuity_available: continuityAvailable,
         },
         speaker: { selected_entity_id: selectedEntityId },
         verification: { status: audio ? 'heard' : 'not_started', heard: audio, attempt_id: acceptedAttemptId },

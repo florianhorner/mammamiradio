@@ -4335,7 +4335,7 @@ function firstListenInstallNeedsOnboarding(first){
 function firstListenEntryRequired(setup){
   const first=setup?.guided_setup?.first_listen||{};
   const needsOnboarding=firstListenInstallNeedsOnboarding(first);
-  return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete);
+  return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete&&first.continuity_available);
 }
 function resolveFirstListenLanding(setup){
   const first=setup?.guided_setup?.first_listen||{};
