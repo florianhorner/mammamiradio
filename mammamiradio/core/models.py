@@ -942,6 +942,10 @@ class StationState:
     last_banter_script: list[dict] = field(default_factory=list)
     last_ad_script: dict = field(default_factory=dict)
     ad_history: deque[AdHistoryEntry] = field(default_factory=lambda: deque(maxlen=20))
+    # Session-only ad receipts for completed breaks. Stores aggregate counts
+    # in memory and resets with the process.
+    ad_experiment_completed_breaks: int = 0
+    ad_experiment_brand_airings: dict[str, int] = field(default_factory=dict)
     session_stopped: bool = False
     # True only after an explicit assetless force-resume, until a listener
     # accepts the first rebuilt segment. Readiness stays "starting" meanwhile.
@@ -2302,11 +2306,37 @@ class StationState:
             if i >= artist_10_start:
                 recent_artist_10[t.artist] = recent_artist_10.get(t.artist, 0) + 1
 
+        # An active course keeps lifting its matches for as long as it is set. That
+        # is deliberate: steering is durable and does not retire when a budget runs out.
+        # The cost is that a small found set gets picked from over and over: at the
+        # target share, a set of H tracks brings a given one back roughly every
+        # H/share picks, which on a five-track set is inside the plain repeat
+        # cooldown's blind spot and reads to a listener as the same song again.
+        #
+        # So cool a course track down against the other course tracks rather than
+        # against the last few plays: it cannot return until the rest of the set has
+        # had its turn. The set still takes its full share of the show, it just
+        # cycles instead of repeating. This is a strict filter and relaxes with the
+        # others below, so a course can never starve selection.
+        heading_recent_keys: set[str] = set()
+        active_heading = self.heading
+        if active_heading is not None and active_heading.id:
+            course_keys = {t.cache_key for t in pool if t.heading_id == active_heading.id}
+            if len(course_keys) > 1:
+                for played in reversed(self.played_tracks):
+                    if played.heading_id != active_heading.id:
+                        continue
+                    heading_recent_keys.add(played.cache_key)
+                    if len(heading_recent_keys) >= len(course_keys) - 1:
+                        break
+
         # --- Hard filters (progressively relaxed) ---
         def _apply_filters(candidates: list[Track], *, strict: bool = True) -> list[Track]:
             result = candidates
             if not allow_explicit:
                 result = [t for t in result if not t.explicit]
+            if strict and heading_recent_keys:
+                result = [t for t in result if t.cache_key not in heading_recent_keys]
             if strict and repeat_cooldown:
                 result = [t for t in result if t.cache_key not in recent_keys]
             if strict and artist_cooldown:
@@ -2341,7 +2371,7 @@ class StationState:
         # --- Soft weights (all lookups are O(1) via dicts built in the single pass above) ---
         # Pass 1: base weight per candidate (everything EXCEPT the Record Hunt lift), plus
         # the heading-match flag and the split base-weight sums the adaptive lift needs.
-        heading = self.heading
+        heading = active_heading
         preference_scores = preference_score_map(self.song_preferences)
         base_weights: list[float] = []
         heading_flags: list[bool] = []
@@ -2465,6 +2495,31 @@ class StationState:
                 transition_motif=transition_motif,
             )
         )
+
+    def record_completed_ad_break(self, brands: Collection[str]) -> None:
+        """Increment process-local counts for one credited ad break."""
+        normalized = [brand.strip() for brand in brands if isinstance(brand, str) and brand.strip()]
+        if not normalized:
+            return
+        self.ad_experiment_completed_breaks += 1
+        for brand in normalized:
+            self.ad_experiment_brand_airings[brand] = self.ad_experiment_brand_airings.get(brand, 0) + 1
+
+    def ad_experiment_snapshot(self) -> dict[str, object]:
+        """Return the public process-local receipt payload."""
+        brands = [
+            {"brand": brand, "completed_airings": count}
+            for brand, count in sorted(
+                self.ad_experiment_brand_airings.items(),
+                key=lambda item: (-item[1], item[0].casefold(), item[0]),
+            )
+        ]
+        return {
+            "scope": "runtime",
+            "completed_breaks": self.ad_experiment_completed_breaks,
+            "completed_spots": sum(self.ad_experiment_brand_airings.values()),
+            "brands": brands,
+        }
 
     def after_ad(self, brands: list[str] | None = None) -> None:
         """Mark one full ad break as produced (called once per break, not per-spot)."""

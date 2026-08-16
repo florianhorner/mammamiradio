@@ -1506,6 +1506,55 @@ def test_audible_commit_logs_new_provider_events_when_object_ids_collide(caplog)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("accepted_counts", "expected_breaks"),
+    [
+        ([1, 1], 1),
+        ([1, 0], 0),
+        ([0, 1], 0),
+        ([0, 0], 0),
+    ],
+)
+async def test_ad_experiment_receipt_requires_every_chunk_to_reach_an_audience(
+    tmp_path,
+    accepted_counts,
+    expected_breaks,
+):
+    """Record a receipt only if every chunk reached a listener."""
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    state = app.state.station_state
+
+    audio_path = tmp_path / "carosello.mp3"
+    audio_path.write_bytes(b"x" * 8192)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.AD,
+            path=audio_path,
+            metadata={"brands": ["Prezzoforte", "TeleCuore"]},
+            ephemeral=False,
+        )
+    )
+    app.state.stream_hub.broadcast = AsyncMock(side_effect=accepted_counts)
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        await asyncio.wait_for(app.state.queue.join(), timeout=2.0)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    receipt = state.ad_experiment_snapshot()
+    assert receipt["completed_breaks"] == expected_breaks
+    assert receipt["completed_spots"] == expected_breaks * 2
+    outcome = state.stream_outcome_history[-1]
+    assert outcome["accepted_listener_count"] == max(accepted_counts)
+    assert outcome["result"] == ("aired" if max(accepted_counts) > 0 else "not_streamed")
+    assert app.state.stream_hub.broadcast.await_count == len(accepted_counts)
+
+
+@pytest.mark.asyncio
 async def test_continuity_reservation_reports_a_bridge_fire_from_the_send_loop(tmp_path):
     """Reserved safety audio reports a bridge ONLY once a listener has it.
 
@@ -9637,6 +9686,47 @@ async def test_home_context_setup_routes_reject_invalid_json_and_missing_ha_acce
     assert missing_access.json()["error"]["code"] == "ha_access_missing"
     assert invalid_choice.status_code == 422
     assert invalid_choice.json()["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_addon", [True, False], ids=["addon", "standalone"])
+async def test_find_speakers_way_out_matches_how_the_station_runs(tmp_path, is_addon):
+    """A standalone run has no add-on options page to send the operator to.
+
+    Same failure, same code, but "check the add-on's Home Assistant access" is a
+    dead end when there is no add-on. Only the wording moves; consumers branching
+    on the error code see no difference.
+    """
+    from mammamiradio.home.ha_playback import HAPlaybackError, HAPlaybackReason
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.is_addon = is_addon
+    service = SimpleNamespace(
+        discover=AsyncMock(side_effect=HAPlaybackError(HAPlaybackReason.HA_ACCESS_MISSING)),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._ha_playback_service", return_value=service):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            response = await client.post("/api/setup/first-listen/players", json={})
+
+    body = response.json()["error"]
+    assert response.status_code == 409
+    assert body["code"] == "ha_access_missing"
+    assert body["retryable"] is True
+
+    if is_addon:
+        assert "add-on" in body["message"]
+        assert ".env" not in body["message"]
+    else:
+        # Names something that exists on this install, and says the station still works.
+        assert "HA_URL" in body["message"] and "HA_TOKEN" in body["message"]
+        assert "skip this step" in body["message"]
+        assert "add-on" not in body["message"]
 
 
 @pytest.mark.asyncio

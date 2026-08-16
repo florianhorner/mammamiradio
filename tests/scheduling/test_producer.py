@@ -336,6 +336,55 @@ async def test_queued_segment_playlist_index_minus_one_for_nonmusic(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_banter_segment_credits_only_hosts_that_spoke(tmp_path):
+    """A silent roster host must never reach the v1 contract's now_playing.host.
+
+    A consumer that receives no host falls back to the full configured roster, so
+    an empty field credited the guest host on every break in Music Assistant even
+    though he was not in the exchange.
+    """
+    state = StationState(
+        playlist=[Track(title="Canzone Uno", artist="Artista", duration_ms=200_000, spotify_id="demo1")],
+        listeners_active=1,
+    )
+    config = _make_config(tmp_path)
+    speaking = [
+        HostPersonality(name="Marco del bar", voice="it-IT-DiegoNeural", style="warm"),
+        HostPersonality(name="Nonna Giulia", voice="it-IT-ElsaNeural", style="dry"),
+    ]
+    silent = HostPersonality(name="Hans Günther", voice="de-DE-ConradNeural", style="bavarian")
+    config.hosts = [*speaking, silent]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+        patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(speaking[0], "Allora...", None),
+        ),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_banter",
+            new_callable=AsyncMock,
+            return_value=([(speaking[0], "Che bella giornata!"), (speaking[1], "Eh, insomma.")], None),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "banter.mp3"),
+        patch(f"{PRODUCER_MODULE}.concat_files", return_value=None),
+    ):
+        await _run_until_status_queued(queue, state, config)
+
+    banter = [queue.get_nowait() for _ in range(queue.qsize())]
+    banter = [seg for seg in banter if seg.type is SegmentType.BANTER]
+    assert banter, "producer did not queue a banter segment"
+
+    credited = banter[-1].metadata.get("host", "")
+    assert credited == "Marco del bar, Nonna Giulia"
+    assert "Hans Günther" not in credited
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("background", [False, True])
 async def test_render_music_cache_hit_reconciles_loudness(tmp_path, background):
     """A normalization cache hit must still run the loudness reconcile pass on the

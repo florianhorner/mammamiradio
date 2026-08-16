@@ -427,6 +427,36 @@ _SETUP_ERRORS: dict[str, tuple[str, str, bool, str, int]] = {
     ),
 }
 
+# Standalone overrides. Same failure, same code, a way out that exists on this
+# install. A station run outside the Home Assistant add-on has no add-on options
+# page and no Supervisor token to refresh, so the default wording sends the
+# operator to a screen they do not have. Only codes whose default instruction is
+# add-on-shaped belong here; everything else falls through to _SETUP_ERRORS.
+_SETUP_ERRORS_STANDALONE: dict[str, tuple[str, str, bool, str, int]] = {
+    "ha_access_missing": (
+        "This station is not connected to Home Assistant",
+        "Set HA_URL and HA_TOKEN in your .env and restart the station. "
+        "The radio plays without a home connection, so you can also skip this step.",
+        True,
+        "Retry connection",
+        409,
+    ),
+    "ha_auth_failed": (
+        "Home Assistant did not accept access",
+        "Check that HA_TOKEN is a current long-lived access token, then restart the station and retry.",
+        True,
+        "Retry connection",
+        502,
+    ),
+    "media_source_missing": (
+        "Mamma Mi Radio is not in HA's media browser",
+        "Install the Mamma Mi Radio HACS integration in Home Assistant and point it at this station's URL, then retry.",
+        True,
+        "Check HACS integration",
+        409,
+    ),
+}
+
 # TODO: split — this god module is a postal address, not a destination.
 # See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
@@ -456,13 +486,23 @@ def _as_int_index(value, default: int = -1) -> int:
 def _setup_error(
     code: str,
     *,
+    addon_mode: bool | None = None,
     accepted: bool | None = None,
     receipt_persisted: bool | None = None,
     station_resumed: bool | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> JSONResponse:
-    """Return one allowlisted, secret-free first-listen failure envelope."""
-    title, message, retryable, action_label, status_code = _SETUP_ERRORS.get(code, _SETUP_ERRORS["invalid_request"])
+    """Return one allowlisted, secret-free first-listen failure envelope.
+
+    ``addon_mode=False`` swaps in the standalone wording where the add-on-shaped
+    instruction would send the operator somewhere that does not exist. The error
+    code is unchanged either way, so a consumer branching on ``code`` sees no
+    difference. ``None`` means the caller does not know, and keeps the default.
+    """
+    entry = _SETUP_ERRORS.get(code, _SETUP_ERRORS["invalid_request"])
+    if addon_mode is False:
+        entry = _SETUP_ERRORS_STANDALONE.get(code, entry)
+    title, message, retryable, action_label, status_code = entry
     payload: dict[str, Any] = {
         "ok": False,
         "error": {
@@ -1797,6 +1837,38 @@ def _record_continuity_air(state: StationState, segment: Segment) -> None:
         )
     except Exception:  # pragma: no cover - telemetry must never break the stream
         logger.debug("continuity air telemetry failed", exc_info=True)
+
+
+def _record_ad_experiment_receipt(
+    state: StationState,
+    segment: Segment,
+    *,
+    result: str,
+    terminal_reason: str | None,
+    all_chunks_audience_delivered: bool,
+) -> None:
+    """Credit brands after a non-fallback EOF when every ad chunk reached listeners."""
+    try:
+        if (
+            segment.type is not SegmentType.AD
+            or result != "aired"
+            or terminal_reason != "eof"
+            or not all_chunks_audience_delivered
+        ):
+            return
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        raw_brands = metadata.get("brands")
+        brands = (
+            [brand for brand in raw_brands if isinstance(brand, str) and brand.strip()]
+            if isinstance(raw_brands, list | tuple)
+            else []
+        )
+        if not brands:
+            brand = metadata.get("brand")
+            brands = [brand] if isinstance(brand, str) else []
+        state.record_completed_ad_break(brands)
+    except Exception:  # pragma: no cover - isolate receipt errors from audio
+        logger.debug("Carosello experiment receipt failed", exc_info=True)
 
 
 # Floor of rotation tracks a BULK ban must leave behind. Below this the producer
@@ -4788,6 +4860,10 @@ async def run_playback_loop(app) -> None:
             terminal_reason = "aborted"
             companionship_discard_recorded = False
             air_start_stamped = False
+            # `aired` means at least one chunk reached a listener. A receipt
+            # requires every ad chunk to reach at least one listener queue; one
+            # zero-delivery chunk makes the break ineligible.
+            all_chunks_audience_delivered = True
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -4858,6 +4934,8 @@ async def run_playback_loop(app) -> None:
                         accepted_listeners = await hub.broadcast(chunk)
                         accepted_count = max(0, int(accepted_listeners or 0))
                         accepted_listener_count = max(accepted_listener_count, accepted_count)
+                        if segment.type is SegmentType.AD and accepted_count <= 0:
+                            all_chunks_audience_delivered = False
                         if is_companionship_cue and not air_start_stamped:
                             if accepted_count <= 0:
                                 terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
@@ -5041,6 +5119,7 @@ async def run_playback_loop(app) -> None:
                 was_skipped,
                 start_listeners,
                 terminal_reason=terminal_reason,
+                all_chunks_audience_delivered=all_chunks_audience_delivered,
                 accepted_listener_count=accepted_listener_count,
             )
             # Best-effort unlink: a raw unlink here can raise a non-missing OSError
@@ -5145,6 +5224,7 @@ def _emit_stream_result(
     listeners: int,
     *,
     terminal_reason: str | None = None,
+    all_chunks_audience_delivered: bool = False,
     accepted_listener_count: int | None = None,
 ) -> None:
     """Tier-3: record the TRUE aired outcome after the send loop.
@@ -5178,6 +5258,13 @@ def _emit_stream_result(
             listeners=listeners,
             fallback_active=is_fallback_active(meta),
             accepted_listeners=accepted_count,
+        )
+        _record_ad_experiment_receipt(
+            state,
+            segment,
+            result=result,
+            terminal_reason=terminal_reason,
+            all_chunks_audience_delivered=all_chunks_audience_delivered,
         )
         state.record_stream_outcome(
             segment_type=segment.type.value,
@@ -5279,6 +5366,15 @@ def _ad_cast_status_payload(config) -> dict[str, object]:
         else []
     )
     return {"excluded_campaigns": excluded, "warnings": warnings}
+
+
+def _ad_experiment_status(state: StationState) -> dict[str, object]:
+    """Return the process-local receipt payload or an empty fallback."""
+    try:
+        return state.ad_experiment_snapshot()
+    except Exception:  # pragma: no cover - isolate receipt errors from status
+        logger.debug("Carosello experiment status failed", exc_info=True)
+        return {"scope": "runtime", "completed_breaks": 0, "completed_spots": 0, "brands": []}
 
 
 def _record_operator_action(request, action: str, old_value, new_value) -> None:
@@ -5766,7 +5862,7 @@ def _header_safe(value: object) -> str:
 
     The guarantee is about the output, not an absolute promise about the call:
     whatever comes back is encodable and is legal HTTP field content, so no
-    configured station name or theme can break the response. It is stated that
+    configured station name or public tagline can break the response. It is stated that
     way deliberately. An earlier "cannot 500" wording was an overclaim, since a
     caller could still hand this an object whose ``__str__`` raises. Nothing in
     a parsed TOML config can.
@@ -5778,8 +5874,8 @@ def _header_safe(value: object) -> str:
 
     The steps, each one load-bearing:
 
-    * Coerce to ``str``. ``StationSection`` is built straight from TOML with no
-      runtime coercion, so ``theme = 42`` in ``radio.toml`` reaches this
+    * Coerce to ``str``. ``BrandSection`` is built straight from TOML with no
+      runtime coercion, so ``tagline = 42`` in ``radio.toml`` reaches this
       function as an int and used to 500 every listener the same way.
     * Compose to NFC. macOS hands over decomposed text (``a`` + U+0300
       combining grave) for the same ``à`` that Linux writes as one codepoint,
@@ -5827,17 +5923,25 @@ async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
+    # ``station.theme`` is a scriptwriter prompt. Use the public brand tagline
+    # for the listener-facing ``icy-genre`` header.
+    # Fold before capping: the fold expands characters (``…`` becomes three
+    # dots), so a cap applied first would not bound what actually ships.
+    # Then strip again after the cut: a space landing at index 63 would put
+    # trailing whitespace back, and h11 refuses the whole response for it.
+    # Both steps are load-bearing — see test_stream_icy_genre_* for the guards.
+    icy_genre = _header_safe(config.brand.tagline)[:64].strip()
     headers = {
         # A name made entirely of unencodable characters folds to "", so fall
         # back and let the player show the station rather than a blank label.
         "icy-name": _header_safe(config.display_station_name) or DEFAULT_STATION_NAME,
-        # Strip again after the cut: a space landing at index 63 would put the
-        # trailing whitespace back and h11 refuses the whole response for it.
-        "icy-genre": _header_safe(config.station.theme)[:64].strip(),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }
+    # Omit ``icy-genre`` when no listener-facing tagline survives header folding.
+    if icy_genre:
+        headers["icy-genre"] = icy_genre
     return StreamingResponse(
         _audio_generator(request),
         headers=headers,
@@ -5878,7 +5982,7 @@ async def setup_first_listen_players(request: Request, _: None = Depends(_requir
     try:
         discovery = await service.discover(force=True)
     except HAPlaybackError as exc:
-        return _setup_error(exc.reason.value)
+        return _setup_error(exc.reason.value, addon_mode=request.app.state.config.is_addon)
 
     receipt = getattr(request.app.state, "first_listen_receipt", None)
     if receipt is None:
@@ -5921,7 +6025,11 @@ async def setup_first_listen_play(request: Request, _: None = Depends(_require_a
     try:
         result = await _ha_playback_service(request.app.state).play(entity_id)
     except HAPlaybackError as exc:
-        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+        return _setup_error(
+            exc.reason.value,
+            addon_mode=request.app.state.config.is_addon,
+            station_resumed=exc.station_resumed,
+        )
     if result.receipt_persisted is not True or not result.attempt_id:
         return _setup_error(
             HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
@@ -5959,7 +6067,11 @@ async def setup_first_listen_receipt_retry(request: Request, _: None = Depends(_
                 station_resumed=exc.station_resumed,
                 extra={"entity_id": str(body["entity_id"])},
             )
-        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+        return _setup_error(
+            exc.reason.value,
+            addon_mode=request.app.state.config.is_addon,
+            station_resumed=exc.station_resumed,
+        )
     if result.receipt_persisted is not True or not result.attempt_id:
         return _setup_error(
             HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
@@ -6027,7 +6139,7 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
     config = app_state.config
     state = app_state.station_state
     if not config.homeassistant.enabled or not config.ha_token:
-        return _setup_error("ha_access_missing")
+        return _setup_error("ha_access_missing", addon_mode=config.is_addon)
 
     authorization = state.home_authorization or HomeAuthorization.narrow()
     revision_before = policy_revision(config.cache_dir)
@@ -9723,6 +9835,8 @@ def _public_status_payload(request: Request) -> dict:
             ),
         },
         "ha_moments": ha_moments,
+        # Process-local receipt counts reused by the admin status payload.
+        "ad_experiment": _ad_experiment_status(state),
         # Brand-fiction layer (PR-A schema). Listener renders against this.
         "brand": _serialize_brand(config.brand),
         # Capability flags (listener-safe subset). Listener JS reads these every

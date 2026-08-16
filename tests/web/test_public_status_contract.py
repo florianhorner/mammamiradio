@@ -85,6 +85,48 @@ async def test_public_status_returns_brand_block():
 
 
 @pytest.mark.asyncio
+async def test_ad_experiment_is_empty_on_fresh_state_and_identical_across_status_surfaces():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    expected = {
+        "scope": "runtime",
+        "completed_breaks": 0,
+        "completed_spots": 0,
+        "brands": [],
+    }
+    assert public["ad_experiment"] == expected
+    assert admin["ad_experiment"] == expected
+
+
+@pytest.mark.asyncio
+async def test_ad_experiment_payload_reports_runtime_counts_with_status_parity():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.record_completed_ad_break(["Prezzoforte", "TeleCuore"])
+    state.record_completed_ad_break(["Prezzoforte"])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    expected = {
+        "scope": "runtime",
+        "completed_breaks": 2,
+        "completed_spots": 3,
+        "brands": [
+            {"brand": "Prezzoforte", "completed_airings": 2},
+            {"brand": "TeleCuore", "completed_airings": 1},
+        ],
+    }
+    assert public["ad_experiment"] == expected
+    assert admin["ad_experiment"] == expected
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_resolved_identity(monkeypatch):
     """Chosen station identity must agree across legacy and additive fields."""
     monkeypatch.setenv("STATION_NAME", "Radio Test")
