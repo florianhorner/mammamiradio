@@ -65,3 +65,14 @@ def test_quality_workflow_runs_shellcheck_on_scripts() -> None:
     assert "koalaman/shellcheck@sha256:" in quality_block
     assert "v0.11.0" in quality_block
     assert "scripts/*.sh" in quality_block
+
+
+def test_quality_workflow_emits_strict_media_proof_on_prs_and_main() -> None:
+    quality_block = _job_block(_workflow_text(), "quality")
+
+    assert "python scripts/media-proof.py --quick --output media-proof.json" in quality_block
+    assert "name: Upload strict media proof" in quality_block
+    assert "if: always()" in quality_block
+    assert "name: media-proof-quality-${{ github.sha }}" in quality_block
+    assert "path: media-proof.json" in quality_block
+    assert "if-no-files-found: error" in quality_block

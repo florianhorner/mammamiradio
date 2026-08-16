@@ -79,6 +79,41 @@ async def test_etag_includes_session_stopped_in_fingerprint():
 
 
 @pytest.mark.asyncio
+async def test_etag_invalidates_when_only_music_attribution_changes():
+    """Attribution is part of the public body and must never be cached stale."""
+    app = make_integrations_app()
+    state = app.state.station_state
+    attribution = {
+        "provider": "incompetech",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://incompetech.com/music/royalty-free/music.html",
+        "credit": "Carefree by Kevin MacLeod, CC BY 4.0",
+        "modified": True,
+        "basis": "bundled_manifest",
+    }
+    play_music_segment(state, extra_metadata={"music_attribution": attribution})
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.get("/api/integrations/v1/now-playing")
+        old_etag = first.headers["ETag"]
+        # No segment transition and no changed_at mutation: the serialized body
+        # hash itself must notice a corrected listener-facing fact.
+        state.now_streaming["metadata"]["music_attribution"] = {
+            **attribution,
+            "credit": "Carefree by Kevin MacLeod; licensed CC BY 4.0",
+        }
+        second = await client.get(
+            "/api/integrations/v1/now-playing",
+            headers={"If-None-Match": old_etag},
+        )
+
+    assert second.status_code == 200
+    assert second.headers["ETag"] != old_etag
+    assert second.json()["now_playing"]["music_attribution"]["credit"].endswith("CC BY 4.0")
+
+
+@pytest.mark.asyncio
 async def test_etag_invalidates_when_force_next_changes_predicted_up_next():
     """force_next can flip the first predicted up_next item without changing
     queue length or any other snapshot field. The body-hash ETag must catch

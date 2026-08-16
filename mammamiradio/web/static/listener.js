@@ -80,6 +80,10 @@
     segmentDurationMs: 0,
     progressTimer: null,
     lastNpKey: null,
+    currentNowPlaying: null,
+    starterCatalog: [],
+    lastCreditIdentity: null,
+    catalogCreditKey: '',
   };
 
   /* ── DOM refs (cached after DOMContentLoaded) ── */
@@ -143,6 +147,44 @@
     }
   }
 
+  /*
+   * Normalize up to 20 non-empty brand names, each capped at 120 characters.
+   * Prefer metadata.brands; fall back to metadata.brand if none are usable.
+   * Keep source order and duplicate names.
+   */
+  function normalizeAdBrandNames(metadata) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+
+    function normalize(source) {
+      if (!Array.isArray(source)) return [];
+      const names = [];
+      source.slice(0, 20).forEach((candidate) => {
+        if (typeof candidate !== 'string') return;
+        const name = candidate.replace(/\s+/g, ' ').trim().slice(0, 120);
+        if (!name) return;
+        names.push(name);
+      });
+      return names;
+    }
+
+    const plural = Array.isArray(metadata.brands) ? normalize(metadata.brands) : [];
+    return plural.length ? plural : normalize([metadata.brand]);
+  }
+
+  function adNowPlayingText(np) {
+    const brands = normalizeAdBrandNames(np && np.metadata);
+    if (brands.length) {
+      return {
+        title: brands.join(' · '),
+        secondary: _t('np_ad_break', 'This ad break'),
+      };
+    }
+    return {
+      title: _t('np_ad_message', 'Sponsored message'),
+      secondary: _t('seg_ad', 'Sponsored'),
+    };
+  }
+
   function segmentPillClass(type) {
     switch ((type || '').toLowerCase()) {
       case 'music': return 'pill-music';
@@ -152,6 +194,221 @@
       case 'news_flash': return 'pill-news';
       case 'idle': return 'pill-idle';
       default: return 'pill-idle';
+    }
+  }
+
+  /* ── Music credits ──
+   * Attribution reaches the listener only through /public-status. Treat it as
+   * untrusted display data anyway: textContent for copy, a strict host/path
+   * allowlist for links, and DOM construction throughout. */
+  function safeCreditUrl(raw, kind) {
+    if (typeof raw !== 'string' || raw.length > 2048) return null;
+    let url;
+    try { url = new URL(raw); } catch (_) { return null; }
+    if (url.protocol !== 'https:' || url.username || url.password) return null;
+    const host = url.hostname.toLowerCase();
+    if (kind === 'license') {
+      const validHost = host === 'creativecommons.org' || host === 'www.creativecommons.org';
+      const validPath = /^\/licenses\/by\/(3\.0|4\.0)\/?$/.test(url.pathname);
+      return validHost && validPath ? url.href : null;
+    }
+    const validSource = host === 'incompetech.com'
+      || host === 'www.incompetech.com'
+      || host === 'jamendo.com'
+      || host === 'www.jamendo.com';
+    return validSource ? url.href : null;
+  }
+
+  function creditLink(label, rawUrl, kind) {
+    const href = safeCreditUrl(rawUrl, kind);
+    if (!href) return null;
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = label;
+    return link;
+  }
+
+  function appendCreditLinks(container, attribution) {
+    const links = document.createElement('div');
+    links.className = 'mmr-credit-links';
+    const source = creditLink(_t('credits_source', 'Source'), attribution && attribution.source_url, 'source');
+    const license = creditLink(_t('credits_license', 'License'), attribution && attribution.license_url, 'license');
+    if (!source || !license) return false;
+    links.append(source, license);
+    container.appendChild(links);
+    return true;
+  }
+
+  function nowPlayingIdentity(np) {
+    const metadata = (np && np.metadata) || {};
+    const label = (np && np.label) || '';
+    const splitAt = label.indexOf(' \u2014 ');
+    const fallbackArtist = splitAt > 0 ? label.slice(0, splitAt) : '';
+    const fallbackTitle = splitAt > 0 ? label.slice(splitAt + 3) : label;
+    return {
+      title: String(metadata.title_only || metadata.title || fallbackTitle || '').slice(0, 300),
+      artist: String(metadata.artist || fallbackArtist || '').slice(0, 300),
+    };
+  }
+
+  function currentAttribution(np) {
+    if (!np || np.type !== 'music') return null;
+    const candidate = np.music_attribution || (np.metadata && np.metadata.music_attribution);
+    return candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : null;
+  }
+
+  function renderCurrentCredit(np, announce) {
+    const container = $('music-credits-current');
+    if (!container) return;
+    container.replaceChildren();
+    const inlineTrigger = $('music-credits-inline');
+    const isMusic = Boolean(np && np.type === 'music');
+    if (inlineTrigger) inlineTrigger.hidden = !isMusic;
+
+    const identity = nowPlayingIdentity(np);
+    const attribution = currentAttribution(np);
+    const metadata = (np && np.metadata) || {};
+    const sourceKind = String(metadata.source_kind || metadata.audio_source || '').toLowerCase();
+    const key = JSON.stringify([isMusic, identity.title, identity.artist, attribution]);
+    if (announce && state.lastCreditIdentity && key !== state.lastCreditIdentity) {
+      const region = $('music-credits-announcement');
+      if (region) region.textContent = identity.title
+        ? _t('current_track_credit', 'Current track') + ': ' + identity.title
+        : _t('credits_no_current_music', 'No music track is on air right now.');
+    }
+    state.lastCreditIdentity = key;
+
+    const paragraph = document.createElement('p');
+    if (!isMusic) {
+      paragraph.textContent = _t('credits_no_current_music', 'No music track is on air right now.');
+      container.appendChild(paragraph);
+      return;
+    }
+    if (!attribution && sourceKind === 'local') {
+      paragraph.textContent = _t(
+        'local_credit',
+        "Provided by this station's operator. Mamma Mi Radio supplies no license information for this file.",
+      );
+      container.appendChild(paragraph);
+      return;
+    }
+    if (!attribution) {
+      paragraph.textContent = _t('source_unavailable', 'Source information unavailable.');
+      container.appendChild(paragraph);
+      return;
+    }
+
+    const licenseId = String(attribution.license_id || '').slice(0, 80);
+    const provider = String(attribution.provider || '').toLowerCase();
+    const title = identity.title || _t('seg_music', 'Music');
+    const artist = identity.artist || (provider === 'jamendo' ? 'Jamendo artist' : 'Kevin MacLeod');
+    const intro = document.createElement('span');
+    intro.className = 'mmr-credit-title';
+    intro.textContent = '\u201c' + title + '\u201d \u2014 ' + artist + '. ';
+    paragraph.appendChild(intro);
+    const fact = document.createElement('span');
+    if (provider === 'jamendo' || attribution.basis === 'provider_reported') {
+      fact.textContent = _t('credits_provided_by_jamendo', 'Provided by Jamendo under {license}.')
+        .replace('{license}', licenseId || 'the reported license');
+    } else {
+      fact.textContent = _t('credits_licensed_under', 'Licensed under {license}.')
+        .replace('{license}', licenseId || 'the listed license');
+    }
+    paragraph.appendChild(fact);
+    container.appendChild(paragraph);
+    const linksComplete = appendCreditLinks(container, attribution);
+    if (!linksComplete) {
+      const neutral = document.createElement('p');
+      neutral.className = 'mmr-credit-notice';
+      neutral.textContent = _t('source_unavailable', 'Source information unavailable.');
+      container.appendChild(neutral);
+    }
+    const notice = document.createElement('p');
+    notice.className = 'mmr-credit-notice';
+    notice.textContent = provider === 'jamendo' || attribution.basis === 'provider_reported'
+      ? _t('provider_reported_notice', 'License information supplied by Jamendo.')
+      : _t('normalized_notice', 'Normalized for Mamma Mi Radio.');
+    container.appendChild(notice);
+  }
+
+  function catalogAttribution(item) {
+    const license = item && typeof item.license === 'object' ? item.license : {};
+    return {
+      license_id: item.license_id || license.id || '',
+      license_url: item.license_url || license.url || '',
+      source_url: item.official_piece_url || item.source_url || '',
+    };
+  }
+
+  function renderStarterCatalog(items) {
+    const list = $('music-credits-catalog');
+    if (!list) return;
+    const safeItems = Array.isArray(items) ? items.slice(0, 12) : [];
+    const renderKey = JSON.stringify(safeItems);
+    if (state.catalogCreditKey === renderKey) return;
+    state.catalogCreditKey = renderKey;
+    list.replaceChildren();
+    if (!safeItems.length) {
+      const row = document.createElement('li');
+      row.textContent = _t('credits_catalog_unavailable', 'Starter catalog information is unavailable.');
+      list.appendChild(row);
+      return;
+    }
+    safeItems.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const row = document.createElement('li');
+      const title = document.createElement('span');
+      title.className = 'mmr-credit-title';
+      title.textContent = String(item.title || '').slice(0, 300) + ' \u2014 '
+        + String(item.artist || 'Kevin MacLeod').slice(0, 300) + '. ';
+      row.appendChild(title);
+      const attribution = catalogAttribution(item);
+      const license = document.createElement('span');
+      license.textContent = _t('credits_licensed_under', 'Licensed under {license}.')
+        .replace('{license}', String(attribution.license_id || 'CC BY 4.0'));
+      row.appendChild(license);
+      appendCreditLinks(row, attribution);
+      const notice = document.createElement('span');
+      notice.className = 'mmr-credit-notice';
+      notice.textContent = String(item.modification_notice || _t(
+        'normalized_notice',
+        'Normalized and transcoded by Mamma Mi Radio; no musical edits.',
+      )).slice(0, 300);
+      row.appendChild(notice);
+      list.appendChild(row);
+    });
+  }
+
+  let creditsInvoker = null;
+  function openMusicCredits(event) {
+    if (event) event.preventDefault();
+    const dialog = $('music-credits-dialog');
+    if (!dialog) return;
+    creditsInvoker = event && event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    renderCurrentCredit(state.currentNowPlaying, false);
+    renderStarterCatalog(state.starterCatalog);
+    if (!dialog.open) dialog.showModal();
+    requestAnimationFrame(() => $('music-credits-title')?.focus());
+  }
+
+  function trapCreditsFocus(event) {
+    if (event.key !== 'Tab') return;
+    const dialog = $('music-credits-dialog');
+    if (!dialog || !dialog.open) return;
+    const focusable = Array.from(dialog.querySelectorAll('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+      .filter((el) => !el.hasAttribute('hidden'));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const heading = $('music-credits-title');
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === heading)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   }
 
@@ -348,8 +605,9 @@
       artist = label || 'Marco & Giulia';
       title = _t('np_live', 'Live') + ' \u2014 ' + _t('seg_banter', 'Banter');
     } else if (np.type === 'ad') {
-      artist = (np.metadata && np.metadata.brand) ? np.metadata.brand : 'Sponsored';
-      title = 'A word from our sponsors';
+      const adText = adNowPlayingText(np);
+      title = adText.title;
+      artist = adText.secondary;
     } else if (np.type === 'welcome') {
       artist = stationName; title = 'The station has noticed you';
     } else if (np.type === 'news_flash' || np.type === 'news') {
@@ -388,6 +646,7 @@
   /* ── Rendering ── */
   function renderNowPlayingStrip(np) {
     if (!np) return;
+    state.currentNowPlaying = np;
     const label = np.label || '';
     const trackEl = $('np-track');
     const artistEl = $('np-artist');
@@ -409,8 +668,9 @@
       trackEl.textContent = label ? label + ' ' + _t('np_banter_strip', 'in conversation') : _t('np_banter_idle', 'The hosts are on air');
       artistEl.textContent = _t('seg_banter', 'Banter');
     } else if (np.type === 'ad') {
-      trackEl.textContent = _t('np_ad_message', 'Sponsored message');
-      artistEl.textContent = (np.metadata && np.metadata.brand) ? np.metadata.brand : _t('seg_ad', 'Sponsored');
+      const adText = adNowPlayingText(np);
+      trackEl.textContent = adText.title;
+      artistEl.textContent = adText.secondary;
     } else if (np.type === 'welcome') {
       trackEl.textContent = _t('np_welcome', 'Welcome aboard');
       artistEl.textContent = currentStationName();
@@ -445,6 +705,96 @@
     }
 
     updateMediaSession(np);
+    renderCurrentCredit(np, Boolean($('music-credits-dialog')?.open));
+  }
+
+  function adReceiptCountText(count, singularKey, singularFallback, pluralKey, pluralFallback) {
+    const singular = count === 1;
+    return _t(
+      singular ? singularKey : pluralKey,
+      singular ? singularFallback : pluralFallback
+    ).replace('{n}', String(count));
+  }
+
+  function renderAdExperiment(status) {
+    const details = $('ad-session-receipt');
+    const summary = $('ad-session-summary');
+    const list = $('ad-session-brands');
+    const announcement = $('ad-session-announcement');
+    if (!details || !summary || !list || !announcement) return;
+
+    const experiment = status && status.ad_experiment;
+    const completedSpots = Number(experiment && experiment.completed_spots);
+    if (!Number.isFinite(completedSpots) || completedSpots <= 0) {
+      // Clear stale runtime state after a restart or payload withdrawal.
+      const hadReceipt = details.dataset.receiptKey !== undefined;
+      details.hidden = true;
+      details.open = false;
+      summary.textContent = '';
+      list.replaceChildren();
+      if (hadReceipt) announcement.textContent = '';
+      delete details.dataset.receiptKey;
+      return;
+    }
+
+    const total = Math.floor(completedSpots);
+    const summaryText = adReceiptCountText(
+      total,
+      'ad_session_summary_one',
+      'This session · 1 completed spot',
+      'ad_session_summary',
+      'This session · {n} completed spots'
+    );
+
+    const brands = experiment && Array.isArray(experiment.brands)
+      ? experiment.brands
+      : [];
+    const rows = [];
+    brands.forEach((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+      const names = normalizeAdBrandNames({ brand: entry.brand });
+      const count = Number(entry.completed_airings);
+      if (!names.length || !Number.isFinite(count) || count <= 0) return;
+      const completedAirings = Math.floor(count);
+
+      rows.push({
+        brand: names[0],
+        airings: adReceiptCountText(
+          completedAirings,
+          'ad_session_airings_one',
+          '1 completed airing',
+          'ad_session_airings',
+          '{n} completed airings'
+        ),
+      });
+    });
+
+    // Keep the user's open state and skip duplicate announcements on unchanged polls.
+    const receiptKey = JSON.stringify([summaryText, rows]);
+    if (details.dataset.receiptKey === receiptKey) {
+      details.hidden = false;
+      return;
+    }
+
+    // Unhide the receipt before populating it.
+    details.hidden = false;
+    summary.textContent = summaryText;
+    list.replaceChildren();
+    rows.forEach((entry) => {
+      const row = document.createElement('li');
+      const name = document.createElement('span');
+      const airings = document.createElement('span');
+      name.className = 'mmr-ad-session-brand';
+      airings.className = 'mmr-ad-session-count';
+      name.textContent = entry.brand;
+      airings.textContent = entry.airings;
+      row.append(name, airings);
+      list.appendChild(row);
+    });
+
+    // Change the always-present live region only when the receipt changes.
+    announcement.textContent = summaryText;
+    details.dataset.receiptKey = receiptKey;
   }
 
   // A second or two past the end is normal — the server reports elapsed as
@@ -773,6 +1123,8 @@
         if (data && data.retry_after) {
           msg = _t('clip_rate_limited', 'The tape decks need a moment — give them {s}s and tap again.')
             .replace('{s}', data.retry_after);
+        } else if (data && data.error_code === 'music_share_unavailable') {
+          msg = _t('music_share_unavailable', 'A complete included track has to finish before it can be shared.');
         } else if (data && data.reason === 'no_audio') {
           msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
         } else {
@@ -790,7 +1142,8 @@
       }
       const npEl = document.getElementById('np-track');
       const stationName = currentStationName();
-      const title = (npEl && npEl.textContent && npEl.textContent.trim()) || stationName;
+      const title = (data.track_title && String(data.track_title).trim()) ||
+        ((npEl && npEl.textContent && npEl.textContent.trim()) || stationName);
       if (navigator.share) {
         try {
           await navigator.share({ title: title + ' — ' + stationName, url: shareUrl });
@@ -829,11 +1182,18 @@
    * /public-status returns brand + capabilities + facts in one shape — single fetch
    * replaces the old /status + /api/capabilities pair. Works on any deploy (loopback,
    * LAN, public) without the 401 risk of admin-only routes. */
+  const STATUS_POLL_INTERVAL_MS = 3000;
+  const STATUS_POLL_DEADLINE_MS = 2400;
+  let _statusPollGeneration = 0;
   async function fetchStatus() {
+    const generation = ++_statusPollGeneration;
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), STATUS_POLL_DEADLINE_MS);
     try {
-      const r = await fetch(_base + '/public-status');
+      const r = await fetch(_base + '/public-status', { signal: controller.signal });
       if (!r.ok) return;
       const status = await r.json();
+      if (generation !== _statusPollGeneration) return;
       syncStationName(status);
       // Capabilities live inside the public payload (PR-B). Wrap to match the
       // legacy { capabilities: {...} } shape the rest of listener.js expects.
@@ -841,6 +1201,8 @@
       state.status = status;
       state.caps = caps;
       state.firstDataReceived = true;
+      state.starterCatalog = Array.isArray(status.starter_catalog) ? status.starter_catalog : [];
+      renderStarterCatalog(state.starterCatalog);
       // Toggle [data-cap] elements based on capabilities (design D2: client-side
       // capability-conditional rendering).
       if (typeof window.mmrApplyCaps === 'function') {
@@ -852,6 +1214,7 @@
         document.body.setAttribute('data-state', 'live');
         renderNowPlayingStrip(status.now_streaming);
       }
+      renderAdExperiment(status);
       renderHeroStats(status, caps);
       renderPalinsesto(status);
       renderStoppedState(status);
@@ -866,7 +1229,11 @@
         renderProgress(status.current_progress_sec, status.current_duration_sec);
       }
     } catch (e) {
-      console.warn('fetchStatus failed', e);
+      if (generation === _statusPollGeneration && e?.name !== 'AbortError') {
+        console.warn('fetchStatus failed', e);
+      }
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
@@ -1141,6 +1508,21 @@
     const shareBtn = document.getElementById('share-clip-btn');
     if (shareBtn) shareBtn.addEventListener('click', doShare);
 
+    // Music credits are informational only and never touch playback intent.
+    document.querySelectorAll('.mmr-credits-trigger').forEach((trigger) => {
+      trigger.addEventListener('click', openMusicCredits);
+    });
+    const creditsDialog = $('music-credits-dialog');
+    const creditsClose = $('music-credits-close');
+    if (creditsClose) creditsClose.addEventListener('click', () => creditsDialog?.close());
+    if (creditsDialog) {
+      creditsDialog.addEventListener('keydown', trapCreditsFocus);
+      creditsDialog.addEventListener('close', () => {
+        if (creditsInvoker && document.contains(creditsInvoker)) creditsInvoker.focus();
+        creditsInvoker = null;
+      });
+    }
+
     // Playback intent is scoped to the three explicit play affordances above.
     // Form, navigation, share, and install interactions must never start audio.
 
@@ -1154,7 +1536,7 @@
     fetchStatus();
     fetchRequests();
     /* fetchPublicStatus removed in PR-F */
-    setInterval(fetchStatus, 3000);
+    setInterval(fetchStatus, STATUS_POLL_INTERVAL_MS);
     setInterval(fetchRequests, 60000);
   });
 })();

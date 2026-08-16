@@ -18,8 +18,11 @@ def _description(path: Path) -> str:
 
 def test_stable_catalog_lists_only_packaged_music_sources() -> None:
     description = _description(STABLE_CONFIG).casefold()
+    assert "offline music collection" in description
     assert "jamendo" in description
-    assert "live italian charts" in description
+    assert "live italian charts" not in description
+    assert "youtube" not in description
+    assert "yt-dlp" not in description
     assert "local file" not in description
 
 

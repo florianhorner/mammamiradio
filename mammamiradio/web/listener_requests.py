@@ -2,8 +2,9 @@
 
 Extracted from `streamer.py` (PR Track B v2.11.0). Owns the public POST surface
 where listeners submit a dedica or song wish, the admin queue view, the
-public sanitized feed, and the dismiss endpoint. Plus the background task that
-turns a typed song wish into a downloaded track ready for the producer.
+public sanitized feed, and the dismiss endpoint. A standalone install with the
+explicit external-media capability may also resolve a typed song wish; every
+add-on and default install keeps the same text as a shout-out.
 
 State machine (extended in v2.11.0 for Track B):
 
@@ -64,9 +65,9 @@ _TRUSTED_PROXY_NETWORKS = [
     _HASSIO_NETWORK,
 ]
 
-# Bounded executor for listener song searches. Caps concurrency at 2 so
-# listener yt-dlp tasks cannot exhaust the default ThreadPoolExecutor and
-# starve the producer's audio prefetch work on Pi-class hardware.
+# Bounded executor for optional standalone external-media song searches. Caps
+# concurrency at 2 so an explicitly enabled resolver cannot exhaust the
+# default ThreadPoolExecutor and starve audio prefetch work.
 _listener_dl_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="listener-dl")
 atexit.register(_listener_dl_executor.shutdown, wait=False, cancel_futures=True)
 
@@ -309,7 +310,9 @@ async def listener_request(request: Request):
     # Detect song request by keyword
     msg_lower = message.lower()
     song_keywords = ["metti", "suona", "play", "voglio sentire", "puoi mettere", "can you play", "mettete"]
-    allow_ytdlp = getattr(config, "allow_ytdlp", False)
+    from mammamiradio.playlist.downloader import external_media_enabled
+
+    allow_ytdlp = external_media_enabled(getattr(config, "allow_ytdlp", False))
     is_song_request = allow_ytdlp and any(kw in msg_lower for kw in song_keywords)
     req: dict = {
         "name": name,

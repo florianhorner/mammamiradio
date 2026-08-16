@@ -2032,10 +2032,10 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
 
     recent_norm_file = tmp_path / "norm_aaa_ordinary_192k.mp3"
     recent_norm_file.write_bytes(b"fake recent norm audio" * 100)
-    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren")
+    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren", source_kind="local")
     norm_file = tmp_path / "norm_zzz_cached_192k.mp3"
     norm_file.write_bytes(b"fake norm audio" * 100)
-    save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
+    save_track_metadata(norm_file, title="Cached", artist="Cache Artist", source_kind="local")
 
     async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
         if stale_check and stale_check():

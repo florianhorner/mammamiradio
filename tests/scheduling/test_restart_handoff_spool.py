@@ -21,7 +21,12 @@ async def test_enqueue_music_schedules_restart_handoff_after_queue_success(tmp_p
         type=SegmentType.MUSIC,
         path=music,
         duration_sec=120.0,
-        metadata={"artist": "Artist", "title_only": "Song", "audio_source": "download"},
+        metadata={
+            "artist": "Artist",
+            "title_only": "Song",
+            "audio_source": "download",
+            "source_kind": "local",
+        },
         ephemeral=False,
     )
 
@@ -51,7 +56,12 @@ async def test_enqueue_music_passes_admitted_paths_as_protected(tmp_path):
         type=SegmentType.MUSIC,
         path=music,
         duration_sec=120.0,
-        metadata={"artist": "Artist", "title_only": "Song", "audio_source": "download"},
+        metadata={
+            "artist": "Artist",
+            "title_only": "Song",
+            "audio_source": "download",
+            "source_kind": "local",
+        },
         ephemeral=False,
     )
 
@@ -91,3 +101,30 @@ async def test_enqueue_front_insert_does_not_write_restart_handoff(tmp_path):
         )
 
     m_write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_starter_music_never_writes_restart_handoff(tmp_path):
+    queue: asyncio.Queue = asyncio.Queue()
+    state = StationState()
+    config = SimpleNamespace(cache_dir=tmp_path, tmp_dir=tmp_path / "tmp")
+    starter = tmp_path / "starter-carefree.mp3"
+    starter.write_bytes(b"canonical starter bytes")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=starter,
+        duration_sec=180.0,
+        metadata={
+            "artist": "Kevin MacLeod",
+            "title_only": "Carefree",
+            "source_kind": "starter",
+        },
+        ephemeral=False,
+    )
+
+    with patch("mammamiradio.scheduling.producer.try_write_restart_handoff_spool") as m_write:
+        assert await _enqueue_with_egress(queue, state, config, segment) is True
+        await asyncio.sleep(0)
+
+    m_write.assert_not_called()
+    assert state._restart_handoff_tasks == set()

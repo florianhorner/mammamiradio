@@ -7,8 +7,10 @@ This repo supports three deployment models: Docker container, Home Assistant add
 - Python 3.11+
 - `ffmpeg` on `PATH`
 - writable `tmp/` and `cache/` directories
-- outbound network access for Apple Music charts API, Anthropic/OpenAI, and optional Home Assistant
-- working shared memory (`/dev/shm`) and one spare process slot, when Home Assistant context is on
+- outbound network access only for enabled optional services (Jamendo,
+  Anthropic/OpenAI, Home Assistant, or standalone external media)
+- working shared memory (`/dev/shm`) and one spare process slot, when Home
+  Assistant context is on
 
 With Home Assistant context enabled, the station runs one extra Python process
 besides the server: the Home Assistant projection worker. It is created lazily at
@@ -19,9 +21,57 @@ up as a second `python3 ... spawn_main` alongside the resident
 playing and only the home colour pauses — see `docs/troubleshooting.md` →
 "Home Assistant colour is paused".
 
-Music comes from live Italian charts (via yt-dlp) when `MAMMAMIRADIO_ALLOW_YTDLP=true`, otherwise from local `music/` files. If neither is available the playback loop rescues from the packaged `continuity_1.mp3` clip once per empty-queue gap, then the norm cache, then bundled demo music assets when present; only if no eligible music exists anywhere (quality-rejected and operator-banned cache files sit on disk but never air) does it repeat the packaged clip, and after 60 seconds without any bridge asset it requests forced banter from the producer so the queue recovers without crashing or stalling on silence. The `/healthz` - `/readyz` silence gate keys on nothing airing at all, not on the queue being empty — a station bridging on the packaged clip is on air, so the add-on watchdog is not invited to restart it mid-recovery. The required recovery files under `mammamiradio/assets/demo/recovery/` are durable package resources, not temp renders: `continuity_1.mp3` is the normal branded bridge and `emergency_tone.mp3` is the neutral two-second cold-cache last rung. Producer and playback cleanup paths guard that tree before unlinking any segment marked ephemeral. A connecting listener does not wait long for that rescue: on an empty queue the rescue ladder opens after a short first-byte grace (`FIRST_BYTE_GRACE_SECONDS`, 1s), so first audio lands inside the 1-2s promise even on a cold start or right after an add-on restart with a warm cache. Resume, idle, and active-playback drain bridges reach for a cached song first and fall back to the short branded continuity clip, then the emergency tone, only when the cache has nothing eligible — a real song is both the better listener experience and the faster one to first byte (the cached payload takes its duration from the sidecar while packaged audio is already manifest/hash approved). Before any of that rescue ladder is needed, startup also tries the restart handoff spool (`cache/restart_handoff/`): a small set of already-normalized music segments the producer copied out just before the restart, admitted straight into the queue ahead of the producer/playback tasks starting (see `docs/architecture.md` → "Restart handoff spool"). It is a faster path when it has something to offer and a silent no-op otherwise — the rescue ladder below is unchanged. Because the producer keeps a multi-segment lookahead buffer, a timed-out queue read only happens under genuine starvation, not a normal inter-segment gap — so reaching for cached audio fast never pre-empts fresh produced segments during healthy playback. `QUEUE_FALLBACK_WAIT_SECONDS` (5s) is retained only as the documented no-content ceiling. The launch gate is `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`): with non-loopback networking denied, it boots one station with a warm norm cache and one with an empty cache/package-only recovery, requiring first byte within 2s in both. Chart entries pass through a narrow content-hygiene filter at ingest that drops obvious non-music (podcasts, BBC comedy, audiobooks, news briefings) before they enter the candidate pool — see `mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS`.
+Music starts from the packaged, attributed twelve-track starter catalog and
+does not require network access. Approved starter derivatives play directly;
+all twelve identities complete before the bag repeats. Operator `music/` files
+may join the base rotation without receiving a project rights claim. Optional
+Jamendo preparation runs in the background only after explicit non-commercial
+enablement and never delays a due music slot. The complete source and rights
+boundary is [Music sources and rights boundaries](music-sources.md).
 
-Acquisition failures from yt-dlp or a direct source create a small `_failed_<cache-key>.mp3` marker rather than synthesized silence. That marker deliberately fails `validate_download` before FFprobe or normalization; the producer deny-lists the source key for the current process, while the marker prevents another acquisition attempt until startup purges it for a fresh retry. A newly synced raw, legacy, local, or bundled-demo file can receive one fresh admission attempt; if it fails, the marker refreshes so that same corrupt file cannot loop. A later explicit external download clears the stale marker and session denial only after it is admitted to rotation. If all music candidates are unavailable, the producer enters its bounded recovery ladder so the sweeper and emergency-tone rungs can keep the station audible. Downloads that otherwise fail `validate_download` (missing file, too-short duration, corrupt) follow the same purge-and-denylist path so the same track is not re-selected endlessly. The main producer loop and prewarm use a bounded retry around `select_next_track`; prefetch filters denied candidates from its non-mutating lookahead. The denylist clears on restart. Music quality-gate rejections (silence, post-normalization artifacts) do NOT denylist the source track — they remove the cached normalization, including on the circuit-breaker path, and use the same producer recovery ladder when direct recovery media is exhausted. Log signatures:
+In a standalone installation that deliberately enables the optional
+`external-media` extra, live Italian charts may supplement the base through
+yt-dlp. A missing or failed extractor falls back to local or starter music. On a
+genuine empty-queue gap, the playback loop rescues from the packaged
+`continuity_1.mp3` clip, the norm cache, then eligible bundled starter assets;
+only when no eligible music exists does it repeat packaged recovery, with
+`emergency_tone.mp3` as the neutral two-second cold-cache last rung. After 60
+seconds without any bridge asset it requests forced banter, so the queue recovers
+without crashing or stalling on silence. Quality-rejected and operator-banned
+cache files remain ineligible.
+
+The `/healthz`–`/readyz` silence gate keys on nothing airing at all, not on an
+empty queue: a station bridging on packaged recovery is on air, so the add-on
+watchdog is not invited to restart it mid-recovery. The required recovery files
+under `mammamiradio/assets/demo/recovery/` are durable package resources, not temp
+renders, and cleanup paths guard them before unlinking anything marked ephemeral.
+On an empty queue the rescue ladder opens after `FIRST_BYTE_GRACE_SECONDS` (1s).
+Resume, idle, and active-playback drain bridges prefer a cached song, then the
+short branded continuity clip, then the emergency tone. Startup first tries the
+restart handoff spool (`cache/restart_handoff/`), admitting already-normalized
+music ahead of the producer/playback tasks (see `docs/architecture.md` →
+"Restart handoff spool"). The producer's multi-segment delivery cushion means a
+timed-out queue read signals genuine starvation rather than a normal segment
+boundary; `QUEUE_FALLBACK_WAIT_SECONDS` (5s) remains only the no-content ceiling.
+`scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`)
+denies non-loopback networking and requires first byte within two seconds for
+both a warm-cache station and an empty-cache/package-only station. External chart
+entries pass through the narrow non-music filter in
+`mammamiradio/playlist/playlist.py::_NON_MUSIC_MARKERS` before admission.
+
+The existing continuity ladder remains a safety path, not the primary catalog:
+packaged recovery audio and eligible cached local/standalone music cover queue
+drains while the producer catches up. `/healthz` and `/readyz` key on actual
+audio delivery rather than queue depth. A connected listener must receive the
+first accepted non-silent starter byte within two seconds on the cold,
+network-disabled smoke path. Jamendo is excluded from cache rescue, continuity,
+SQLite, restart handoff, and persistent reuse.
+
+In a standalone installation with the optional `external-media` extra enabled,
+external acquisition failures still use `_failed_<cache-key>.mp3` markers and a
+per-process denied-key set rather than synthesized silence. Quality-gate rejects
+are removed and the producer advances. This mechanism never applies to the
+single-use Jamendo namespace. Representative standalone log signatures are:
 
 ```
 INFO Rejecting non-music chart entry: BBC Studios - <title>
@@ -37,7 +87,12 @@ Environment:
 
 - `MAMMAMIRADIO_BIND_HOST`
 - `MAMMAMIRADIO_PORT`
-- `MAMMAMIRADIO_ALLOW_YTDLP` (optional, enables live charts and yt-dlp downloads; enabled by default in HA addon and Conductor)
+- `MAMMAMIRADIO_ALLOW_YTDLP` (standalone only; default `false`; also requires
+  the `external-media` extra. Both Home Assistant add-ons force it off and omit
+  yt-dlp.)
+- `JAMENDO_CLIENT_ID` (optional secret; normally managed through **Motore ->
+  Setup -> Music sources** together with explicit enablement and the current
+  non-commercial acknowledgement)
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD` or `ADMIN_TOKEN` — required for any non-loopback bind in standalone mode; optional for the HA add-on, which trusts its own LAN (see **Admin access model**)
 - `ANTHROPIC_API_KEY`
@@ -222,7 +277,9 @@ commit and PR writing contract; machine-specific overrides belong in
 `.conductor/settings.local.toml`, which is managed by the Conductor app:
 
 - setup bootstraps `.venv`, installs dev tooling, and links `.env` from `~/.config/mammamiradio/.env` when present, falling back to `$CONDUCTOR_ROOT_PATH/.env`
-- run exports a workspace-specific port and tmp/cache dirs before delegating to `./start.sh`, and defaults `MAMMAMIRADIO_ALLOW_YTDLP=true`
+- run exports a workspace-specific port and tmp/cache dirs before delegating to
+  `./start.sh`; external extraction remains off unless a standalone operator
+  installs the extra and opts in
 - archive deletes `.context/conductor/`
 
 ## HTTP surface
@@ -237,7 +294,8 @@ Public:
   client-local mini-show before joining the shared live stream)
 - `GET /healthz`, `GET /readyz`, `GET /public-status`
 - `GET /sw.js`, `GET /static/{filename:path}` (PWA assets)
-- `POST /api/clip` (rate-limited, 1 per 10s per IP)
+- `POST /api/clip` (rate-limited; music sharing is available only for a
+  complete single bundled-track window)
 - `GET /clips/{id}.mp3` (no auth, for sharing)
 - `POST /api/listener-request`, `GET /public-listener-requests` (sanitized feed for the on-page sidebar)
 
@@ -266,6 +324,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `GET /admin`, `GET /dashboard`
 - `GET /status`, `GET /api/capabilities`
+- `PUT /api/media-sources/jamendo`, `POST /api/media-sources/jamendo/retry`
 - `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
 - `GET /api/pacing`, `PATCH /api/pacing`
@@ -280,7 +339,15 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 ### Diagnosing provider fallbacks
 
-`GET /status` returns a `runtime_status` object under the top-level response. It contains:
+`GET /status` includes a redacted top-level `jamendo` object with `enabled`,
+the detailed provider `state`, `client_id_configured`, current
+`noncommercial_acknowledged`, `terms_scope`, `provider_confirmation`,
+`ready`, `in_flight`, last-success age, a coarse last-failure code, and rejected
+count. It never contains the client ID, private stream URL, or raw exception.
+The source row maps that detail to the five operational UI states documented in
+[music-sources.md](music-sources.md#admin-states).
+
+The same response returns a `runtime_status` object. It contains:
 
 - `station_on_air` — listener-centric boolean that is true only when producer/playback tasks are alive, no listener-facing silence failure is active, the session is not stopped, and either a listener accepted a chunk from the current segment or an active listener is inside the bounded three-second handoff grace after the last accepted audio.
 - `health_state` — backward-compatible runtime health state for blocked tasks, listener-facing silence, paused sessions, and provider fallback summaries.
@@ -760,16 +827,18 @@ Supervisor-injected `$SUPERVISOR_TOKEN` to `HA_TOKEN`, overlays AI/TTS provider
 secrets from `/config/secrets.env`, and starts uvicorn. Runtime code never writes
 the projection directly.
 
-Provider secrets in `/config/secrets.env` win over legacy option values per key
-(the provider fields are no longer in the add-on schema; keys saved by older
-installs are recovered once from Supervisor's stored settings via the
-Supervisor API and persisted into `secrets.env` at first boot);
-`ADMIN_TOKEN` and `JAMENDO_CLIENT_ID` remain add-on options. A mode or pacing
-selection held only in memory by a pre-fix build cannot be reconstructed after
-an update rematerializes an older Supervisor value. The add-on binds `0.0.0.0`
-with no admin credential by default and trusts its own LAN for admin access (see
-**Admin access model**); set `admin_token` in the add-on options to require a
-credential.
+Provider secrets in `/config/secrets.env` win over legacy option values per key.
+AI/TTS fields and the Jamendo client ID are absent from both current add-on
+schemas. Keys saved by older installs are recovered once from Supervisor's
+stored settings via the Supervisor API and persisted into `secrets.env` at first
+boot. A legacy Jamendo ID uses its own versioned migration marker, remains
+disabled, and must be reviewed in **Motore -> Setup -> Music sources** before
+acknowledged non-commercial use. Legacy extractor flags and environment
+overrides are coerced off. A mode or pacing selection held only in memory by a
+pre-fix build cannot be reconstructed after an update rematerializes an older
+Supervisor value. The add-on binds `0.0.0.0` with no admin credential by default
+and trusts its own LAN for admin access (see **Admin access model**); set
+`admin_token` in the add-on options to require a credential.
 
 The dashboard is accessible via HA ingress (sidebar). The first-run flow shows source readiness, starts the exact Live media source on one selected Home Assistant speaker, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. AI-host keys are optional and come afterward.
 

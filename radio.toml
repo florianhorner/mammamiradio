@@ -709,3 +709,51 @@ edge_fallback_voice = "it-IT-ElsaNeural"
 style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
 role = "witness"
 airtime_approved = true
+
+# Campaign candidates stay out of airtime until the provider render and the
+# human listening gate are complete. Do not add campaign pins or set these to
+# true without the redacted selection receipt.
+[[ads.voices]]
+name = "Dottoressa Tiziana"
+voice = "RXoaSpLaWTEckJgPUBG3"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "smart, balanced, and credible Italian adult authority; grounded, clear, and natural rather than theatrical"
+role = "bureaucrat"
+airtime_approved = false
+
+[[ads.voices]]
+name = "La Cronista"
+voice = "3DPhHWXDY263XJ1d2EPN"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "prickly, cheerful, full-bodied Italian field reporter with a bright lead presence and quick professional recovery"
+role = "hammer"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Carlotta"
+voice = "Z9LM7NBnQ8aOZKIXkd5S"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "young, fresh, and fun fairy-princess energy; playful and bright for joyful food copy, never sensual or severe"
+role = "maniac"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Francesca"
+voice = "S3RXi1qdUT4is6DxRHdi"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "passionate and spirited contemporary Italian woman; athletic, energetic, direct, and sincere"
+role = "hammer"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Il Razzo"
+voice = "t3hJ92dgZhDVtsff084B"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "high-energy expressive Italian male; over-the-top, bright, fast, and the opposite of monotone"
+role = "disclaimer_goblin"
+airtime_approved = false

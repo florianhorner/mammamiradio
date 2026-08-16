@@ -1,0 +1,19 @@
+mammamiradio — pre-ship verification
+commit: 9908374cfe9209c75e66d6bb8d2dea4f7b863143
+branch: florianhorner/valencia-v3
+host:   local (make check), merged with origin/main
+
+$ make check
+All checks passed!
+Success: no issues found in 312 source files
+6411 passed, 4 skipped, 23 deselected, 1 warning in 225.27s (0:03:45)
+All checks passed
+
+$ bash scripts/check-release-invariants.sh
+All invariants passed. (16 checks)
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ python tests/integrations/golden/generate_fixture.py --check
+golden fixture matches serializer output

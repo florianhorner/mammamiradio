@@ -40,6 +40,16 @@ class StreamBlock(TypedDict, total=False):
     audio_format: AudioFormat
 
 
+class MusicAttributionBlock(TypedDict):
+    provider: str
+    license_id: str
+    license_url: str
+    source_url: str
+    credit: str
+    modified: bool
+    basis: Literal["bundled_manifest", "provider_reported"]
+
+
 class NowPlayingBlock(TypedDict, total=False):
     segment_class: SegmentClass
     segment_type: str
@@ -53,6 +63,7 @@ class NowPlayingBlock(TypedDict, total=False):
     external_ids: dict[str, str]
     host: str | None
     context: dict
+    music_attribution: MusicAttributionBlock
 
 
 class UpNextItem(TypedDict, total=False):

@@ -20,6 +20,7 @@ from mammamiradio.audio.admission import ffmpeg_slot
 logger = logging.getLogger(__name__)
 _NORM_CACHE_BITRATE_RE = re.compile(r"_(?P<bitrate>[1-9]\d*)k\.mp3$")
 DEFAULT_CONCAT_SILENCE_MS = 300
+_CACHE_SOURCE_KINDS = frozenset({"classic", "demo", "jamendo", "local", "starter", "youtube"})
 
 
 class ConcatDurationError(RuntimeError):
@@ -60,7 +61,14 @@ def _positive_finite_number(value: object) -> float | None:
     return None
 
 
-def save_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms: int | None = None) -> None:
+def save_track_metadata(
+    norm_path: Path,
+    title: str,
+    artist: str,
+    *,
+    duration_ms: int | None = None,
+    source_kind: str | None = None,
+) -> None:
     """Persist norm-cache metadata so rescue paths can surface current-track facts.
 
     Called only when a cache file is freshly (re)normalized. Any `reconciled_lufs`
@@ -74,17 +82,27 @@ def save_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms
     data.pop("duration_ms", None)
     data.pop("duration_sec", None)
     data.pop("duration_s", None)
+    data.pop("source_kind", None)
     data.update({"title": title, "artist": artist})
     duration = _positive_finite_number(duration_ms)
     if duration is not None:
         data["duration_ms"] = round(duration)
+    if source_kind in _CACHE_SOURCE_KINDS:
+        data["source_kind"] = source_kind
     try:
         sidecar.write_text(json.dumps(data))
     except OSError as exc:
         logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
 
 
-def refresh_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms: int | None = None) -> None:
+def refresh_track_metadata(
+    norm_path: Path,
+    title: str,
+    artist: str,
+    *,
+    duration_ms: int | None = None,
+    source_kind: str | None = None,
+) -> None:
     """Refresh mutable norm-cache metadata without clearing content markers."""
     sidecar = _norm_sidecar_path(norm_path)
     data = _load_sidecar(sidecar)
@@ -94,6 +112,8 @@ def refresh_track_metadata(norm_path: Path, title: str, artist: str, *, duration
         data.pop("duration_sec", None)
         data.pop("duration_s", None)
         data["duration_ms"] = round(duration)
+    if source_kind in _CACHE_SOURCE_KINDS:
+        data["source_kind"] = source_kind
     try:
         sidecar.write_text(json.dumps(data))
     except OSError as exc:
@@ -114,6 +134,17 @@ def load_track_metadata(norm_path: Path) -> dict[str, str | int] | None:
             metadata["duration_ms"] = round(duration_ms)
         return metadata
     return None
+
+
+def load_track_cache_source(norm_path: Path) -> str:
+    """Return the persisted source class for a normalized cache artifact.
+
+    Legacy sidecars predate this field. They deliberately return an empty
+    string so strict rescue callers can leave the bytes on disk while refusing
+    to air media whose acquisition class is unknown.
+    """
+    value = _load_sidecar(_norm_sidecar_path(norm_path)).get("source_kind")
+    return value if isinstance(value, str) and value in _CACHE_SOURCE_KINDS else ""
 
 
 def _norm_cache_filename_bitrate_kbps(norm_path: Path) -> float | None:
