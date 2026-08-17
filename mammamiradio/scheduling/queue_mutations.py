@@ -49,6 +49,7 @@ def _drop_moment_receipts(state: StationState, segment: Segment, reason: str) ->
 
 def _unlink_ephemeral_best_effort(segment: Segment) -> None:
     """Remove a discarded temporary render while preserving package data."""
+    segment.release()
     if not segment.ephemeral or is_packaged_asset(segment.path, _DEMO_ASSETS_DIR):
         return
     try:

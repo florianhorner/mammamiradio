@@ -55,6 +55,18 @@ _PROMPT_INJECTION_RE = re.compile(
 # plain words of letters joined by spaces/apostrophes/hyphens. Anything else
 # falls back to the heuristic ladder (always safe).
 _SCENE_SHAPE_RE = re.compile(r"^[^\W\d_]+(?:[ '’\-][^\W\d_]+){0,5}$")
+# A headcount is never grounded: person entities report home/away, not how many
+# people are in a room, so "due persone" is the model inventing. It would then ride
+# into every banter prompt as HOME MOOD and reach the Casa card, the same failure
+# as naming a resident. _SCENE_SHAPE_RE already rejects digits, so a count can only
+# arrive spelled out.
+_PERSON_COUNT_RE = re.compile(
+    r"(?:\b(?:un[ao]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci"
+    r"|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:person[ae]|gente|ospit[ei]|invitat[aeio]|people|persons?|guests?|humans?)\b"
+    r"|\bun['’](?:ospite|invitata)\b)",
+    re.IGNORECASE,
+)
 # Unicode categories dropped before validation: C0/C1 controls (Cc), format
 # chars incl. zero-width + bidi overrides (Cf), line/paragraph separators
 # (Zl/Zp) — all invisible-steering vectors _CONTROL_RE alone misses.
@@ -266,6 +278,8 @@ def _validate_scene(scene: str, scored: tuple[ScoredEntity, ...]) -> bool:
     if _IP_RE.search(scene) or _EMAIL_RE.search(scene) or _TOKEN_RE.search(scene) or _HEX_TOKEN_RE.search(scene):
         return False
     if not _SCENE_SHAPE_RE.match(scene):
+        return False
+    if _PERSON_COUNT_RE.search(scene):
         return False
     lowered = scene.lower()
     for entity in scored:

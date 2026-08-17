@@ -8,7 +8,7 @@ says 'IN ONDA' — different code paths producing different state).
 Cathedral standard:
 - Strict subset: every field in /public-status must also exist in /status
 - Bytes-identical for shared fields: capabilities dict, brand dict, uptime,
-  tracks_played, session_stopped, now_streaming, upcoming/upcoming_mode,
+  tracks_played, rotation_track_count, session_stopped, now_streaming, upcoming/upcoming_mode,
   runtime_health, playback_actions, ha_moments
 - Shape snapshot: catches accidental field additions on the listener side
 """
@@ -16,10 +16,12 @@ Cathedral standard:
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from mammamiradio.core.config import JAMENDO_ACK_REVISION
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentLogEntry, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
 
@@ -85,6 +87,48 @@ async def test_public_status_returns_brand_block():
 
 
 @pytest.mark.asyncio
+async def test_ad_experiment_is_empty_on_fresh_state_and_identical_across_status_surfaces():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    expected = {
+        "scope": "runtime",
+        "completed_breaks": 0,
+        "completed_spots": 0,
+        "brands": [],
+    }
+    assert public["ad_experiment"] == expected
+    assert admin["ad_experiment"] == expected
+
+
+@pytest.mark.asyncio
+async def test_ad_experiment_payload_reports_runtime_counts_with_status_parity():
+    app = _make_test_app()
+    state = app.state.station_state
+    state.record_completed_ad_break(["Prezzoforte", "TeleCuore"])
+    state.record_completed_ad_break(["Prezzoforte"])
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    expected = {
+        "scope": "runtime",
+        "completed_breaks": 2,
+        "completed_spots": 3,
+        "brands": [
+            {"brand": "Prezzoforte", "completed_airings": 2},
+            {"brand": "TeleCuore", "completed_airings": 1},
+        ],
+    }
+    assert public["ad_experiment"] == expected
+    assert admin["ad_experiment"] == expected
+
+
+@pytest.mark.asyncio
 async def test_public_status_returns_resolved_identity(monkeypatch):
     """Chosen station identity must agree across legacy and additive fields."""
     monkeypatch.setenv("STATION_NAME", "Radio Test")
@@ -116,6 +160,124 @@ async def test_public_status_returns_capabilities():
     for flag in ("llm", "anthropic_key", "openai", "ha", "anthropic_degraded"):
         assert flag in caps, f"capabilities missing flag: {flag}"
         assert isinstance(caps[flag], bool), f"capability {flag} must be bool"
+
+
+@pytest.mark.asyncio
+async def test_jamendo_status_is_admin_only_and_now_playing_exposes_only_safe_attribution():
+    app = _make_test_app()
+    app.state.config.playlist.jamendo_enabled = True
+    app.state.config.playlist.jamendo_client_id = "private_client_123"
+    app.state.config.playlist.jamendo_noncommercial_acknowledged = True
+    app.state.config.playlist.jamendo_ack_revision = JAMENDO_ACK_REVISION
+    app.state.jamendo_provider = SimpleNamespace(
+        status=lambda: {
+            "state": "ready",
+            "ready": True,
+            "in_flight": False,
+            "last_success_age_sec": 4,
+            "last_failure_code": None,
+            "rejected_count": 2,
+            "stream_url": "https://storage.jamendo.com/file.mp3?token=private",
+            "filesystem_path": "/tmp/jamendo/private/normalized.mp3",
+            "boot_id": "private-boot",
+            "operation_id": "private-operation",
+            "lease_id": "private-lease",
+        }
+    )
+    attribution = {
+        "provider": "jamendo",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://www.jamendo.com/track/12345/example",
+        "credit": "Artist - Track, provided by Jamendo, CC-BY-4.0",
+        "modified": True,
+        "basis": "provider_reported",
+    }
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Artist - Track",
+        "started": 1.0,
+        "duration_sec": 180.0,
+        "metadata": {
+            "title": "Artist - Track",
+            "artist": "Artist",
+            "source_kind": "jamendo",
+            "provider_track_id": "12345",
+            "operation_id": "private-operation",
+            "lease_id": "private-lease",
+            "artifact_path": "/tmp/jamendo/private/normalized.mp3",
+            "music_attribution": attribution,
+        },
+    }
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public_response = await client.get("/public-status")
+        admin_response = await client.get("/status")
+
+    public = public_response.json()
+    admin = admin_response.json()
+    assert "jamendo" not in public
+    assert public["now_streaming"]["metadata"] == {
+        "title": "Artist - Track",
+        "artist": "Artist",
+        "source_kind": "jamendo",
+        "music_attribution": attribution,
+    }
+    assert admin["now_streaming"] == public["now_streaming"]
+    assert admin["jamendo"] == {
+        "enabled": True,
+        "state": "ready",
+        "client_id_configured": True,
+        "noncommercial_acknowledged": True,
+        "terms_scope": "noncommercial_api_use",
+        "provider_confirmation": "pending",
+        "ready": True,
+        "in_flight": False,
+        "last_success_age_sec": 4,
+        "last_failure_code": None,
+        "rejected_count": 2,
+    }
+    for private_value in (
+        "private_client_123",
+        "token=private",
+        "/tmp/jamendo/private",
+        "private-boot",
+        "private-operation",
+        "private-lease",
+    ):
+        assert private_value not in public_response.text
+        assert private_value not in admin_response.text
+
+
+@pytest.mark.asyncio
+async def test_admin_status_reports_playing_until_disabled_jamendo_track_finishes():
+    app = _make_test_app()
+    app.state.config.playlist.jamendo_enabled = False
+    app.state.config.playlist.jamendo_client_id = "private_client_123"
+    app.state.config.playlist.jamendo_noncommercial_acknowledged = True
+    app.state.config.playlist.jamendo_ack_revision = JAMENDO_ACK_REVISION
+    app.state.jamendo_provider = SimpleNamespace(
+        status=lambda: {
+            "state": "playing",
+            "ready": False,
+            "in_flight": False,
+            "last_success_age_sec": 4,
+            "last_failure_code": None,
+            "rejected_count": 0,
+        }
+    )
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        public = (await client.get("/public-status")).json()
+        admin = (await client.get("/status")).json()
+
+    assert "jamendo" not in public
+    assert admin["jamendo"]["enabled"] is False
+    assert admin["jamendo"]["state"] == "playing"
+    assert admin["jamendo"]["ready"] is False
+    assert admin["jamendo"]["in_flight"] is False
 
 
 @pytest.mark.asyncio
@@ -227,9 +389,36 @@ async def test_public_status_returns_uptime_and_tracks():
     body = resp.json()
     assert "uptime_sec" in body
     assert "tracks_played" in body
+    assert "rotation_track_count" in body
     assert isinstance(body["uptime_sec"], int)
     assert isinstance(body["tracks_played"], int)
+    assert isinstance(body["rotation_track_count"], int)
     assert body["tracks_played"] >= 0
+    assert body["rotation_track_count"] == len(app.state.station_state.playlist)
+
+
+@pytest.mark.asyncio
+async def test_public_status_rotation_count_follows_live_playlist_mutations():
+    """The listener count follows the active pool, not stale source metadata."""
+    app = _make_test_app()
+    state = app.state.station_state
+    state.playlist_source = PlaylistSource(
+        kind="local",
+        label="Local music",
+        track_count=len(state.playlist),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        before = (await client.get("/public-status")).json()
+        added = await client.post(
+            "/api/playlist/add",
+            json={"title": "Fresh Song", "artist": "Fresh Artist", "duration_ms": 180_000},
+        )
+        after = (await client.get("/public-status")).json()
+
+    assert added.status_code == 200
+    assert after["rotation_track_count"] == before["rotation_track_count"] + 1
+    assert after["rotation_track_count"] == len(state.playlist)
 
 
 @pytest.mark.asyncio
@@ -255,6 +444,7 @@ async def test_admin_listener_facts_agree():
     # Bytes-identical shared fields
     assert admin["uptime_sec"] == public["uptime_sec"]
     assert admin["tracks_played"] == public["tracks_played"]
+    assert admin["rotation_track_count"] == public["rotation_track_count"]
     assert admin["session_stopped"] == public["session_stopped"]
     assert admin.get("now_streaming") == public.get("now_streaming")
     assert admin["brand"] == public["brand"]

@@ -66,7 +66,7 @@ def detect_run_mode(config: StationConfig) -> dict:
 
 
 def _playlist_is_demo(state: StationState) -> bool:
-    """Check if the loaded playlist is the built-in demo set."""
+    """Retain the Demo Radio host-tier classifier without licensing music."""
     if not state.playlist:
         return True
     return all(track.spotify_id.startswith("demo") for track in state.playlist[:5])
@@ -154,9 +154,11 @@ def _stream_status(config: StationConfig, state: StationState, golden_path: dict
     # pause/queue/selection state is surfaced separately by /status.
     if golden_path is not None:
         return "blocked" if golden_path.get("blocking") else "ready"
+    from mammamiradio.playlist.downloader import external_media_enabled
+
     if state.playlist_source is not None or state.playlist:
         return "ready"
-    return "checking" if config.allow_ytdlp else "blocked"
+    return "checking" if external_media_enabled(config.allow_ytdlp) else "blocked"
 
 
 def _legacy_home_context_status(has_llm: bool, availability: HomeContextAvailability) -> str:
@@ -577,7 +579,7 @@ def classify_station_mode(
     return {
         "id": "demo",
         "label": "Demo Radio",
-        "summary": "The station is running with canned banter clips and demo music.",
+        "summary": "Demo mode uses stock host copy and its available base music.",
         "detail": "Add an Anthropic or OpenAI API key to unlock AI-generated banter.",
     }
 
@@ -639,6 +641,10 @@ def build_setup_status(
     mode = detect_run_mode(config)
     ffmpeg_bin = shutil.which("ffmpeg")
     ytdlp_bin = shutil.which("yt-dlp")
+    from mammamiradio.playlist.downloader import external_media_enabled
+
+    external_media_requested = bool(config.allow_ytdlp)
+    external_media_effective = False if config.is_addon else external_media_enabled(config.allow_ytdlp)
     demo_playlist = _playlist_is_demo(state)
     station_mode = classify_station_mode(config, state, demo_playlist=demo_playlist)
     identity = identity_status(config)
@@ -764,23 +770,34 @@ def build_setup_status(
         },
         {
             "key": "ytdlp",
-            "label": "yt-dlp",
-            "status": "ok" if ytdlp_bin else "warn",
+            "label": "External media",
+            "status": "warn"
+            if external_media_requested and not external_media_effective and not config.is_addon
+            else "ok",
             "detail": (
-                "yt-dlp is available for fresh charts when enabled."
-                if ytdlp_bin
-                else "yt-dlp is not installed. The station can still play demo or local tracks."
+                "External extraction is intentionally unavailable in this Home Assistant add-on; "
+                "starter and local music remain available."
+                if config.is_addon
+                else "The standalone external-media resolver is installed and explicitly enabled."
+                if external_media_effective
+                else "External extraction is off; starter and local music remain available."
+                if not external_media_requested
+                else "External extraction was requested, but the standalone external-media extra is unavailable."
             ),
-            "where": ytdlp_bin or "not found in PATH",
-            "repair": "Install yt-dlp if you want live charts; otherwise keep using demo/local sources.",
+            "where": "not included in add-on image" if config.is_addon else ytdlp_bin or "optional extra not active",
+            "repair": (
+                "No action required. Use starter or operator-local music."
+                if config.is_addon or not external_media_requested
+                else "Install mammamiradio[external-media], then restart this standalone process."
+            ),
         },
         {
             "key": "playlist_loaded",
             "label": "Current loaded tracks",
-            "status": "warn" if demo_playlist else "ok",
+            "status": "ok" if state.playlist else "warn",
             "detail": (
-                "The station currently has demo tracks loaded."
-                if demo_playlist
+                "No verified base music is currently loaded."
+                if not state.playlist
                 else "The station currently uses "
                 + (
                     state.playlist_source.label

@@ -11,6 +11,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEDIA_PYTHON="python3"
+if ! "$MEDIA_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+    if [ -x .venv/bin/python ]; then
+        MEDIA_PYTHON=".venv/bin/python"
+    else
+        MEDIA_PYTHON="python3.11"
+    fi
+fi
 
 case "${1:-}" in
   -h|--help)
@@ -19,8 +27,9 @@ Usage: scripts/pre-release-check.sh
 
 Pre-release sanity check. Run before bumping the version number.
 Verifies version consistency across pyproject.toml + addon config.yaml,
-CHANGELOG head matches the version, and all release invariants
-(FFmpeg eq chain count, recovery audio, test mocks, post-restart guard).
+CHANGELOG head matches the version, all release invariants (FFmpeg eq
+chain count, recovery and browser audio, test mocks, post-restart guard),
+and the physical 20-run Home Assistant Green cold-launch receipt set.
 
 Catches the class of bugs that have caused production silence incidents.
 
@@ -50,7 +59,7 @@ ADDON_VER=$(grep '^version:' ha-addon/mammamiradio/config.yaml | awk '{print $2}
 PYPROJECT_VER=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' pyproject.toml | head -1)
 # `.get('version','')` + `|| true` so malformed JSON or a missing key yields an empty
 # string and a clean [FAIL] below, never a Python traceback that aborts the release gate.
-MANIFEST_VER=$(python3 -c "import json; print(json.load(open('custom_components/mammamiradio/manifest.json')).get('version',''))" 2>/dev/null || true)
+MANIFEST_VER=$("$MEDIA_PYTHON" -c "import json; print(json.load(open('custom_components/mammamiradio/manifest.json')).get('version',''))" 2>/dev/null || true)
 
 if [ "$ADDON_VER" = "$PYPROJECT_VER" ]; then
     ok "config.yaml ($ADDON_VER) matches pyproject.toml ($PYPROJECT_VER)"
@@ -105,7 +114,7 @@ fi
 echo ""
 echo "3. Release beat manifest"
 
-if python3 "$SCRIPT_DIR/validate-release-beat.py" --channel stable --semver "$ADDON_VER"; then
+if "$MEDIA_PYTHON" "$SCRIPT_DIR/validate-release-beat.py" --channel stable --semver "$ADDON_VER"; then
     ok "release beat manifest matches stable release target ($ADDON_VER), is disabled, or is absent"
 else
     fail "release beat manifest validation failed for stable release target $ADDON_VER"
@@ -164,6 +173,16 @@ else
     fail "packaged spoken-asset manifest/hash/transcript validation failed"
 fi
 
+if python3 "$SCRIPT_DIR/validate-spoken-assets.py" \
+    --browser-assets-root "$PWD/mammamiradio/web/static/audio" \
+    --static-root "$PWD/mammamiradio/web/static" \
+    --admin-template "$PWD/mammamiradio/web/templates/admin.html" \
+    --radio-config "$PWD/radio.toml"; then
+    ok "browser narration assets and admin metadata match the release manifest"
+else
+    fail "browser narration asset/admin manifest validation failed"
+fi
+
 if command -v ffprobe >/dev/null 2>&1; then
     for asset_name in "${REQUIRED_RECOVERY_ASSETS[@]}"; do
         asset_path="$RECOVERY_DIR/$asset_name"
@@ -211,7 +230,7 @@ echo ""
 echo "8. HA Green fallback performance gates"
 
 QUEUE_FALLBACK_WAIT=$(awk -F= '/QUEUE_FALLBACK_WAIT_SECONDS/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' mammamiradio/web/streamer.py)
-if python3 - "$QUEUE_FALLBACK_WAIT" <<'PY'
+if "$MEDIA_PYTHON" - "$QUEUE_FALLBACK_WAIT" <<'PY'
 import sys
 value = float(sys.argv[1])
 raise SystemExit(0 if value <= 5.0 else 1)
@@ -238,6 +257,26 @@ if [ -x scripts/ha-green-launch-smoke.py ] && grep -q '^launch-smoke:' Makefile;
     ok "HA Green cold-launch smoke script and Make target are present"
 else
     fail "Missing executable scripts/ha-green-launch-smoke.py or Makefile launch-smoke target"
+fi
+
+# ── 9. Physical HA Green release evidence ────────────────────────────────────
+echo ""
+echo "9. Physical HA Green release evidence"
+
+if "$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py --release-version "$ADDON_VER"; then
+    ok "at least 20 cold Home Assistant Green runs meet the <=2s p95 release contract"
+else
+    fail "HA Green release evidence is incomplete — record 20 runs with scripts/ha-green-launch-smoke.py --record-release-receipt proof/media/ha-green-release-evidence, then commit only those receipt JSON files"
+fi
+
+# ── 10. Strict media-rights gate ──────────────────────────────────────────────
+echo ""
+echo "10. Strict media-rights gate"
+
+if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
+    ok "starter catalog evidence, bytes, audio, and packaging are release-ready"
+else
+    fail "strict media proof failed — release/publish paths must remain blocked"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

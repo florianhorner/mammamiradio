@@ -84,9 +84,12 @@ from mammamiradio.core.first_listen_show import (
 from mammamiradio.core.listener_session import ListenerSessionCueState
 from mammamiradio.core.models import (
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    STREAM_LATE_THRESHOLD_SECONDS,
+    STREAM_TARGET_LEAD_SECONDS,
     ChaosSubtype,
     GenerationWasteReason,
     Heading,
+    MediaAttribution,
     PartyMode,
     PersonalityAxes,
     PlaylistSource,
@@ -94,6 +97,7 @@ from mammamiradio.core.models import (
     SegmentType,
     StationState,
     Track,
+    safe_media_attribution_dict,
     segment_track_key,
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
@@ -153,6 +157,7 @@ from mammamiradio.playlist.direction import (
     normalize_direction_text,
     resolve_direction_search_results,
 )
+from mammamiradio.playlist.downloader import external_media_enabled
 from mammamiradio.playlist.music_admission import (
     YOUTUBE_ADMISSION_SEARCH_DEPTH,
     classify_youtube_candidate,
@@ -162,6 +167,8 @@ from mammamiradio.playlist.playlist import (
     PERSISTED_HEADING_FILENAME,
     PERSISTED_SOURCE_FILENAME,
     ExplicitSourceError,
+    ExternalMediaUnavailableError,
+    LegacyJamendoSourceRetiredError,
     filter_blocklisted,
     load_explicit_source,
     normalized_track_key,
@@ -183,7 +190,6 @@ from mammamiradio.scheduling.queue_mutations import drop_matching_segments
 from mammamiradio.scheduling.scheduler import buffered_audio_seconds
 from mammamiradio.web.assets import (
     _ASSET_VERSION,
-    _ASSETS_DIR,
     _STATIC_DIR,
     _TEMPLATES_DIR,
     _bust_static_cache,
@@ -205,6 +211,7 @@ from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/t
     security,
 )
 from mammamiradio.web.json_body import read_json_object
+from mammamiradio.web.media_sources import _media_error, safe_jamendo_status
 from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
 from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
 from mammamiradio.web.persistence import (
@@ -235,6 +242,7 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
     _paginated_tracks,
     _public_now_streaming_payload,
     _public_segment_metadata,
+    _public_starter_catalog,
     _serialize_brand,
     _serialize_heading,
     _serialize_identity,
@@ -435,6 +443,36 @@ _SETUP_ERRORS: dict[str, tuple[str, str, bool, str, int]] = {
     ),
 }
 
+# Standalone overrides. Same failure, same code, a way out that exists on this
+# install. A station run outside the Home Assistant add-on has no add-on options
+# page and no Supervisor token to refresh, so the default wording sends the
+# operator to a screen they do not have. Only codes whose default instruction is
+# add-on-shaped belong here; everything else falls through to _SETUP_ERRORS.
+_SETUP_ERRORS_STANDALONE: dict[str, tuple[str, str, bool, str, int]] = {
+    "ha_access_missing": (
+        "This station is not connected to Home Assistant",
+        "Set HA_URL and HA_TOKEN in your .env and restart the station. "
+        "The radio plays without a home connection, so you can also skip this step.",
+        True,
+        "Retry connection",
+        409,
+    ),
+    "ha_auth_failed": (
+        "Home Assistant did not accept access",
+        "Check that HA_TOKEN is a current long-lived access token, then restart the station and retry.",
+        True,
+        "Retry connection",
+        502,
+    ),
+    "media_source_missing": (
+        "Mamma Mi Radio is not in HA's media browser",
+        "Install the Mamma Mi Radio HACS integration in Home Assistant and point it at this station's URL, then retry.",
+        True,
+        "Check HACS integration",
+        409,
+    ),
+}
+
 # TODO: split — this god module is a postal address, not a destination.
 # See docs/archive/2026-04-28-cathedral-restructure.md (PR 5) for the routes/playback split plan.
 # Path roots, the static-asset content hash (_ASSET_VERSION), and
@@ -464,13 +502,23 @@ def _as_int_index(value, default: int = -1) -> int:
 def _setup_error(
     code: str,
     *,
+    addon_mode: bool | None = None,
     accepted: bool | None = None,
     receipt_persisted: bool | None = None,
     station_resumed: bool | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> JSONResponse:
-    """Return one allowlisted, secret-free first-listen failure envelope."""
-    title, message, retryable, action_label, status_code = _SETUP_ERRORS.get(code, _SETUP_ERRORS["invalid_request"])
+    """Return one allowlisted, secret-free first-listen failure envelope.
+
+    ``addon_mode=False`` swaps in the standalone wording where the add-on-shaped
+    instruction would send the operator somewhere that does not exist. The error
+    code is unchanged either way, so a consumer branching on ``code`` sees no
+    difference. ``None`` means the caller does not know, and keeps the default.
+    """
+    entry = _SETUP_ERRORS.get(code, _SETUP_ERRORS["invalid_request"])
+    if addon_mode is False:
+        entry = _SETUP_ERRORS_STANDALONE.get(code, entry)
+    title, message, retryable, action_label, status_code = entry
     payload: dict[str, Any] = {
         "ok": False,
         "error": {
@@ -650,6 +698,30 @@ def _safe_external_album_art(value: Any) -> str:
     return url
 
 
+def _addon_external_media_error(config: Any) -> JSONResponse | None:
+    """Return the shared add-on denial for extractor-only operations."""
+    if not getattr(config, "is_addon", False):
+        return None
+    return _media_error(
+        403,
+        "external_media_unavailable_in_addon",
+        "External resolution is unavailable in this Home Assistant add-on. Local search and shout-outs still work.",
+        retryable=False,
+        next_action="Use a local track or send the request as a shout-out.",
+    )
+
+
+def _external_extractors_status(config: Any) -> dict[str, str]:
+    """Report artifact truth without exposing an extractor inventory."""
+    if getattr(config, "is_addon", False):
+        return {"state": "unavailable_in_addon"}
+    return {
+        "state": "operator_enabled"
+        if external_media_enabled(bool(getattr(config, "allow_ytdlp", False)))
+        else "disabled"
+    }
+
+
 SESSION_STOPPED_FLAG = "session_stopped.flag"
 SILENCE_FAILURE_SECONDS = 30.0
 # Producer rescue-bridge health (#547). A drain/resume/idle bridge firing now and
@@ -713,9 +785,9 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 CLIP_LOOKBACK_SECONDS = 15
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
-STREAM_TARGET_LEAD_SECONDS = 0.5
 STREAM_MAX_PACKET_SECONDS = 0.125
-STREAM_LATE_THRESHOLD_SECONDS = 0.05
+# Restores 375 ms — ~75% of the old 0.5s lead, ~9% of today's 4s. Calibrated
+# against STREAM_TARGET_LEAD_SECONDS; revisit the two together.
 STREAM_MAX_RECOVERY_CHUNKS = 3
 STREAM_UNDERRUN_WARNING_INTERVAL_SECONDS = 60.0
 
@@ -897,8 +969,7 @@ def _purge_segment_queue(q) -> int:
     """Drain all pre-produced segments from the queue and unlink temp files."""
     items = _drain_segment_queue(q)
     for seg in items:
-        if seg.ephemeral and not _is_packaged_asset(seg.path):
-            seg.path.unlink(missing_ok=True)
+        _unlink_ephemeral_best_effort(seg)
     return len(items)
 
 
@@ -910,6 +981,9 @@ def _unlink_ephemeral_best_effort(seg) -> None:
     swallows a missing file; a real ``OSError`` would otherwise abort the purge
     mid-loop and leave the UI shadow stale behind a half-drained queue.
     """
+    release = getattr(seg, "release", None)
+    if callable(release):
+        release()
     if getattr(seg, "ephemeral", False) and not _is_packaged_asset(seg.path):
         try:
             seg.path.unlink(missing_ok=True)
@@ -919,6 +993,60 @@ def _unlink_ephemeral_best_effort(seg) -> None:
             # leave the UI shadow stale behind a half-drained queue. Honors this
             # helper's "without ever raising" contract.
             logger.warning("Ephemeral purge unlink failed for %s", getattr(seg, "path", None), exc_info=True)
+
+
+def _validated_starter_share_snapshot(segment: Segment) -> dict[str, Any] | None:
+    """Return a complete, manifest-verified starter track snapshot.
+
+    Music sharing must never derive bytes from the rolling buffer: it can span
+    two tracks or contain Jamendo/local audio.  A starter snapshot therefore
+    points only at the immutable packaged file and is created after that exact
+    segment reaches EOF for at least one listener.
+    """
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if segment.type is not SegmentType.MUSIC or metadata.get("source_kind") != "starter":
+        return None
+    raw_attribution = metadata.get("music_attribution")
+    if not isinstance(raw_attribution, dict) or raw_attribution.get("basis") != "bundled_manifest":
+        return None
+    attribution = MediaAttribution(
+        provider=str(raw_attribution.get("provider") or ""),
+        license_id=str(raw_attribution.get("license_id") or ""),
+        license_url=str(raw_attribution.get("license_url") or ""),
+        source_url=str(raw_attribution.get("source_url") or ""),
+        credit=str(raw_attribution.get("credit") or ""),
+        modified=bool(raw_attribution.get("modified")),
+        basis="bundled_manifest",
+    )
+    track = Track(
+        title=str(metadata.get("title_only") or ""),
+        artist=str(metadata.get("artist") or ""),
+        duration_ms=int(metadata.get("duration_ms") or round(segment.duration_sec * 1000)),
+        spotify_id=str(metadata.get("spotify_id") or ""),
+        local_path=segment.path,
+        source="starter",
+        provider_track_id=str(metadata.get("provider_track_id") or ""),
+        attribution=attribution,
+    )
+    try:
+        from mammamiradio.media.starter import resolve_starter_track
+
+        entry = resolve_starter_track(track)
+    except (OSError, TypeError, ValueError):
+        logger.warning("Starter share snapshot rejected by manifest validation", exc_info=True)
+        return None
+    safe_attribution = safe_media_attribution_dict(attribution)
+    if safe_attribution is None:
+        return None
+    return {
+        "path": entry.path,
+        "ended_monotonic": time.monotonic(),
+        "type": "starter",
+        "title": entry.title,
+        "artist": entry.artist,
+        "provider_track_id": entry.isrc,
+        "attribution": safe_attribution,
+    }
 
 
 def _drop_segment_moment_receipts(state: StationState, segment, reason: str) -> None:
@@ -1925,6 +2053,38 @@ def _record_continuity_air(state: StationState, segment: Segment) -> None:
         )
     except Exception:  # pragma: no cover - telemetry must never break the stream
         logger.debug("continuity air telemetry failed", exc_info=True)
+
+
+def _record_ad_experiment_receipt(
+    state: StationState,
+    segment: Segment,
+    *,
+    result: str,
+    terminal_reason: str | None,
+    all_chunks_audience_delivered: bool,
+) -> None:
+    """Credit brands after a non-fallback EOF when every ad chunk reached listeners."""
+    try:
+        if (
+            segment.type is not SegmentType.AD
+            or result != "aired"
+            or terminal_reason != "eof"
+            or not all_chunks_audience_delivered
+        ):
+            return
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        raw_brands = metadata.get("brands")
+        brands = (
+            [brand for brand in raw_brands if isinstance(brand, str) and brand.strip()]
+            if isinstance(raw_brands, list | tuple)
+            else []
+        )
+        if not brands:
+            brand = metadata.get("brand")
+            brands = [brand] if isinstance(brand, str) else []
+        state.record_completed_ad_break(brands)
+    except Exception:  # pragma: no cover - isolate receipt errors from audio
+        logger.debug("Carosello experiment receipt failed", exc_info=True)
 
 
 # Floor of rotation tracks a BULK ban must leave behind. Below this the producer
@@ -4127,6 +4287,11 @@ def _apply_loaded_source(
         excluded_track_keys=handoff_excluded_track_keys,
     )
     state.switch_playlist(tracks, resolved_source)
+    jamendo_provider = getattr(request.app.state, "jamendo_provider", None)
+    invalidate_jamendo = getattr(jamendo_provider, "invalidate_source", None)
+    if callable(invalidate_jamendo):
+        task = asyncio.create_task(invalidate_jamendo())
+        _register_background_task(request.app.state, task)
     _delete_persisted_heading(request.app.state.config.cache_dir)
 
     # Immediate cutover is safe only when this action admitted fresh protected
@@ -4471,6 +4636,7 @@ def _finalize_selected_playback(
     start_listeners: int,
     accepted_listener_count: int,
     terminal_reason: str,
+    all_chunks_audience_delivered: bool,
     cancel_reason: str = GenerationWasteReason.OPERATOR_PURGE,
 ) -> None:
     """Settle every selected Segment exactly once, including setup failures.
@@ -4513,6 +4679,7 @@ def _finalize_selected_playback(
                     was_skipped,
                     start_listeners,
                     terminal_reason=terminal_reason,
+                    all_chunks_audience_delivered=all_chunks_audience_delivered,
                     accepted_listener_count=accepted_listener_count,
                 )
             finally:
@@ -4545,6 +4712,10 @@ async def run_playback_loop(app) -> None:
     pacer_factory = getattr(app.state, "stream_pacer_factory", StreamPacer)
     pacer = pacer_factory(bytes_per_sec)
     app.state.stream_pacer = pacer
+    # Report what this pacer runs at, not what the constant says, so the admin
+    # diagnostic can never describe a cushion the loop is not using.
+    state.stream_pacing_target_lead_seconds = pacer.target_lead_seconds
+    state.stream_pacing_late_threshold_seconds = pacer.late_threshold_seconds
     # A full disconnect/reconnect can happen while the inner file-send loop is
     # active, so the outer empty-room branch alone is not enough to restore a
     # first-packet cushion for that new listener generation.
@@ -4691,7 +4862,13 @@ async def run_playback_loop(app) -> None:
                         # the cache holds nothing else. The strict answer belongs
                         # to the producer's drain/resume/idle bridge, which has the
                         # packaged clip and the emergency tone beneath it.
-                        rescue = _select_norm_cache_rescue(config.cache_dir, state, allow_recent_repeat=True)
+                        rescue = _select_norm_cache_rescue(
+                            config.cache_dir,
+                            state,
+                            allow_recent_repeat=True,
+                            require_known_origin=True,
+                            allow_external_media=external_media_enabled(config.allow_ytdlp),
+                        )
                         if rescue:
                             logger.warning(
                                 "Queue empty %ds - rescuing with norm cache: %s",
@@ -4760,50 +4937,10 @@ async def run_playback_loop(app) -> None:
                     if rescued_from_norm:
                         pass
                     else:
-                        # Try bundled demo assets as a last-resort audio source before
-                        # repeating clips or forcing banter. Raw (un-normalized) audio
-                        # beats dead air.
-                        demo_music_dir = _ASSETS_DIR / "demo" / "music"
-                        demo_files = list(demo_music_dir.glob("*.mp3")) if demo_music_dir.exists() else []
-                        if demo_files:
-                            rescue = _random.choice(demo_files)
-                            # Parse "Artist - Title.mp3" so the listener UI shows proper
-                            # metadata instead of the raw stem. Preserves the illusion.
-                            stem = rescue.stem
-                            if " - " in stem:
-                                rescue_artist, rescue_title = stem.split(" - ", 1)
-                                rescue_artist = (
-                                    strip_foreign_station_name(rescue_artist.strip(), config.display_station_name)
-                                    or "Unknown"
-                                )
-                                rescue_title = rescue_title.strip() or stem
-                            else:
-                                rescue_artist = "Unknown"
-                                rescue_title = stem
-                            logger.warning(
-                                "Queue empty %ds - rescuing with demo asset: %s",
-                                int(elapsed),
-                                rescue.name,
-                            )
-                            state.queue_empty_since = None
-                            gap_clips_served = 0
-                            duration_sec = norm_cache_duration_sec(rescue, bitrate_kbps=config.audio.bitrate)
-                            duration_fields = {"duration_ms": round(duration_sec * 1000)} if duration_sec > 0 else {}
-                            segment = Segment(
-                                type=SegmentType.MUSIC,
-                                path=rescue,
-                                duration_sec=duration_sec,
-                                metadata={
-                                    "type": "music",
-                                    "title": rescue_title,
-                                    "artist": rescue_artist,
-                                    **duration_fields,
-                                    "audio_source": "fallback_demo_asset",
-                                    "fallback": True,
-                                },
-                                ephemeral=False,
-                            )
-                        elif fallback := _pick_recovery_clip(state):
+                        # Unmanifested packaged music is never a fallback source.
+                        # Reuse only approved continuity speech before requesting
+                        # fresh banter from the producer.
+                        if fallback := _pick_recovery_clip(state):
                             logger.warning(
                                 "Queue empty %ds - re-serving packaged recovery clip: %s",
                                 int(elapsed),
@@ -4970,6 +5107,13 @@ async def run_playback_loop(app) -> None:
             gap_clips_served = 0
             continue
 
+        if not segment.mark_playback_started():
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info("segment_playback_admission_denied")
+            continue
+
         if not _home_context_generation_is_current(state, config, segment):
             # A privacy cutover may land after queue admission but before this
             # segment becomes now-playing.  Reject it at the final unstarted
@@ -5032,6 +5176,10 @@ async def run_playback_loop(app) -> None:
             # playback-owned: advance the private handoff phase before any
             # callback or send work below can fail.
             mark_handoff_segment_selected(state, segment)
+            # `aired` means at least one chunk reached a listener. A receipt
+            # requires every ad chunk to reach at least one listener queue; one
+            # zero-delivery chunk makes the break ineligible.
+            all_chunks_audience_delivered = True
             # Sample listeners at the START of the send loop so a mid-segment
             # disconnect doesn't mislabel an aired segment as no_listeners
             # (matches classify_stream_outcome's documented contract). Default to
@@ -5102,6 +5250,8 @@ async def run_playback_loop(app) -> None:
                         accepted_listeners = await hub.broadcast(chunk)
                         accepted_count = max(0, int(accepted_listeners or 0))
                         accepted_listener_count = max(accepted_listener_count, accepted_count)
+                        if segment.type is SegmentType.AD and accepted_count <= 0:
+                            all_chunks_audience_delivered = False
                         if is_companionship_cue and not air_start_stamped:
                             if accepted_count <= 0:
                                 terminal_reason = GenerationWasteReason.LISTENER_SESSION_STALE
@@ -5162,9 +5312,12 @@ async def run_playback_loop(app) -> None:
                             _record_rescue_airplay(state, segment)
                             _record_continuity_air(state, segment)
 
-                        # Feed the clip ring buffer for "share WTF moment"
+                        # Feed only non-music into the generic share ring. Starter
+                        # music uses a separately validated package snapshot below;
+                        # local, Jamendo, mixed, and unknown music must never enter
+                        # clip/share memory even if the endpoint later returns 403.
                         clip_buf = getattr(app.state, "clip_ring_buffer", None)
-                        if clip_buf is not None:
+                        if clip_buf is not None and segment.type is not SegmentType.MUSIC:
                             clip_buf.append(chunk)
 
                         pacing = pacer.after_send(len(chunk))
@@ -5242,6 +5395,16 @@ async def run_playback_loop(app) -> None:
                             }
                 except Exception as exc:
                     logger.warning("lookback snapshot failed for %s segment: %s", segment.type.value, exc)
+            if (
+                segment.type is SegmentType.MUSIC
+                and send_completed_cleanly
+                and not was_skipped
+                and bytes_sent > 0
+                and start_listeners > 0
+            ):
+                starter_snapshot = _validated_starter_share_snapshot(segment)
+                if starter_snapshot is not None:
+                    app.state.last_shareworthy_starter = starter_snapshot
             if segment.type == SegmentType.MUSIC and not was_skipped and air_start_stamped and send_completed_cleanly:
                 listen_sec = bytes_sent / bytes_per_sec if bytes_per_sec else None
                 # Fire-and-forget: persistence must not block the handoff to the next
@@ -5281,6 +5444,7 @@ async def run_playback_loop(app) -> None:
                 start_listeners=start_listeners,
                 accepted_listener_count=accepted_listener_count,
                 terminal_reason=terminal_reason,
+                all_chunks_audience_delivered=all_chunks_audience_delivered,
             )
 
 
@@ -5378,6 +5542,7 @@ def _emit_stream_result(
     listeners: int,
     *,
     terminal_reason: str | None = None,
+    all_chunks_audience_delivered: bool = False,
     accepted_listener_count: int | None = None,
 ) -> None:
     """Tier-3: record the TRUE aired outcome after the send loop.
@@ -5412,6 +5577,13 @@ def _emit_stream_result(
             fallback_active=is_fallback_active(meta),
             accepted_listeners=accepted_count,
         )
+        _record_ad_experiment_receipt(
+            state,
+            segment,
+            result=result,
+            terminal_reason=terminal_reason,
+            all_chunks_audience_delivered=all_chunks_audience_delivered,
+        )
         state.record_stream_outcome(
             segment_type=segment.type.value,
             result=result,
@@ -5427,6 +5599,15 @@ def _emit_stream_result(
     # this one was. Stamping at EOF also left a song looking unheard for its
     # entire play, which is how a live control came to re-reserve the song
     # already on the air.
+    meta = segment.metadata if isinstance(segment.metadata, dict) else {}
+    if meta.get("source_kind") == "jamendo" or meta.get("audio_source") in {
+        "jamendo",
+        "jamendo_transient",
+    }:
+        # Jamendo candidate and lease facts are process-local by contract. Keep
+        # the anonymous in-memory delivery outcome above, but never serialize
+        # title, provider, source, or lease-derived metadata into cache/ledger.
+        return
     led = getattr(state, "ledger", None)
     if led is None or not led.enabled:
         return
@@ -5436,7 +5617,6 @@ def _emit_stream_result(
         from mammamiradio.core.ledger import SCHEMA_VERSION
         from mammamiradio.core.segment_status import classify_stream_outcome, is_fallback_active
 
-        meta = segment.metadata or {}
         fallback_active = is_fallback_active(meta)
         led.record(
             {
@@ -5512,6 +5692,15 @@ def _ad_cast_status_payload(config) -> dict[str, object]:
         else []
     )
     return {"excluded_campaigns": excluded, "warnings": warnings}
+
+
+def _ad_experiment_status(state: StationState) -> dict[str, object]:
+    """Return the process-local receipt payload or an empty fallback."""
+    try:
+        return state.ad_experiment_snapshot()
+    except Exception:  # pragma: no cover - isolate receipt errors from status
+        logger.debug("Carosello experiment status failed", exc_info=True)
+        return {"scope": "runtime", "completed_breaks": 0, "completed_spots": 0, "brands": []}
 
 
 def _record_operator_action(request, action: str, old_value, new_value) -> None:
@@ -5610,6 +5799,8 @@ def _track_from_music_metadata(metadata: dict) -> Track | None:
 
 async def _persist_completed_music(state: StationState, config, metadata: dict, *, listen_sec: float | None) -> None:
     """Persist only music that actually finished streaming to listeners."""
+    if metadata.get("source_kind") == "jamendo" or metadata.get("audio_source") == "jamendo":
+        return
     track = _track_from_music_metadata(metadata)
     if track is None:
         return
@@ -5999,7 +6190,7 @@ def _header_safe(value: object) -> str:
 
     The guarantee is about the output, not an absolute promise about the call:
     whatever comes back is encodable and is legal HTTP field content, so no
-    configured station name or theme can break the response. It is stated that
+    configured station name or public tagline can break the response. It is stated that
     way deliberately. An earlier "cannot 500" wording was an overclaim, since a
     caller could still hand this an object whose ``__str__`` raises. Nothing in
     a parsed TOML config can.
@@ -6011,8 +6202,8 @@ def _header_safe(value: object) -> str:
 
     The steps, each one load-bearing:
 
-    * Coerce to ``str``. ``StationSection`` is built straight from TOML with no
-      runtime coercion, so ``theme = 42`` in ``radio.toml`` reaches this
+    * Coerce to ``str``. ``BrandSection`` is built straight from TOML with no
+      runtime coercion, so ``tagline = 42`` in ``radio.toml`` reaches this
       function as an int and used to 500 every listener the same way.
     * Compose to NFC. macOS hands over decomposed text (``a`` + U+0300
       combining grave) for the same ``à`` that Linux writes as one codepoint,
@@ -6060,17 +6251,25 @@ async def stream(request: Request):
     """Expose the live MP3 stream consumed by browsers and audio players."""
     config = request.app.state.config
     audio_format = stream_audio_metadata(config)
+    # ``station.theme`` is a scriptwriter prompt. Use the public brand tagline
+    # for the listener-facing ``icy-genre`` header.
+    # Fold before capping: the fold expands characters (``…`` becomes three
+    # dots), so a cap applied first would not bound what actually ships.
+    # Then strip again after the cut: a space landing at index 63 would put
+    # trailing whitespace back, and h11 refuses the whole response for it.
+    # Both steps are load-bearing — see test_stream_icy_genre_* for the guards.
+    icy_genre = _header_safe(config.brand.tagline)[:64].strip()
     headers = {
         # A name made entirely of unencodable characters folds to "", so fall
         # back and let the player show the station rather than a blank label.
         "icy-name": _header_safe(config.display_station_name) or DEFAULT_STATION_NAME,
-        # Strip again after the cut: a space landing at index 63 would put the
-        # trailing whitespace back and h11 refuses the whole response for it.
-        "icy-genre": _header_safe(config.station.theme)[:64].strip(),
         "icy-br": str(audio_format["bitrate_kbps"]),
         "Cache-Control": "no-cache, no-store",
         "Connection": "keep-alive",
     }
+    # Omit ``icy-genre`` when no listener-facing tagline survives header folding.
+    if icy_genre:
+        headers["icy-genre"] = icy_genre
     return StreamingResponse(
         _audio_generator(request),
         headers=headers,
@@ -6111,7 +6310,7 @@ async def setup_first_listen_players(request: Request, _: None = Depends(_requir
     try:
         discovery = await service.discover(force=True)
     except HAPlaybackError as exc:
-        return _setup_error(exc.reason.value)
+        return _setup_error(exc.reason.value, addon_mode=request.app.state.config.is_addon)
 
     receipt = getattr(request.app.state, "first_listen_receipt", None)
     if receipt is None:
@@ -6154,7 +6353,11 @@ async def setup_first_listen_play(request: Request, _: None = Depends(_require_a
     try:
         result = await _ha_playback_service(request.app.state).play(entity_id)
     except HAPlaybackError as exc:
-        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+        return _setup_error(
+            exc.reason.value,
+            addon_mode=request.app.state.config.is_addon,
+            station_resumed=exc.station_resumed,
+        )
     if result.receipt_persisted is not True or not result.attempt_id:
         return _setup_error(
             HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
@@ -6192,7 +6395,11 @@ async def setup_first_listen_receipt_retry(request: Request, _: None = Depends(_
                 station_resumed=exc.station_resumed,
                 extra={"entity_id": str(body["entity_id"])},
             )
-        return _setup_error(exc.reason.value, station_resumed=exc.station_resumed)
+        return _setup_error(
+            exc.reason.value,
+            addon_mode=request.app.state.config.is_addon,
+            station_resumed=exc.station_resumed,
+        )
     if result.receipt_persisted is not True or not result.attempt_id:
         return _setup_error(
             HAPlaybackReason.RECEIPT_UNAVAILABLE.value,
@@ -6260,7 +6467,7 @@ async def setup_home_context_preview(request: Request, _: None = Depends(_requir
     config = app_state.config
     state = app_state.station_state
     if not config.homeassistant.enabled or not config.ha_token:
-        return _setup_error("ha_access_missing")
+        return _setup_error("ha_access_missing", addon_mode=config.is_addon)
 
     authorization = state.home_authorization or HomeAuthorization.narrow()
     revision_before = policy_revision(config.cache_dir)
@@ -7257,6 +7464,9 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
 
     state.last_state_change_at = time.time()
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
+    # Drop the remembered starter share snapshot so a clip can't leak across a
+    # stop (the generic ad/banter clip snapshot is already cleared above).
+    request.app.state.last_shareworthy_starter = None
     logger.info(
         "Session stopped by admin epoch=%d purged_segments=%d cleanup_warnings=%s",
         visible_epoch,
@@ -8242,6 +8452,11 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
             discard_reason=GenerationWasteReason.OPERATOR_PURGE,
         )
         state.switch_playlist([], None)
+        jamendo_provider = getattr(request.app.state, "jamendo_provider", None)
+        invalidate_jamendo = getattr(jamendo_provider, "invalidate_source", None)
+        if callable(invalidate_jamendo):
+            task = asyncio.create_task(invalidate_jamendo())
+            _register_background_task(request.app.state, task)
         state.force_next = SegmentType.BANTER
         persisted = _delete_persisted_source(config.cache_dir)
     logger.info("Rotation pool purged by admin — cleared pool, purged %d queued segments, forced banter", purged)
@@ -8625,7 +8840,7 @@ async def search_tracks(
     # that motivated backgrounding add-external). On timeout we return the
     # in-playlist results with no web hits rather than failing the whole request.
     external_candidates = []
-    if include_external:
+    if include_external and external_media_enabled(request.app.state.config.allow_ytdlp):
         loop = asyncio.get_running_loop()
         # Cap fetch depth to prevent DoS via unbounded external_offset (4-thread pool, 45s timeout).
         fetch_depth = min(external_offset + external_limit + 1, 50)
@@ -8693,7 +8908,11 @@ async def add_external_track(request: Request, _: None = Depends(require_admin_a
 
     state = request.app.state.station_state
     config = request.app.state.config
-    if not config.allow_ytdlp:
+    if config.is_addon and not external_media_enabled(config.allow_ytdlp):
+        denial = _addon_external_media_error(config)
+        if denial is not None:
+            return denial
+    if not external_media_enabled(config.allow_ytdlp):
         return JSONResponse({"ok": False, "error": "external_downloads_disabled"}, status_code=409)
 
     track = Track(
@@ -9132,9 +9351,15 @@ async def add_track(request: Request, _: None = Depends(require_admin_access)):
     if not track.title:
         return {"ok": False, "error": "Missing title"}
 
+    config = request.app.state.config
+    if config.is_addon and not external_media_enabled(config.allow_ytdlp):
+        denial = _addon_external_media_error(config)
+        if denial is not None:
+            return denial
+
     state = request.app.state.station_state
     position = body.get("position", "end")
-    _reserve_continuity_runway(request.app.state, state, request.app.state.config)
+    _reserve_continuity_runway(request.app.state, state, config)
     if position == "next":
         state.playlist.insert(0, track)
     else:
@@ -9250,7 +9475,7 @@ async def _set_direction_text(request: Request, text: str):
         }
 
     resolved_tracks: list[Track] = []
-    if config.allow_ytdlp:
+    if external_media_enabled(config.allow_ytdlp):
         resolved_tracks = await _resolve_direction_tracks_for_route(expansion.targets, state, config)
         resolved_tracks = filter_blocklisted(resolved_tracks, state.blocklist)
 
@@ -9469,6 +9694,22 @@ async def set_heading(request: Request, _: None = Depends(require_admin_access))
                 config,
                 PlaylistSource(kind="url", url=seed),
             )
+        except ExternalMediaUnavailableError:
+            denial = _addon_external_media_error(config)
+            if denial is not None:
+                return denial
+            _record_heading_ledger(
+                request,
+                requested_seed=seed,
+                added_count=0,
+                zero_result=True,
+                persisted=False,
+                source="heading_set",
+            )
+            return {
+                "ok": False,
+                "message": "Couldn't pull that vibe right now - give it a moment and try again.",
+            }
         except ExplicitSourceError:
             _record_heading_ledger(
                 request,
@@ -9694,6 +9935,20 @@ async def enrich_playlist(request: Request, _: None = Depends(require_admin_acce
         captured_continuity_epoch = state.continuity_epoch
         try:
             tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+        except LegacyJamendoSourceRetiredError:
+            return _media_error(
+                410,
+                "legacy_jamendo_source_retired",
+                "Saved Jamendo playlists were retired in favor of transient playback.",
+                retryable=False,
+                next_action="Open Motore -> Setup -> Music sources to configure Jamendo.",
+            )
+        except ExternalMediaUnavailableError as exc:
+            denial = _addon_external_media_error(config)
+            if denial is not None:
+                return denial
+            _msg = exc.args[0] if exc.args else "Playlist source unavailable"
+            return {"ok": False, "error": _msg}
         except ExplicitSourceError as exc:
             _msg = exc.args[0] if exc.args else "Playlist source unavailable"
             return {"ok": False, "error": _msg}
@@ -9762,6 +10017,20 @@ async def load_playlist(request: Request, _: None = Depends(require_admin_access
         captured_continuity_epoch = state.continuity_epoch
         try:
             tracks, resolved_source = await asyncio.to_thread(load_explicit_source, config, source)
+        except LegacyJamendoSourceRetiredError:
+            return _media_error(
+                410,
+                "legacy_jamendo_source_retired",
+                "Saved Jamendo playlists were retired in favor of transient playback.",
+                retryable=False,
+                next_action="Open Motore -> Setup -> Music sources to configure Jamendo.",
+            )
+        except ExternalMediaUnavailableError as exc:
+            denial = _addon_external_media_error(config)
+            if denial is not None:
+                return denial
+            _msg = exc.args[0] if exc.args else "Playlist source unavailable"
+            return {"ok": False, "error": _msg}
         except ExplicitSourceError as exc:
             _msg = exc.args[0] if exc.args else "Playlist source unavailable"
             return {"ok": False, "error": _msg}
@@ -9983,6 +10252,8 @@ def _public_status_payload(request: Request) -> dict:
         "running_jokes": list(state.running_jokes),
         **playback,
         "current_source": _serialize_source(state.playlist_source),
+        "starter_catalog": _public_starter_catalog(),
+        "rotation_track_count": len(state.playlist),
         "heading": _serialize_heading(state.heading, state),
         "golden_path": _golden_path_status(config, state),
         "runtime_health": runtime_health,
@@ -10003,6 +10274,8 @@ def _public_status_payload(request: Request) -> dict:
             ),
         },
         "ha_moments": ha_moments,
+        # Process-local receipt counts reused by the admin status payload.
+        "ad_experiment": _ad_experiment_status(state),
         # Brand-fiction layer (PR-A schema). Listener renders against this.
         "brand": _serialize_brand(config.brand),
         # Capability flags (listener-safe subset). Listener JS reads these every
@@ -10044,10 +10317,36 @@ async def _release_clip_stamp(client_ip: str, stamp: float) -> None:
             _clip_rate.pop(client_ip, None)
 
 
+def _read_validated_starter_share(snapshot: Mapping[str, Any]) -> bytes | None:
+    """Read a starter file only while every snapshot fact still matches the manifest."""
+    try:
+        from mammamiradio.media.starter import load_starter_catalog, starter_track, verify_starter_entry
+
+        provider_track_id = str(snapshot.get("provider_track_id") or "")
+        catalog = load_starter_catalog(require_complete=True, verify_all=False)
+        matches = [entry for entry in catalog.entries if entry.isrc == provider_track_id]
+        if len(matches) != 1:
+            return None
+        entry = matches[0]
+        expected_track = starter_track(entry)
+        if (
+            snapshot.get("path") != entry.path
+            or snapshot.get("title") != entry.title
+            or snapshot.get("artist") != entry.artist
+            or snapshot.get("attribution") != safe_media_attribution_dict(expected_track.attribution)
+        ):
+            return None
+        verify_starter_entry(entry)
+        return entry.path.read_bytes()
+    except (OSError, TypeError, ValueError):
+        logger.warning("Starter share read rejected by manifest validation", exc_info=True)
+        return None
+
+
 @router.post("/api/clip")
 async def create_clip(request: Request):
-    """Extract the last ~30s of audio into a shareable clip."""
-    from mammamiradio.scheduling.clip import CLIP_TTL_SECONDS, cleanup_old_clips, extract_clip, save_clip
+    """Share exactly one validated, complete bundled starter track."""
+    from mammamiradio.scheduling.clip import CLIP_TTL_SECONDS, cleanup_old_clips, save_clip
 
     # Rate limit: 1 clip per 10 seconds per IP. Return retry_after (seconds), not
     # tech-lingo prose — the listener UI turns it into warm, actionable copy.
@@ -10056,8 +10355,6 @@ async def create_clip(request: Request):
     async with _clip_rate_lock:
         last = _clip_rate.get(client_ip, 0)
         if now - last < CLIP_RATE_LIMIT_SECONDS:
-            from fastapi.responses import JSONResponse
-
             retry_after = max(1, math.ceil(CLIP_RATE_LIMIT_SECONDS - (now - last)))
             return JSONResponse({"ok": False, "retry_after": retry_after}, status_code=429)
         _clip_rate[client_ip] = now
@@ -10067,48 +10364,39 @@ async def create_clip(request: Request):
             _clip_rate.pop(key, None)
 
     config = request.app.state.config
-    bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
     station_state = getattr(request.app.state, "station_state", None)
     now_streaming = getattr(station_state, "now_streaming", None) or {}
     if not isinstance(now_streaming, dict):
         now_streaming = {}
-    ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
 
-    # Pick what to clip:
-    #  - live ad/banter  → the whole segment so far (operator content, no 30s cap)
-    #  - just-finished ad/banter within the lookback window → the saved snapshot
-    #  - otherwise (music) → the rolling 30s window (copyright-capped)
-    seg_type = now_streaming.get("type")
-    clip_data = None
-    clip_title_override = None
-    if seg_type in ("ad", "banter") and ring_buffer:
-        started = float(now_streaming.get("started") or now)
-        duration_sec = float(now_streaming.get("duration_sec") or CLIP_DURATION_SECONDS)
-        elapsed = max(0.0, now - started)
-        cap = min(float(CLIP_MAX_SEGMENT_SECONDS), duration_sec)
-        secs = min(cap, max(float(CLIP_DURATION_SECONDS), elapsed))
-        clip_data = extract_clip(ring_buffer, duration_seconds=math.ceil(secs), bitrate_kbps=bitrate)
-    else:
-        snap = getattr(request.app.state, "last_shareworthy_clip", None)
-        if (
-            isinstance(snap, dict)
-            and snap.get("bytes")
-            and (time.monotonic() - float(snap.get("ended_monotonic", 0))) < CLIP_LOOKBACK_SECONDS
-        ):
-            clip_data = snap["bytes"]
-            clip_title_override = str(snap.get("title") or "").strip()
-
-    if clip_data is None:
-        if ring_buffer is None or len(ring_buffer) == 0:
-            # Nothing to clip yet (e.g. cold start). Roll back the rate-limit
-            # stamp so the listener can retry the moment audio is buffered,
-            # instead of being locked out for the full window after a no-op.
-            await _release_clip_stamp(client_ip, now)
-            return {"ok": False, "reason": "no_audio"}
-        clip_data = extract_clip(ring_buffer, duration_seconds=CLIP_DURATION_SECONDS, bitrate_kbps=bitrate)
-    if not clip_data:
+    snap = getattr(request.app.state, "last_shareworthy_starter", None)
+    valid_window = (
+        isinstance(snap, dict)
+        and snap.get("type") == "starter"
+        and (time.monotonic() - float(snap.get("ended_monotonic", 0))) < CLIP_LOOKBACK_SECONDS
+    )
+    clip_data = (
+        await asyncio.to_thread(_read_validated_starter_share, snap)
+        if valid_window and isinstance(snap, dict)
+        else None
+    )
+    if not clip_data or not isinstance(snap, dict):
         await _release_clip_stamp(client_ip, now)
-        return {"ok": False, "reason": "no_audio"}
+        return JSONResponse(
+            {
+                "ok": False,
+                "error_code": "music_share_unavailable",
+                "message": "Only a complete bundled starter track can be shared.",
+                "retryable": False,
+                "next_action": "Wait for a bundled starter track to finish, then try again.",
+                "stream_status": "unaffected",
+            },
+            status_code=403,
+        )
+
+    clip_title_override = str(snap.get("title") or "").strip()
+    clip_artist_override = str(snap.get("artist") or "").strip()
+    clip_attribution_override = snap.get("attribution")
 
     clips_dir = config.cache_dir / "clips"
 
@@ -10133,18 +10421,18 @@ async def create_clip(request: Request):
     station_name = config.display_station_name
     track_title = str(meta.get("title_only") or meta.get("title") or "").strip()
     track_artist = str(meta.get("artist") or "").strip()
-    # When we served a just-finished ad/banter via the lookback snapshot,
-    # now_streaming describes the CURRENT segment (music) — stamp the remembered
-    # ad/banter title instead so the share card names what was actually clipped.
-    if clip_title_override is not None:
-        track_title = clip_title_override
-        track_artist = ""
+    # ``now_streaming`` may already describe the next segment. The complete
+    # manifested snapshot remains the sole authority for this share.
+    track_title = clip_title_override
+    track_artist = clip_artist_override
     sidecar = {
         "station_name": station_name,
         "track_title": track_title,
         "track_artist": track_artist,
         "created_at": int(time.time()),
     }
+    if clip_attribution_override is not None:
+        sidecar["music_attribution"] = clip_attribution_override
     try:
         (clips_dir / f"{clip_id}.json").write_text(_json.dumps(sidecar))
     except OSError as exc:
@@ -10156,6 +10444,8 @@ async def create_clip(request: Request):
         "clip_id": clip_id,
         "url": f"/clips/{clip_id}.mp3",
         "share_url": f"/clips/{clip_id}",
+        "track_title": track_title,
+        "track_artist": track_artist,
     }
 
 
@@ -10382,6 +10672,8 @@ async def status(
                 "recent": [{"kind": r["kind"], "label": r["label"], "ok": r["ok"]} for r in list(state.gen_recent)],
             },
             "playlist_source": _serialize_source(state.playlist_source),
+            "jamendo": safe_jamendo_status(config, getattr(request.app.state, "jamendo_provider", None)),
+            "external_extractors": _external_extractors_status(config),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],
             "last_banter_script": state.last_banter_script,
             "last_ad_script": state.last_ad_script,

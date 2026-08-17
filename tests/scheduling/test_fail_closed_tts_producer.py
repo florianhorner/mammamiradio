@@ -735,6 +735,12 @@ async def test_impossible_tts_unavailable_uses_canned_or_propagates_to_recovery(
         assert queued.type is SegmentType.BANTER
         assert queued.path == canned
         assert state.last_banter_script == [{"host": "Radio", "text": "(pre-recorded banter)"}]
+        # The synthetic "Radio" host above is a placeholder, not a speaker. It must
+        # not reach the v1 contract's now_playing.host, so a canned clip claims
+        # nobody and the consumer falls back on its own. Indexed, not .get() with a
+        # default: a default of "" also passes when the key is dropped entirely,
+        # which is the regression this is here to catch.
+        assert queued.metadata["host"] == ""
         recovery_builder.assert_not_awaited()
     else:
         assert queued is recovery
@@ -982,7 +988,7 @@ async def test_tts_failure_norm_cache_music_recovery_schedules_restart_handoff(t
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_path),
         patch(
             f"{PRODUCER_MODULE}.load_track_metadata",
-            return_value={"title": "Song", "artist": "Artist"},
+            return_value={"title": "Song", "artist": "Artist", "source_kind": "local"},
         ),
         patch(f"{PRODUCER_MODULE}.norm_cache_duration_sec", return_value=120.0),
         patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=_identity_egress),
@@ -1011,6 +1017,9 @@ async def test_tts_failure_norm_cache_music_recovery_schedules_restart_handoff(t
     assert cache_dir == config.cache_dir
     assert len(candidates) == 1
     assert candidates[0].path == norm_path
+    # The vetted origin must ride into the spool entry, or the boot-time
+    # admission gate would reject the candidate as unknown_source.
+    assert candidates[0].metadata.get("source_kind") == "local"
 
 
 @pytest.mark.asyncio

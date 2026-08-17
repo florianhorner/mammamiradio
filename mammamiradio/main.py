@@ -17,6 +17,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from mammamiradio.audio.norm_cache import norm_cache_origin_is_eligible
 from mammamiradio.audio.normalizer import norm_cache_duration_sec
 from mammamiradio.core.config import (
     _FALSY as _CONFIG_FALSY,
@@ -63,8 +64,9 @@ from mammamiradio.playlist.direction import (
     target_dicts_to_targets,
 )
 from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
+from mammamiradio.playlist.jamendo_transient import JamendoStreamProvider
+from mammamiradio.playlist.legacy_media import reconcile_legacy_external_media
 from mammamiradio.playlist.playlist import (
-    DEMO_TRACKS,
     PERSISTED_HEADING_FILENAME,
     fetch_startup_playlist,
     filter_blocklisted,
@@ -79,6 +81,7 @@ from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, 
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
 from mammamiradio.scheduling.producer import _queue_shadow_entry, prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
+from mammamiradio.web.media_sources import router as media_sources_router
 from mammamiradio.web.streamer import (
     CLIP_MAX_SEGMENT_SECONDS,
     LiveStreamHub,
@@ -102,6 +105,10 @@ logging.basicConfig(
 def _configure_http_logging() -> None:
     level_name = os.getenv("MAMMAMIRADIO_HTTP_LOG_LEVEL", "WARNING").strip().upper()
     level = logging.getLevelNamesMapping().get(level_name, logging.WARNING)
+    # Jamendo authenticates metadata requests with a query-string client_id.
+    # httpx logs complete request URLs at INFO, so dependency logging must never
+    # be made more verbose than WARNING even when a legacy override remains set.
+    level = max(level, logging.WARNING)
     logging.getLogger("httpx").setLevel(level)
     logging.getLogger("httpcore").setLevel(level)
 
@@ -131,7 +138,12 @@ def _explicit_bool_env(name: str) -> bool | None:
     return None
 
 
-def _build_immediate_audio_index(cache_dir: Path, *, bitrate_kbps: int | float | None) -> dict[Path, float]:
+def _build_immediate_audio_index(
+    cache_dir: Path,
+    *,
+    bitrate_kbps: int | float | None,
+    allow_external_media: bool = False,
+) -> dict[Path, float]:
     """Index warm normalized audio without probing it during a control action.
 
     ``norm_cache_duration_sec`` is intentionally sidecar/file-size based, so a
@@ -140,7 +152,10 @@ def _build_immediate_audio_index(cache_dir: Path, *, bitrate_kbps: int | float |
     """
     indexed: dict[Path, float] = {}
     for path in sorted(cache_dir.glob("norm_*.mp3")):
-        if not path.is_file():
+        if not path.is_file() or not norm_cache_origin_is_eligible(
+            path,
+            allow_external_media=allow_external_media,
+        ):
             continue
         duration_sec = norm_cache_duration_sec(path, bitrate_kbps=bitrate_kbps)
         if duration_sec > 0:
@@ -277,6 +292,8 @@ def _disk_safe_cache_ceiling_mb(cache_dir: Path, configured_mb: int, *, cached_m
 
 def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) -> int:
     """Synchronously admit safe handoff music before background tasks start."""
+    from mammamiradio.playlist.downloader import external_media_enabled
+
     if state.session_stopped:
         logger.info("Restart handoff: skipped because the station is stopped")
         return 0
@@ -285,6 +302,8 @@ def _admit_restart_handoff(queue: asyncio.Queue, state: StationState, config) ->
         blocklist=state.blocklist,
         playlist=state.playlist,
         pacing=config.pacing,
+        allow_external_media=external_media_enabled(config.allow_ytdlp),
+        require_known_source=True,
     )
     accepted = 0
     for segment in admission.to_segments(config.cache_dir):
@@ -320,6 +339,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title=DEFAULT_STATION_NAME, lifespan=_lifespan)
 app.include_router(router)
 app.include_router(listener_requests_router)
+app.include_router(media_sources_router)
 app.include_router(integrations_router)
 
 
@@ -476,6 +496,13 @@ async def startup():
 
     # Initialize persona database and store for compounding listener memory.
     first_listen_sentinel_state = init_db(db_path)
+    try:
+        reconcile_legacy_external_media(config.cache_dir, db_path)
+    except Exception:
+        # Fail closed without blocking instant audio: no marker is published,
+        # so the idempotent pass retries next boot, while runtime cache/handoff
+        # admission still refuses unknown or disabled external origins.
+        logger.warning("Legacy external-media reconciliation will retry on the next boot", exc_info=True)
     if legacy_preflight.durable:
         try:
             persist_legacy_home_database_preflight_v1(db_path, legacy_preflight)
@@ -532,16 +559,19 @@ async def startup():
 
     # Dependency checks with install hints
     _ffmpeg_found = bool(shutil.which("ffmpeg"))
+    from mammamiradio.playlist.downloader import external_media_enabled
+
+    _external_media_enabled = external_media_enabled(config.allow_ytdlp)
     _ytdlp_found = bool(shutil.which("yt-dlp"))
     if not _ffmpeg_found:
         logger.warning(
             "FFmpeg not found — audio generation will fail. "
             "Install: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
         )
-    if config.allow_ytdlp and not _ytdlp_found:
+    if config.allow_ytdlp and not _external_media_enabled:
         logger.warning(
-            "yt-dlp not found but MAMMAMIRADIO_ALLOW_YTDLP is enabled — charts will fall back to demo. "
-            "Install: brew install yt-dlp (macOS) or pip install yt-dlp"
+            "External media was requested but the optional extra is unavailable — starter/local music continues. "
+            "Standalone install: pip install 'mammamiradio[external-media]'"
         )
 
     # Restore stop state so a reload/restart honours an operator-issued stop.
@@ -614,16 +644,11 @@ async def startup():
     try:
         tracks, playlist_source, startup_source_error = fetch_startup_playlist(config, persisted_source)
     except Exception as e:
-        logger.error("Playlist fetch crashed: %s — using demo playlist", e)
-        tracks = list(DEMO_TRACKS)
+        from mammamiradio.media.starter import starter_source
 
-        playlist_source = PlaylistSource(
-            kind="demo",
-            source_id="demo",
-            label="Built-in modern Italian demo mix",
-            track_count=len(tracks),
-            selected_at=time.time(),
-        )
+        logger.error("Playlist fetch crashed: %s — no unverified music will be loaded", e)
+        tracks = []
+        playlist_source = starter_source(0)
         startup_source_error = str(e)
 
     # Persistent operator blocklist: a song the operator banned must never re-enter
@@ -737,6 +762,7 @@ async def startup():
         immediate_audio_index=_build_immediate_audio_index(
             config.cache_dir,
             bitrate_kbps=config.audio.bitrate,
+            allow_external_media=_external_media_enabled,
         ),
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
@@ -756,6 +782,7 @@ async def startup():
         _clip_maxlen = 240
     app.state.clip_ring_buffer: deque[bytes] = deque(maxlen=_clip_maxlen)
     app.state.last_shareworthy_clip = None
+    app.state.last_shareworthy_starter = None
 
     # Set app.state for streamer access
     app.state.queue = queue
@@ -779,6 +806,8 @@ async def startup():
     app.state.first_listen_cold_install = not first_listen_origin_capture.database_preexisted
     app.state.home_context_choice_explicit = home_context_explicit_choice is not None
     app.state.home_context_choice_lock = asyncio.Lock()
+    jamendo_provider = JamendoStreamProvider(config.tmp_dir, lambda: state.source_revision)
+    app.state.jamendo_provider = jamendo_provider
 
     def _persist_heading_update(heading) -> None:
         async def _write_heading() -> None:
@@ -836,7 +865,39 @@ async def startup():
     _prewarm_task = asyncio.create_task(_prewarm_multiple())
 
     _playback_task = asyncio.create_task(run_playback_loop(app))
-    _producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=app.state.skip_event))
+    _producer_task = asyncio.create_task(
+        run_producer(
+            queue,
+            state,
+            config,
+            skip_event=app.state.skip_event,
+            jamendo_provider=jamendo_provider,
+        )
+    )
+    # Discovery/preparation must never delay listener-ready startup. The
+    # provider itself remains inert unless the current acknowledgement and
+    # client ID are both present.
+    _playlist_config = config.playlist
+
+    def _jamendo_text(name: str, default: str = "") -> str:
+        value = getattr(_playlist_config, name, default)
+        return value if isinstance(value, str) else default
+
+    _jamendo_limit = getattr(_playlist_config, "jamendo_limit", 20)
+    if isinstance(_jamendo_limit, bool) or not isinstance(_jamendo_limit, int):
+        _jamendo_limit = 20
+    app.state.jamendo_start_task = asyncio.create_task(
+        jamendo_provider.start(
+            enabled=getattr(_playlist_config, "jamendo_enabled", False) is True,
+            client_id=_jamendo_text("jamendo_client_id"),
+            noncommercial_acknowledged=(getattr(_playlist_config, "jamendo_noncommercial_acknowledged", False) is True),
+            tags=_jamendo_text("jamendo_tags", "pop"),
+            country=_jamendo_text("jamendo_country"),
+            order=_jamendo_text("jamendo_order", "popularity_week"),
+            limit=_jamendo_limit,
+        ),
+        name="jamendo-transient-start",
+    )
     app.state.prewarm_task = _prewarm_task
     app.state.playback_task = _playback_task
     app.state.producer_task = _producer_task
@@ -959,7 +1020,7 @@ async def startup():
         app.state.provider_verdict_task = asyncio.create_task(_run_provider_verdict(app.state))
     # Startup diagnostics — first 5 seconds of logs must be actionable for debugging
     _config_file = Path("radio.toml").resolve()
-    _audio_src = {"charts": "yt-dlp", "demo": "demo", "local": "local"}.get(
+    _audio_src = {"charts": "external-media", "starter": "starter", "local": "local"}.get(
         (playlist_source.kind if playlist_source else ""), "unknown"
     )
     logger.info("Startup diagnostics:")
@@ -975,7 +1036,7 @@ async def startup():
         "  deps: ffmpeg=%s  ytdlp=%s (allowed=%s)",
         "found" if _ffmpeg_found else "MISSING",
         "found" if _ytdlp_found else "missing",
-        "yes" if config.allow_ytdlp else "no",
+        "yes" if _external_media_enabled else "no",
     )
     logger.info(
         "Producer started. Stream at http://%s:%d/stream",
@@ -996,6 +1057,10 @@ async def shutdown():
     if _playback_task:
         _playback_task.cancel()
         tasks_to_cancel.append(_playback_task)
+    jamendo_start_task = getattr(app.state, "jamendo_start_task", None)
+    if jamendo_start_task:
+        jamendo_start_task.cancel()
+        tasks_to_cancel.append(jamendo_start_task)
     # The provider-verdict probe is created outside the producer/playback set
     # (startup + credential saves); cancel it so it can't mutate station_state
     # after teardown begins — same write-after-shutdown race as the downloads.
@@ -1026,6 +1091,14 @@ async def shutdown():
             tasks_to_cancel.append(_rh)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+    if hasattr(app.state, "jamendo_start_task"):
+        app.state.jamendo_start_task = None
+    jamendo_provider = getattr(app.state, "jamendo_provider", None)
+    if jamendo_provider is not None:
+        try:
+            await jamendo_provider.stop()
+        except Exception:
+            logger.warning("Failed to stop transient Jamendo provider cleanly", exc_info=True)
     if hasattr(app.state, "producer_task"):
         app.state.producer_task = None
     if hasattr(app.state, "prewarm_task"):

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities, next_step
 from mammamiradio.core.models import Capabilities, StationState
 
@@ -152,8 +154,19 @@ def test_get_capabilities_jamendo_flag_false_for_whitespace_client_id():
     assert caps.jamendo is False
 
 
-def test_get_capabilities_sets_charts_reload_only_when_ytdlp_enabled():
+def test_get_capabilities_sets_charts_reload_only_when_ytdlp_enabled(external_media_installed):
     assert get_capabilities(_config(allow_ytdlp=False), _state()).charts_reload is False
+    assert get_capabilities(_config(allow_ytdlp=True), _state()).charts_reload is True
+
+
+def test_get_capabilities_charts_reload_stays_off_when_external_media_missing(external_media_missing):
+    """Opt-in alone is not enough — a default install without the extra never advertises charts."""
+    assert get_capabilities(_config(allow_ytdlp=True), _state()).charts_reload is False
+
+
+def test_get_capabilities_charts_reload_on_with_real_external_media_module():
+    """Integration truth for installs that carry the external-media extra."""
+    pytest.importorskip("yt_dlp")
     assert get_capabilities(_config(allow_ytdlp=True), _state()).charts_reload is True
 
 

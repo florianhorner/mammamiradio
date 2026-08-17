@@ -18,14 +18,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mammamiradio.core.models import Segment, SegmentType, StationState
+from mammamiradio.core.models import Segment, SegmentType, StationState, Track
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import (
     _adjacent_music_source,
     _apply_egress,
     _enqueue_with_egress,
     _front_insert_queue_and_shadow,
+    _is_direct_attributed_music,
     _is_rescue_fill,
+    _jamendo_track_from_segment,
+    _reserve_music_segment,
 )
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -361,6 +364,238 @@ async def test_enqueue_with_egress_puts_coloured_segment(tmp_path):
     assert producer._last_music_file is None
 
 
+async def test_music_enqueue_reserves_then_dequeue_start_commits(tmp_path):
+    """Queue publication protects the identity but is not reported as air."""
+    path = tmp_path / "starter.mp3"
+    path.write_bytes(b"STARTER")
+    track = Track(
+        title="Starter",
+        artist="Catalog Artist",
+        duration_ms=180_000,
+        source="starter",
+        local_path=path,
+    )
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=path,
+        duration_sec=180.0,
+        metadata={"source_kind": "starter", "audio_source": "starter", "title": track.display},
+        ephemeral=False,
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=3)
+    state = StationState(playlist=[track])
+
+    assert await _enqueue_with_egress(
+        queue,
+        state,
+        _Cfg(tmp_path),
+        segment,
+        admission_callback=lambda queued: _reserve_music_segment(state, track, queued),
+    )
+
+    reservation_id = segment.metadata["music_reservation_id"]
+    assert reservation_id in state.music_admission_reservations
+    assert state.current_track is None
+    assert state.jamendo_base_music_since_last == 0
+
+    dequeued = queue.get_nowait()
+    assert dequeued.mark_playback_started() is True
+    queue.task_done()
+    assert state.jamendo_base_music_since_last == 1
+    assert track.cache_key not in state.starter_cycle_remaining
+    assert reservation_id not in state.music_admission_reservations
+
+
+def test_failed_provider_start_rolls_back_without_spending_jamendo_cadence(tmp_path):
+    events: list[str] = []
+    track = Track(
+        title="Transient",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="provider-1",
+    )
+    segment = _seg(
+        tmp_path,
+        metadata={"queue_id": "jamendo-q", "source_kind": "jamendo", "audio_source": "jamendo"},
+        name="jamendo.mp3",
+    )
+    segment.playback_start_callback = lambda: False
+    segment.release_callback = lambda: events.append("provider-released")
+    state = StationState(jamendo_base_music_since_last=2)
+
+    _reserve_music_segment(state, track, segment)
+
+    assert segment.mark_playback_started() is False
+    assert state.jamendo_base_music_since_last == 2
+    assert state.music_admission_reservations == {}
+    assert events == ["provider-released"]
+
+
+def test_jamendo_segment_metadata_builds_listener_safe_scheduling_track(tmp_path):
+    segment = _seg(
+        tmp_path,
+        metadata={
+            "title_only": "Transient title",
+            "artist": "Provider artist",
+            "provider_track_id": "12345",
+            "music_attribution": {
+                "provider": "jamendo",
+                "license_id": "CC-BY-4.0",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "source_url": "https://www.jamendo.com/track/12345/transient-title",
+                "credit": "Provider artist - Transient title, provided by Jamendo, CC-BY-4.0",
+                "modified": True,
+                "basis": "provider_reported",
+            },
+        },
+        name="transient.mp3",
+    )
+    segment.duration_sec = 181.25
+
+    track = _jamendo_track_from_segment(segment)
+
+    assert track.source == "jamendo"
+    assert track.duration_ms == 181_250
+    assert track.provider_track_id == "12345"
+    assert track.attribution is not None
+    assert track.attribution.provider == "jamendo"
+    assert track.attribution.modified is True
+
+
+def test_jamendo_segment_without_attribution_is_rejected(tmp_path):
+    segment = _seg(tmp_path, metadata={"source_kind": "jamendo"}, name="missing-attribution.mp3")
+
+    with pytest.raises(ValueError, match="missing attribution"):
+        _jamendo_track_from_segment(segment)
+
+
+def test_direct_attributed_music_predicate_requires_music_and_direct_source(tmp_path):
+    direct = _seg(tmp_path, metadata={"audio_source": "jamendo"}, name="direct.mp3")
+    speech = Segment(
+        type=SegmentType.BANTER,
+        path=direct.path,
+        metadata={"source_kind": "starter"},
+    )
+    ordinary = _seg(tmp_path, metadata={"audio_source": "norm_cache"}, name="ordinary.mp3")
+
+    assert _is_direct_attributed_music(direct) is True
+    assert _is_direct_attributed_music(speech) is False
+    assert _is_direct_attributed_music(ordinary) is False
+
+
+def test_music_reservation_requires_queue_identity_and_is_idempotent(tmp_path):
+    track = Track(
+        title="Starter",
+        artist="Catalog Artist",
+        duration_ms=180_000,
+        source="starter",
+        local_path=tmp_path / "starter.mp3",
+    )
+    track.local_path.write_bytes(b"STARTER")
+    state = StationState(playlist=[track])
+    missing = _seg(tmp_path, metadata={"source_kind": "starter"}, name="missing-id.mp3")
+
+    with pytest.raises(RuntimeError, match="missing its queue reservation identity"):
+        _reserve_music_segment(state, track, missing)
+
+    segment = _seg(tmp_path, metadata={"queue_id": "starter-q"}, name="starter-segment.mp3")
+    _reserve_music_segment(state, track, segment)
+    _reserve_music_segment(state, track, segment)
+    assert list(state.music_admission_reservations) == ["starter-q"]
+
+    segment.release()
+    with pytest.raises(RuntimeError, match="reservation is no longer active"):
+        _reserve_music_segment(state, track, segment)
+
+
+def test_duplicate_starter_reservation_and_metadata_publish_failure_roll_back(tmp_path):
+    track = Track(
+        title="Starter",
+        artist="Catalog Artist",
+        duration_ms=180_000,
+        source="starter",
+        local_path=tmp_path / "starter.mp3",
+    )
+    track.local_path.write_bytes(b"STARTER")
+    state = StationState(playlist=[track])
+    first = _seg(tmp_path, metadata={"queue_id": "first"}, name="first.mp3")
+    second = _seg(tmp_path, metadata={"queue_id": "second"}, name="second.mp3")
+    _reserve_music_segment(state, track, first)
+
+    with pytest.raises(RuntimeError, match="reservation rejected"):
+        _reserve_music_segment(state, track, second)
+    first.release()
+
+    class RejectReservationMetadata(dict):
+        def __setitem__(self, key, value):
+            if key == "music_reservation_id":
+                raise OSError("metadata became read-only")
+            return super().__setitem__(key, value)
+
+    broken = _seg(tmp_path, metadata={"queue_id": "broken"}, name="broken.mp3")
+    broken.metadata = RejectReservationMetadata(broken.metadata)
+    with pytest.raises(OSError, match="read-only"):
+        _reserve_music_segment(state, track, broken)
+    assert state.music_admission_reservations == {}
+
+
+@pytest.mark.parametrize("playback_started", [False, True])
+def test_skip_counts_base_cadence_only_after_playback_start(tmp_path, playback_started):
+    track = Track(
+        title="Local Base",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=tmp_path / "local.mp3",
+    )
+    track.local_path.write_bytes(b"LOCAL")
+    segment = _seg(tmp_path, metadata={"queue_id": "local-q", "source_kind": "local"}, name="local-seg.mp3")
+    state = StationState()
+    _reserve_music_segment(state, track, segment)
+
+    if playback_started:
+        assert segment.mark_playback_started() is True
+    segment.release()
+
+    assert state.jamendo_base_music_since_last == (1 if playback_started else 0)
+    assert state.music_admission_reservations == {}
+
+
+async def test_failed_queue_admission_retracts_segment_and_rolls_back_reservation(tmp_path):
+    track = Track(
+        title="Admission Failure",
+        artist="Catalog Artist",
+        duration_ms=180_000,
+        source="starter",
+        local_path=tmp_path / "admission-failure.mp3",
+    )
+    track.local_path.write_bytes(b"STARTER")
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=track.local_path,
+        metadata={"source_kind": "starter", "audio_source": "starter"},
+        ephemeral=False,
+    )
+    state = StationState(playlist=[track])
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=3)
+
+    def fail_after_reserving(queued: Segment) -> None:
+        _reserve_music_segment(state, track, queued)
+        raise RuntimeError("later admission hook failed")
+
+    assert not await _enqueue_with_egress(
+        queue,
+        state,
+        _Cfg(tmp_path),
+        segment,
+        admission_callback=fail_after_reserving,
+    )
+    assert queue.empty()
+    assert state.music_admission_reservations == {}
+    assert state.select_next_track() is track
+
+
 async def test_enqueue_with_egress_front_insert_colours_before_critical_section(tmp_path):
     """Operator air-next colours the segment BEFORE the synchronous front-insert
     critical section (which must stay a no-await drain→prepend→repush)."""
@@ -429,6 +664,29 @@ async def test_enqueue_with_egress_emergency_tone_clears_music_adjacency(tmp_pat
     assert queue.get_nowait() is tone
     assert state.last_enqueued_type is None
     # The next speech beds nothing — no stale song bleeds across the beep gap.
+    assert _adjacent_music_source(state) is None
+
+
+@pytest.mark.parametrize("source_kind", ["starter", "jamendo"])
+async def test_direct_attributed_music_severs_reuse_adjacency(tmp_path, source_kind):
+    """Direct-only music cannot lend a stale prior local song to later speech."""
+    previous_song = tmp_path / "previous-local.mp3"
+    previous_song.write_bytes(b"LOCAL")
+    direct = _seg(
+        tmp_path,
+        metadata={"source_kind": source_kind, "audio_source": source_kind, "title": "Direct"},
+        ephemeral=source_kind == "jamendo",
+        name=f"{source_kind}.mp3",
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = StationState(last_music_file=previous_song, last_enqueued_type=SegmentType.MUSIC)
+
+    assert await _enqueue_with_egress(queue, state, _Cfg(tmp_path), direct) is True
+
+    assert queue.get_nowait() is direct
+    assert state.last_music_file == previous_song
+    assert state.last_enqueued_type is None
+    assert direct.path not in state.immediate_audio_index
     assert _adjacent_music_source(state) is None
 
 
@@ -527,6 +785,41 @@ def test_seed_adjacency_type_applies_continuity_break_on_both_paths(tmp_path):
     q: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
     q.put_nowait(_seg(tmp_path, metadata={"audio_source": "emergency_tone", "rescue": True}, name="t.mp3"))
     assert _seed_adjacency_type(q, state, SegmentType.MUSIC) is None
+
+
+@pytest.mark.parametrize("source_kind", ["starter", "jamendo"])
+def test_direct_attributed_music_breaks_startup_adjacency(tmp_path, source_kind):
+    from mammamiradio.scheduling.producer import _initial_previous_segment_type, _seed_adjacency_type
+
+    empty: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    state = StationState()
+    state.now_streaming = {
+        "type": "music",
+        "metadata": {"source_kind": source_kind, "audio_source": source_kind},
+    }
+    inferred = _initial_previous_segment_type(empty, state)
+    assert inferred is None
+    assert _seed_adjacency_type(empty, state, SegmentType.MUSIC) is None
+
+    state.now_streaming = {}
+    state.current_track = Track(
+        title="Direct",
+        artist="Artist",
+        duration_ms=180_000,
+        source=source_kind,
+    )
+    assert _initial_previous_segment_type(empty, state) is None
+
+    queued: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queued.put_nowait(
+        _seg(
+            tmp_path,
+            metadata={"source_kind": source_kind, "audio_source": source_kind},
+            name=f"queued-{source_kind}.mp3",
+        )
+    )
+    assert _initial_previous_segment_type(queued, state) is None
+    assert _seed_adjacency_type(queued, state, SegmentType.MUSIC) is None
 
 
 def test_initial_previous_segment_type_treats_continuity_breaks_as_none(tmp_path):
@@ -629,6 +922,52 @@ def test_front_insert_full_queue_drop_clears_stale_music_adjacency(tmp_path):
     assert state.last_enqueued_type == SegmentType.BANTER  # inserted banter is the new tail
     # No stale song bleeds under the next generated speech even though tail_song persists on disk.
     assert _adjacent_music_source(state) is None
+
+
+def test_front_insert_replacement_rolls_back_dropped_starter_reservation(tmp_path):
+    track_path = tmp_path / "reserved-starter.mp3"
+    track_path.write_bytes(b"STARTER")
+    track = Track(
+        title="Reserved Starter",
+        artist="Catalog Artist",
+        duration_ms=180_000,
+        source="starter",
+        local_path=track_path,
+    )
+    queued_song = Segment(
+        type=SegmentType.MUSIC,
+        path=track_path,
+        metadata={
+            "queue_id": "reserved-tail",
+            "title": track.display,
+            "source_kind": "starter",
+            "audio_source": "starter",
+        },
+        ephemeral=False,
+    )
+    state = StationState(playlist=[track])
+    _reserve_music_segment(state, track, queued_song)
+    state.queued_segments = [{"id": "reserved-tail", "type": "music"}]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=1)
+    queue.put_nowait(queued_song)
+
+    front_banter = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "replacement.mp3",
+        metadata={"title": "Replacement"},
+        ephemeral=False,
+    )
+    front_banter.path.write_bytes(b"VOICE")
+
+    assert _front_insert_queue_and_shadow(
+        queue,
+        state,
+        front_banter,
+        {"id": "replacement", "type": "banter"},
+    )
+    assert state.music_admission_reservations == {}
+    assert state.jamendo_base_music_since_last == 0
+    assert state.select_next_track() is track
 
 
 def test_front_insert_into_empty_queue_clears_stale_music_adjacency(tmp_path):

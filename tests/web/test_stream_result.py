@@ -8,6 +8,7 @@ disabled-is-silent, and that a broken ledger never raises into the stream.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -75,6 +76,64 @@ def test_disabled_ledger_records_nothing():
     assert led.rows == []
 
 
+def test_jamendo_stream_result_keeps_observability_in_memory_and_out_of_ledger(tmp_path):
+    from mammamiradio.core.ledger import ProvenanceLedger
+
+    ledger = ProvenanceLedger(tmp_path / "ledger", enabled=True)
+    state = StationState()
+    state.ledger = ledger
+    ledger.start()
+    try:
+        _emit_stream_result(
+            state,
+            _segment({"ledger_segment_id": "control", "title": "Control banter"}),
+            bytes_sent=2048,
+            was_skipped=False,
+            listeners=1,
+        )
+        _emit_stream_result(
+            state,
+            _segment(
+                {
+                    "title": "Private Jamendo title",
+                    "artist": "Private Jamendo artist",
+                    "provider_track_id": "987654",
+                    "source_kind": "jamendo",
+                    "audio_source": "jamendo_transient",
+                    "music_attribution": {
+                        "provider": "jamendo",
+                        "source_url": "https://www.jamendo.com/track/987654/private",
+                    },
+                },
+                seg_type=SegmentType.MUSIC,
+            ),
+            bytes_sent=4096,
+            was_skipped=False,
+            listeners=1,
+        )
+    finally:
+        ledger.stop()
+
+    outcome = list(state.stream_outcome_history)[-1]
+    assert outcome["segment_type"] == "music"
+    assert outcome["result"] == "aired"
+
+    ledger_files = list((tmp_path / "ledger").glob("provenance-*.jsonl"))
+    assert len(ledger_files) == 1
+    ledger_text = ledger_files[0].read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in ledger_text.splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Control banter"
+    for private_fact in (
+        "jamendo",
+        "Private Jamendo title",
+        "Private Jamendo artist",
+        "987654",
+        "https://www.jamendo.com/track/987654/private",
+    ):
+        assert private_fact not in ledger_text
+
+
 def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():
     led = _FakeLedger(enabled=False)
     state = StationState()
@@ -99,6 +158,173 @@ def test_station_id_outcome_is_retained_when_provenance_ledger_is_disabled():
         "accepted_listener_count": 1,
         "terminal_reason": "eof",
     }
+
+
+def test_completed_ad_eof_records_runtime_receipt_with_plural_brands():
+    state = StationState()
+    segment = _segment(
+        {"brands": [" Prezzoforte ", "", 17, "TeleCuore"]},
+        seg_type=SegmentType.AD,
+    )
+
+    _emit_stream_result(
+        state,
+        segment,
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
+    )
+
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 1,
+        "completed_spots": 2,
+        "brands": [
+            {"brand": "Prezzoforte", "completed_airings": 1},
+            {"brand": "TeleCuore", "completed_airings": 1},
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("bytes_sent", "was_skipped", "listeners", "accepted_listeners", "terminal_reason", "metadata"),
+    [
+        (5000, True, 1, 1, "skip", {"brands": ["Skipped"]}),
+        (5000, False, 1, 1, "cancelled", {"brands": ["Cancelled"]}),
+        (5000, False, 1, 1, "aborted", {"brands": ["Aborted"]}),
+        (5000, False, 1, 0, "eof", {"brands": ["Unheard"]}),
+        (5000, False, 1, 1, "eof", {"brands": ["Fallback"], "fallback": True}),
+        (0, False, 1, 0, "eof", {"brands": ["Empty send"]}),
+    ],
+)
+def test_ad_experiment_rejects_non_completed_or_non_aired_outcomes(
+    bytes_sent,
+    was_skipped,
+    listeners,
+    accepted_listeners,
+    terminal_reason,
+    metadata,
+):
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment(metadata, seg_type=SegmentType.AD),
+        bytes_sent=bytes_sent,
+        was_skipped=was_skipped,
+        listeners=listeners,
+        terminal_reason=terminal_reason,
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=accepted_listeners,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+
+
+def test_ad_experiment_rejects_aired_eof_after_any_delivery_gap():
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment({"brands": ["Partially delivered"]}, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        all_chunks_audience_delivered=False,
+        accepted_listener_count=1,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+    assert state.stream_outcome_history[-1]["result"] == "aired"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"brands": "not-a-list"},
+        {"brands": []},
+        {"brands": [None, "", "   "]},
+        {"brand": ""},
+    ],
+)
+def test_ad_experiment_ignores_completed_break_without_a_valid_brand(metadata):
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment(metadata, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+
+
+def test_ad_experiment_uses_singular_brand_fallback_and_accumulates_repeats():
+    state = StationState()
+    for metadata in (
+        {"brand": "TeleCuore"},
+        {"brands": [], "brand": "TeleCuore"},
+        {"brands": ["Prezzoforte"], "brand": "Ignored"},
+    ):
+        _emit_stream_result(
+            state,
+            _segment(metadata, seg_type=SegmentType.AD),
+            bytes_sent=5000,
+            was_skipped=False,
+            listeners=1,
+            terminal_reason="eof",
+            all_chunks_audience_delivered=True,
+            accepted_listener_count=1,
+        )
+
+    assert state.ad_experiment_snapshot() == {
+        "scope": "runtime",
+        "completed_breaks": 3,
+        "completed_spots": 3,
+        "brands": [
+            {"brand": "TeleCuore", "completed_airings": 2},
+            {"brand": "Prezzoforte", "completed_airings": 1},
+        ],
+    }
+
+
+def test_ad_experiment_requires_explicit_eof_terminal_reason():
+    state = StationState()
+    _emit_stream_result(
+        state,
+        _segment({"brands": ["Partial"]}, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
+    )
+    assert state.ad_experiment_snapshot()["completed_breaks"] == 0
+
+
+def test_ad_experiment_failure_never_escapes_stream_result():
+    state = StationState()
+
+    def _boom(_brands):
+        raise RuntimeError("experiment failed")
+
+    state.record_completed_ad_break = _boom  # type: ignore[method-assign]
+    _emit_stream_result(
+        state,
+        _segment({"brands": ["TeleCuore"]}, seg_type=SegmentType.AD),
+        bytes_sent=5000,
+        was_skipped=False,
+        listeners=1,
+        terminal_reason="eof",
+        all_chunks_audience_delivered=True,
+        accepted_listener_count=1,
+    )
+
+    assert state.stream_outcome_history[-1]["result"] == "aired"
 
 
 def test_release_campaign_runs_even_when_ledger_disabled():

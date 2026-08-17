@@ -43,6 +43,7 @@ TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
 WEB_ROOT = Path(__file__).resolve().parents[2] / "mammamiradio" / "web"
 ADMIN_HTML = WEB_ROOT / "templates" / "admin.html"
 LISTENER_HTML = WEB_ROOT / "templates" / "listener.html"
+LISTENER_JS = WEB_ROOT / "static" / "listener.js"
 TOKEN = "test-admin-token"
 AUTH = {"X-Radio-Admin-Token": TOKEN}
 
@@ -1202,7 +1203,7 @@ class TestCapabilitiesEndpoint:
 
 class TestSourceControlVisibilityContract:
     @pytest.mark.asyncio
-    async def test_capabilities_expose_admin_source_control_flags(self):
+    async def test_capabilities_expose_admin_source_control_flags(self, external_media_installed):
         app = _make_app()
         app.state.config.playlist.jamendo_client_id = "jamendo-client"
         app.state.config.allow_ytdlp = False
@@ -1223,23 +1224,34 @@ class TestSourceControlVisibilityContract:
         assert data["charts_reload"] is True
 
     @pytest.mark.asyncio
-    async def test_admin_html_binds_source_buttons_to_capability_flags_only(self):
+    async def test_capabilities_keep_charts_hidden_when_external_media_missing(self, external_media_missing):
+        """Without the optional external-media module, opt-in never surfaces chart controls."""
+        app = _make_app()
+        app.state.config.allow_ytdlp = True
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/capabilities", headers=AUTH)
+
+        assert resp.json()["capabilities"]["charts_reload"] is False
+
+    @pytest.mark.asyncio
+    async def test_admin_html_keeps_jamendo_out_of_quick_add_and_charts_capability_gated(self):
         app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get("/admin", headers=AUTH)
 
         html = resp.text
-        assert re.search(r'id="sourceJamendoBtn"[^>]*\bdata-capability="jamendo"', html)
+        assert 'id="sourceJamendoBtn"' not in html
+        assert 'id="jamendoSourceRow"' in html
+        assert 'id="jamendoSettings"' in html
         assert re.search(r'id="sourceChartsBtn"[^>]*\bdata-capability="charts_reload"', html)
         assert "function sourceControlVisibility(caps)" in html
-        assert "Boolean(capabilities.jamendo)" in html
         assert "Boolean(capabilities.charts_reload)" in html
         assert 'id="libraryTools"' in html
         tools = html[html.index('id="libraryTools"') : html.index("<!-- Diretta zone -->")]
-        assert 'id="sourceJamendoBtn"' in tools
         assert 'id="sourceChartsBtn"' in tools
-        assert "sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload" in html
+        assert "sourceGroup.hidden=!visibility.charts_reload" in html
         assert "jamendoSourceAvailable" not in html
 
     @pytest.mark.asyncio
@@ -1678,6 +1690,18 @@ class TestRuntimeProviderTransparencyUI:
         assert "header.setAttribute('aria-label',headerDetail)" in html
 
 
+class TestListenerHeroStats:
+    def test_tracks_stat_uses_live_rotation_count(self):
+        # The rendered output is covered behaviourally by scripts/player-smoke.js;
+        # the public-status contract covers a real in-session playlist mutation.
+        js = LISTENER_JS.read_text()
+        stat_logic = js[js.index("const stat2") : js.index("const stat3")]
+
+        assert "status.rotation_track_count" in stat_logic
+        assert "current_source.track_count" not in stat_logic
+        assert "tracks_played" not in stat_logic
+
+
 # ── Item 19: stopped-state UI actually stops (timer, waveform, producer btns) ──
 
 
@@ -1765,7 +1789,7 @@ class TestStoppedStateQuietsTheUI:
         blob = (
             LISTENER_HTML.read_text()
             + (base / "static" / "listener.css").read_text()
-            + (base / "static" / "listener.js").read_text()
+            + LISTENER_JS.read_text()
             # Also consult base.css — the unified waveform pause rule lives there.
             + (base / "static" / "base.css").read_text()
         )
@@ -1799,7 +1823,7 @@ class TestStoppedStateQuietsTheUI:
         # Bluetooth / CarPlay) must both sanitize the stopped state. If a
         # future refactor drops either branch, the internal "Session stopped"
         # label flows back through `np.label` and lands in front of listeners.
-        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        js = LISTENER_JS.read_text()
 
         # Both surfaces must explicitly handle np.type === 'stopped' and
         # render the brand-voice paused copy — not fall through to a
@@ -1843,7 +1867,7 @@ class TestStoppedStateQuietsTheUI:
 
     def test_listener_building_schedule_is_single_placeholder(self):
         """An empty rendered queue should not look like four fake future slots."""
-        js = (WEB_ROOT / "static" / "listener.js").read_text()
+        js = LISTENER_JS.read_text()
         css = (WEB_ROOT / "static" / "listener.css").read_text()
 
         assert "status.upcoming_mode === 'building'" in js

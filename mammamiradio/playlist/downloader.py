@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -10,13 +11,10 @@ import re
 import shutil
 import subprocess
 import time
-import uuid
 from functools import partial
 from itertools import islice
 from pathlib import Path
-from urllib.error import URLError
-from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, build_opener
+from types import ModuleType
 
 from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.core.models import Track
@@ -34,6 +32,7 @@ _CACHE_PROTECTED = {
     "moments.json",
 }
 _TRUTHY = ("true", "1", "yes")
+_EXTERNAL_MEDIA_SOURCES = frozenset({"youtube", "classic"})
 
 # Per-socket-operation timeout for yt-dlp network reads. Python's urllib has no
 # default socket timeout — without this a stalled YouTube socket blocks a
@@ -319,31 +318,11 @@ def prune_stale_tmp_files(tmp_dir: Path, max_age_hours: float = 6) -> int:
     return pruned
 
 
-_DEMO_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "music"
-
-# Cached directory listings to avoid repeated glob() on every track lookup.
-# Demo assets never change at runtime; local music rarely does.
-_demo_files_cache: tuple[str, list[Path]] | None = None
+# Cached directory listings avoid repeated glob() on every local-track lookup.
 _local_files_cache: dict[str, tuple[float, list[Path]]] = {}
 _LOCAL_FILES_TTL = 60.0  # seconds
 _LOCAL_FILES_LIMIT = 200
 _LOCAL_DIRECTORY_ENTRY_LIMIT = 10_000
-
-
-def _find_demo_asset(track: Track) -> Path | None:
-    """Check bundled assets/demo/music/ for a matching MP3."""
-    global _demo_files_cache
-    cache_key = str(_DEMO_ASSETS_DIR)
-    if _demo_files_cache is None or _demo_files_cache[0] != cache_key:
-        if not _DEMO_ASSETS_DIR.exists():
-            _demo_files_cache = (cache_key, [])
-        else:
-            _demo_files_cache = (cache_key, list(_DEMO_ASSETS_DIR.glob("*.mp3")))
-    for f in _demo_files_cache[1]:
-        name = f.stem.lower()
-        if track.cache_key in name or track.title.lower() in name:
-            return f
-    return None
 
 
 def _find_local(track: Track, music_dir: Path) -> Path | None:
@@ -386,7 +365,7 @@ def _find_local(track: Track, music_dir: Path) -> Path | None:
 
 def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
     """Download the best-effort public audio match for a track via yt-dlp."""
-    import yt_dlp
+    yt_dlp = _load_external_media_module()
 
     # Use the exact video ID when available to download the chosen upload,
     # not a fresh text-search result that might return a different version.
@@ -429,52 +408,48 @@ def _download_ytdlp(track: Track, cache_dir: Path) -> Path:
     return out_path
 
 
-_ALLOWED_DIRECT_URL_HOST_SUFFIX = ".jamendo.com"
+def _load_external_media_module() -> ModuleType:
+    """Load the optional extractor behind the single lazy import boundary.
 
-
-# Opener that refuses HTTP redirects — prevents a compromised CDN from redirecting
-# a validated jamendo.com URL to an internal host (HA supervisor, AWS metadata, etc.)
-class _BlockRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        raise URLError(f"redirect to {newurl!r} blocked (SSRF guard)")
-
-
-_NO_REDIRECT_OPENER = build_opener(_BlockRedirectHandler)
-
-
-def _validate_direct_url(url: str) -> None:
-    """Raise ValueError if url is not a safe https://*.jamendo.com URL (SSRF guard)."""
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError(f"direct_url must use https, got scheme={parsed.scheme!r}")
-    host = parsed.netloc.split(":")[0].lower()
-    if host != "jamendo.com" and not host.endswith(_ALLOWED_DIRECT_URL_HOST_SUFFIX):
-        raise ValueError(f"direct_url host {host!r} is not *.jamendo.com")
-
-
-def _download_direct_url(url: str, out_path: Path, timeout: int = 10, *, background: bool = False) -> Path:
-    """Download a direct MP3 URL into the cache atomically, with SSRF guard."""
-    _validate_direct_url(url)
-    tmp_path = out_path.parent / f"{out_path.stem}.{uuid.uuid4().hex}.tmp"
+    The default distribution and both current Home Assistant add-ons omit this
+    dependency. Keeping the import here lets the rest of the application load
+    and serve local/bundled music when the optional extra is absent.
+    """
     try:
-        with _NO_REDIRECT_OPENER.open(url, timeout=timeout) as resp, tmp_path.open("wb") as f:
-            shutil.copyfileobj(resp, f)
-        tmp_path.replace(out_path)
-    except (URLError, OSError, TimeoutError) as exc:
-        tmp_path.unlink(missing_ok=True)
-        raise RuntimeError(f"direct-url fetch failed: {exc}") from exc
+        return importlib.import_module("yt_dlp")
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise RuntimeError(
+            "external media is unavailable; install mammamiradio[external-media] before enabling it"
+        ) from exc
 
-    ok, reason = validate_download(out_path, background=background)
-    if not ok:
-        logger.warning("Direct URL download failed validation for %s: %s", out_path.name, reason)
-        out_path.unlink(missing_ok=True)
-        raise RuntimeError(f"direct-url validation failed: {reason}")
-    return out_path
+
+def external_media_enabled(configured: bool | None = None) -> bool:
+    """Return the effective extractor gate for this process.
+
+    A caller-supplied value represents the already-parsed station setting;
+    otherwise the environment is read directly. Opt-in is necessary but not
+    sufficient: the standalone-only optional module must also be installed.
+    """
+    opted_in = (
+        os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in _TRUTHY if configured is None else bool(configured)
+    )
+    if not opted_in:
+        return False
+    try:
+        _load_external_media_module()
+    except RuntimeError:
+        return False
+    return True
 
 
 def _ytdlp_enabled() -> bool:
-    """Return whether yt-dlp downloads are enabled for this runtime."""
-    return os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in _TRUTHY
+    """Compatibility alias for the canonical external-media gate."""
+    return external_media_enabled()
+
+
+def _track_requires_external_media(track: Track) -> bool:
+    """Return whether cached bytes came from an extractor-owned source."""
+    return track.source in _EXTERNAL_MEDIA_SOURCES or bool(track.youtube_id)
 
 
 def _failed_download_path(track: Track, cache_dir: Path, reason: str) -> Path:
@@ -485,12 +460,19 @@ def _failed_download_path(track: Track, cache_dir: Path, reason: str) -> Path:
 
 
 def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> Path | None:
-    """Return an existing cache/local/demo asset path when one is already available."""
+    """Return an existing admitted cache or operator-local path when available."""
+    if track.source == "jamendo":
+        # Only JamendoStreamProvider may own Jamendo bytes. Legacy cache and
+        # direct-URL tracks are intentionally invisible to the normal pipeline.
+        return None
+    external_cache_allowed = not _track_requires_external_media(track) or _ytdlp_enabled()
     out_path = cache_dir / f"{track.cache_key}.mp3"
-    if out_path.exists():
+    if out_path.exists() and external_cache_allowed:
         logger.info("Cache hit: %s", track.display)
         return out_path
-    if track.source == "youtube":
+    if out_path.exists():
+        logger.info("Ignoring external-media cache while extraction is disabled: %s", track.display)
+    if track.source == "youtube" and external_cache_allowed:
         legacy_path = cache_dir / f"{track.legacy_cache_key}.mp3"
         if legacy_path.exists():
             logger.info("Legacy YouTube cache hit: %s", track.display)
@@ -498,11 +480,6 @@ def _resolve_cached_or_local(track: Track, cache_dir: Path, music_dir: Path) -> 
     if track.local_path is not None and track.local_path.exists():
         logger.info("Track file: %s -> %s", track.display, track.local_path)
         return track.local_path
-
-    demo = _find_demo_asset(track)
-    if demo:
-        logger.info("Demo asset: %s -> %s", track.display, demo)
-        return demo
 
     local = _find_local(track, music_dir)
     if local:
@@ -543,25 +520,13 @@ def has_fresh_concrete_track_source(track: Track, cache_dir: Path, music_dir: Pa
 
 def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background: bool = False) -> Path:
     """Resolve a track from cache, local files, yt-dlp, or an unavailable marker."""
+    if track.source == "jamendo":
+        raise RuntimeError("persistent Jamendo track acquisition is retired")
     existing = _resolve_cached_or_local(track, cache_dir, music_dir)
     if existing is not None:
         return existing
 
-    # Order invariant: honor cache/local/demo hits first, then direct URLs,
-    # and only fall back to yt-dlp discovery when nothing concrete exists.
-    if track.direct_url:
-        out_path = cache_dir / f"{track.cache_key}.mp3"
-        try:
-            return _download_direct_url(track.direct_url, out_path, background=background)
-        except Exception as e:
-            logger.warning("Direct URL download failed for %s: %s", track.display, e)
-            if track.source == "jamendo":
-                return _failed_download_path(track, cache_dir, f"jamendo direct-url failed: {e}")
-
     # 3. Try yt-dlp (opt-in only, disabled by default for copyright safety)
-    if track.source == "jamendo":
-        logger.warning("Skipping yt-dlp fallback for Jamendo track: %s", track.display)
-        return _failed_download_path(track, cache_dir, "jamendo fallback blocked")
     if _ytdlp_enabled():
         try:
             return _download_ytdlp(track, cache_dir)
@@ -577,11 +542,9 @@ def _download_sync(track: Track, cache_dir: Path, music_dir: Path, *, background
 
 def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> Path:
     """Resolve an explicit external request without a silent fallback."""
-    out_path = cache_dir / f"{track.cache_key}.mp3"
-    if out_path.exists():
-        logger.info("Cache hit: %s", track.display)
-        return out_path
-
+    if track.local_path is not None and track.local_path.exists():
+        logger.info("Track file: %s -> %s", track.display, track.local_path)
+        return track.local_path
     local = _find_local(track, music_dir)
     if local:
         logger.info("Local file: %s -> %s", track.display, local)
@@ -589,6 +552,13 @@ def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> P
 
     if not _ytdlp_enabled():
         raise RuntimeError("yt-dlp is disabled")
+
+    # Extractor-owned cache reuse is gated too: disabling external media must
+    # not keep serving bytes acquired by an earlier enabled process.
+    out_path = cache_dir / f"{track.cache_key}.mp3"
+    if out_path.exists():
+        logger.info("Cache hit: %s", track.display)
+        return out_path
 
     return _download_ytdlp(track, cache_dir)
 
@@ -603,8 +573,8 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
     if not _ytdlp_enabled():
         return []
     try:
-        import yt_dlp
-    except ImportError:
+        yt_dlp = _load_external_media_module()
+    except RuntimeError:
         return []
     opts = {
         "quiet": True,

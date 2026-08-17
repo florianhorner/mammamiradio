@@ -82,6 +82,14 @@ def _write_release_check_repo(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(demo_assets / asset_path, target)
     shutil.copy2(spoken_manifest_path, tmp_path / "mammamiradio/assets/demo/spoken_assets.json")
+    shutil.copytree(
+        ROOT / "mammamiradio/web/static/audio",
+        tmp_path / "mammamiradio/web/static/audio",
+    )
+    admin_template = tmp_path / "mammamiradio/web/templates/admin.html"
+    admin_template.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "mammamiradio/web/templates/admin.html", admin_template)
+    shutil.copy2(ROOT / "radio.toml", tmp_path / "radio.toml")
     _write(tmp_path / "tests/test_fallback.py", "_pick_canned_clip return_value=None\nsession_stopped\n")
     _write(
         tmp_path / "Makefile",
@@ -92,6 +100,11 @@ def _write_release_check_repo(
     os.chmod(tmp_path / "scripts/ha-green-perf-smoke.py", 0o755)
     _write(tmp_path / "scripts/ha-green-launch-smoke.py", "#!/usr/bin/env python3\n")
     os.chmod(tmp_path / "scripts/ha-green-launch-smoke.py", 0o755)
+    _write(
+        tmp_path / "scripts/validate-ha-green-release-evidence.py",
+        "#!/usr/bin/env python3\nraise SystemExit(0)\n",
+    )
+    _write(tmp_path / "scripts/media-proof.py", "#!/usr/bin/env python3\nraise SystemExit(0)\n")
 
 
 @pytest.fixture
@@ -103,20 +116,49 @@ def fake_ffprobe_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     _write(
         ffprobe,
         """#!/usr/bin/env python3
+import json
 from pathlib import Path
 import sys
 
-payload = Path(sys.argv[-1]).read_bytes()
+path = Path(sys.argv[-1])
+payload = path.read_bytes()
 is_mp3 = payload.startswith(b"ID3") or (
     len(payload) >= 2 and payload[0] == 0xFF and payload[1] & 0xE0 == 0xE0
 )
 if not is_mp3:
     print("invalid audio", file=sys.stderr)
     raise SystemExit(1)
-print("audio")
+if "json" in sys.argv:
+    manifest = json.loads((path.parents[1] / "spoken_assets.json").read_text())
+    relative_path = f"first_listen/{path.name}"
+    entry = next(item for item in manifest["assets"] if item["path"] == relative_path)
+    print(json.dumps({
+        "streams": [{
+            "codec_name": "mp3",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bit_rate": "192000",
+        }],
+        "format": {"duration": str(entry["duration_seconds"])},
+    }))
+else:
+    print("audio")
 """,
     )
     ffprobe.chmod(0o755)
+    ffmpeg = bin_dir / "ffmpeg"
+    _write(
+        ffmpeg,
+        """#!/usr/bin/env python3
+import sys
+
+print("I: -16.0 LUFS", file=sys.stderr)
+print("Peak: -2.0 dBFS", file=sys.stderr)
+""",
+    )
+    ffmpeg.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
@@ -373,6 +415,7 @@ def test_pre_release_check_skips_unreleased_addon_changelog_heading(
     assert result.returncode == 0
     assert "CHANGELOG latest version (## 1.1.0) matches config.yaml (1.1.0)" in result.stdout
     assert "manifest.json (1.1.0) matches config.yaml (1.1.0)" in result.stdout
+    assert "browser narration assets and admin metadata match the release manifest" in result.stdout
 
 
 def test_pre_release_check_fails_on_manifest_version_mismatch(
@@ -528,6 +571,21 @@ def test_pre_release_check_rejects_manifest_approved_unsafe_transcript(
     assert "transcript contains listener arrival/return copy" in result.stderr
 
 
+def test_pre_release_check_rejects_browser_narration_hash_drift(
+    tmp_path: Path,
+    fake_ffprobe_on_path: None,
+) -> None:
+    _write_release_check_repo(tmp_path)
+    asset = tmp_path / "mammamiradio/web/static/audio/first_listen/welcome.mp3"
+    asset.write_bytes(asset.read_bytes() + b"tampered")
+
+    result = _run(["bash", str(PRE_RELEASE_CHECK)], cwd=tmp_path)
+
+    assert result.returncode != 0
+    assert "browser narration asset/admin manifest validation failed" in result.stdout
+    assert "first_listen/welcome.mp3 sha256 does not match" in result.stderr
+
+
 def test_ha_green_perf_smoke_script_has_runtime_quality_gates() -> None:
     body = HA_GREEN_PERF_SMOKE.read_text()
 
@@ -556,14 +614,21 @@ def test_ha_green_launch_smoke_covers_warm_and_cold_offline_starts() -> None:
     # ... while every external network-backed source is disabled and a child
     # process socket guard enforces that contract.
     assert "_write_network_guard" in body
+    assert "blocks outbound network connections" in body
     assert "external network disabled by launch smoke" in body
     assert '"MAMMAMIRADIO_ALLOW_YTDLP": "false"' in body
     assert '"JAMENDO_CLIENT_ID": ""' in body
     assert '"HA_ENABLED": "false"' in body
+    # ... and proves the copyright-safe First Listen contract: bundled starter
+    # audio with manifest-backed attribution, never silent output.
+    assert 'metadata.get("source_kind") != "starter"' in body
+    assert 'attribution.get("basis") != "bundled_manifest"' in body
+    assert "_assert_non_silent_mp3" in body
     # ... and asserts a STRICT first-byte bound (default 2s, not the perf
     # smoke's 8s already-running budget).
     assert "MAMMAMIRADIO_LAUNCH_FIRST_BYTE_S" in body
     assert '"2.0"' in body
+    assert "_check_first_starter_audio" in body
     assert "MAMMAMIRADIO_PERF_FIRST_BYTE_TIMEOUT_S" in body
     # A fresh install answers first byte from the client-local First Listen
     # prelude before joining the live hub, so both modes must also hold a
@@ -622,7 +687,21 @@ def test_ha_green_launch_smoke_reports_missing_ffmpeg(monkeypatch: pytest.Monkey
     monkeypatch.setattr(smoke.subprocess, "run", missing_ffmpeg)
 
     with pytest.raises(RuntimeError, match=r"ffmpeg is required for scripts/ha-green-launch-smoke\.py"):
-        smoke._seed_warm_norm_cache(str(tmp_path))
+        smoke._assert_non_silent_mp3(b"not-an-mp3")
+
+
+def test_ha_green_launch_smoke_rejects_nonstarter_status() -> None:
+    smoke = _load_ha_green_launch_smoke()
+
+    with pytest.raises(RuntimeError, match="not from a manifest-attributed starter track"):
+        smoke._assert_manifest_starter_status(
+            {
+                "now_streaming": {
+                    "type": "music",
+                    "metadata": {"source_kind": "local", "music_attribution": None},
+                }
+            }
+        )
 
 
 def test_ha_green_launch_smoke_held_listener_source_is_runnable_python() -> None:
@@ -988,6 +1067,9 @@ def test_release_invariants_guard_ha_green_perf_budget() -> None:
         assert "ha-green-launch-smoke.py" in body
         assert "launch-smoke:" in body
 
+    assert "from mammamiradio.core.spoken_assets import" not in release_body
+    assert 'resources.files("mammamiradio")' in release_body
+
 
 def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -> None:
     _write(
@@ -1086,6 +1168,7 @@ def _create_validate_addon_repo(
             [
                 "#!/usr/bin/env sh",
                 'export MAMMAMIRADIO_PORT="8000"',
+                'export MAMMAMIRADIO_ALLOW_YTDLP="false"',
                 "anthropic_api_key=${anthropic_api_key:-}",
                 "openai_api_key=${openai_api_key:-}",
                 "station_name=${station_name:-}",
@@ -1168,7 +1251,12 @@ fallback_input_per_million = 15.0
 fallback_output_per_million = 75.0
 """.lstrip(),
     )
-    _write(tmp_path / "pyproject.toml", '[project]\nname = "mammamiradio"\nversion = "1.1.0"\n')
+    _write(
+        tmp_path / "pyproject.toml",
+        '[project]\nname = "mammamiradio"\nversion = "1.1.0"\ndependencies = []\n'
+        '\n[project.optional-dependencies]\nexternal-media = ["yt-dlp>=2026.6.9"]\n',
+    )
+    _write(tmp_path / "requirements.txt", "fastapi==0.116.0\n")
     _write(tmp_path / "repository.yaml", "name: test\n")
 
     if broken_dotvenv_python:
@@ -1212,6 +1300,19 @@ def test_validate_addon_requires_the_canonical_model_registry(tmp_path: Path) ->
 
     assert result.returncode != 0
     assert "Missing canonical model_registry.toml" in result.stdout
+
+
+def test_validate_addon_rejects_ytdlp_in_default_requirements(tmp_path: Path) -> None:
+    env = _create_validate_addon_repo(
+        tmp_path,
+        streamer_body="def _inject_ingress_prefix(html: str, prefix: str) -> str:\n    return html\n",
+    )
+    _write(tmp_path / "requirements.txt", "yt_dlp==2026.6.9\n")
+
+    result = _run(["bash", str(VALIDATE_ADDON)], cwd=tmp_path, env=env)
+
+    assert result.returncode != 0
+    assert "yt-dlp dependency boundary is invalid" in result.stdout
 
 
 def test_validate_addon_rejects_a_committed_addon_registry_copy(tmp_path: Path) -> None:
@@ -1383,6 +1484,7 @@ def _inject_ingress_prefix(html: str, prefix: str) -> str:
             [
                 "#!/usr/bin/env sh",
                 'export MAMMAMIRADIO_PORT="8000"',
+                'export MAMMAMIRADIO_ALLOW_YTDLP="false"',
                 "station_name=${station_name:-}",
                 "quality_profile=${quality_profile:-}",
                 "legacy_api_key=${legacy_api_key:-}",
@@ -1802,6 +1904,7 @@ def test_addon_schema_has_no_provider_secret_fields() -> None:
     fallback, but the schema — stable and edge — must stay clean.
     """
     provider_fields = (
+        "jamendo_client_id",
         "anthropic_api_key",
         "openai_api_key",
         "azure_speech_key",
@@ -1827,9 +1930,8 @@ def test_addon_schema_has_no_provider_secret_fields() -> None:
         "configure them via /config/secrets.env instead: " + ", ".join(leaks)
     )
 
-    # The inverse contract: run.sh must keep reading these keys from legacy
-    # options.json so installs that predate the schema removal still boot
-    # with their credentials (secrets.env wins per key once populated).
+    # The inverse contract: run.sh must retain a migration/recovery reference
+    # for each removed key so upgrades do not silently discard credentials.
     run_sh = (ROOT / "ha-addon" / "mammamiradio" / "rootfs" / "run.sh").read_text()
     missing = [field for field in provider_fields if f"'{field}'" not in run_sh]
     assert not missing, "run.sh lost the legacy options.json fallback for: " + ", ".join(missing)

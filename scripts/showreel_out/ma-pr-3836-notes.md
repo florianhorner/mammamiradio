@@ -11,7 +11,7 @@ pasted stream URL can't.
 
 | time | you hear | the provider emits to Music Assistant |
 |------|----------|----------------------------------------|
-| `0:00` | a song fading out | `segment_class: music` · *Night in Venice* (CC0 bed) |
+| `0:00` | a song fading out | `segment_class: music` · [*Night in Venice*](https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900056) by Kevin MacLeod (incompetech.com), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); excerpted/faded for this Mamma Mi Radio showreel |
 | `0:08` | Marco & Giulia talking | `segment_class: voice` · *Marco & Giulia* / Marco del bar, Nonna Giulia |
 | `0:51` | an ad break | `segment_class: interstitial` · *Ad: Caffè Turbino* |
 

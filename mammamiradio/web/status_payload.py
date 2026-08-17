@@ -18,6 +18,7 @@ from mammamiradio.core.models import (
     SourceReadinessEvidence,
     StationState,
     Track,
+    safe_media_attribution_dict,
 )
 from mammamiradio.playlist.playlist import normalized_track_key
 from mammamiradio.playlist.preferences import preference_score
@@ -628,7 +629,32 @@ def _serialize_track(track: Track, *, preferences: object | None = None) -> dict
     }
     if preferences is not None:
         payload["preference"] = _track_preference_score(track, preferences)
+    attribution = safe_media_attribution_dict(track.attribution)
+    if attribution is not None:
+        payload["music_attribution"] = attribution
     return payload
+
+
+def _public_starter_catalog() -> list[dict[str, object]]:
+    """Return only release-ready manifest facts for the listener credits dialog."""
+    try:
+        from mammamiradio.media.starter import load_starter_catalog
+
+        catalog = load_starter_catalog(require_complete=True)
+    except (OSError, ValueError, RuntimeError):
+        return []
+    return [
+        {
+            "title": entry.title,
+            "artist": entry.artist,
+            "isrc": entry.isrc,
+            "license_id": entry.license_id,
+            "license_url": entry.license_url,
+            "official_piece_url": entry.official_piece_url,
+            "modification_notice": entry.modification_notice,
+        }
+        for entry in catalog.entries
+    ]
 
 
 def _paginated_tracks(
@@ -698,6 +724,20 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         # metadata-only source swap. It is operational bookkeeping, not part of
         # the public or frozen now-playing contract.
         SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+        # Provider operation identity is intentionally process-private.  The
+        # validated music_attribution object below is the only provider fact
+        # added to public now-playing metadata.
+        "provider_track_id",
+        "lease_id",
+        "operation_id",
+        "boot_id",
+        "provider_epoch",
+        "client_id_fingerprint",
+        "artifact_path",
+        "artifact_sha256",
+        "source_revision",
+        "fetched_at",
+        "transform_description",
     }
 )
 
@@ -721,7 +761,16 @@ def _public_segment_metadata(metadata: object) -> dict:
         return copy.deepcopy(value)
 
     public = _without_internal(metadata)
-    return public if isinstance(public, dict) else {}
+    if not isinstance(public, dict):
+        return {}
+    if "music_attribution" in public:
+        raw_attribution = public.get("music_attribution")
+        attribution = safe_media_attribution_dict(raw_attribution if isinstance(raw_attribution, dict) else None)
+        if attribution is None:
+            public.pop("music_attribution", None)
+        else:
+            public["music_attribution"] = attribution
+    return public
 
 
 def _public_now_streaming_payload(now_streaming: dict | None) -> dict:

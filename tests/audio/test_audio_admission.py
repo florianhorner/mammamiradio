@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import json
 import subprocess
 import threading
@@ -356,10 +355,8 @@ def test_post_restart_rescue_renders_despite_starved_gates(tmp_path, monkeypatch
     assert started.is_set()
 
 
-def test_download_sync_direct_url_validates_with_background(tmp_path, monkeypatch):
-    """The prefetch download chain threads background admission down to the
-    direct-url ffprobe leg — guards the downloader-internal calls the producer
-    boundary mocks cannot see."""
+def test_download_sync_rejects_persistent_jamendo_acquisition(tmp_path, monkeypatch):
+    """Jamendo bytes may only enter the transient provider's single-use path."""
     track = Track(
         title="Song",
         artist="Artist",
@@ -367,23 +364,12 @@ def test_download_sync_direct_url_validates_with_background(tmp_path, monkeypatc
         source="jamendo",
         direct_url="https://storage.jamendo.com/tracks/1.mp3",
     )
-    seen: dict[str, bool] = {}
+    monkeypatch.setattr(downloader, "validate_download", lambda *args, **kwargs: pytest.fail())
 
-    monkeypatch.setattr(
-        downloader._NO_REDIRECT_OPENER,
-        "open",
-        lambda url, timeout=10: io.BytesIO(b"x" * (600 * 1024)),
-    )
+    with pytest.raises(RuntimeError, match="persistent Jamendo track acquisition is retired"):
+        downloader._download_sync(track, tmp_path, tmp_path / "music", background=True)
 
-    def fake_validate(path, *, background=False):
-        seen["background"] = background
-        return True, ""
-
-    monkeypatch.setattr(downloader, "validate_download", fake_validate)
-    result = downloader._download_sync(track, tmp_path, tmp_path / "music", background=True)
-
-    assert seen["background"] is True
-    assert result.exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_download_sync_unavailable_source_skips_ffmpeg_admission(tmp_path, monkeypatch):
