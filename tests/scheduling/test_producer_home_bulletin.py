@@ -17,6 +17,7 @@ from mammamiradio.home.context_director import DirectorObservation, HomeContextD
 from mammamiradio.home.ha_context import HomeContext
 from mammamiradio.scheduling.producer import (
     RenderedMusicTrack,
+    _home_bulletin_admission_reachable,
     _home_bulletin_admission_stale_reason,
     _home_bulletin_ready,
     _mark_home_bulletin_segment_queued,
@@ -127,6 +128,236 @@ def test_home_bulletin_admission_requires_current_build_claim():
     _mark_home_bulletin_segment_queued(state, segment)
     assert state.listener_session.casa_state is CasaBulletinState.QUEUED
     assert _home_bulletin_admission_stale_reason(state, segment) is not None
+
+
+def test_home_bulletin_admission_is_reachable_until_bounded_queue_is_full(tmp_path):
+    state = _earned_state()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=3)
+    runway = tmp_path / "short-song.mp3"
+    runway.write_bytes(b"runway")
+    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=runway, duration_sec=180.0))
+
+    assert _home_bulletin_admission_reachable(queue, state) is True
+
+    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=runway, duration_sec=180.0))
+    queue.put_nowait(Segment(type=SegmentType.MUSIC, path=runway, duration_sec=180.0))
+    assert _home_bulletin_admission_reachable(queue, state) is False
+
+    epoch = state.listener_session.claim_casa()
+    assert epoch is not None
+    assert _home_bulletin_admission_reachable(queue, state) is False
+
+
+@pytest.mark.parametrize("lookahead_segments", [1, 2])
+@pytest.mark.asyncio
+async def test_casa_is_not_starved_when_short_music_restores_runway_floor(tmp_path, lookahead_segments):
+    """An earned Casa slot gets a reachable queue slot below/at the floor.
+
+    With lookahead=1 or 2, a single 180-second song leaves producer capacity.
+    The old governor replaced Casa with another short song, reached the 240s
+    floor, then idled before Casa could ever be selected.
+    """
+
+    state = _earned_state()
+    config = _config(tmp_path)
+    config.pacing.lookahead_segments = lookahead_segments
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=lookahead_segments + 2)
+    runway = tmp_path / "short-song.mp3"
+    runway.write_bytes(b"runway")
+    queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=runway,
+            duration_sec=180.0,
+            metadata={"title": "Canzone breve"},
+            ephemeral=False,
+        )
+    )
+    state.now_streaming = {"type": "music", "metadata": {"title": "Canzone breve"}}
+    director = MagicMock()
+    director.has_eligible_casual_fact.return_value = True
+    director.select.return_value = _fact()
+    director.reserve_by_id.return_value = True
+    state.home_context_director = director
+    host: HostPersonality = config.hosts[0]
+    text = "Il Bollettino di Casa. " + " ".join(["casa"] * 72)
+    imaging = MagicMock()
+
+    async def _synthesize(_text, _voice, output_path: Path, **_kwargs) -> Path:
+        output_path.write_bytes(b"voice")
+        return output_path
+
+    async def _talk_bed(audio_path: Path, *_args, **_kwargs) -> Path:
+        return audio_path
+
+    def _home_sting(output_path: Path) -> Path:
+        output_path.write_bytes(b"home motif")
+        return output_path
+
+    def _transition_sting(_previous, _current, output_path: Path) -> Path:
+        output_path.write_bytes(b"transition")
+        return output_path
+
+    def _concat(paths: list[Path], output_path: Path, *_args, **_kwargs) -> Path:
+        output_path.write_bytes(b"mixed")
+        return output_path
+
+    imaging.pick_home_bulletin_sting.side_effect = _home_sting
+    imaging.pick_stinger.side_effect = _transition_sting
+
+    async def _write_home_bulletin(*_args, submission_guard, **_kwargs):
+        assert submission_guard() is True
+        return host, text
+
+    with (
+        patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 240),
+        patch(f"{SCRIPTWRITER_MODULE}.home_bulletin_provider_ready", return_value=True),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_home_bulletin",
+            new_callable=AsyncMock,
+            side_effect=_write_home_bulletin,
+        ),
+        patch(
+            f"{PRODUCER_MODULE}._HAContextRefreshCoordinator.prepare_for_segment",
+            new_callable=AsyncMock,
+            return_value=(HomeContext(), False),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", side_effect=_synthesize),
+        patch(f"{PRODUCER_MODULE}._apply_talk_bed", side_effect=_talk_bed),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_concat),
+        patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=38.0),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            async with asyncio.timeout(3.0):
+                while not any(segment.type is SegmentType.HOME_BULLETIN for segment in list(queue._queue)):
+                    await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    queued = list(queue._queue)
+    assert [segment.type for segment in queued] == [SegmentType.MUSIC, SegmentType.HOME_BULLETIN]
+    assert state.listener_session.casa_state is CasaBulletinState.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_casa_fallback_is_audible_in_assetless_container(tmp_path):
+    """Casa failure still reaches the branded sweeper when no assets/cache exist."""
+
+    state = _earned_state()
+    config = _config(tmp_path / "tmp")
+    config.cache_dir = tmp_path / "empty-cache"
+    config.cache_dir.mkdir()
+    empty_assets = tmp_path / "empty-assets"
+    (empty_assets / "recovery").mkdir(parents=True)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=3)
+    director = MagicMock()
+    director.has_eligible_casual_fact.return_value = True
+    director.select.return_value = _fact()
+    state.home_context_director = director
+    recovery_path = tmp_path / "recovery-sweeper.mp3"
+    recovery_path.write_bytes(b"non-silent branded recovery audio")
+    recovery = Segment(
+        type=SegmentType.SWEEPER,
+        path=recovery_path,
+        duration_sec=22.0,
+        metadata={"type": "sweeper", "title": "Recovery sweeper", "error_recovery": True, "rescue": True},
+    )
+    segment_types = iter((SegmentType.HOME_BULLETIN, SegmentType.MUSIC))
+
+    async def _writer_fails(*_args, **_kwargs):
+        raise RuntimeError("Casa provider unavailable")
+
+    with (
+        patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", empty_assets),
+        patch(
+            f"{PRODUCER_MODULE}.next_segment_type",
+            side_effect=lambda *_args, **_kwargs: next(segment_types, SegmentType.MUSIC),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.home_bulletin_provider_ready", return_value=True),
+        patch(f"{SCRIPTWRITER_MODULE}.write_home_bulletin", new_callable=AsyncMock, side_effect=_writer_fails),
+        patch(
+            f"{PRODUCER_MODULE}._HAContextRefreshCoordinator.prepare_for_segment",
+            new_callable=AsyncMock,
+            return_value=(HomeContext(), False),
+        ),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, side_effect=RuntimeError("no music")),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(
+            f"{PRODUCER_MODULE}._build_recovery_sweeper_segment",
+            new_callable=AsyncMock,
+            return_value=recovery,
+        ) as build,
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=22.0),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            async with asyncio.timeout(3.0):
+                while queue.empty():
+                    await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    queued = queue.get_nowait()
+    assert queued.type is SegmentType.SWEEPER
+    assert queued.metadata["error_recovery"] is True
+    assert queued.metadata["rescue"] is True
+    assert queued.path == recovery_path
+    assert queued.path.read_bytes()
+    build.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_casa_delivery_after_persisted_stop_resumes_with_audio(tmp_path):
+    """Scenario 3: a watchdog-restart stop marker cannot leave a resumed listener silent."""
+    track = Track(
+        title="Canzone dopo il riavvio",
+        artist="Artista",
+        duration_ms=180_000,
+        spotify_id="restart-track",
+    )
+    state = StationState(playlist=[track], listeners_active=1, session_stopped=True)
+    config = _config(tmp_path)
+    config.homeassistant.enabled = False
+    stop_flag = config.cache_dir / "session_stopped.flag"
+    stop_flag.touch()
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=3)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._pick_recovery_clip", return_value=None),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=2.0),
+    ):
+        task = asyncio.create_task(run_producer(queue, state, config))
+        try:
+            await asyncio.sleep(0.05)
+            assert queue.empty()
+            assert stop_flag.exists()
+
+            state.session_stopped = False
+            stop_flag.unlink()
+            state.resume_event.set()
+            async with asyncio.timeout(3.0):
+                while queue.empty():
+                    await asyncio.sleep(0.01)
+            resumed = queue.get_nowait()
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert resumed.metadata.get("resume_bridge") is True
+    assert resumed.metadata.get("rescue") is True
+    assert resumed.metadata.get("audio_source") == "emergency_tone"
+    assert resumed.duration_sec > 0
 
 
 @pytest.mark.asyncio

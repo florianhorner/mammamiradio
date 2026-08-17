@@ -282,20 +282,29 @@ def _coerce_texts(texts: str | Iterable[str]) -> str:
     return " ".join(text.strip() for text in texts if isinstance(text, str) and text.strip())
 
 
-def assess_language(texts: str | Iterable[str]) -> LanguageAssessment:
+def assess_language(
+    texts: str | Iterable[str],
+    *,
+    ambiguous_markers: Iterable[str] | None = None,
+) -> LanguageAssessment:
     """Count known English and Italian words in ``texts``.
 
     Unknown words are retained in ``total_tokens`` but excluded from the
     language ratio.  This keeps brand names, song titles, and invented station
     vocabulary from skewing the target while leaving the caller an explicit
-    ``unclassified_tokens`` count for observability.
+    ``unclassified_tokens`` count for observability.  Callers may add words
+    that are valid in both languages to ``ambiguous_markers``; those words are
+    excluded from both language counts without changing the shared marker bank.
     """
 
     tokens = [token.casefold() for token in LANGUAGE_TOKEN_RE.findall(_coerce_texts(texts))]
+    ambiguous = set(_NORMAL_MODE_AMBIGUOUS_MARKERS)
+    if ambiguous_markers is not None:
+        ambiguous.update(marker.casefold() for marker in ambiguous_markers)
     english_tokens = 0
     italian_tokens = 0
     for token in tokens:
-        if token in _NORMAL_MODE_AMBIGUOUS_MARKERS:
+        if token in ambiguous:
             continue
         if token in _NORMAL_MODE_ITALIAN_MARKERS or any(char in token for char in "àèéìòù"):
             italian_tokens += 1

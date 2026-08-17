@@ -33,6 +33,14 @@ def test_ambiguous_short_words_do_not_turn_english_copy_italian():
     assert assessment.italian_tokens == 1
 
 
+def test_callers_can_add_language_specific_ambiguous_markers():
+    assessment = assess_language("radio casa", ambiguous_markers={"radio"})
+
+    assert assessment.english_tokens == 0
+    assert assessment.italian_tokens == 1
+    assert assessment.unclassified_tokens == 1
+
+
 def test_long_copy_accepts_the_75_percent_target():
     text = "The music is back and we stay with the song, ciao amici grazie"
     assessment = assess_language(text)

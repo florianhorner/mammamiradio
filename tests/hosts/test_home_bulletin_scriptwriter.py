@@ -100,6 +100,41 @@ async def test_write_home_bulletin_strips_repeated_opening_and_stage_directions(
 
 
 @pytest.mark.asyncio
+async def test_write_home_bulletin_uses_italian_casa_prompt_in_default_mode(config, state, prompt_fact):
+    """Casa must not inherit Normal Mode's English-led system instruction."""
+    response = {"text": _body(66), "home_fact_id": prompt_fact.fact_id}
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new=AsyncMock(return_value=response),
+    ) as generate:
+        result = await write_home_bulletin(state, config, prompt_fact=prompt_fact)
+
+    assert result is not None
+    system_prompt = generate.await_args.kwargs["system_prompt_override"]
+    assert "LANGUAGE — CASA" in system_prompt
+    assert "100% natural spoken Italian" in system_prompt
+    assert "75% English" not in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_write_home_bulletin_accepts_italian_radio_noun(config, state, prompt_fact):
+    """The Italian noun ``radio`` must not be rejected as an English token."""
+    response = {
+        "text": "radio " + _body(65),
+        "home_fact_id": prompt_fact.fact_id,
+    }
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new=AsyncMock(return_value=response),
+    ):
+        result = await write_home_bulletin(state, config, prompt_fact=prompt_fact)
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
 async def test_write_home_bulletin_has_no_provider_fallback(config, state, prompt_fact):
     config.anthropic_api_key = ""
     config.openai_api_key = ""

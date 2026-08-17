@@ -2873,6 +2873,22 @@ def _runway_fill_needed(queue: asyncio.Queue[Segment]) -> bool:
     return maxsize > 0 and queue.qsize() < maxsize
 
 
+def _home_bulletin_admission_reachable(queue: asyncio.Queue[Segment], state: StationState) -> bool:
+    """Return whether an earned Casa slot can still enter the ready queue.
+
+    Casa is an earned, one-shot listener moment rather than optional pacing
+    speech.  The runway governor must therefore leave a reachable queue slot
+    for it even when short songs have already restored the seconds floor.  A
+    full bounded queue still waits for playback to consume a segment before
+    rendering, preserving the producer's no-overflow invariant.
+    """
+
+    if not state.listener_session.casa_eligible:
+        return False
+    maxsize = int(getattr(queue, "maxsize", 0) or 0)
+    return maxsize <= 0 or queue.qsize() < maxsize
+
+
 def _should_defer_for_runway(queue: asyncio.Queue[Segment], lookahead_segments: int) -> tuple[bool, float]:
     """Return whether optional speech should yield to music, plus observed seconds."""
     buffered = _producer_buffered_seconds(queue)
@@ -4818,6 +4834,10 @@ async def _run_producer_inner(
         if (
             queue.qsize() >= config.pacing.lookahead_segments
             and not _runway_fill_needed(queue)
+            # An earned Casa moment must get a reachable admission attempt;
+            # otherwise short music can restore the seconds floor and make the
+            # producer idle before the one-shot cue is ever selected.
+            and not _home_bulletin_admission_reachable(queue, state)
             and state.force_next is None
             and state.chaos_pending is None
         ):
@@ -4917,7 +4937,7 @@ async def _run_producer_inner(
                     else next_segment_type(state, config.pacing)
                 )
             natural_banter_candidate = seg_type == SegmentType.BANTER
-            if seg_type in _RUNWAY_GOVERNED_TYPES:
+            if seg_type in _RUNWAY_GOVERNED_TYPES and seg_type is not SegmentType.HOME_BULLETIN:
                 should_defer, buffered = _should_defer_for_runway(queue, config.pacing.lookahead_segments)
                 if should_defer:
                     logger.info(
