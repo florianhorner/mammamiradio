@@ -30,6 +30,12 @@ def test_quality_workflow_pr_job_is_read_only() -> None:
     assert "python scripts/coverage-ratchet.py check" in quality_block
 
 
+def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
+    quality_block = _job_block(_workflow_text(), "quality")
+
+    assert "fetch-depth: 0" in quality_block
+
+
 def test_quality_workflow_scopes_write_to_main_ratchet_job() -> None:
     text = _workflow_text()
     quality_block = _job_block(text, "quality")
