@@ -488,7 +488,7 @@ def test_stage_cleanup_failure_still_releases_promotion_lock(
 
     original_rmtree = promoter.shutil.rmtree
 
-    def fail_stage_cleanup(path: Path, *args: object, **kwargs: object) -> None:
+    def fail_stage_cleanup(path: Path, *args: Any, **kwargs: Any) -> None:
         if "promotion-stage" in Path(path).name:
             raise OSError("injected cleanup failure")
         original_rmtree(path, *args, **kwargs)
