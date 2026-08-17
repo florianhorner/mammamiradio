@@ -1,13 +1,30 @@
-# Imaging Assets
+# Modern Night Drive imaging pack
 
-Optional pre-recorded station imaging can be dropped here by operators.
+This is Mamma Mi Radio's bundled radio-imaging library. Its Neon Relay station
+signature carries the atmospheric character of Velvet Horizon; the signature
+appears only in the station ID and sweeper. Music-to-speech and
+speech-to-music handoffs are separate, and advertising uses distinct `in`,
+`mid`, and `out` bumpers.
 
-Directory layout:
+The pack contains 47 delivery assets and nine semantic advertising recipes.
+All material is project-authored deterministic audio: no trumpet or novelty
+mandolin recording is part of the delivered sound. Compatibility filenames
+remain stable for operators, while sounds such as `startup_synth` are genuinely
+electronic.
 
-- `stingers/`: transition files named `{from}_{to}.mp3`, for example `music_banter.mp3` or `banter_music.mp3`
-- `beds/`: reusable talk beds; any `.mp3` file may be sampled for banter and news underlays
+## Provenance and approval
 
-If no matching asset exists, mammamiradio generates synthetic stingers and beds with FFmpeg.
-Those generated fallback layers are cached under `cache_dir` as `synth_*.mp3`, keyed by
-their inputs, so repeated transitions and cold-start talk beds do not rerender on every
-break. Operator-provided assets still win before the cache is consulted.
+`manifest.json` is the self-contained runtime contract. It records every
+asset, retained source master, exact layer timing/gain/DSP/license fact, and an
+exact file inventory. `ATTRIBUTION.md` is generated from that manifest. The
+separate candidate board and its digest-bound listening receipt authorize this
+exact immutable runtime projection before promotion.
+
+Validate the installed pack offline with:
+
+```bash
+.venv/bin/python scripts/validate_audio_asset_pack.py
+```
+
+The recovery and First Listen audio under `mammamiradio/assets/demo/` and the
+web static tree are separate and are not replaced by this pack.

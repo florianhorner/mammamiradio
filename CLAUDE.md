@@ -332,6 +332,9 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
   - On PRs: `check` mode — fails if any module dropped below its floor.
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
+- **Pi aarch64 smoke**: `.github/workflows/pi-smoke.yml` is an arm64 FFmpeg
+  7.x/8.x compatibility canary, not exact add-on package parity. It uses JVS as
+  primary and verifies the supported BtbN fallback against GitHub's digest.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
 - **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
@@ -508,6 +511,19 @@ it rots because no one can tell whether it still does anything. The corollary: w
 an operator-facing control changes something subtle or imperceptible, its UI copy
 must say so plainly (what it does, how subtle it is, where it's most noticeable) —
 an honest "you may not hear a difference" beats a confident label nobody can verify.
+
+### Sonic identity must translate beyond full-range speakers
+
+Keep a default station signature recognizable on phones, laptops, small smart
+speakers, and ordinary car systems. Bass may reinforce the cue on full-range
+equipment. It must not carry the identifying rhythm, contour, or answer by
+itself. Keep the identifying energy in the midrange. Test it on a small speaker
+as well as the Mac and target speaker.
+
+Modern Night Drive uses **Neon Relay** as its station signature. **Velvet
+Horizon** sets the atmosphere for separately authored transitions. Use it as a
+production style. Reserve the station signature for Neon Relay, and do not
+reuse the Velvet Horizon prototype as transition material.
 
 ## Skill routing
 

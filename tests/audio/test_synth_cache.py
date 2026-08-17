@@ -50,14 +50,31 @@ def test_materialize_synth_mp3_publishes_without_leaving_staging_files(tmp_path)
     assert list(cache_dir.glob(".*.tmp*")) == []
 
 
-def test_materialize_synth_mp3_empty_generation_is_not_cached(tmp_path):
+def test_materialize_synth_mp3_empty_generation_raises_after_direct_retry(tmp_path):
     cache_dir = tmp_path / "cache"
     out = tmp_path / "out.mp3"
 
-    materialize_synth_mp3(cache_dir, "foley", out, {"environment": "unknown"}, lambda path: path)
+    with pytest.raises(RuntimeError, match="produced no audio"):
+        materialize_synth_mp3(cache_dir, "foley", out, {"environment": "unknown"}, lambda path: path)
 
     assert not out.exists()
     assert list(cache_dir.glob("synth_foley_*.mp3")) == []
+
+
+def test_materialize_synth_mp3_retries_an_empty_cached_render_directly(tmp_path):
+    cache_dir = tmp_path / "cache"
+    output = tmp_path / "out.mp3"
+    calls = 0
+
+    def _first_empty_then_direct(path: Path) -> Path:
+        nonlocal calls
+        calls += 1
+        return path if calls == 1 else _write(path, b"direct-recovery")
+
+    assert materialize_synth_mp3(cache_dir, "bed", output, {"mood": "lounge"}, _first_empty_then_direct) == output
+    assert calls == 2
+    assert output.read_bytes() == b"direct-recovery"
+    assert list(cache_dir.glob("synth_bed_*.mp3")) == []
 
 
 def test_materialize_synth_mp3_ignores_empty_existing_cache_entry(tmp_path):

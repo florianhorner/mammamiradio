@@ -15,7 +15,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -24,13 +24,17 @@ import httpx
 import openai
 
 from mammamiradio.audio.audio_quality import AudioQualityError
+from mammamiradio.audio.imaging_schema import MAX_RECIPE_GAIN_DB, MIN_RECIPE_GAIN_DB
 from mammamiradio.audio.normalizer import (
+    DEFAULT_CONCAT_SILENCE_MS,
     concat_files,
     generate_brand_motif,
     generate_foley_loop,
     generate_music_bed,
     generate_sfx,
     generate_silence,
+    loop_audio_bed,
+    mix_oneshot_layers,
     mix_with_bed,
     normalize,
     normalize_ad,
@@ -44,9 +48,10 @@ from mammamiradio.audio.voice_catalog import (
     is_openai_voice as _catalog_is_openai_voice,
 )
 from mammamiradio.core.models import DialogueLine, HostPersonality
-from mammamiradio.hosts.ad_creative import AdScript, AdVoice
+from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice
 
 if TYPE_CHECKING:
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
     from mammamiradio.core.models import StationState
 
 logger = logging.getLogger(__name__)
@@ -560,6 +565,38 @@ def _openai_instructions_for_ad_voice(voice: AdVoice) -> str:
 def _estimate_duration(path: Path) -> float:
     """Rough duration estimate from file size at 192kbps."""
     return max(5.0, path.stat().st_size / (192 * 128))
+
+
+def _first_voice_end_in_rendered_timeline(parts: list[tuple[str, float]]) -> float | None:
+    """Return the first voice end on the same timeline ``concat_files`` creates."""
+    elapsed = 0.0
+    join_seconds = DEFAULT_CONCAT_SILENCE_MS / 1_000
+    for index, (part_type, duration_sec) in enumerate(parts):
+        elapsed += max(0.0, duration_sec)
+        if part_type == "voice":
+            return elapsed + index * join_seconds
+    return None
+
+
+def _recipe_cue_offset(
+    anchor: str,
+    *,
+    voice_duration_sec: float,
+    first_voice_end_sec: float | None,
+    max_duration_sec: float,
+) -> float:
+    """Map a canonical recipe anchor to a bounded point in rendered dialogue."""
+    latest_start = max(0.0, voice_duration_sec - max_duration_sec)
+    if anchor == "intro":
+        return 0.0
+    if anchor == "after_first_voice":
+        boundary = first_voice_end_sec if first_voice_end_sec is not None else voice_duration_sec
+        return min(max(0.0, boundary), latest_start)
+    if anchor == "mid":
+        return max(0.0, (voice_duration_sec - max_duration_sec) / 2.0)
+    if anchor == "outro":
+        return latest_start
+    raise ValueError(f"Unsupported recipe cue anchor: {anchor}")
 
 
 def _get_openai_client(api_key: str):
@@ -1231,6 +1268,8 @@ async def synthesize_ad(
     state: StationState | None = None,
     cache_dir: Path | None = None,
     default_voice: AdVoice | None = None,
+    bed_assets_dir: Path | None = None,
+    recipe: ResolvedAdRecipe | None = None,
 ) -> Path:
     """Assemble a multi-part ad: voice segments + SFX + pauses into a single MP3.
 
@@ -1248,7 +1287,9 @@ async def synthesize_ad(
     # 1+2. Brand motif AND voice/SFX parts in parallel (motif is just prepended)
     from mammamiradio.audio.normalizer import AVAILABLE_SFX_TYPES
 
-    sonic_sig = script.sonic.sonic_signature if script.sonic else ""
+    # A resolved recipe has its own reviewed accents.  Never prepend a legacy
+    # synthetic motif merely because an API caller supplied both inputs.
+    sonic_sig = "" if recipe is not None else (script.sonic.sonic_signature if script.sonic else "")
     motif_path = tmp_dir / f"motif_{uuid4().hex[:8]}.mp3" if sonic_sig else None
 
     def _sfx_asset_fingerprint(signature: str) -> list[dict[str, object]]:
@@ -1275,21 +1316,62 @@ async def synthesize_ad(
             fingerprint.append(entry)
         return fingerprint
 
-    def _render_brand_motif(path: Path) -> Path:
+    def _render_brand_motif(path: Path, signature: str = "") -> Path:
+        sig = signature or sonic_sig
         if cache_dir is None:
-            return generate_brand_motif(path, sonic_sig, sfx_dir)
+            return generate_brand_motif(path, sig, sfx_dir)
         return materialize_synth_mp3(
             cache_dir,
             "brand_motif",
             path,
             {
-                "sfx_assets": _sfx_asset_fingerprint(sonic_sig),
-                "sonic_signature": sonic_sig,
+                "sfx_assets": _sfx_asset_fingerprint(sig),
+                "sonic_signature": sig,
             },
-            lambda out: generate_brand_motif(out, sonic_sig, sfx_dir),
+            lambda out: generate_brand_motif(out, sig, sfx_dir),
         )
 
-    def _render_music_bed(path: Path, bed_mood: str, duration_sec: float) -> Path:
+    def _asset_fingerprint(asset: Path | None) -> dict[str, object] | None:
+        if asset is None:
+            return None
+        try:
+            stat = asset.stat()
+        except OSError:
+            return {"path": str(asset)}
+        return {"path": str(asset), "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+
+    def _pick_packaged_bed(bed_mood: str) -> Path | None:
+        if bed_assets_dir is None or not bed_assets_dir.is_dir():
+            return None
+        slug = re.sub(r"[^a-z0-9]+", "_", bed_mood.strip().lower()).strip("_")
+        for name in (f"{slug}.mp3" if slug else "", "casa_notte.mp3"):
+            candidate = bed_assets_dir / name
+            if name and candidate.is_file():
+                return candidate
+        candidates = sorted(path for path in bed_assets_dir.glob("*.mp3") if path.is_file())
+        return candidates[0] if candidates else None
+
+    def _render_music_bed(
+        path: Path,
+        bed_mood: str,
+        duration_sec: float,
+        *,
+        asset: Path | None = None,
+    ) -> Path:
+        if asset is not None:
+            if cache_dir is None:
+                return loop_audio_bed(asset, path, duration_sec)
+            bucket = duration_bucket_sec(duration_sec)
+            return materialize_synth_mp3(
+                cache_dir,
+                "packaged_ad_bed",
+                path,
+                {
+                    "asset": _asset_fingerprint(asset),
+                    "duration_sec": bucket,
+                },
+                lambda out: loop_audio_bed(asset, out, float(bucket)),
+            )
         if cache_dir is None:
             return generate_music_bed(path, bed_mood, duration_sec)
         bucket = duration_bucket_sec(duration_sec)
@@ -1346,21 +1428,31 @@ async def synthesize_ad(
                 state=state,
             )
         if part.type == "sfx" and part.sfx:
-            sfx_name = part.sfx if part.sfx in AVAILABLE_SFX_TYPES else "chime"
+            if part.sfx not in AVAILABLE_SFX_TYPES:
+                # An invented LLM token must not silently become the same generic
+                # chime heard in unrelated ads.  Skipping one decorative cue is
+                # safer and more honest than flattening the station's identity.
+                logger.warning("Skipping unsupported ad SFX '%s'", part.sfx)
+                return None
             try:
-                return await loop.run_in_executor(None, generate_sfx, part_path, sfx_name, sfx_dir)
+                return await _settle_executor(loop.run_in_executor(None, generate_sfx, part_path, part.sfx, sfx_dir))
             except Exception as e:
-                logger.warning("Ad SFX '%s' failed, inserting short fallback: %s", sfx_name, e)
-                return await loop.run_in_executor(None, generate_silence, part_path, 0.18)
+                logger.warning("Ad SFX '%s' failed, inserting short fallback: %s", part.sfx, e)
+                return await _settle_executor(loop.run_in_executor(None, generate_silence, part_path, 0.18))
         if part.type == "pause":
             duration = part.duration if part.duration > 0 else 0.5
-            return await loop.run_in_executor(None, generate_silence, part_path, duration)
+            return await _settle_executor(loop.run_in_executor(None, generate_silence, part_path, duration))
         return None
 
     renderable = [
         (part, tmp_dir / f"adpart_{uuid4().hex[:8]}.mp3")
         for part in script.parts
-        if part.type in ("voice", "sfx", "pause") and (part.type != "voice" or part.text)
+        if part.type in ("voice", "sfx", "pause")
+        and (part.type != "voice" or part.text)
+        # The scriptwriter strips these for recipe-driven spots, but enforce
+        # the boundary here too: direct callers cannot sneak a third or fourth
+        # decorative effect into a three-layer recipe mix.
+        and not (recipe is not None and part.type == "sfx")
     ]
     # A voice part with empty text drops out here. has_required_voice below only
     # asserts that SOME voice survived, so the ad still airs with a hole where
@@ -1419,6 +1511,7 @@ async def synthesize_ad(
 
     voice_failures: list[Exception] = []
     successful_results: list[Path] = []
+    rendered_parts: list[tuple[AdPart, Path]] = []
     for (part, part_path), result in zip(renderable, results, strict=True):
         if isinstance(result, Exception):
             if part.type == "voice":
@@ -1429,6 +1522,7 @@ async def synthesize_ad(
             continue
         if isinstance(result, Path):
             successful_results.append(result)
+            rendered_parts.append((part, result))
         elif part.type == "voice":
             voice_failures.append(TTSUnavailableError("required ad voice produced no audio"))
 
@@ -1471,6 +1565,59 @@ async def synthesize_ad(
 
     voice_sfx_parts = successful_results
 
+    # ``after_first_voice`` is defined on the assembled ad timeline, not the
+    # isolated first voice file. Account for leading pauses and every join
+    # that concat_files inserts before that voice.
+    first_voice_end_sec: float | None = None
+    first_voice_index = next(
+        (index for index, (part, _) in enumerate(rendered_parts) if part.type == "voice"),
+        None,
+    )
+    if recipe is not None and first_voice_index is not None:
+        timeline_parts = rendered_parts[: first_voice_index + 1]
+        try:
+            measured_duration_results = await _settle_owned(
+                *(loop.run_in_executor(None, probe_duration_sec, path) for _, path in timeline_parts)
+            )
+        except BaseException:
+            _unlink_speech_artifacts(voice_sfx_parts)
+            if motif_result:
+                _unlink_many([motif_result])
+            raise
+        measured_failure = _prioritized_failure(measured_duration_results)
+        if measured_failure is not None and (
+            isinstance(measured_failure, TTSUnavailableError) or not isinstance(measured_failure, Exception)
+        ):
+            _unlink_speech_artifacts(voice_sfx_parts)
+            if motif_result:
+                _unlink_many([motif_result])
+            raise measured_failure
+        ordinary_probe_failures = [result for result in measured_duration_results if isinstance(result, Exception)]
+        if ordinary_probe_failures:
+            logger.warning(
+                "Recipe %s could not probe %d timeline part(s); using duration estimates (%s)",
+                recipe.id,
+                len(ordinary_probe_failures),
+                type(ordinary_probe_failures[0]).__name__,
+            )
+        measured_durations = cast(
+            list[float | None],
+            [None if isinstance(result, Exception) else result for result in measured_duration_results],
+        )
+        timeline: list[tuple[str, float]] = []
+        for (part, path), measured_duration in zip(timeline_parts, measured_durations, strict=True):
+            if measured_duration is not None and measured_duration > 0:
+                duration_sec = measured_duration
+            elif part.type == "pause":
+                duration_sec = part.duration if part.duration > 0 else 0.5
+            else:
+                try:
+                    duration_sec = _estimate_duration(path)
+                except OSError:
+                    duration_sec = 0.0
+            timeline.append((part.type, duration_sec))
+        first_voice_end_sec = _first_voice_end_in_rendered_timeline(timeline)
+
     # Concatenate voice+sfx parts
     if len(voice_sfx_parts) == 1:
         voice_path = voice_sfx_parts[0]
@@ -1479,7 +1626,7 @@ async def synthesize_ad(
         # Skip loudnorm — each part already normalized by synthesize()
         try:
             concat_results = await _settle_owned(
-                loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, 300, False)
+                loop.run_in_executor(None, concat_files, voice_sfx_parts, voice_path, DEFAULT_CONCAT_SILENCE_MS, False)
             )
             concat_failure = _prioritized_failure(concat_results)
             if concat_failure is not None:
@@ -1491,39 +1638,251 @@ async def synthesize_ad(
             raise
         _unlink_many(voice_sfx_parts)
 
+    async def _apply_recipe_world() -> Path | None:
+        """Mix one optional bed and no more than two authored dry details.
+
+        The voice render stays intact until every recipe stage succeeds, so a
+        corrupt or disappearing public asset simply falls through to the
+        established fallback path below instead of turning into a silent spot.
+        """
+        if recipe is None:
+            return None
+
+        created: list[Path] = []
+        current = voice_path
+        succeeded = False
+        try:
+            try:
+                measured_duration = cast(
+                    float | None,
+                    await _settle_executor(loop.run_in_executor(None, probe_duration_sec, voice_path)),
+                )
+            except asyncio.CancelledError:
+                raise
+            except TTSUnavailableError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Recipe %s could not probe assembled voice; using duration estimate (%s)",
+                    recipe.id,
+                    type(exc).__name__,
+                )
+                measured_duration = None
+            voice_duration = (
+                measured_duration if measured_duration and measured_duration > 0 else _estimate_duration(voice_path)
+            )
+            if recipe.bed_path is not None:
+                if not recipe.bed_path.is_file():
+                    return None
+                bed_path = tmp_dir / f"recipe_bed_{uuid4().hex[:8]}.mp3"
+                bed_mix_path = tmp_dir / f"recipe_bed_mix_{uuid4().hex[:8]}.mp3"
+                created.extend((bed_path, bed_mix_path))
+                await _settle_executor(
+                    loop.run_in_executor(None, loop_audio_bed, recipe.bed_path, bed_path, voice_duration)
+                )
+                bed_scale = 10 ** (max(MIN_RECIPE_GAIN_DB, min(MAX_RECIPE_GAIN_DB, recipe.bed_gain_db)) / 20.0)
+                await _settle_executor(
+                    loop.run_in_executor(None, mix_with_bed, current, bed_path, bed_mix_path, bed_scale)
+                )
+                current = bed_mix_path
+
+            layers = [
+                (
+                    cue.asset_path,
+                    _recipe_cue_offset(
+                        cue.anchor,
+                        voice_duration_sec=voice_duration,
+                        first_voice_end_sec=first_voice_end_sec,
+                        max_duration_sec=cue.max_duration_sec,
+                    ),
+                    cue.gain_db,
+                    cue.max_duration_sec,
+                )
+                for cue in recipe.cues
+                if cue.asset_path.is_file()
+            ]
+            if len(layers) != len(recipe.cues):
+                return None
+            if layers:
+                recipe_mix_path = tmp_dir / f"recipe_mix_{uuid4().hex[:8]}.mp3"
+                created.append(recipe_mix_path)
+                await _settle_executor(loop.run_in_executor(None, mix_oneshot_layers, current, layers, recipe_mix_path))
+                current = recipe_mix_path
+            succeeded = True
+        except asyncio.CancelledError:
+            _unlink_speech_artifacts([voice_path, *ad_parts])
+            raise
+        except TTSUnavailableError:
+            _unlink_speech_artifacts([voice_path, *ad_parts])
+            raise
+        except Exception as exc:
+            logger.warning("Recipe %s failed; using compatibility ad audio: %s", recipe.id, exc)
+            return None
+        finally:
+            if not succeeded:
+                for path in created:
+                    path.unlink(missing_ok=True)
+
+        for path in created:
+            if path != current:
+                path.unlink(missing_ok=True)
+        if current != voice_path:
+            voice_path.unlink(missing_ok=True)
+        return current
+
+    async def _restore_legacy_recipe_accents() -> None:
+        """Put the legacy opener and motif back when a resolved recipe fails later."""
+        nonlocal voice_path
+        if recipe is None or script.sonic is None:
+            return
+
+        legacy_sonic = script.sonic
+        opener_path = tmp_dir / f"recipe_recovery_opener_{uuid4().hex[:8]}.mp3"
+        try:
+            opener = await _render_part(
+                AdPart(type="sfx", sfx=legacy_sonic.transition_motif or "chime"),
+                opener_path,
+            )
+        except BaseException:
+            _unlink_speech_artifacts([opener_path])
+            raise
+        if opener is not None:
+            recovered_voice_path = tmp_dir / f"recipe_recovery_voice_{uuid4().hex[:8]}.mp3"
+            try:
+                await _settle_executor(
+                    loop.run_in_executor(
+                        None,
+                        concat_files,
+                        [opener, voice_path],
+                        recovered_voice_path,
+                        DEFAULT_CONCAT_SILENCE_MS,
+                        False,
+                    )
+                )
+            except asyncio.CancelledError:
+                opener.unlink(missing_ok=True)
+                recovered_voice_path.unlink(missing_ok=True)
+                raise
+            except TTSUnavailableError:
+                opener.unlink(missing_ok=True)
+                recovered_voice_path.unlink(missing_ok=True)
+                raise
+            except Exception as exc:
+                logger.warning("Could not restore legacy ad opener after recipe failure: %s", exc)
+                opener.unlink(missing_ok=True)
+                recovered_voice_path.unlink(missing_ok=True)
+            else:
+                opener.unlink(missing_ok=True)
+                voice_path.unlink(missing_ok=True)
+                voice_path = recovered_voice_path
+
+        signature = legacy_sonic.sonic_signature
+        if not signature:
+            return
+        motif_path = tmp_dir / f"recipe_recovery_motif_{uuid4().hex[:8]}.mp3"
+        try:
+            await _settle_executor(loop.run_in_executor(None, _render_brand_motif, motif_path, signature))
+        except asyncio.CancelledError:
+            motif_path.unlink(missing_ok=True)
+            raise
+        except TTSUnavailableError:
+            motif_path.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            logger.warning("Could not restore legacy ad motif after recipe failure: %s", exc)
+            motif_path.unlink(missing_ok=True)
+            return
+        if motif_path.is_file() and motif_path.stat().st_size > 0:
+            ad_parts.append(motif_path)
+        else:
+            motif_path.unlink(missing_ok=True)
+
+    recipe_output = await _apply_recipe_world()
+    if recipe_output is not None:
+        broadcast_path = tmp_dir / f"ad_broadcast_{uuid4().hex[:8]}.mp3"
+        try:
+            await _settle_executor(loop.run_in_executor(None, normalize_ad, recipe_output, broadcast_path))
+            if broadcast_path.exists() and broadcast_path.stat().st_size > 0:
+                recipe_output.unlink(missing_ok=True)
+                return broadcast_path
+            broadcast_path.unlink(missing_ok=True)
+        except asyncio.CancelledError:
+            _unlink_speech_artifacts([recipe_output, broadcast_path, *ad_parts])
+            raise
+        except TTSUnavailableError:
+            _unlink_speech_artifacts([recipe_output, broadcast_path, *ad_parts])
+            raise
+        except Exception as exc:
+            logger.warning("Recipe ad broadcast processing failed, using unprocessed audio: %s", exc)
+            return recipe_output
+        return recipe_output
+
+    await _restore_legacy_recipe_accents()
+
     # 3+4. Generate foley loop + env bed + music bed in parallel, then mix sequentially.
     # Layer order (quietest → loudest): foley → env bed → music bed → voice.
     env_name = script.sonic.environment if script.sonic else ""
     mood = script.mood or (script.sonic.music_bed if script.sonic else "lounge")
     voice_duration = _estimate_duration(voice_path)
     output_path = tmp_dir / f"ad_{uuid4().hex[:8]}.mp3"
+    packaged_bed = _pick_packaged_bed(mood)
 
-    foley_path = tmp_dir / f"foley_{uuid4().hex[:8]}.mp3" if env_name else None
-    env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3" if env_name else None
+    # A curated bed is a complete ad world on its own.  Do not layer the legacy
+    # tonal environment and foley loops on top of it: their cumulative hum was
+    # the audible "drone" in the default ad break.  Custom/missing packs retain
+    # the legacy synthesis path as a resilience fallback.
+    use_packaged_bed = packaged_bed is not None
+    foley_path: Path | None = None
+    env_bed_path: Path | None = None
     bed_path = tmp_dir / f"adbed_{uuid4().hex[:8]}.mp3"
 
     def _cleanup_cancelled_ad_render(*paths: Path | None) -> None:
         owned = [path for path in (*paths, *voice_sfx_parts, *ad_parts, motif_result) if path is not None]
         _unlink_speech_artifacts(owned)
 
-    # Generate all three beds concurrently
     _dur = voice_duration + 1.0
-    bed_paths = [bed_path]
-    bed_tasks: list[Awaitable[object]] = [
-        loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur)),
-    ]
-    if env_name:
-        _env = env_name
-        _env_bed_path: Path = env_bed_path  # type: ignore[assignment]  # non-None when env_name is set
-        _foley_path: Path = foley_path  # type: ignore[assignment]  # non-None when env_name is set
-        bed_paths.extend((_env_bed_path, _foley_path))
-        bed_tasks.append(loop.run_in_executor(None, lambda: _render_music_bed(_env_bed_path, _env, _dur)))
-        bed_tasks.append(loop.run_in_executor(None, lambda: _render_foley(_foley_path, _env, _dur)))
+
+    def _legacy_bed_tasks() -> tuple[list[Awaitable[object]], list[Path]]:
+        """Build the historical synthesized layers when no usable pack bed exists."""
+        nonlocal env_bed_path, foley_path
+        tasks: list[Awaitable[object]] = [
+            loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur)),
+        ]
+        paths: list[Path] = [bed_path]
+        if env_name:
+            env_bed_path = tmp_dir / f"envbed_{uuid4().hex[:8]}.mp3"
+            foley_path = tmp_dir / f"foley_{uuid4().hex[:8]}.mp3"
+            _env = env_name
+            _env_bed_path = env_bed_path
+            _foley_path = foley_path
+            paths.extend((_env_bed_path, _foley_path))
+            tasks.append(loop.run_in_executor(None, lambda: _render_music_bed(_env_bed_path, _env, _dur)))
+            tasks.append(loop.run_in_executor(None, lambda: _render_foley(_foley_path, _env, _dur)))
+        return tasks, paths
+
+    if use_packaged_bed:
+        bed_tasks: list[Awaitable[object]] = [
+            loop.run_in_executor(None, lambda: _render_music_bed(bed_path, mood, _dur, asset=packaged_bed))
+        ]
+        bed_paths = [bed_path]
+    else:
+        bed_tasks, bed_paths = _legacy_bed_tasks()
     try:
         bed_results = await _settle_owned(*bed_tasks)
     except BaseException:
         _cleanup_cancelled_ad_render(voice_path, output_path, *bed_paths)
         raise
+    packaged_bed_failed = use_packaged_bed and any(isinstance(result, BaseException) for result in bed_results)
+    if packaged_bed_failed:
+        logger.warning("Packaged ad bed failed; retrying synthetic fallback")
+        use_packaged_bed = False
+        _unlink_many([bed_path])
+        bed_tasks, bed_paths = _legacy_bed_tasks()
+        try:
+            bed_results = await _settle_owned(*bed_tasks)
+        except BaseException:
+            _cleanup_cancelled_ad_render(voice_path, output_path, *bed_paths)
+            raise
     for bed_result, generated_path in zip(bed_results, bed_paths, strict=True):
         if isinstance(bed_result, BaseException):
             logger.warning("Bed generation failed for %s: %s", generated_path.name, bed_result)
@@ -1568,7 +1927,16 @@ async def synthesize_ad(
     # Mix music bed (loudest bed layer — harmonic colour)
     if bed_path.exists() and bed_path.stat().st_size > 0:
         try:
-            await _settle_executor(loop.run_in_executor(None, mix_with_bed, voice_path, bed_path, output_path, 0.24))
+            await _settle_executor(
+                loop.run_in_executor(
+                    None,
+                    mix_with_bed,
+                    voice_path,
+                    bed_path,
+                    output_path,
+                    0.14 if use_packaged_bed else 0.24,
+                )
+            )
             if output_path.exists() and output_path.stat().st_size > 0:
                 bed_path.unlink(missing_ok=True)
                 voice_path.unlink(missing_ok=True)

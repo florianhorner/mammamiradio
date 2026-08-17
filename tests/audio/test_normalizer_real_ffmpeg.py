@@ -363,6 +363,19 @@ def _measure_lufs_real(path) -> float | None:
     return float(matches[-1]) if matches else None
 
 
+def _measure_true_peak_real(path) -> float | None:
+    """Decoded true peak in dBFS via ffmpeg ebur128."""
+    import re
+
+    result = subprocess.run(
+        ["ffmpeg", "-i", str(path), "-af", "ebur128=peak=true", "-f", "null", "-"],
+        check=False,
+        capture_output=True,
+    )
+    matches = re.findall(r"Peak:\s+(-?\d+\.\d+)\s+dBFS", result.stderr.decode(errors="ignore"))
+    return float(matches[-1]) if matches else None
+
+
 def test_loudness_reconcile_brings_music_to_target_real_ffmpeg(tmp_path):
     """With reconciliation enabled, a finished segment lands within +/-2 LU of the
     main target regardless of its raw level — the loudness-unification contract."""
@@ -414,6 +427,25 @@ def test_loudness_reconcile_brings_ad_to_hotter_target_real_ffmpeg(tmp_path):
     lufs = _measure_lufs_real(out)
     assert lufs is not None, "could not measure ad output LUFS"
     assert abs(lufs - ad_target) <= 2.0, f"reconciled ad at {lufs} LUFS, expected ad target {ad_target} +/-2"
+
+
+def test_normalize_ad_preserves_decoded_true_peak_ceiling_real_ffmpeg(tmp_path):
+    """The production ad path must retain codec headroom after LUFS reconciliation."""
+    from mammamiradio.audio.normalizer import configure_loudness_reconcile, normalize_ad
+
+    src = tmp_path / "ad_peak_in.mp3"
+    out = tmp_path / "ad_peak_out.mp3"
+    _make_noise_mp3(src, duration_sec=3.0)
+
+    try:
+        configure_loudness_reconcile(-16.0, -15.0)
+        normalize_ad(src, out)
+    finally:
+        configure_loudness_reconcile(None, None)
+
+    true_peak = _measure_true_peak_real(out)
+    assert true_peak is not None, "could not measure ad output true peak"
+    assert true_peak <= -1.0, f"decoded ad true peak {true_peak} dBFS exceeds -1.0 dBTP ceiling"
 
 
 def test_mix_voice_with_bed_does_not_crash_real_ffmpeg(tmp_path):

@@ -452,6 +452,7 @@ def test_source_readiness_reports_only_terminal_candidate_exhaustion_as_unavaila
     assert charts["detail"] == "No found track could be prepared as playable audio."
     assert exhausted["sources"]["recovery"]["status"] == "on_air"
     assert exhausted["programming_ready"] is False
+    assert exhausted["continuity_available"] is True
     assert exhausted["transport_only"] is True
 
     monkeypatch.setattr(status_payload, "_golden_path_cache", None)
@@ -459,6 +460,7 @@ def test_source_readiness_reports_only_terminal_candidate_exhaustion_as_unavaila
     monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
     golden_path = status_payload._golden_path_status(_source_config(allow_ytdlp=True), state)
     assert golden_path["stage"] == "needs_music_source"
+    assert "Backup audio is ready" in golden_path["detail"]
 
 
 def test_recovery_on_air_proves_transport_but_not_source_health():
@@ -478,6 +480,35 @@ def test_recovery_on_air_proves_transport_but_not_source_health():
     assert payload["sources"]["recovery"]["status"] == "on_air"
     assert payload["programming_ready"] is False
     assert payload["transport_only"] is True
+
+
+def test_recovery_cover_only_without_on_air_still_reports_backup_audio_ready(monkeypatch):
+    """Regression: golden-path detail must widen to recovery_cover_available.
+
+    Before this fix, the "Backup audio is ready" detail only fired when
+    recovery was proven on_air. A bundled/configured recovery cover that has
+    never actually aired (cover_only, not on_air) must still report
+    continuity — otherwise First Listen stays stuck even though a usable
+    fallback exists.
+    """
+    evidence = SourceReadinessEvidence()
+    evidence.configure("recovery", True, bundled=True)
+    state = StationState(source_readiness=evidence)
+
+    readiness = status_payload._source_readiness_status(_source_config(), state)
+    assert readiness["sources"]["recovery"]["status"] == "cover_only"
+    assert readiness["recovery_on_air"] is False
+    assert readiness["recovery_cover_available"] is True
+    assert readiness["continuity_available"] is True
+    assert readiness["programming_ready"] is False
+
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_key", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
+    golden_path = status_payload._golden_path_status(_source_config(), state)
+
+    assert golden_path["stage"] == "needs_music_source"
+    assert "Backup audio is ready" in golden_path["detail"]
 
 
 def test_configured_source_not_reached_does_not_claim_it_was_checked():

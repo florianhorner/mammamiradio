@@ -1099,6 +1099,12 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     def _slow_bumper(*_args, **_kwargs):
         time.sleep(0.05)
 
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _slow_bumper
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+    imaging.resolve_ad_recipe.return_value = None
+
     os.environ.pop("MAMMAMIRADIO_SKIP_QUALITY_GATE", None)
 
     with (
@@ -1110,7 +1116,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=fake_audio),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_slow_bumper),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
