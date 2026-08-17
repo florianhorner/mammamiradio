@@ -1161,6 +1161,71 @@ def test_jamendo_cadence_counts_playback_starts_not_queue_reservations() -> None
     assert state.jamendo_insert_eligible() is False
 
 
+def test_jamendo_insert_eligible_when_rotation_crate_is_empty() -> None:
+    jamendo = Track(
+        title="Transient",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-1",
+    )
+    state = StationState(playlist=[])
+
+    assert state.jamendo_insert_eligible() is True
+    assert state.reserve_music_admission("jamendo-only", jamendo) is True
+    assert state.jamendo_insert_eligible() is False
+    assert state.rollback_music_admission("jamendo-only") is True
+    assert state.jamendo_insert_eligible() is True
+
+
+def test_restore_playlist_if_still_empty_preserves_operator_intent() -> None:
+    """Unlike switch_playlist, this recovery must not wipe operator state."""
+    pinned = Track(title="Pinned Song", artist="Pinned Artist", duration_ms=180_000, source="local")
+    heading = Heading(id="h1", seed="italo disco", label="Italo Disco", set_at=1.0, set_by="operator")
+    state = StationState(
+        playlist=[],
+        heading=heading,
+        pinned_track=pinned,
+        force_next=SegmentType.AD,
+        operator_force_pending=SegmentType.NEWS_FLASH,
+        songs_since_banter=3,
+    )
+    state.pending_actions.append({"type": "note", "detail": "operator note"})
+    previously_played = Track(title="Some Title", artist="Some Artist", duration_ms=180_000, source="local")
+    state.played_tracks.append(previously_played)
+    starting_heading_revision = state.heading_revision
+
+    recovered = Track(title="Recovered", artist="Operator", duration_ms=180_000, source="local")
+    source = PlaylistSource(kind="local", source_id="local_music_dir", label="Local music/ files", track_count=1)
+
+    assert state.restore_playlist_if_still_empty([recovered], source) is True
+    assert state.playlist == [recovered]
+    assert state.playlist_source is source
+    assert state.heading is heading
+    assert state.heading_revision == starting_heading_revision
+    assert state.pinned_track is pinned
+    assert state.force_next == SegmentType.AD
+    assert state.operator_force_pending == SegmentType.NEWS_FLASH
+    assert state.songs_since_banter == 3
+    assert len(state.pending_actions) == 1
+    assert previously_played in state.played_tracks
+
+
+def test_restore_playlist_if_still_empty_backs_off_when_no_longer_empty() -> None:
+    """A concurrent writer (e.g. an admin source switch) must win — this
+    recovery must never clobber a playlist that filled in the meantime."""
+    admin_track = Track(title="Admin Pick", artist="Admin", duration_ms=180_000, source="youtube")
+    admin_source = PlaylistSource(kind="charts", source_id="apple_music_it_top_100", label="Charts", track_count=1)
+    state = StationState(playlist=[admin_track], playlist_source=admin_source)
+
+    recovered = Track(title="Recovered", artist="Operator", duration_ms=180_000, source="local")
+    local_source = PlaylistSource(kind="local", source_id="local_music_dir", label="Local music/ files", track_count=1)
+
+    assert state.restore_playlist_if_still_empty([recovered], local_source) is False
+    assert state.playlist == [admin_track]
+    assert state.playlist_source is admin_source
+
+
 def test_music_admission_rejects_invalid_duplicate_and_missing_reservations() -> None:
     local = Track(
         title="Operator Local",

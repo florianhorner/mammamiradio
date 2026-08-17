@@ -349,9 +349,9 @@ async def test_home_context_generation_gate_rechecks_after_egress_await(tmp_path
     assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 1
 
 
-async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, timeout: float = 5.0):
+async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, timeout: float = 5.0, **producer_kwargs):
     """Run the producer, waiting until at least one segment is queued, then cancel."""
-    task = asyncio.create_task(run_producer(queue, state, config))
+    task = asyncio.create_task(run_producer(queue, state, config, **producer_kwargs))
     try:
         # Poll until at least one segment appears
         deadline = asyncio.get_event_loop().time() + timeout
@@ -643,6 +643,7 @@ async def test_runway_governor_empty_playlist_falls_back_to_banter(tmp_path):
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "empty-music"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     host = config.hosts[0]
     banter_lines = [(host, "Restiamo in onda.")]
@@ -664,6 +665,190 @@ async def test_runway_governor_empty_playlist_falls_back_to_banter(tmp_path):
         await _run_until_queued(queue, state, config, timeout=2.0)
 
     assert queue.get_nowait().type == SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_empty_crate_airs_ready_jamendo_instead_of_recovery_banter(tmp_path):
+    """A prepared Jamendo lease must air when there is no starter/local crate."""
+    audio = tmp_path / "jamendo.mp3"
+    audio.write_bytes(b"JAMENDO")
+    ready = Segment(
+        type=SegmentType.MUSIC,
+        path=audio,
+        duration_sec=181.0,
+        metadata={
+            "queue_id": "jamendo-ready",
+            "title_only": "Transient title",
+            "artist": "Provider artist",
+            "provider_track_id": "12345",
+            "audio_source": "jamendo",
+            "music_attribution": {
+                "provider": "jamendo",
+                "license_id": "CC-BY-4.0",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "source_url": "https://www.jamendo.com/track/12345/transient-title",
+                "credit": "Provider artist - Transient title, provided by Jamendo, CC-BY-4.0",
+                "modified": True,
+                "basis": "provider_reported",
+            },
+        },
+        ephemeral=True,
+    )
+    remaining = [ready]
+    provider = SimpleNamespace(take_ready_segment=lambda: remaining.pop(0) if remaining else None)
+    state = StationState(playlist=[], listeners_active=1)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "empty-music"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config, jamendo_provider=provider)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("audio_source") == "jamendo"
+    assert seg.metadata.get("title_only") == "Transient title"
+
+
+async def test_empty_crate_recovers_local_files_and_airs_a_real_music_segment(tmp_path):
+    """The empty-crate recovery path must end in a real playing MUSIC segment.
+
+    A unit test on ``_recover_local_rotation`` alone only proves state.playlist
+    gets repopulated — it can't prove the producer's generation loop actually
+    picks up a recovered track, renders it, and queues real audio.
+    """
+    from mammamiradio.scheduling.producer import RenderedMusicTrack
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+
+    rendered_path = tmp_path / "rendered.mp3"
+    rendered_path.write_bytes(b"audio")
+
+    async def _render_recovered_track(track, *_args, **_kwargs):
+        return RenderedMusicTrack(track=track, path=rendered_path, cache_path=rendered_path, cache_hit=True)
+
+    state = StationState(playlist=[], listeners_active=1)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.music_dir = music_dir
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render_recovered_track),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("title_only") == "Carefree"
+    assert state.playlist_source is not None
+    assert state.playlist_source.kind == "local"
+
+
+async def test_recover_local_rotation_loads_operator_mp3s(tmp_path):
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    (music_dir / "Kevin MacLeod - Allada.mp3").write_bytes(b"id3")
+    config = load_config(TOML_PATH)
+    config.music_dir = music_dir
+    state = StationState(playlist=[])
+
+    assert await _recover_local_rotation(state, config) is True
+    assert len(state.playlist) == 2
+    assert state.playlist_source is not None
+    assert state.playlist_source.kind == "local"
+    assert {track.title for track in state.playlist} == {"Carefree", "Allada"}
+    assert {track.source for track in state.playlist} == {"local"}
+
+
+async def test_recover_local_rotation_drops_blocklisted_operator_files(tmp_path):
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "Banned Artist - Banned Song.mp3").write_bytes(b"id3")
+    (music_dir / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    config = load_config(TOML_PATH)
+    config.music_dir = music_dir
+    state = StationState(
+        playlist=[],
+        blocklist={("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}},
+    )
+
+    assert await _recover_local_rotation(state, config) is True
+    assert [track.title for track in state.playlist] == ["Carefree"]
+    assert state.playlist[0].source == "local"
+
+
+async def test_recover_local_rotation_stays_empty_without_mp3s(tmp_path):
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    config = load_config(TOML_PATH)
+    config.music_dir = tmp_path / "music"
+    state = StationState(playlist=[])
+
+    assert await _recover_local_rotation(state, config) is False
+    assert state.playlist == []
+
+
+async def test_recover_local_rotation_returns_false_on_oserror(tmp_path):
+    """The blocking scan is offloaded via asyncio.to_thread and its OSError
+    is caught without propagating into the producer loop."""
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    config = load_config(TOML_PATH)
+    config.music_dir = tmp_path / "music"
+    state = StationState(playlist=[])
+
+    with patch("mammamiradio.playlist.playlist.load_operator_local_tracks", side_effect=OSError("boom")):
+        assert await _recover_local_rotation(state, config) is False
+    assert state.playlist == []
+
+
+async def test_recover_local_rotation_never_clobbers_a_concurrent_source_switch(tmp_path):
+    """The directory scan runs off the event loop (asyncio.to_thread). If a
+    concurrent writer (e.g. an admin source switch) repopulates state.playlist
+    while the scan is still in flight, recovery must back off, not overwrite
+    the winner with stale recovered-local-file data."""
+    from mammamiradio.core.models import PlaylistSource, Track
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    config = load_config(TOML_PATH)
+    config.music_dir = tmp_path / "music"
+    state = StationState(playlist=[])
+
+    admin_track = Track(title="Admin Pick", artist="Admin", duration_ms=180_000, source="youtube")
+    admin_source = PlaylistSource(kind="charts", source_id="apple_music_it_top_100", label="Charts", track_count=1)
+
+    def _concurrent_switch_lands_during_scan(*_args, **_kwargs):
+        # Simulates an admin source switch completing while this scan runs
+        # off-loop; the recovered tracks below must lose to it.
+        state.playlist = [admin_track]
+        state.playlist_source = admin_source
+        return [Track(title="Recovered", artist="Operator", duration_ms=180_000, source="local")]
+
+    with patch(
+        "mammamiradio.playlist.playlist.load_operator_local_tracks",
+        side_effect=_concurrent_switch_lands_during_scan,
+    ):
+        assert await _recover_local_rotation(state, config) is False
+
+    assert state.playlist == [admin_track]
+    assert state.playlist_source is admin_source
 
 
 def test_producer_buffered_seconds_uses_real_queue_and_fails_safe():
