@@ -33,14 +33,18 @@ def test_quality_workflow_pr_job_is_read_only() -> None:
 
 
 def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
-    def checkout_fetch_depth(text: str) -> object:
-        steps = yaml.safe_load(text)["jobs"]["quality"]["steps"]
+    def checkout_fetch_depth(document: dict[str, object]) -> object:
+        steps = document["jobs"]["quality"]["steps"]  # type: ignore[index]
         checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
         return checkout.get("with", {}).get("fetch-depth")
 
-    text = _workflow_text()
-    assert checkout_fetch_depth(text) == 0
-    assert checkout_fetch_depth(text.replace("          fetch-depth: 0", "          # fetch-depth: 0")) is None
+    document = yaml.safe_load(_workflow_text())
+    assert checkout_fetch_depth(document) == 0
+    checkout = next(
+        step for step in document["jobs"]["quality"]["steps"] if step.get("uses", "").startswith("actions/checkout@")
+    )
+    checkout["with"].pop("fetch-depth")
+    assert checkout_fetch_depth(document) is None
 
 
 def test_quality_workflow_scopes_write_to_main_ratchet_job() -> None:
