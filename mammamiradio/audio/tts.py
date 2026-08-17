@@ -15,7 +15,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -1435,13 +1435,13 @@ async def synthesize_ad(
                 logger.warning("Skipping unsupported ad SFX '%s'", part.sfx)
                 return None
             try:
-                return await loop.run_in_executor(None, generate_sfx, part_path, part.sfx, sfx_dir)
+                return await _settle_executor(loop.run_in_executor(None, generate_sfx, part_path, part.sfx, sfx_dir))
             except Exception as e:
                 logger.warning("Ad SFX '%s' failed, inserting short fallback: %s", part.sfx, e)
-                return await loop.run_in_executor(None, generate_silence, part_path, 0.18)
+                return await _settle_executor(loop.run_in_executor(None, generate_silence, part_path, 0.18))
         if part.type == "pause":
             duration = part.duration if part.duration > 0 else 0.5
-            return await loop.run_in_executor(None, generate_silence, part_path, duration)
+            return await _settle_executor(loop.run_in_executor(None, generate_silence, part_path, duration))
         return None
 
     renderable = [
@@ -1575,9 +1575,13 @@ async def synthesize_ad(
     )
     if recipe is not None and first_voice_index is not None:
         timeline_parts = rendered_parts[: first_voice_index + 1]
-        measured_durations = await asyncio.gather(
+        measured_duration_results = await _settle_owned(
             *(loop.run_in_executor(None, probe_duration_sec, path) for _, path in timeline_parts)
         )
+        measured_failure = _prioritized_failure(measured_duration_results)
+        if measured_failure is not None:
+            raise measured_failure
+        measured_durations = cast(list[float | None], measured_duration_results)
         timeline: list[tuple[str, float]] = []
         for (part, path), measured_duration in zip(timeline_parts, measured_durations, strict=True):
             if measured_duration is not None and measured_duration > 0:
@@ -1622,7 +1626,10 @@ async def synthesize_ad(
         if recipe is None:
             return None
 
-        measured_duration = await loop.run_in_executor(None, probe_duration_sec, voice_path)
+        measured_duration = cast(
+            float | None,
+            await _settle_executor(loop.run_in_executor(None, probe_duration_sec, voice_path)),
+        )
         voice_duration = (
             measured_duration if measured_duration and measured_duration > 0 else _estimate_duration(voice_path)
         )
@@ -1636,9 +1643,13 @@ async def synthesize_ad(
                 bed_path = tmp_dir / f"recipe_bed_{uuid4().hex[:8]}.mp3"
                 bed_mix_path = tmp_dir / f"recipe_bed_mix_{uuid4().hex[:8]}.mp3"
                 created.extend((bed_path, bed_mix_path))
-                await loop.run_in_executor(None, loop_audio_bed, recipe.bed_path, bed_path, voice_duration)
+                await _settle_executor(
+                    loop.run_in_executor(None, loop_audio_bed, recipe.bed_path, bed_path, voice_duration)
+                )
                 bed_scale = 10 ** (max(MIN_RECIPE_GAIN_DB, min(MAX_RECIPE_GAIN_DB, recipe.bed_gain_db)) / 20.0)
-                await loop.run_in_executor(None, mix_with_bed, current, bed_path, bed_mix_path, bed_scale)
+                await _settle_executor(
+                    loop.run_in_executor(None, mix_with_bed, current, bed_path, bed_mix_path, bed_scale)
+                )
                 current = bed_mix_path
 
             layers = [
@@ -1661,7 +1672,7 @@ async def synthesize_ad(
             if layers:
                 recipe_mix_path = tmp_dir / f"recipe_mix_{uuid4().hex[:8]}.mp3"
                 created.append(recipe_mix_path)
-                await loop.run_in_executor(None, mix_oneshot_layers, current, layers, recipe_mix_path)
+                await _settle_executor(loop.run_in_executor(None, mix_oneshot_layers, current, layers, recipe_mix_path))
                 current = recipe_mix_path
             succeeded = True
         except asyncio.CancelledError:
@@ -1691,17 +1702,26 @@ async def synthesize_ad(
 
         legacy_sonic = script.sonic
         opener_path = tmp_dir / f"recipe_recovery_opener_{uuid4().hex[:8]}.mp3"
-        opener = await _render_part(AdPart(type="sfx", sfx=legacy_sonic.transition_motif or "chime"), opener_path)
+        try:
+            opener = await _render_part(
+                AdPart(type="sfx", sfx=legacy_sonic.transition_motif or "chime"),
+                opener_path,
+            )
+        except BaseException:
+            _unlink_speech_artifacts([opener_path])
+            raise
         if opener is not None:
             recovered_voice_path = tmp_dir / f"recipe_recovery_voice_{uuid4().hex[:8]}.mp3"
             try:
-                await loop.run_in_executor(
-                    None,
-                    concat_files,
-                    [opener, voice_path],
-                    recovered_voice_path,
-                    DEFAULT_CONCAT_SILENCE_MS,
-                    False,
+                await _settle_executor(
+                    loop.run_in_executor(
+                        None,
+                        concat_files,
+                        [opener, voice_path],
+                        recovered_voice_path,
+                        DEFAULT_CONCAT_SILENCE_MS,
+                        False,
+                    )
                 )
             except asyncio.CancelledError:
                 opener.unlink(missing_ok=True)
@@ -1725,7 +1745,7 @@ async def synthesize_ad(
             return
         motif_path = tmp_dir / f"recipe_recovery_motif_{uuid4().hex[:8]}.mp3"
         try:
-            await loop.run_in_executor(None, _render_brand_motif, motif_path, signature)
+            await _settle_executor(loop.run_in_executor(None, _render_brand_motif, motif_path, signature))
         except asyncio.CancelledError:
             motif_path.unlink(missing_ok=True)
             raise

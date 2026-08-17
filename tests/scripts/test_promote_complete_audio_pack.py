@@ -476,6 +476,32 @@ def test_staging_validation_failure_leaves_existing_target_untouched(
     assert not _promotion_artifacts(target)
 
 
+def test_stage_cleanup_failure_still_releases_promotion_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = _candidate(tmp_path)
+    target = tmp_path / "installed"
+
+    def fail_copy(_projection: object, _stage: Path) -> None:
+        raise RuntimeError("injected copy failure")
+
+    original_rmtree = promoter.shutil.rmtree
+
+    def fail_stage_cleanup(path: Path, *args: object, **kwargs: object) -> None:
+        if "promotion-stage" in Path(path).name:
+            raise OSError("injected cleanup failure")
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(promoter, "_copy_projection", fail_copy)
+    monkeypatch.setattr(promoter.shutil, "rmtree", fail_stage_cleanup)
+
+    with pytest.raises(OSError, match="injected cleanup failure"):
+        promoter.promote_complete_audio_pack(candidate.board_manifest, CONTENT_DIGEST, target=target)
+
+    assert not promoter._lock_path(target).exists()
+
+
 @pytest.mark.parametrize("phase", ["after-backup", "after-swap", "after-validation"])
 def test_injected_swap_failure_restores_target_byte_identically(tmp_path: Path, phase: str) -> None:
     candidate = _candidate(tmp_path)

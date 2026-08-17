@@ -552,10 +552,14 @@ def promote_complete_audio_pack(
             )
         raise
     finally:
-        if stage_owned and stage.exists():
-            shutil.rmtree(stage)
-        os.close(lock_fd)
-        lock_path.unlink(missing_ok=True)
+        try:
+            if stage_owned and stage.exists():
+                shutil.rmtree(stage)
+        finally:
+            try:
+                os.close(lock_fd)
+            finally:
+                lock_path.unlink(missing_ok=True)
 
     if backup.exists():
         shutil.rmtree(backup)

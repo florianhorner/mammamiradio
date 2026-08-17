@@ -4503,6 +4503,92 @@ async def test_synthesize_ad_recipe_does_not_swallow_cancellation(_mock_all, tmp
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_recipe_cancellation_waits_for_executor_before_cleanup(_mock_all, tmp_path):
+    """Recipe cancellation must not unlink a bed while its worker still writes."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+
+    def _slow_bed(_source: Path, output: Path, _duration: float) -> Path:
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        _touch(output)
+        worker_finished.set()
+        return output
+
+    _mock_all["loop_audio_bed"].side_effect = _slow_bed
+    task = asyncio.create_task(synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe))
+    async with asyncio.timeout(1.0):
+        while not worker_started.is_set():
+            await asyncio.sleep(0.001)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must drain the recipe FFmpeg worker"
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert worker_finished.is_set()
+    assert not list(tmp_path.glob("recipe_bed_*.mp3"))
+    assert not list(tmp_path.glob("recipe_bed_mix_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_recovery_cancellation_drains_and_cleans_opener(_mock_all, tmp_path):
+    """Legacy recovery must settle its SFX worker before removing scratch."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=tmp_path / "missing-bed.mp3",
+        bed_gain_db=-25.0,
+        cues=(),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink"),
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+
+    def _slow_opener(output: Path, *_args: object, **_kwargs: object) -> Path:
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        _touch(output)
+        worker_finished.set()
+        return output
+
+    _mock_all["generate_sfx"].side_effect = _slow_opener
+    task = asyncio.create_task(synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe))
+    async with asyncio.timeout(1.0):
+        while not worker_started.is_set():
+            await asyncio.sleep(0.001)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must drain the recovery SFX worker"
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert worker_finished.is_set()
+    assert not list(tmp_path.glob("recipe_recovery_opener_*.mp3"))
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_recipe_does_not_swallow_tts_unavailable(_mock_all, tmp_path):
     from mammamiradio.audio.imaging import ResolvedAdRecipe
     from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
