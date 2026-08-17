@@ -183,24 +183,23 @@ From the repository root, run:
 .venv/bin/python scripts/audition_sonic_brand.py
 ```
 
-It writes a timestamped local review directory under
-`tmp/sonic-brand-auditions/` with an `index.html` listening page and a manifest.
-Before writing the board, the command also verifies that every electronic
-compatibility alias is present. The board plays the Neon Relay station ID and
-sweeper, the time check, both directional transitions, distinct `in`, `mid`,
-and `out` ad bumpers, Casa Notte, and all nine fictional-ad recipes. Open that
-generated HTML file in a browser; the script does not open a browser itself.
+It writes a timestamped review directory under `tmp/sonic-brand-auditions/`.
+The directory contains an `index.html` listening page and a manifest. Before it
+writes either file, the command checks every compatibility alias. The board
+covers the Neon Relay station ID and sweeper, the time check, and both
+directional transitions. It also covers all three ad bumpers, Casa Notte, and
+the nine fictional-ad recipes. Open the generated HTML file in a browser; the
+script does not open it for you.
 
 Use `--output-dir PATH` to choose the parent directory and `--timestamp
 YYYYMMDDTHHMMSSZ` for a deterministic review location. The script validates the
-complete pack before it writes a listening directory and is local-only: it does
-not call TTS providers, start the app, or touch the playback queue. The shipped
-runtime pack has 47 checksum-bound outputs, 47 retained project-authored sources,
-and nine recipes. Release approval is a separate receipt binding the exact
-board content digest to the immutable pack digest after Mac, small-speaker, and
-Sonos listening. That receipt and the board previews stay outside the immutable
-installed runtime manifest. Pack layout, provenance, selection precedence, and
-recovery/broadcast-chain boundaries are in
+pack before writing the board. It runs locally without calling TTS providers or
+changing the app's playback queue. The runtime pack has 47 checksum-bound
+outputs, each with its own retained project-authored source. Nine recipes define
+the ad scenes. After listening on the Mac, small speaker, and Sonos, the reviewer
+signs a receipt that binds the board content digest to the pack digest. The
+installed runtime manifest omits the receipt and board previews. Pack layout,
+provenance, selection precedence, and recovery/broadcast-chain boundaries are in
 [`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md).
 
 ## Startup model

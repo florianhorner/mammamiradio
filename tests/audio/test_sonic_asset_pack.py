@@ -85,7 +85,7 @@ EXPECTED_ASSET_PATHS = {
 }
 
 
-def test_recorded_manifest_covers_default_runtime_and_official_scene_recipes() -> None:
+def test_runtime_manifest_covers_default_assets_and_official_scene_recipes() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     assets = manifest["assets"]
     assert isinstance(assets, list)
@@ -116,7 +116,7 @@ def test_recorded_manifest_covers_default_runtime_and_official_scene_recipes() -
         assert all(cue["anchor"] in RECIPE_CUE_ANCHORS for cue in recipe["cues"])
 
 
-def test_runtime_manifest_retains_one_project_authored_source_and_master_per_asset() -> None:
+def test_runtime_manifest_maps_each_asset_to_one_retained_master() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     assets = manifest["assets"]
     sources = manifest["sources"]
@@ -133,7 +133,7 @@ def test_runtime_manifest_retains_one_project_authored_source_and_master_per_ass
     }
 
 
-def test_runtime_manifest_has_exact_immutable_file_inventory_without_receipt() -> None:
+def test_runtime_manifest_inventory_excludes_external_receipt() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     assets = manifest["assets"]
     sources = manifest["sources"]
@@ -161,7 +161,7 @@ def test_runtime_manifest_has_exact_immutable_file_inventory_without_receipt() -
     assert actual_files == expected_paths | {"manifest.json"}
 
 
-def test_modern_night_drive_identity_and_wrapper_roles_are_explicit() -> None:
+def test_runtime_manifest_declares_identity_and_bumper_roles() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     assert manifest["design_direction"] == {

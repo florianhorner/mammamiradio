@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Build a local A/B and recipe board for Mamma Mi Radio's Modern Night Drive imaging.
 
-The script never calls TTS providers, starts the station, or touches its queue. It
-can render the current procedural-versus-packaged review, the historical
-source-backed motif gate, or the revised local-synthesis treatment gate bound to
-an approved production-voice manifest. It can also render the provider-free core
-cadence board from an approved treatment receipt plus a frozen approved-route
-speech manifest. Every mode writes a standalone local listening page.
+The script renders the current procedural-versus-packaged review or the
+historical source-backed motif gate. It can also render the local-synthesis
+treatment gate and provider-free core cadence board from their approved inputs.
+Each mode writes a standalone listening page. The script runs locally without
+contacting TTS providers or changing the station process and playback queue.
 """
 
 from __future__ import annotations
@@ -43,8 +42,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGED_ASSETS_DIR = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions"
 TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
-# Historical comparison only. New motif candidates never use this retired
-# C-E-G-C sequence.
+# The historical comparison uses this retired C-E-G-C sequence. New motif
+# candidates exclude it.
 LEGACY_MOTIF_NOTES = [523, 659, 784, 1047]
 TALK_BED_DURATION_SEC = 8.0
 RECIPE_PREVIEW_DURATION_SEC = 8.0
@@ -99,7 +98,7 @@ SAMPLES: tuple[SonicSample, ...] = (
         "speech_to_music.mp3",
     ),
     SonicSample("ad_in", "Ad-break entry bumper", Path("bumpers") / "ad_in.mp3", "ad_in.mp3"),
-    SonicSample("ad_mid", "Ad-break middle bumper", Path("bumpers") / "ad_mid.mp3", "ad_mid.mp3"),
+    SonicSample("ad_mid", "Mid-break bumper", Path("bumpers") / "ad_mid.mp3", "ad_mid.mp3"),
     SonicSample("ad_out", "Ad-break exit bumper", Path("bumpers") / "ad_out.mp3", "ad_out.mp3"),
     SonicSample("talk_bed", "Casa Notte talk bed", Path("beds") / "casa_notte.mp3", "talk_bed.mp3"),
 )
@@ -160,8 +159,8 @@ def render_baseline_sample(sample: SonicSample, output_path: Path) -> Path:
     if sample.key in {"ad_in", "ad_mid", "ad_out"}:
         return generate_bumper_jingle(output_path)
     if sample.key == "talk_bed":
-        # A deliberately-empty assets root forces the same synthetic-drone branch
-        # used by a cold station when no packaged bed or adjacent track is available.
+        # An empty assets root selects the same synthetic-drone branch used by a
+        # cold station with no packaged bed or adjacent track.
         baseline_assets_dir = output_path.parent / ".no-packaged-beds"
         return ImagingLibrary(
             LEGACY_MOTIF_NOTES,
@@ -215,12 +214,10 @@ def _recipe_preview_offset(anchor: str, cue_duration_sec: float) -> float:
 
 
 def render_recipe_previews(run_dir: Path, *, assets_dir: Path | None = None) -> list[RecipeAuditionResult]:
-    """Render every declared recipe over its own bed for a zero-provider audition.
+    """Render every declared recipe over its own bed without TTS.
 
-    This intentionally contains no fake voice: the result isolates the thing
-    a listener needs to approve here — level, texture, and the placement of the
-    project-authored electronic cues — without asking a network TTS engine to
-    manufacture review material.
+    The previews contain no voice. They expose the balance between each bed and
+    its project-authored cues, along with the cue placement.
     """
     assets_dir = assets_dir or PACKAGED_ASSETS_DIR
     manifest = json.loads((assets_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -263,9 +260,7 @@ def render_recipe_previews(run_dir: Path, *, assets_dir: Path | None = None) -> 
                 label=recipe.id.replace("_", " ").title(),
                 audio=output_path.relative_to(run_dir).as_posix(),
                 bed=recipe.bed_path.relative_to(assets_dir).as_posix(),
-                cues=tuple(
-                    f"{cue.anchor} → {cue.asset_path.relative_to(assets_dir).as_posix()}" for cue in recipe.cues
-                ),
+                cues=tuple(f"{cue.anchor}: {cue.asset_path.relative_to(assets_dir).as_posix()}" for cue in recipe.cues),
             )
         )
     return results
@@ -358,10 +353,10 @@ def write_index_html(
   </head>
   <body>
     <h1>Neon Relay × Velvet Horizon</h1>
-    <p class=\"lede\">Generated locally at {html.escape(timestamp)}. Left is the current procedural render;
-      right is the Modern Night Drive packaged asset. Neon Relay is the station signature; Velvet Horizon
-      is the atmospheric character. Scene recipes below isolate each project-authored bed and cue pair.
-      No station queue or network provider was used.</p>
+    <p class=\"lede\">Generated locally at {html.escape(timestamp)}. Compare the procedural render on the left
+      with the Modern Night Drive asset on the right. Neon Relay identifies the station. Velvet Horizon sets
+      the atmosphere for the other cues and beds. Each recipe preview contains its project-authored bed and
+      cue pair. The generator did not start the station or contact a provider.</p>
 {rows}
     <h1>Ad scene recipes</h1>
 {recipe_rows}

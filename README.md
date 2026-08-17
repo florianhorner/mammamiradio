@@ -188,12 +188,12 @@ Issues and PRs welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). First-tim
 
 ## License
 
-The code is [Apache-2.0](LICENSE). Bundled media keeps its own per-asset license
-and attribution: station imaging is documented in the [imaging attribution
-file](mammamiradio/assets/imaging/ATTRIBUTION.md), while starter music uses
-attributed CC BY 4.0 sources. Jamendo facts are provider-reported; local and
-externally resolved media remain the operator's responsibility. See the
-canonical [music-source boundaries](docs/music-sources.md). You are also
-responsible for what your station plays and says.
+The code is [Apache-2.0](LICENSE). Each bundled asset keeps its own license and
+attribution. The [imaging attribution file](mammamiradio/assets/imaging/ATTRIBUTION.md)
+documents station imaging. Starter music uses attributed CC BY 4.0 sources.
+Jamendo facts are provider-reported. Operators are responsible for local and
+externally resolved media. See the canonical [music-source
+boundaries](docs/music-sources.md). You are also responsible for what your
+station plays and says.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=florianhorner/mammamiradio&type=Date)](https://star-history.com/#florianhorner/mammamiradio&Date)

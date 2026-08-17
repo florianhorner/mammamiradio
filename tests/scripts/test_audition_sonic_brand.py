@@ -720,7 +720,7 @@ def test_core_audition_builds_five_pending_previews_without_touching_shipped_pac
     readme = (output_root / "README.md").read_text()
     page = (output_root / "index.html").read_text()
     assert "Selected direction: Warm Resolve (`warm_resolve`)" in readme
-    assert "Warm Resolve is direction-selected" in page
+    assert "Warm Resolve is the selected direction" in page
     assert page.count("<audio controls") == 5
 
 

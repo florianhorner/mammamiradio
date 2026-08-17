@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Render historical motif and core-cadence audition boards.
 
-This script does not build the installed imaging pack. The rejected Recorded
-Night Drive source/rebuild path is retained only as archived lineage and cannot
-be invoked. Modern Night Drive pack materialization belongs to
-``complete_audio_pack_gate.py`` and ``promote_complete_audio_pack.py``; the
-current approved identity is Neon Relay with Velvet Horizon's atmosphere.
+Use ``complete_audio_pack_gate.py`` and ``promote_complete_audio_pack.py`` to
+build and install Modern Night Drive. This module keeps the rejected Recorded
+Night Drive definitions as archived lineage. Its old source verifier and builder
+stop before reading or writing assets. The approved identity combines the Neon
+Relay signature with Velvet Horizon's atmosphere.
 
 Usage:
     python scripts/build_public_imaging_pack.py --prototype-motifs --source-dir /path/to/hq-derivatives
@@ -13,9 +13,8 @@ Usage:
         --selected-motif-artifact /path/to/listened/warm_resolve.mp3 \
         --source-dir /path/to/hq-derivatives --output-root /tmp/core-audition
 
-``--prototype-motifs`` is a deliberately separate, non-release path. It accepts
-three known Freesound HQ preview derivatives only to create the human selection
-board. Those derivatives can never satisfy the final public-pack build.
+``--prototype-motifs`` creates a non-release selection board from three known
+Freesound HQ preview derivatives. The final pack builder rejects those files.
 """
 
 from __future__ import annotations
@@ -51,13 +50,12 @@ DEFAULT_PROTOTYPE_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions" / "m
 DEFAULT_CORE_AUDITION_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions" / "core-audition"
 FORMAT = {"codec": "mp3", "sample_rate_hz": 48_000, "channels": 2, "bitrate_kbps": 192}
 REJECTED_REBUILD_MESSAGE = (
-    "The rejected Recorded Night Drive rebuild is retired; use "
+    "The rejected Recorded Night Drive rebuild is retired. Use "
     "complete_audio_pack_gate.py and promote_complete_audio_pack.py."
 )
 
-# Immutable lineage from the first human selection board.  A direction choice
-# is not the same thing as the required Mac/Sonos listening approval, so the
-# Stage 2 manifest records this separately and remains release_ready=false.
+# Lineage from the first human selection board. Stage 2 records the direction
+# separately from Mac and Sonos approval and sets release_ready=false.
 MOTIF_PROTOTYPE_PACK_DIGEST = "4b7097b5c865e447aa29d250a13daf811d7cf247077a7dc62200524069db3870"
 MOTIF_PROTOTYPE_SHA256 = {
     "midnight_signal": "97a3af9b763f0c78612e31a006489b0cc2e41992cbb9aaae8b755f182382d995",
@@ -68,7 +66,7 @@ MOTIF_PROTOTYPE_SHA256 = {
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """One reviewed public master; its local filename is deliberately not shipped."""
+    """One reviewed public master whose local file is not shipped."""
 
     id: str
     filename: str
@@ -191,9 +189,8 @@ class CoreGeneratedCue:
     fade_out_sec: float
 
 
-# Archived rejected-pack lineage. Nothing below this marker is a claim about
-# the installed Modern Night Drive pack, and the old verifier/builder reject
-# every invocation before reading a source or writing an output.
+# The definitions below preserve rejected-pack lineage. The old verifier and
+# builder reject every call before reading a source or writing an output.
 SOURCES: tuple[SourceSpec, ...] = (
     SourceSpec(
         "cafe-kentspublicdomain",
@@ -2299,7 +2296,7 @@ def _core_audition_manifest(
         _preview_record(
             output_root,
             preview_id="full-cadence",
-            label="Full music → spot → music cadence",
+            label="Full cadence: music, spot, music",
             path="full_cadence.mp3",
             purpose="One runtime-order break with representative Italian speech and a music successor.",
             layers=_component_records(cadence_parts, gap_sec=0.0),
@@ -2611,11 +2608,8 @@ def _core_audition_readme(manifest: dict[str, Any]) -> str:
             "",
             "[Open the listening board](./index.html)",
             "",
-            (
-                f"Selected direction: {manifest['selected_motif_label']} "
-                f"(`{manifest['selected_motif_id']}`). This records a direction choice only; "
-            ),
-            "Mac and Wohnzimmer Sonos Arc approval are still pending.",
+            (f"Selected direction: {manifest['selected_motif_label']} (`{manifest['selected_motif_id']}`)."),
+            "Mac and Wohnzimmer Sonos Arc approval are pending.",
             "",
             "## Five previews",
             "",
@@ -2709,9 +2703,9 @@ code {{ color: #efc27a; }}
 </head>
 <body>
 <h1>Modern Night Drive — core cadence approval</h1>
-<p class="notice"><strong>Audition only.</strong> {manifest["selected_motif_label"]} is direction-selected,
-but no Mac or Wohnzimmer Sonos Arc pass is recorded. Nothing here is release-ready.</p>
-<p>Keep volume fixed. Hear the two identity surfaces three times, then Ad in, Ad out,
+<p class="notice"><strong>Audition only.</strong> {manifest["selected_motif_label"]} is the selected direction.
+Mac and Wohnzimmer Sonos Arc approval are pending. This board is not release-ready.</p>
+<p>Keep volume fixed. Play the two identity surfaces three times, then Ad in, Ad out,
 and the full cadence twice. The cadence exposes every bumper and boundary transition
 once. Replay all five on the target speaker.</p>
 <main class="grid">

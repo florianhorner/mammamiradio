@@ -513,10 +513,10 @@ print(
 )
 PY
     then
-        pass "Installed Modern Night Drive imaging pack is identity-bound, inventory-exact, and ffprobe-playable"
+        pass "Installed Modern Night Drive matches its manifest; FFprobe decodes all 47 assets"
         return 0
     else
-        fail "Installed Modern Night Drive imaging pack is stale, incomplete, modified, or unplayable"
+        fail "Installed Modern Night Drive validation failed; see the error above"
         return 1
     fi
 }

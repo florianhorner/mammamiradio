@@ -244,9 +244,9 @@ always remains best-effort and never blocks or delays audio.
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
   - selects one of 6 ad formats: classic pitch, testimonial, duo scene, live remote, late-night whisper, or institutional PSA
-  - resolves a sonic world and, for every shipped brand, a named public recorded scene recipe
+  - resolves a sonic world and a named scene recipe for every shipped brand
   - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
-  - lets a recipe own one quiet bed plus at most two timed dry cues; recipe-driven LLM output cannot add generic SFX or a legacy motif on top
+  - uses one quiet bed and at most two timed dry cues for a resolved recipe, suppressing generic SFX and legacy motifs from the LLM output
   - preserves generated brand motifs for legacy/custom campaigns with no recipe and for configured recipes that cannot resolve
   - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
@@ -345,44 +345,40 @@ normal LRU eviction still treats them as regular cache files, evicting them befo
 
 ### Modern Night Drive imaging pack
 
-`mammamiradio/assets/imaging/` is the default selected imaging root for both
-the standalone app and the HA add-on: both shipped `radio.toml` files retain
-`[imaging].assets_dir = ""`, so neither needs an add-on-specific asset copy.
-Its approved Neon Relay signature is exclusive to the station ID and sweeper;
-separately authored cues carry Velvet Horizon's atmospheric character through
-the time check, understated music-to-speech and speech-to-music handoffs, Casa
-Notte, and the advertising scenes. Ad breaks use distinct `in`, `mid`, and
-`out` bumpers. Compatibility filenames remain stable for operators, but resolve
-to the same modern electronic palette. The pack contains 47 48 kHz stereo MP3
-outputs, 47 retained project-authored sources, and nine named ad recipes.
+`mammamiradio/assets/imaging/` is the default imaging root for the standalone
+app and HA add-on. Both shipped `radio.toml` files leave
+`[imaging].assets_dir = ""`, so the add-on does not need a separate asset copy.
+Only the station ID and sweeper use the Neon Relay signature. Velvet Horizon
+defines the production style for the remaining cues and beds. Ad breaks have
+separate `in`, `mid`, and `out` bumpers. Operators still use the existing
+compatibility filenames. The pack contains 47 stereo MP3 files at 48 kHz, each
+with its own retained project-authored source. Nine recipes define the ad scenes.
 
-The schema-v2 `manifest.json` is the immutable runtime contract: it records the
-exact asset/source paths and checksums, layer timing, gain, DSP and license
-metadata, design direction, and a complete digest-bound file inventory.
-Human approval belongs to the separate complete-pack listening board and its
-pack-scoped receipt; board previews and receipt state are deliberately not
-copied into the installed runtime manifest. CI and add-on validation instead
-verify the installed inventory and hashes. `ATTRIBUTION.md` is generated from
-the runtime ledger; see
+The schema-v2 `manifest.json` defines the runtime pack. It records asset and
+source paths with their checksums. It also records each layer's timing, gain,
+DSP, and license metadata, plus the selected design and checksum inventory.
+The separate listening board stores the pack-scoped approval receipt. The
+installed manifest omits that receipt and the board previews. CI and add-on
+validation check the installed files against the inventory. `ATTRIBUTION.md`
+is generated from the runtime ledger; see
 [`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md)
 for the full inventory and local audition command.
 
-An operator can set `[imaging].assets_dir` to select a custom root. That is a
-complete replacement, not an overlay: a missing custom asset takes the existing
-procedural/cached fallback rather than falling through to the package. Within a
-root, a transition tries an exact `stingers/{from}_{to}.mp3` before its generic
-directional stinger; talk beds take eligible adjacent music before a bundled bed
-and then a synthetic drone. For ads, a real configured `[ads].sfx_dir` has
+Setting `[imaging].assets_dir` replaces the packaged root with a custom root.
+When the custom root lacks an asset, the runtime uses its procedural or cached
+fallback. It does not read the missing asset from the packaged root. Within the
+selected root, a transition tries `stingers/{from}_{to}.mp3` before the generic
+directional stinger. Talk beds use eligible adjacent music first, followed by a
+bundled bed or synthetic drone. For ads, a configured `[ads].sfx_dir` takes
 priority over the selected root's `sfx/` directory. A resolved recipe uses its
-declared bed and no more than two cue files; a missing/corrupt recipe falls back
-safely without a network download or live source render.
+declared bed and no more than two cue files. A missing or corrupt recipe falls
+back without downloading or rendering source audio.
 
-The pack affects normal segment production only. It does not replace the
-`mammamiradio/assets/demo/` recovery material or alter the explicit `rescue`
-flag: bridge and rescue fills still skip the egress pipeline for instant audio.
-It also does not enable the optional FM broadcast chain; if that independent
-`[audio].broadcast_chain` setting is enabled, it colours the finished normal
-segment after pack material has been mixed in.
+The runtime reads recovery audio from `mammamiradio/assets/demo/` and honors the
+explicit `rescue` flag. Bridge and rescue fills still skip the egress pipeline.
+The optional FM broadcast chain is independent. When enabled,
+`[audio].broadcast_chain` colours the finished normal segment after the pack has
+been mixed in.
 
 ### Queue commit (the per-path gate matrix)
 
@@ -644,7 +640,11 @@ Script generation never names a model in code. Each call site asks for a model b
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries, mix authored electronic scene recipes around ad dialogue, and mix identity stings under sweepers. The packaged Modern Night Drive root is the default (documented above); a custom root can replace it, while generated stings and beds remain the resilient legacy fallback and reuse `synth_` cache renders when their inputs match.
+Before queueing, `mammamiradio/audio/imaging.py` may add transition stings at
+music/speech boundaries or mix an electronic scene recipe around ad dialogue.
+It also mixes identity stings under sweepers. Modern Night Drive is the default
+root, and a custom root can replace it. Generated stings and beds provide the
+legacy fallback and reuse matching `synth_` cache renders.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 

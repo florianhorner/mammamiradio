@@ -5,7 +5,7 @@ import pytest
 from scripts import generate_sonic_brand_assets as generator
 
 
-def test_validate_only_checks_runtime_manifest_without_requiring_external_receipt(monkeypatch) -> None:
+def test_validate_only_checks_runtime_manifest_independently_of_listening_receipt(monkeypatch) -> None:
     calls: list[list[str]] = []
 
     def fake_validate(argv: list[str]) -> int:

@@ -1775,7 +1775,7 @@ def test_validate_addon_build_checks_installed_modern_night_drive_pack() -> None
     validator = VALIDATE_ADDON.read_text()
 
     assert "assert_image_imaging_assets" in validator
-    assert "Installed Modern Night Drive imaging pack" in validator
+    assert "Installed Modern Night Drive matches its manifest" in validator
     assert 'joinpath("assets", "imaging")' in validator
     assert '"signature": "neon_relay"' in validator
     assert '"atmospheric_character": "velvet_horizon"' in validator
