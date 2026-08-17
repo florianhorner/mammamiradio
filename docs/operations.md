@@ -177,30 +177,75 @@ for a trim warning.
 
 ## Audition the Modern Night Drive imaging pack
 
-From the repository root, run:
+For post-install listening QA, validate the runtime pack and build a local board:
 
 ```bash
+.venv/bin/python scripts/validate_audio_asset_pack.py
 .venv/bin/python scripts/audition_sonic_brand.py
 ```
 
 It writes a timestamped review directory under `tmp/sonic-brand-auditions/`.
-The directory contains an `index.html` listening page and a manifest. Before it
-writes either file, the command checks every compatibility alias. The board
-covers the Neon Relay station ID and sweeper, the time check, and both
-directional transitions. It also covers all three ad bumpers, Casa Notte, and
-the nine fictional-ad recipes. Open the generated HTML file in a browser; the
-script does not open it for you.
+The directory contains an `index.html` listening page and a QA manifest. The
+board covers the Neon Relay station ID and sweeper, the time check, both
+directional transitions, all three ad bumpers, Casa Notte, and the nine
+fictional-ad recipes. Open the generated HTML file in a browser; the script does
+not open it for you. This board checks an installed pack. It does not create or
+record a release approval.
 
 Use `--output-dir PATH` to choose the parent directory and `--timestamp
-YYYYMMDDTHHMMSSZ` for a deterministic review location. The script validates the
-pack before writing the board. It runs locally without calling TTS providers or
-changing the app's playback queue. The runtime pack has 47 checksum-bound
-outputs, each with its own retained project-authored source. Nine recipes define
-the ad scenes. After listening on the Mac, small speaker, and Sonos, the reviewer
-signs a receipt that binds the board content digest to the pack digest. The
-installed runtime manifest omits the receipt and board previews. Pack layout,
-provenance, selection precedence, and recovery/broadcast-chain boundaries are in
+YYYYMMDDTHHMMSSZ` for a deterministic review location. Both commands run
+locally without calling TTS providers or changing the app's playback queue.
+
+For release approval, start from the approved core-cadence manifest and build a
+separate immutable candidate:
+
+```bash
+.venv/bin/python scripts/complete_audio_pack_gate.py build \
+  --core-manifest <APPROVED_CORE_MANIFEST>
+.venv/bin/python scripts/complete_audio_pack_gate.py validate \
+  <BOARD_DIR>/manifest.json
+```
+
+Serve `<BOARD_DIR>` on loopback:
+
+```bash
+python3 -m http.server 8765 --bind 127.0.0.1 --directory <BOARD_DIR>
+```
+
+Open <http://127.0.0.1:8765/> and review it on the Mac, a small speaker, and the
+Sonos Arc. The board prints its content digest. Record the decision in a JSON
+file with exactly these fields:
+
+```json
+{
+  "content_digest": "<CONTENT_DIGEST>",
+  "status": "approved",
+  "mac": "pass",
+  "small_speaker": "pass",
+  "sonos_arc": "pass",
+  "notes": "approved"
+}
+```
+
+Bind that decision to the candidate, validate it again, and promote only the
+same digest:
+
+```bash
+.venv/bin/python scripts/complete_audio_pack_gate.py record-receipt \
+  <BOARD_DIR>/manifest.json <DECISION_JSON>
+.venv/bin/python scripts/complete_audio_pack_gate.py validate \
+  <BOARD_DIR>/manifest.json
+.venv/bin/python scripts/promote_complete_audio_pack.py \
+  --manifest <BOARD_DIR>/manifest.json \
+  --expected-content-digest <CONTENT_DIGEST>
+```
+
+Promotion installs the runtime projection but does not start the station or
+restart Home Assistant. The installed manifest intentionally omits the receipt
+and board previews. Pack layout, provenance, and its recovery boundary are in
 [`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md).
+Runtime selection precedence and broadcast-chain boundaries are in
+[Architecture](architecture.md#modern-night-drive-imaging-pack).
 
 ## Startup model
 

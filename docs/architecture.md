@@ -360,9 +360,10 @@ DSP, and license metadata, plus the selected design and checksum inventory.
 The separate listening board stores the pack-scoped approval receipt. The
 installed manifest omits that receipt and the board previews. CI and add-on
 validation check the installed files against the inventory. `ATTRIBUTION.md`
-is generated from the runtime ledger; see
-[`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md)
-for the full inventory and local audition command.
+is generated from the runtime ledger. The exact inventory is in
+[`manifest.json`](../mammamiradio/assets/imaging/manifest.json); the local
+audition procedure is in
+[Operations](operations.md#audition-the-modern-night-drive-imaging-pack).
 
 Setting `[imaging].assets_dir` replaces the packaged root with a custom root.
 When the custom root lacks an asset, the runtime uses its procedural or cached
