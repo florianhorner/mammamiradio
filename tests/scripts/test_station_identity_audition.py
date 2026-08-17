@@ -424,11 +424,14 @@ async def test_identity_renderer_rejects_helper_output_path_drift(
 
 
 def test_identity_audio_probe_requires_exact_configured_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    path = tmp_path / "clip.mp3"
+    monkeypatch.chdir(tmp_path)
+    path = Path("-clip.mp3")
     path.write_bytes(b"audio")
     sample_rate = "48000"
+    commands: list[list[str]] = []
 
-    def fake_ffprobe(*_args, **_kwargs) -> subprocess.CompletedProcess[str]:
+    def fake_ffprobe(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
         payload = {
             "streams": [
                 {
@@ -454,6 +457,7 @@ def test_identity_audio_probe_requires_exact_configured_format(tmp_path: Path, m
     assert audio_format["channels"] == 2
     assert audio_format["bitrate_kbps"] == 192
     assert duration == 1.234
+    assert commands[0][-1] == str(path.resolve())
 
     sample_rate = "44100"
     with pytest.raises(RuntimeError, match="expected"):

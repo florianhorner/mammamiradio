@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,30 @@ import pytest
 from scripts import freeze_core_cadence_speech as freezer
 
 IDENTITY_DIGEST = "a" * 64
+
+
+def test_audio_probe_passes_an_absolute_input_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = Path("-speech.mp3")
+    path.write_bytes(b"audio")
+    commands: list[list[str]] = []
+
+    def fake_ffprobe(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        payload = {
+            "streams": [{"codec_name": "mp3", "sample_rate": "48000", "channels": 2, "bit_rate": "192000"}],
+            "format": {"duration": "1.375", "bit_rate": "192000"},
+        }
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(freezer.subprocess, "run", fake_ffprobe)
+
+    audio_format, duration = freezer._probe_audio(path)
+
+    assert audio_format == freezer.FORMAT
+    assert duration == 1.375
+    assert len(commands) == 1
+    assert commands[0][-1] == str(path.resolve())
 
 
 def test_json_copy_accepts_recursively_frozen_identity_metadata() -> None:

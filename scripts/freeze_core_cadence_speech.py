@@ -528,7 +528,7 @@ def _probe_audio(path: Path) -> tuple[dict[str, object], float]:
                 "stream=codec_name,sample_rate,channels,bit_rate:format=duration,bit_rate",
                 "-of",
                 "json",
-                str(path),
+                str(path.resolve()),
             ],
             capture_output=True,
             text=True,

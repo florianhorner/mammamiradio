@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
@@ -84,6 +85,15 @@ CONTEXT_FIELDS = frozenset({*ASSET_FIELDS, "voice_id", "voice_sha256", "mix"})
 LISTENING_PROMPT = (
     "Treatment: neon_relay|velvet_horizon|headlight_cut|none; "
     "Mac: pass|fail; Sonos Arc: pass|fail|not_tested; Notes: <short reason>"
+)
+PRODUCTION_MIX_CONTRACT: Mapping[str, object] = MappingProxyType(
+    {
+        "voice_id": "identity-isabella",
+        "mix_helper": "mammamiradio.audio.normalizer.mix_voice_with_sting",
+        "sting_gain_linear": 0.15,
+        "voice_gain_linear": 1.2,
+        "voice_delay_ms": 400,
+    }
 )
 
 
@@ -253,7 +263,7 @@ def _probe_audio(path: Path) -> tuple[dict[str, object], float]:
         "stream=codec_name,sample_rate,channels,bit_rate:format=duration,bit_rate",
         "-of",
         "json",
-        str(path),
+        str(path.resolve()),
     ]
     result = subprocess.run(command, check=True, capture_output=True, text=True)
     payload = json.loads(result.stdout)
@@ -306,13 +316,7 @@ def _pack_digest(
         "scope": SCOPE,
         "limitations": list(LIMITATIONS),
         "upstream_identity": upstream_identity,
-        "production_contract": {
-            "voice_id": "identity-isabella",
-            "mix_helper": "mammamiradio.audio.normalizer.mix_voice_with_sting",
-            "sting_gain_linear": 0.15,
-            "voice_gain_linear": 1.2,
-            "voice_delay_ms": 400,
-        },
+        "production_contract": dict(PRODUCTION_MIX_CONTRACT),
         "candidates": list(candidates),
     }
     return hashlib.sha256(
@@ -623,13 +627,7 @@ def validate_treatment_gate(
         raise ValueError("Treatment manifest has a stale Isabella hash")
 
     production_contract = manifest.get("production_contract")
-    expected_contract = {
-        "voice_id": "identity-isabella",
-        "mix_helper": "mammamiradio.audio.normalizer.mix_voice_with_sting",
-        "sting_gain_linear": 0.15,
-        "voice_gain_linear": 1.2,
-        "voice_delay_ms": 400,
-    }
+    expected_contract = dict(PRODUCTION_MIX_CONTRACT)
     if production_contract != expected_contract:
         raise ValueError("Treatment manifest differs from the production mix contract")
 
@@ -762,13 +760,6 @@ def _manifest(
         "isabella_id": "identity-isabella",
         "isabella_audio_sha256": isabella_sha256,
     }
-    production_contract = {
-        "voice_id": "identity-isabella",
-        "mix_helper": "mammamiradio.audio.normalizer.mix_voice_with_sting",
-        "sting_gain_linear": 0.15,
-        "voice_gain_linear": 1.2,
-        "voice_delay_ms": 400,
-    }
     pack_digest = _pack_digest(upstream_identity, candidates, generated_at=generated_at)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -777,7 +768,7 @@ def _manifest(
         "release_ready": False,
         "scope": SCOPE,
         "upstream_identity": upstream_identity,
-        "production_contract": production_contract,
+        "production_contract": dict(PRODUCTION_MIX_CONTRACT),
         "candidates": candidates,
         "pack_digest": pack_digest,
         "listening_receipt": {
@@ -840,7 +831,7 @@ def render_treatment_gate(
     stamp = generated_at or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     if not TIMESTAMP_RE.fullmatch(stamp):
         raise ValueError("generated_at must use YYYYMMDDTHHMMSSZ format")
-    if output_root.exists():
+    if os.path.lexists(output_root):
         raise FileExistsError(f"Refusing to overwrite treatment gate: {output_root}")
 
     output_root.parent.mkdir(parents=True, exist_ok=True)
@@ -856,13 +847,6 @@ def render_treatment_gate(
         audio_root = staging_root / "audio"
         audio_root.mkdir()
         candidates: list[dict[str, object]] = []
-        production_contract = {
-            "voice_id": "identity-isabella",
-            "mix_helper": "mammamiradio.audio.normalizer.mix_voice_with_sting",
-            "sting_gain_linear": 0.15,
-            "voice_gain_linear": 1.2,
-            "voice_delay_ms": 400,
-        }
         for spec in TREATMENTS:
             solo_path = _render_solo(spec, audio_root / f"{spec.id}.mp3")
             context_path = audio_root / f"{spec.id}_isabella.mp3"
@@ -872,7 +856,7 @@ def render_treatment_gate(
                 **_asset_record(context_path, staging_root),
                 "voice_id": "identity-isabella",
                 "voice_sha256": isabella_sha256,
-                "mix": production_contract,
+                "mix": dict(PRODUCTION_MIX_CONTRACT),
             }
             candidates.append(
                 {
@@ -902,7 +886,7 @@ def render_treatment_gate(
         (staging_root / "index.html").write_text(_treatment_html(manifest), encoding="utf-8")
         (staging_root / ".ready").write_text(f"{manifest['pack_digest']}\n", encoding="ascii")
         validate_treatment_gate(manifest_path)
-        if output_root.exists():
+        if os.path.lexists(output_root):
             raise FileExistsError(f"Treatment gate appeared during render: {output_root}")
         os.replace(staging_root, output_root)
         return manifest
@@ -974,7 +958,7 @@ def write_treatment_listening_receipt_from_decision(
             decided_manifest, decided_audio_paths = validate_treatment_gate(manifest_path)
             if _decision_evidence_snapshot(manifest_path, decided_manifest, decided_audio_paths) != original_evidence:
                 raise ValueError("Treatment board changed while its decision was being committed")
-        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        except BaseException:
             rollback_path = manifest_path.parent.parent / (
                 f".{manifest_path.parent.name}.{manifest_path.name}.{uuid4().hex}.rollback"
             )

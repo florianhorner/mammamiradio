@@ -35,7 +35,9 @@ from mammamiradio.audio.normalizer import (
 
 try:
     pack_builder = importlib.import_module("scripts.build_public_imaging_pack")
-except ModuleNotFoundError:  # Direct ``python scripts/audition_sonic_brand.py`` invocation.
+except ModuleNotFoundError as exc:  # Direct ``python scripts/audition_sonic_brand.py`` invocation.
+    if exc.name != "scripts":
+        raise
     pack_builder = importlib.import_module("build_public_imaging_pack")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -282,7 +284,10 @@ def write_manifest(
         "samples": [asdict(result) for result in results],
         "scene_recipes": [asdict(result) for result in recipe_results or []],
     }
-    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return manifest_path
 
 

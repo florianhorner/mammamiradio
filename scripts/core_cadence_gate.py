@@ -3017,7 +3017,7 @@ def write_core_listening_receipt_from_decision(
             decided_manifest, decided_audio_paths = validate_core_cadence_gate(manifest_path)
             if _evidence_snapshot(manifest_path, decided_manifest, decided_audio_paths) != original_evidence:
                 raise ValueError("Core board changed while its decision was being committed")
-        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        except BaseException:
             rollback_path = manifest_path.parent.parent / (
                 f".{manifest_path.parent.name}.{manifest_path.name}.{uuid4().hex}.rollback"
             )

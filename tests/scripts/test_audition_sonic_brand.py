@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
+import runpy
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,46 @@ def test_required_pack_paths_covers_manifest_core_surfaces_and_sfx() -> None:
     assert "stingers/speech_to_music.mp3" in required
     assert "beds/casa_notte.mp3" in required
     assert {f"sfx/{name}.mp3" for name in audition.AVAILABLE_SFX_TYPES}.issubset(required)
+
+
+def test_module_fallback_does_not_mask_a_nested_missing_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    real_import_module = importlib.import_module
+
+    def import_with_nested_failure(name: str, package: str | None = None):
+        calls.append(name)
+        if name == "scripts.build_public_imaging_pack":
+            raise ModuleNotFoundError(
+                "No module named 'missing_audio_dependency'",
+                name="missing_audio_dependency",
+            )
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", import_with_nested_failure)
+
+    assert audition.__file__ is not None
+    with pytest.raises(ModuleNotFoundError) as caught:
+        runpy.run_path(audition.__file__)
+
+    assert caught.value.name == "missing_audio_dependency"
+    assert calls == ["scripts.build_public_imaging_pack"]
+
+
+def test_listening_manifest_is_written_as_utf8(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    encodings: list[str | None] = []
+    real_write_text = Path.write_text
+
+    def track_manifest_encoding(path: Path, data: str, *args, **kwargs):
+        if path == manifest_path:
+            encodings.append(kwargs.get("encoding"))
+        return real_write_text(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", track_manifest_encoding)
+
+    assert audition.write_manifest([], tmp_path, timestamp="20260710T120000Z") == manifest_path
+    assert encodings == ["utf-8"]
+    assert "Modern Night Drive — Neon Relay × Velvet Horizon" in manifest_path.read_text(encoding="utf-8")
 
 
 def test_main_uses_deterministic_timestamp_and_writes_manifest_and_html(tmp_path, monkeypatch) -> None:

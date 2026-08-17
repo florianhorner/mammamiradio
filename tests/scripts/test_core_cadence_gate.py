@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 from copy import deepcopy
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -181,3 +184,63 @@ def test_pack_digest_excludes_only_receipt_and_digest_fields() -> None:
     assert isinstance(first_source, dict)
     first_source["sha256"] = "e" * 64
     assert gate._core_pack_digest(changed) != original
+
+
+def test_core_receipt_rolls_back_called_process_error_after_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    board = tmp_path / "core-board"
+    board.mkdir()
+    manifest_path = board / "manifest.json"
+    pack_digest = "a" * 64
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "pack_digest": pack_digest,
+                "listening_receipt": gate._receipt(pack_digest),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original_bytes = manifest_path.read_bytes()
+    decision_path = tmp_path / "core-decision.json"
+    decision_path.write_text(
+        json.dumps(
+            {
+                "pack_digest": pack_digest,
+                "status": "approved",
+                "mac": "pass",
+                "small_speaker": "pass",
+                "sonos_arc": "pass",
+                "rationale": "accepted_core_cadence",
+            }
+        ),
+        encoding="utf-8",
+    )
+    validation_calls = 0
+
+    def validate(path: Path) -> tuple[dict[str, object], tuple[Path, ...]]:
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 3:
+            raise subprocess.CalledProcessError(17, ["ffprobe", "manifest-audio.mp3"])
+        return json.loads(path.read_text(encoding="utf-8")), ()
+
+    monkeypatch.setattr(gate, "validate_core_cadence_gate", validate)
+    monkeypatch.setattr(gate, "_evidence_snapshot", lambda *_args: {"board": "unchanged"})
+
+    with pytest.raises(subprocess.CalledProcessError):
+        gate.write_core_listening_receipt_from_decision(
+            manifest_path=manifest_path,
+            decision_path=decision_path,
+            reviewed_at="2026-08-15T23:15:00+00:00",
+        )
+
+    assert validation_calls == 3
+    assert manifest_path.read_bytes() == original_bytes
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["listening_receipt"]["status"] == "pending"
+    assert not list(tmp_path.glob(f".{board.name}.*"))

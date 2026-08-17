@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,29 @@ def _write_decision(
     return path
 
 
+def test_audio_probe_passes_an_absolute_input_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = Path("-treatment.mp3")
+    path.write_bytes(b"audio")
+    commands: list[list[str]] = []
+
+    def fake_ffprobe(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        payload = {
+            "streams": [{"codec_name": "mp3", "sample_rate": "48000", "channels": 2, "bit_rate": "192000"}],
+            "format": {"duration": "0.92", "bit_rate": "192000"},
+        }
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_ffprobe)
+
+    audio_format, duration = gate._probe_audio(path)
+
+    assert audio_format == EXPECTED_FORMAT
+    assert duration == 0.92
+    assert commands[0][-1] == str(path.resolve())
+
+
 def test_render_treatment_gate_binds_approved_identity_and_writes_exact_board(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -154,6 +178,17 @@ def test_render_treatment_gate_binds_approved_identity_and_writes_exact_board(
     assert manifest["upstream_identity"]["manifest_path_kind"] == "absolute"
     assert Path(manifest["upstream_identity"]["manifest_path"]) == identity_manifest
     assert (output_root / ".ready").read_text(encoding="ascii").strip() == manifest["pack_digest"]
+    expected_contract = {
+        "voice_id": "identity-isabella",
+        "mix_helper": "mammamiradio.audio.normalizer.mix_voice_with_sting",
+        "sting_gain_linear": 0.15,
+        "voice_gain_linear": 1.2,
+        "voice_delay_ms": 400,
+    }
+    assert dict(gate.PRODUCTION_MIX_CONTRACT) == expected_contract
+    assert manifest["production_contract"] == expected_contract
+    with pytest.raises(TypeError):
+        gate.PRODUCTION_MIX_CONTRACT["voice_id"] = "changed"  # type: ignore[index]
     assert len(rendered_outputs) == 6
     assert len(audio_paths) == 6
     assert set(audio_paths) == {
@@ -175,6 +210,7 @@ def test_render_treatment_gate_binds_approved_identity_and_writes_exact_board(
         assert context["format"] == EXPECTED_FORMAT
         assert context["voice_id"] == "identity-isabella"
         assert context["voice_sha256"] == isabella_sha256
+        assert context["mix"] == expected_contract
         for asset in (solo, context):
             path = output_root / asset["path"]
             assert asset["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -269,6 +305,50 @@ def test_render_refuses_output_collisions_without_touching_existing_directory(
     assert rendered_outputs == []
     assert output_root.is_dir()
     assert not preexisting_file or sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_render_refuses_a_dangling_output_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_manifest, _isabella_sha256 = _patch_approved_identity(tmp_path, monkeypatch)
+    rendered_outputs = _patch_audio_tools(monkeypatch)
+    output_root = tmp_path / "gate"
+    dangling_target = tmp_path / "missing-gate"
+    output_root.symlink_to(dangling_target, target_is_directory=True)
+
+    with pytest.raises(FileExistsError, match="Refusing to overwrite treatment gate"):
+        gate.render_treatment_gate(identity_manifest, output_root, generated_at="20260815T203002Z")
+
+    assert rendered_outputs == []
+    assert output_root.is_symlink()
+    assert output_root.resolve(strict=False) == dangling_target
+
+
+def test_render_refuses_a_dangling_output_symlink_created_during_render(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_manifest, _isabella_sha256 = _patch_approved_identity(tmp_path, monkeypatch)
+    _patch_audio_tools(monkeypatch)
+    output_root = tmp_path / "gate"
+    dangling_target = tmp_path / "late-missing-gate"
+    real_validate = gate.validate_treatment_gate
+
+    def validate_then_create_collision(manifest_path: Path, *, require_ready: bool = True):
+        result = real_validate(manifest_path, require_ready=require_ready)
+        output_root.symlink_to(dangling_target, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(gate, "validate_treatment_gate", validate_then_create_collision)
+
+    with pytest.raises(FileExistsError, match="Treatment gate appeared during render"):
+        gate.render_treatment_gate(identity_manifest, output_root, generated_at="20260815T203002Z")
+
+    assert output_root.is_symlink()
+    assert output_root.resolve(strict=False) == dangling_target
+    assert not (tmp_path / ".gate.claim").exists()
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".gate.")]
 
 
 def test_render_failure_removes_claim_and_staging_outputs(
@@ -497,9 +577,18 @@ def test_treatment_validator_rejects_unexpected_board_file(
         gate.validate_treatment_gate(output_root / "manifest.json")
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("simulated post-commit race"),
+        subprocess.CalledProcessError(17, ["ffprobe", "manifest-audio.mp3"]),
+    ],
+    ids=["value-error", "called-process-error"],
+)
 def test_treatment_receipt_rolls_back_manifest_when_post_commit_validation_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
 ) -> None:
     output_root, manifest = _render_gate(tmp_path, monkeypatch)
     manifest_path = output_root / "manifest.json"
@@ -522,12 +611,12 @@ def test_treatment_receipt_rolls_back_manifest_when_post_commit_validation_fails
         nonlocal validation_calls
         validation_calls += 1
         if validation_calls == 3:
-            raise ValueError("simulated post-commit race")
+            raise failure
         return original_validate(path, require_ready=require_ready)
 
     monkeypatch.setattr(gate, "validate_treatment_gate", fail_post_commit_validation)
 
-    with pytest.raises(ValueError, match="post-commit race"):
+    with pytest.raises(type(failure)):
         gate.write_treatment_listening_receipt_from_decision(
             manifest_path=manifest_path,
             decision_path=decision,
@@ -538,3 +627,4 @@ def test_treatment_receipt_rolls_back_manifest_when_post_commit_validation_fails
     assert manifest_path.read_bytes() == before
     stored, _paths = original_validate(manifest_path)
     assert stored["listening_receipt"]["status"] == "pending"
+    assert not list(tmp_path.glob(f".{output_root.name}.*"))
