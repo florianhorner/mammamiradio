@@ -35,7 +35,7 @@ from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
-from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
+from mammamiradio.hosts.ad_creative import AdBrand, AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import (
     BanterCommit,
@@ -825,12 +825,14 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
     config.sonic_brand.sweeper_voice = ""
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
         patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -856,11 +858,13 @@ async def test_station_id_uses_configured_sweeper_engine():
     config.sonic_brand.sweeper_engine = "openai"
     config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -965,12 +969,14 @@ async def test_time_check_uses_host_engine_for_tts():
     config.identity.station_name = "Radio Test"
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_time_check_sting.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
         patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -1013,6 +1019,12 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         roles_used=["hammer"],
     )
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    packaged_sfx = Path("/tmp/night-drive/sfx")
+    packaged_beds = Path("/tmp/night-drive/beds")
+    imaging.ad_sfx_dir.return_value = packaged_sfx
+    imaging.ad_beds_dir.return_value = packaged_beds
 
     async def _same_intro_path(path, *_args, **_kwargs):
         return path
@@ -1029,8 +1041,12 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         ),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad",
+            new_callable=AsyncMock,
+            return_value=_fake_path(),
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -1046,6 +1062,374 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
     assert promo_call.args[1] == "elevenlabs-voice-id"
     assert promo_call.kwargs["engine"] == "elevenlabs"
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
+    assert mock_synthesize_ad.call_args.args[3] == packaged_sfx
+    assert mock_synthesize_ad.call_args.kwargs["bed_assets_dir"] == packaged_beds
+
+
+@pytest.mark.asyncio
+async def test_ad_break_requests_each_foreground_bumper_role_once():
+    """A normal multi-spot break must not reuse one foreground bumper source."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 3
+    host = config.hosts[0]
+    script = AdScript(
+        brand=config.ads.brands[0].name,
+        parts=[AdPart(type="voice", text="Compra subito.", role="hammer")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=["hammer"],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    requested_roles: list[str] = []
+
+    def _record_bumper(
+        output_path: Path,
+        _duration_sec: float = 1.5,
+        *,
+        role: str = "in",
+    ) -> Path:
+        requested_roles.append(role)
+        return output_path
+
+    imaging.pick_ad_bumper.side_effect = _record_bumper
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+
+    async def _same_intro_path(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=0.0),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.AD
+    assert requested_roles == ["in", "mid", "out"]
+    assert len(set(requested_roles)) == len(requested_roles)
+
+
+@pytest.mark.asyncio
+async def test_ad_recipe_resolves_once_and_reaches_tts_renderer():
+    """Official brand recipes cross the producer boundary without LLM SFX state."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.brands = [AdBrand(name="Vittoria", tagline="Sempre avanti", sonic_recipe="stadium_win")]
+    config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+    sonic = SonicWorld(recipe_id="stadium_win", transition_motif="", sonic_signature="")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=None, bed_gain_db=0.0, cues=())
+    script = AdScript(
+        brand="Vittoria",
+        summary="A winner",
+        parts=[AdPart(type="voice", text="Una vittoria.", role="hammer")],
+        sonic=sonic,
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = Path("/tmp/recorded-sfx")
+    imaging.ad_beds_dir.return_value = Path("/tmp/recorded-beds")
+    imaging.resolve_ad_recipe.return_value = recipe
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", sonic, ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    imaging.resolve_ad_recipe.assert_called_once()
+    assert mock_synthesize_ad.call_args.kwargs["recipe"] is recipe
+
+
+async def _render_two_spot_recipe_break(recipes, *, core_foreground_source_ids=()):
+    """Return the concrete recipes handed to each ad renderer in one break."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 2
+    host = config.hosts[0]
+    brands = [
+        AdBrand(name="Prima", tagline="Prima", sonic_recipe="first"),
+        AdBrand(name="Seconda", tagline="Seconda", sonic_recipe="second"),
+    ]
+    config.ads.brands = brands
+    voice_map = {"hammer": config.ads.voices[0]}
+    sonics = [
+        SonicWorld(recipe_id="first", transition_motif="", sonic_signature=""),
+        SonicWorld(recipe_id="second", transition_motif="", sonic_signature=""),
+    ]
+    selections = [
+        (brands[0], "classic_pitch", sonics[0], voice_map),
+        (brands[1], "classic_pitch", sonics[1], voice_map),
+    ]
+    scripts = [
+        AdScript(
+            brand=brand.name,
+            parts=[AdPart(type="voice", text=f"{brand.name} parla.", role="hammer")],
+            summary=brand.name,
+            format="classic_pitch",
+            sonic=sonic,
+            roles_used=["hammer"],
+        )
+        for brand, sonic in zip(brands, sonics, strict=True)
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+    imaging.resolve_ad_recipe.side_effect = recipes
+    imaging.core_break_foreground_source_ids.return_value = core_foreground_source_ids
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=selections),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=scripts),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad",
+            new_callable=AsyncMock,
+            return_value=_fake_path(),
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.AD
+    assert segment.metadata["brands"] == ["Prima", "Seconda"]
+    assert [call.args[0].brand for call in mock_synthesize_ad.await_args_list] == ["Prima", "Seconda"]
+    return [call.kwargs["recipe"] for call in mock_synthesize_ad.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_ad_break_suppresses_only_later_recipe_cues_with_repeated_foreground_sources():
+    """Two spots keep their copy/beds while the later repeated recording is removed."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    first = ResolvedAdRecipe(
+        id="first",
+        bed_path=Path("/tmp/first-bed.mp3"),
+        bed_gain_db=-22.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/shared-first.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("shared-recording",),
+            ),
+        ),
+    )
+    second = ResolvedAdRecipe(
+        id="second",
+        bed_path=Path("/tmp/second-bed.mp3"),
+        bed_gain_db=-21.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/shared-later.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("shared-recording",),
+            ),
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/fresh-later.mp3"),
+                -12.0,
+                0.5,
+                source_ids=("fresh-recording",),
+            ),
+        ),
+    )
+
+    rendered_recipes = await _render_two_spot_recipe_break([first, second])
+
+    assert rendered_recipes[0] is first
+    assert rendered_recipes[1].bed_path == second.bed_path
+    assert [cue.asset_path.name for cue in rendered_recipes[1].cues] == ["fresh-later.mp3"]
+
+
+@pytest.mark.asyncio
+async def test_ad_break_suppresses_recipe_cues_that_repeat_core_bumpers_or_transitions():
+    """Core in/mid/out and boundary foregrounds reserve their sources before spots."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    conflicting = ResolvedAdRecipe(
+        id="first",
+        bed_path=Path("/tmp/first-bed.mp3"),
+        bed_gain_db=-22.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/core-repeat.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("core-transition",),
+            ),
+        ),
+    )
+    fresh = ResolvedAdRecipe(
+        id="second",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/fresh.mp3"),
+                -11.0,
+                0.5,
+                source_ids=("fresh-recording",),
+            ),
+        ),
+    )
+
+    rendered = await _render_two_spot_recipe_break(
+        [conflicting, fresh],
+        core_foreground_source_ids=("core-transition",),
+    )
+
+    assert rendered[0].bed_path == conflicting.bed_path
+    assert rendered[0].cues == ()
+    assert rendered[1] is fresh
+
+
+@pytest.mark.asyncio
+async def test_ad_break_preserves_non_overlapping_recipe_cues():
+    """Unique foreground recordings cross the producer boundary unchanged."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    first = ResolvedAdRecipe(
+        id="first",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/first.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("first-recording",),
+            ),
+        ),
+    )
+    second = ResolvedAdRecipe(
+        id="second",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/second.mp3"),
+                -11.0,
+                0.5,
+                source_ids=("second-recording",),
+            ),
+        ),
+    )
+
+    rendered_recipes = await _render_two_spot_recipe_break([first, second])
+
+    assert rendered_recipes == [first, second]
+    assert rendered_recipes[0] is first
+    assert rendered_recipes[1] is second
+
+
+@pytest.mark.asyncio
+async def test_unresolved_ad_recipe_restores_legacy_sonic_mode_before_writing():
+    """Configured recipe IDs suppress accents only after they actually resolve."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.brands = [AdBrand(name="Vittoria", tagline="Sempre avanti", sonic_recipe="stadium_win")]
+    config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+    configured_sonic = SonicWorld(
+        recipe_id="stadium_win",
+        transition_motif="whoosh",
+        sonic_signature="ice_clink+startup_synth",
+    )
+    fallback_script = AdScript(
+        brand="Vittoria",
+        summary="A winner",
+        parts=[AdPart(type="voice", text="Una vittoria.", role="hammer")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = Path("/tmp/recorded-sfx")
+    imaging.ad_beds_dir.return_value = Path("/tmp/recorded-beds")
+    imaging.resolve_ad_recipe.return_value = None
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fallback_script) as write_ad,
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", configured_sonic, ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()) as synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    rendered_sonic = write_ad.call_args.kwargs["sonic"]
+    assert rendered_sonic.recipe_id == ""
+    assert rendered_sonic.transition_motif == "whoosh"
+    assert rendered_sonic.sonic_signature == "ice_clink+startup_synth"
+    assert synthesize_ad.call_args.kwargs["recipe"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -5108,7 +5492,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()) as mock_synth_ad,
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
