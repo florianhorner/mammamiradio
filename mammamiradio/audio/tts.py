@@ -1575,13 +1575,35 @@ async def synthesize_ad(
     )
     if recipe is not None and first_voice_index is not None:
         timeline_parts = rendered_parts[: first_voice_index + 1]
-        measured_duration_results = await _settle_owned(
-            *(loop.run_in_executor(None, probe_duration_sec, path) for _, path in timeline_parts)
-        )
+        try:
+            measured_duration_results = await _settle_owned(
+                *(loop.run_in_executor(None, probe_duration_sec, path) for _, path in timeline_parts)
+            )
+        except BaseException:
+            _unlink_speech_artifacts(voice_sfx_parts)
+            if motif_result:
+                _unlink_many([motif_result])
+            raise
         measured_failure = _prioritized_failure(measured_duration_results)
-        if measured_failure is not None:
+        if measured_failure is not None and (
+            isinstance(measured_failure, TTSUnavailableError) or not isinstance(measured_failure, Exception)
+        ):
+            _unlink_speech_artifacts(voice_sfx_parts)
+            if motif_result:
+                _unlink_many([motif_result])
             raise measured_failure
-        measured_durations = cast(list[float | None], measured_duration_results)
+        ordinary_probe_failures = [result for result in measured_duration_results if isinstance(result, Exception)]
+        if ordinary_probe_failures:
+            logger.warning(
+                "Recipe %s could not probe %d timeline part(s); using duration estimates (%s)",
+                recipe.id,
+                len(ordinary_probe_failures),
+                type(ordinary_probe_failures[0]).__name__,
+            )
+        measured_durations = cast(
+            list[float | None],
+            [None if isinstance(result, Exception) else result for result in measured_duration_results],
+        )
         timeline: list[tuple[str, float]] = []
         for (part, path), measured_duration in zip(timeline_parts, measured_durations, strict=True):
             if measured_duration is not None and measured_duration > 0:
@@ -1626,17 +1648,29 @@ async def synthesize_ad(
         if recipe is None:
             return None
 
-        measured_duration = cast(
-            float | None,
-            await _settle_executor(loop.run_in_executor(None, probe_duration_sec, voice_path)),
-        )
-        voice_duration = (
-            measured_duration if measured_duration and measured_duration > 0 else _estimate_duration(voice_path)
-        )
         created: list[Path] = []
         current = voice_path
         succeeded = False
         try:
+            try:
+                measured_duration = cast(
+                    float | None,
+                    await _settle_executor(loop.run_in_executor(None, probe_duration_sec, voice_path)),
+                )
+            except asyncio.CancelledError:
+                raise
+            except TTSUnavailableError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Recipe %s could not probe assembled voice; using duration estimate (%s)",
+                    recipe.id,
+                    type(exc).__name__,
+                )
+                measured_duration = None
+            voice_duration = (
+                measured_duration if measured_duration and measured_duration > 0 else _estimate_duration(voice_path)
+            )
             if recipe.bed_path is not None:
                 if not recipe.bed_path.is_file():
                     return None
@@ -1676,8 +1710,10 @@ async def synthesize_ad(
                 current = recipe_mix_path
             succeeded = True
         except asyncio.CancelledError:
+            _unlink_speech_artifacts([voice_path, *ad_parts])
             raise
         except TTSUnavailableError:
+            _unlink_speech_artifacts([voice_path, *ad_parts])
             raise
         except Exception as exc:
             logger.warning("Recipe %s failed; using compatibility ad audio: %s", recipe.id, exc)

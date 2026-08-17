@@ -1618,7 +1618,10 @@ def fit_audio_oneshot(
     """Trim or silence-pad a one-shot to a fixed duration without repeating it."""
     duration = max(float(duration_sec), 0.5)
     fade = min(max(float(fade_out_sec), 0.0), duration / 2)
-    fade_filter = f",afade=t=out:st={_fmt_num(duration - fade)}:d={_fmt_num(fade)}" if fade > 0 else ""
+    # Reverse-fade-reverse targets the actual end of the trimmed source.  A
+    # timestamp relative to ``duration`` can fall after EOF for short one-shots,
+    # and applying the fade after ``apad`` would only fade appended silence.
+    fade_filter = f",areverse,afade=t=in:st=0:d={_fmt_num(fade)},areverse" if fade > 0 else ""
     cmd = [
         "ffmpeg",
         "-y",

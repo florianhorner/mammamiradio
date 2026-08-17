@@ -4435,6 +4435,115 @@ async def test_synthesize_ad_recipe_after_first_voice_uses_rendered_timeline(_mo
 
 
 @pytest.mark.asyncio
+async def test_synthesize_ad_recipe_timeline_probe_exception_uses_duration_fallbacks(_mock_all, tmp_path, caplog):
+    """An instrumentation failure cannot discard already rendered recipe speech."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    sting = _touch(tmp_path / "sting.mp3")
+    recipe = ResolvedAdRecipe(
+        id="after_voice",
+        bed_path=None,
+        bed_gain_db=-25.0,
+        cues=(ResolvedRecipeCue("after_first_voice", sting, -12.0, 0.4),),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[
+            AdPart(type="pause", duration=0.5),
+            AdPart(type="voice", text="Prima la voce, poi il dettaglio."),
+        ],
+    )
+
+    def _probe(path: Path) -> float:
+        if path.name.startswith("adpart_"):
+            raise RuntimeError("ffprobe instrumentation failed")
+        return 3.1
+
+    _mock_all["ffprobe_duration"].side_effect = _probe
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
+    assert layers[0][1] == pytest.approx(2.7)
+    assert caplog.text.count("could not probe 2 timeline part(s)") == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_voice_probe_exception_uses_duration_estimate(_mock_all, tmp_path, caplog):
+    """An assembled-voice probe failure keeps the selected recipe on air."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    _mock_all["ffprobe_duration"].side_effect = [1.0, RuntimeError("ffprobe instrumentation failed")]
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    _mock_all["generate_music_bed"].assert_not_called()
+    assert caplog.text.count("could not probe assembled voice") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_probe_call", [1, 2])
+async def test_synthesize_ad_recipe_probe_cancellation_drains_then_cleans_speech(
+    _mock_all,
+    tmp_path,
+    blocked_probe_call,
+):
+    """Both recipe probes drain their executor worker before removing speech."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(id="sting_only", bed_path=None, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+    probe_calls = 0
+
+    def _blocking_probe(_path: Path) -> float:
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls != blocked_probe_call:
+            return 1.0
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        worker_finished.set()
+        return 1.0
+
+    _mock_all["ffprobe_duration"].side_effect = _blocking_probe
+    task = asyncio.create_task(synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe))
+    async with asyncio.timeout(1.0):
+        while not worker_started.is_set():
+            await asyncio.sleep(0.001)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must drain the duration probe worker"
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert worker_finished.is_set()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+
+
+@pytest.mark.asyncio
 async def test_synthesize_ad_recipe_normalize_ad_returns_broadcast(_mock_all, tmp_path):
     """A successful recipe mix still takes the same broadcast loudness pass as legacy ads."""
     from mammamiradio.audio.imaging import ResolvedAdRecipe

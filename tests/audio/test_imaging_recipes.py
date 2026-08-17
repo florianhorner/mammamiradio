@@ -403,6 +403,10 @@ def test_fit_audio_oneshot_silence_pads_without_repeating_source(tmp_path: Path)
     assert "apad=whole_dur=0.8" in audio_filter
     assert "atrim=0:0.8" in audio_filter
     assert "loudnorm=I=-16" in audio_filter
+    reverse_fade = "areverse,afade=t=in:st=0:d=0.08,areverse"
+    assert reverse_fade in audio_filter
+    assert audio_filter.index(reverse_fade) < audio_filter.index("apad=whole_dur=0.8")
+    assert "afade=t=out:st=0.72" not in audio_filter
 
 
 @pytest.mark.requires_ffmpeg
@@ -436,6 +440,73 @@ def test_fit_audio_oneshot_has_no_second_attack_in_padded_tail(tmp_path: Path) -
     match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", completed.stderr)
     assert match, completed.stderr
     assert float(match.group(1)) <= -70.0
+
+
+@pytest.mark.requires_ffmpeg
+def test_fit_audio_oneshot_fades_actual_end_of_unfaded_short_source(tmp_path: Path) -> None:
+    source = tmp_path / "unfaded-tone.wav"
+    output = tmp_path / "fitted.mp3"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:duration=0.32:sample_rate=48000",
+            "-c:a",
+            "pcm_s16le",
+            str(source),
+        ],
+        check=True,
+    )
+
+    fit_audio_oneshot(source, output, 0.8, fade_out_sec=0.08)
+
+    def _mean_volume_db(start_sec: float, end_sec: float) -> float:
+        completed = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-i",
+                str(output),
+                "-af",
+                f"atrim=start={start_sec}:end={end_sec},asetpts=N/SR/TB,volumedetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", completed.stderr)
+        assert match, completed.stderr
+        return float(match.group(1))
+
+    steady_db = _mean_volume_db(0.16, 0.22)
+    source_tail_db = _mean_volume_db(0.30, 0.32)
+    assert source_tail_db <= steady_db - 6.0
+
+    duration = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+            str(output),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    assert float(duration.stdout) == pytest.approx(0.8, abs=0.06)
 
 
 @pytest.mark.requires_ffmpeg
