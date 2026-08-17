@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "quality.yml"
 
@@ -31,9 +33,14 @@ def test_quality_workflow_pr_job_is_read_only() -> None:
 
 
 def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
-    quality_block = _job_block(_workflow_text(), "quality")
+    def checkout_fetch_depth(text: str) -> object:
+        steps = yaml.safe_load(text)["jobs"]["quality"]["steps"]
+        checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+        return checkout.get("with", {}).get("fetch-depth")
 
-    assert "fetch-depth: 0" in quality_block
+    text = _workflow_text()
+    assert checkout_fetch_depth(text) == 0
+    assert checkout_fetch_depth(text.replace("          fetch-depth: 0", "          # fetch-depth: 0")) is None
 
 
 def test_quality_workflow_scopes_write_to_main_ratchet_job() -> None:
