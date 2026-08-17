@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a local A/B and scene-recipe listening pack for recorded Mamma Mi Radio imaging.
+"""Build a local A/B and recipe board for Mamma Mi Radio's Modern Night Drive imaging.
 
 The script never calls TTS providers, starts the station, or touches its queue. It
 can render the current procedural-versus-packaged review, the historical
@@ -43,8 +43,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGED_ASSETS_DIR = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions"
 TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
-# Historical comparison only. New motif candidates are rendered from recorded
-# electric-piano material and never use this retired C-E-G-C sequence.
+# Historical comparison only. New motif candidates never use this retired
+# C-E-G-C sequence.
 LEGACY_MOTIF_NOTES = [523, 659, 784, 1047]
 TALK_BED_DURATION_SEC = 8.0
 RECIPE_PREVIEW_DURATION_SEC = 8.0
@@ -68,7 +68,7 @@ class SonicAuditionResult:
     label: str
     source_asset: str
     baseline: str
-    night_drive: str
+    modern_night_drive: str
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,9 @@ SAMPLES: tuple[SonicSample, ...] = (
         Path("stingers") / "speech_to_music.mp3",
         "speech_to_music.mp3",
     ),
-    SonicSample("ad_bumper", "Ad-break bumper", Path("bumpers") / "ad_break.mp3", "ad_bumper.mp3"),
+    SonicSample("ad_in", "Ad-break entry bumper", Path("bumpers") / "ad_in.mp3", "ad_in.mp3"),
+    SonicSample("ad_mid", "Ad-break middle bumper", Path("bumpers") / "ad_mid.mp3", "ad_mid.mp3"),
+    SonicSample("ad_out", "Ad-break exit bumper", Path("bumpers") / "ad_out.mp3", "ad_out.mp3"),
     SonicSample("talk_bed", "Casa Notte talk bed", Path("beds") / "casa_notte.mp3", "talk_bed.mp3"),
 )
 
@@ -111,7 +113,7 @@ def _timestamp(value: str | None = None) -> str:
 
 
 def required_pack_paths() -> tuple[Path, ...]:
-    """Return the complete Night Drive contract, including the shared SFX bank."""
+    """Return the Modern Night Drive audition contract, including compatibility SFX."""
     return (
         Path("manifest.json"),
         *(sample.packaged_asset for sample in SAMPLES),
@@ -120,7 +122,7 @@ def required_pack_paths() -> tuple[Path, ...]:
 
 
 def missing_pack_paths(assets_dir: Path) -> list[Path]:
-    """Return missing or empty Night Drive assets relative to ``assets_dir``."""
+    """Return missing or empty Modern Night Drive assets relative to ``assets_dir``."""
     missing: list[Path] = []
     for relative_path in required_pack_paths():
         candidate = assets_dir / relative_path
@@ -139,7 +141,7 @@ def require_pack_assets(assets_dir: Path) -> None:
     if not missing:
         return
     names = ", ".join(path.as_posix() for path in missing)
-    raise FileNotFoundError(f"Night Drive pack is incomplete under {assets_dir}: missing or empty {names}")
+    raise FileNotFoundError(f"Modern Night Drive pack is incomplete under {assets_dir}: missing or empty {names}")
 
 
 def render_baseline_sample(sample: SonicSample, output_path: Path) -> Path:
@@ -155,7 +157,7 @@ def render_baseline_sample(sample: SonicSample, output_path: Path) -> Path:
         return generate_transition_sting("music", "banter", output_path, LEGACY_MOTIF_NOTES)
     if sample.key == "speech_to_music":
         return generate_transition_sting("banter", "music", output_path, LEGACY_MOTIF_NOTES)
-    if sample.key == "ad_bumper":
+    if sample.key in {"ad_in", "ad_mid", "ad_out"}:
         return generate_bumper_jingle(output_path)
     if sample.key == "talk_bed":
         # A deliberately-empty assets root forces the same synthetic-drone branch
@@ -173,28 +175,28 @@ def render_baseline_sample(sample: SonicSample, output_path: Path) -> Path:
 
 
 def render_audition(run_dir: Path, *, assets_dir: Path | None = None) -> list[SonicAuditionResult]:
-    """Render procedural baselines and copy the packaged recorded counterparts."""
+    """Render procedural baselines and copy the packaged Modern Night Drive counterparts."""
     assets_dir = assets_dir or PACKAGED_ASSETS_DIR
     require_pack_assets(assets_dir)
     if run_dir.exists():
         raise FileExistsError(f"Refusing to overwrite existing audition directory: {run_dir}")
 
     baseline_dir = run_dir / "baseline"
-    night_drive_dir = run_dir / "night-drive"
+    modern_night_drive_dir = run_dir / "modern-night-drive"
     results: list[SonicAuditionResult] = []
     for sample in SAMPLES:
         baseline_path = baseline_dir / sample.output_name
-        night_drive_path = night_drive_dir / sample.output_name
+        modern_night_drive_path = modern_night_drive_dir / sample.output_name
         render_baseline_sample(sample, baseline_path)
-        night_drive_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(assets_dir / sample.packaged_asset, night_drive_path)
+        modern_night_drive_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(assets_dir / sample.packaged_asset, modern_night_drive_path)
         results.append(
             SonicAuditionResult(
                 key=sample.key,
                 label=sample.label,
                 source_asset=sample.packaged_asset.as_posix(),
                 baseline=baseline_path.relative_to(run_dir).as_posix(),
-                night_drive=night_drive_path.relative_to(run_dir).as_posix(),
+                modern_night_drive=modern_night_drive_path.relative_to(run_dir).as_posix(),
             )
         )
     return results
@@ -217,14 +219,14 @@ def render_recipe_previews(run_dir: Path, *, assets_dir: Path | None = None) -> 
 
     This intentionally contains no fake voice: the result isolates the thing
     a listener needs to approve here — level, texture, and the placement of the
-    real crowd/brass/foley details — without asking a network TTS engine to
+    project-authored electronic cues — without asking a network TTS engine to
     manufacture review material.
     """
     assets_dir = assets_dir or PACKAGED_ASSETS_DIR
     manifest = json.loads((assets_dir / "manifest.json").read_text(encoding="utf-8"))
     raw_recipes = manifest.get("recipes")
     if not isinstance(raw_recipes, list):
-        raise ValueError("Night Drive pack manifest has no recipe inventory")
+        raise ValueError("Modern Night Drive pack manifest has no recipe inventory")
 
     library = ImagingLibrary(LEGACY_MOTIF_NOTES, run_dir / ".recipe-tmp", assets_dir=assets_dir)
     previews_dir = run_dir / "scene-recipes"
@@ -232,11 +234,11 @@ def render_recipe_previews(run_dir: Path, *, assets_dir: Path | None = None) -> 
     results: list[RecipeAuditionResult] = []
     for raw_recipe in raw_recipes:
         if not isinstance(raw_recipe, dict) or not isinstance(raw_recipe.get("id"), str):
-            raise ValueError("Night Drive pack contains an invalid recipe id")
+            raise ValueError("Modern Night Drive pack contains an invalid recipe id")
         recipe_id = raw_recipe["id"]
         recipe = library.resolve_ad_recipe(recipe_id, variant_key="audition")
         if recipe is None or recipe.bed_path is None:
-            raise ValueError(f"Night Drive pack recipe is not auditionable: {recipe_id}")
+            raise ValueError(f"Modern Night Drive pack recipe is not auditionable: {recipe_id}")
 
         bed_render = previews_dir / f".{recipe_id}.bed.mp3"
         output_path = previews_dir / f"{recipe_id}.mp3"
@@ -281,7 +283,7 @@ def write_manifest(
     payload = {
         "generated_at": timestamp,
         "mode": "local-only",
-        "pack": "Recorded Night Drive",
+        "pack": "Modern Night Drive — Neon Relay × Velvet Horizon",
         "samples": [asdict(result) for result in results],
         "scene_recipes": [asdict(result) for result in recipe_results or []],
     }
@@ -310,9 +312,9 @@ def write_index_html(
               </audio>
             </figure>
             <figure>
-              <figcaption>Night Drive packaged asset</figcaption>
+              <figcaption>Modern Night Drive packaged asset</figcaption>
               <audio controls preload=\"metadata\">
-                <source src=\"{html.escape(result.night_drive, quote=True)}\" type=\"audio/mpeg\">
+                <source src=\"{html.escape(result.modern_night_drive, quote=True)}\" type=\"audio/mpeg\">
                 Your browser cannot play this file.
               </audio>
             </figure>
@@ -337,7 +339,7 @@ def write_index_html(
   <head>
     <meta charset=\"utf-8\">
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-    <title>Mamma Mi Radio — Night Drive A/B audition</title>
+    <title>Mamma Mi Radio — Modern Night Drive A/B audition</title>
     <style>
       :root {{ color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif;
         background: #14110f; color: #f5edd8; }}
@@ -355,9 +357,10 @@ def write_index_html(
     </style>
   </head>
   <body>
-    <h1>Recorded Night Drive audition</h1>
+    <h1>Neon Relay × Velvet Horizon</h1>
     <p class=\"lede\">Generated locally at {html.escape(timestamp)}. Left is the current procedural render;
-      right is the packaged recorded asset. Scene recipes below isolate their real bed and cues.
+      right is the Modern Night Drive packaged asset. Neon Relay is the station signature; Velvet Horizon
+      is the atmospheric character. Scene recipes below isolate each project-authored bed and cue pair.
       No station queue or network provider was used.</p>
 {rows}
     <h1>Ad scene recipes</h1>

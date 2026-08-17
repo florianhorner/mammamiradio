@@ -343,20 +343,29 @@ loop. Startup's suspect-file purge preserves `synth_` files even when they are s
 normal LRU eviction still treats them as regular cache files, evicting them before
 `norm_`/`fm_` processed audio.
 
-### Recorded Night Drive imaging pack
+### Modern Night Drive imaging pack
 
 `mammamiradio/assets/imaging/` is the default selected imaging root for both
 the standalone app and the HA add-on: both shipped `radio.toml` files retain
 `[imaging].assets_dir = ""`, so neither needs an add-on-specific asset copy.
-It supplies recorded station-ID/sweeper/time-check cues, generic music-to-speech
-and speech-to-music stingers, an ad-break bumper, the Casa Notte loopable room
-bed, and an ad library of real crowd reactions, trumpet, mandolin, café/espresso,
-till, telephone, cassette, ice, and road details. `manifest.json` is schema-v2:
-it links each rendered asset to CC0 source records, creator/source URL, source
-and output checksums, plus nine named ad recipes. `ATTRIBUTION.md` is generated
-from that ledger and checked in CI; see
+Its approved Neon Relay signature is exclusive to the station ID and sweeper;
+separately authored cues carry Velvet Horizon's atmospheric character through
+the time check, understated music-to-speech and speech-to-music handoffs, Casa
+Notte, and the advertising scenes. Ad breaks use distinct `in`, `mid`, and
+`out` bumpers. Compatibility filenames remain stable for operators, but resolve
+to the same modern electronic palette. The pack contains 47 48 kHz stereo MP3
+outputs, 47 retained project-authored sources, and nine named ad recipes.
+
+The schema-v2 `manifest.json` is the immutable runtime contract: it records the
+exact asset/source paths and checksums, layer timing, gain, DSP and license
+metadata, design direction, and a complete digest-bound file inventory.
+Human approval belongs to the separate complete-pack listening board and its
+pack-scoped receipt; board previews and receipt state are deliberately not
+copied into the installed runtime manifest. CI and add-on validation instead
+verify the installed inventory and hashes. `ATTRIBUTION.md` is generated from
+the runtime ledger; see
 [`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md)
-for the full inventory, rebuild boundary, and local audition command.
+for the full inventory and local audition command.
 
 An operator can set `[imaging].assets_dir` to select a custom root. That is a
 complete replacement, not an overlay: a missing custom asset takes the existing
@@ -635,7 +644,7 @@ Script generation never names a model in code. Each call site asks for a model b
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries, mix recorded scene recipes around ad dialogue, and mix identity stings under sweepers. The packaged Recorded Night Drive root is the default (documented above); a custom root can replace it, while generated stings and beds remain the resilient legacy fallback and reuse `synth_` cache renders when their inputs match.
+Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries, mix authored electronic scene recipes around ad dialogue, and mix identity stings under sweepers. The packaged Modern Night Drive root is the default (documented above); a custom root can replace it, while generated stings and beds remain the resilient legacy fallback and reuse `synth_` cache renders when their inputs match.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 

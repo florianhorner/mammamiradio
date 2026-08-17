@@ -141,30 +141,213 @@ PY
 assert_image_imaging_assets() {
     local image="$1"
     if docker run --rm -i "$image" python3 - <<'PY'
+from hashlib import sha256
 from importlib import resources
 import json
+from pathlib import PurePosixPath
+import re
 import subprocess
+
+EXPECTED_TOP_LEVEL_FIELDS = {
+    "schema_version",
+    "pack",
+    "provenance",
+    "generated_at",
+    "design_direction",
+    "production_contract",
+    "sources",
+    "assets",
+    "recipes",
+    "quality_guard_allowlist",
+    "pack_digest",
+    "inventory",
+}
+EXPECTED_PROVENANCE = (
+    "Project-authored deterministic masters with exact layer provenance, retained generator inputs, "
+    "and a digest-bound complete-pack listening gate."
+)
+EXPECTED_DESIGN_DIRECTION = {
+    "signature": "neon_relay",
+    "atmospheric_character": "velvet_horizon",
+    "signature_roles": ["identity.station-id", "identity.sweeper"],
+    "foreground_policy": "one unique project-authored source per advertising cue",
+    "small_speaker_policy": "recognition remains above 170 Hz",
+}
+EXPECTED_CORE_ASSETS = {
+    "identity.station-id": "station_id.mp3",
+    "identity.sweeper": "sweeper.mp3",
+    "identity.time-check": "time_check.mp3",
+    "transition.music-to-speech": "stingers/music_to_speech.mp3",
+    "transition.speech-to-music": "stingers/speech_to_music.mp3",
+    "bumper.ad-in": "bumpers/ad_in.mp3",
+    "bumper.ad-mid": "bumpers/ad_mid.mp3",
+    "bumper.ad-out": "bumpers/ad_out.mp3",
+    "bed.casa-notte": "beds/casa_notte.mp3",
+}
+EXPECTED_COMPATIBILITY_IDS = {
+    "compat.chime",
+    "compat.ding",
+    "compat.cash-register",
+    "compat.register-hit",
+    "compat.sweep",
+    "compat.whoosh",
+    "compat.tape-stop",
+    "compat.hotline-beep",
+    "compat.mandolin-sting",
+    "compat.ice-clink",
+    "compat.startup-synth",
+}
+EXPECTED_RECIPE_IDS = {
+    "cafe_testimonial",
+    "stadium_win",
+    "showroom_reveal",
+    "bureaucracy_stamp",
+    "motorway_pass",
+    "late_night_hotline",
+    "supermarket_dash",
+    "pharmacy_whisper",
+    "home_reveal",
+}
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def require_path(value, *, label):
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        raise SystemExit(f"{label} must be a canonical relative POSIX path")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or path.as_posix() != value
+        or any(part in {"", ".", ".."} or part.startswith(".") for part in path.parts)
+    ):
+        raise SystemExit(f"{label} must be a canonical relative POSIX path")
+    return value
+
+
+def require_sha256(value, *, label):
+    if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+        raise SystemExit(f"{label} must be a lowercase SHA-256 digest")
+    return value
+
+
+def inventory_digest(records):
+    digest = sha256()
+    for path, checksum in records:
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(checksum.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def installed_tree(directory, prefix=""):
+    files = {}
+    try:
+        children = sorted(directory.iterdir(), key=lambda child: child.name)
+    except OSError as exc:
+        raise SystemExit(f"cannot enumerate installed Modern Night Drive pack: {exc}") from exc
+    for child in children:
+        relative = f"{prefix}/{child.name}" if prefix else child.name
+        require_path(relative, label="installed pack path")
+        if child.is_dir():
+            files.update(installed_tree(child, relative))
+        elif child.is_file():
+            try:
+                files[relative] = sha256(child.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise SystemExit(f"cannot read installed imaging file {relative}: {exc}") from exc
+        else:
+            raise SystemExit(f"installed imaging pack contains a special entry: {relative}")
+    return files
+
 
 try:
     imaging_dir = resources.files("mammamiradio").joinpath("assets", "imaging")
     manifest = json.loads(imaging_dir.joinpath("manifest.json").read_text(encoding="utf-8"))
 except (ModuleNotFoundError, FileNotFoundError, NotADirectoryError, OSError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"cannot read installed Night Drive imaging pack: {exc}") from exc
+    raise SystemExit(f"cannot read installed Modern Night Drive imaging pack: {exc}") from exc
+
+if not isinstance(manifest, dict) or set(manifest) != EXPECTED_TOP_LEVEL_FIELDS:
+    raise SystemExit("installed Modern Night Drive manifest has the wrong immutable runtime field set")
+if (
+    manifest.get("schema_version") != 2
+    or manifest.get("pack") != "Mamma Mi Radio — Modern Night Drive"
+    or manifest.get("provenance") != EXPECTED_PROVENANCE
+):
+    raise SystemExit("installed imaging manifest has stale pack identity")
+if manifest.get("design_direction") != EXPECTED_DESIGN_DIRECTION:
+    raise SystemExit("installed imaging manifest has stale Neon Relay / Velvet Horizon direction")
+production_contract = manifest.get("production_contract")
+if (
+    not isinstance(production_contract, dict)
+    or production_contract.get("ad_bumper_roles") != ["in", "mid", "out"]
+    or production_contract.get("station_and_sweeper_are_runtime_underlays") is not True
+):
+    raise SystemExit("installed imaging manifest has the wrong runtime production contract")
+require_sha256(manifest.get("pack_digest"), label="pack_digest")
 
 assets = manifest.get("assets")
-if not isinstance(assets, list) or not assets:
-    raise SystemExit("installed Night Drive manifest has no assets")
+sources = manifest.get("sources")
+recipes = manifest.get("recipes")
+if not isinstance(assets, list) or len(assets) != 47:
+    raise SystemExit("installed Modern Night Drive manifest must contain exactly 47 assets")
+if not isinstance(sources, list) or len(sources) != 47:
+    raise SystemExit("installed Modern Night Drive manifest must contain exactly 47 retained sources")
+if not isinstance(recipes, list) or len(recipes) != 9:
+    raise SystemExit("installed Modern Night Drive manifest must contain exactly nine recipes")
 
-for entry in assets:
-    if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-        raise SystemExit(f"invalid Night Drive manifest entry: {entry!r}")
-    asset = imaging_dir.joinpath(*entry["path"].split("/"))
+recipe_ids = [entry.get("id") for entry in recipes if isinstance(entry, dict)]
+if len(recipe_ids) != len(recipes) or set(recipe_ids) != EXPECTED_RECIPE_IDS or len(set(recipe_ids)) != len(recipe_ids):
+    raise SystemExit("installed Modern Night Drive manifest has the wrong recipe inventory")
+
+declared_files = {}
+asset_by_id = {}
+asset_digest_records = []
+asset_output_digests = set()
+
+for index, entry in enumerate(assets):
+    if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+        raise SystemExit(f"invalid Modern Night Drive asset entry {index}: {entry!r}")
+    asset_id = entry["id"]
+    if not asset_id or asset_id in asset_by_id:
+        raise SystemExit(f"installed imaging manifest repeats asset id: {asset_id!r}")
+    relative = require_path(entry.get("path"), label=f"assets[{index}].path")
+    checksum = require_sha256(entry.get("sha256"), label=f"assets[{index}].sha256")
+    if relative in declared_files:
+        raise SystemExit(f"installed imaging manifest repeats runtime path: {relative}")
+    if checksum in asset_output_digests:
+        raise SystemExit(f"installed imaging manifest contains exact duplicate outputs: {checksum}")
+    asset_output_digests.add(checksum)
+    declared_files[relative] = checksum
+    asset_by_id[asset_id] = entry
+    asset_digest_records.append((relative, checksum, asset_id))
+
+    source_ids = entry.get("source_ids")
+    layers = entry.get("layers")
+    if (
+        not isinstance(source_ids, list)
+        or len(source_ids) != 1
+        or not isinstance(source_ids[0], str)
+        or not isinstance(layers, list)
+        or len(layers) != 1
+        or not isinstance(layers[0], dict)
+        or layers[0].get("source_id") != source_ids[0]
+    ):
+        raise SystemExit(f"installed imaging asset lacks one exact retained-source layer: {asset_id}")
+    declared_format = entry.get("format")
+    if not isinstance(declared_format, dict) or any(
+        declared_format.get(key) != expected
+        for key, expected in {"codec": "mp3", "sample_rate_hz": 48000, "channels": 2}.items()
+    ):
+        raise SystemExit(f"installed imaging asset has the wrong declared format: {relative}")
+
+    asset = imaging_dir.joinpath(*relative.split("/"))
     try:
         size = len(asset.read_bytes())
     except OSError as exc:
-        raise SystemExit(f"cannot read installed imaging asset {entry['path']}: {exc}") from exc
+        raise SystemExit(f"cannot read installed imaging asset {relative}: {exc}") from exc
     if size <= 1024:
-        raise SystemExit(f"installed imaging asset is missing or too small: {entry['path']}")
+        raise SystemExit(f"installed imaging asset is missing or too small: {relative}")
     try:
         with resources.as_file(asset) as path:
             result = subprocess.run(
@@ -187,22 +370,153 @@ for entry in assets:
     except FileNotFoundError as exc:
         raise SystemExit("ffprobe is not installed in the image") from exc
     except subprocess.TimeoutExpired:
-        raise SystemExit(f"ffprobe timed out for installed imaging asset {entry['path']}")
+        raise SystemExit(f"ffprobe timed out for installed imaging asset {relative}")
     if result.returncode != 0:
-        raise SystemExit(f"ffprobe failed for {entry['path']}: {result.stderr.strip()}")
-    payload = json.loads(result.stdout)
+        raise SystemExit(f"ffprobe failed for {relative}: {result.stderr.strip()}")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"ffprobe returned invalid JSON for {relative}: {exc}") from exc
     streams = payload.get("streams", [])
     stream = streams[0] if streams else {}
     if stream.get("codec_name") != "mp3" or stream.get("sample_rate") != "48000" or stream.get("channels") != 2:
-        raise SystemExit(f"installed imaging asset has wrong format {entry['path']}: {stream}")
+        raise SystemExit(f"installed imaging asset has wrong decoded format {relative}: {stream}")
 
-print(f"Night Drive imaging pack OK: {len(assets)} assets")
+for asset_id, relative in EXPECTED_CORE_ASSETS.items():
+    if asset_id not in asset_by_id or asset_by_id[asset_id].get("path") != relative:
+        raise SystemExit(f"installed Modern Night Drive core asset is missing or remapped: {asset_id}")
+
+compatibility_ids = {asset_id for asset_id in asset_by_id if asset_id.startswith("compat.")}
+if compatibility_ids != EXPECTED_COMPATIBILITY_IDS:
+    raise SystemExit("installed Modern Night Drive compatibility inventory is incomplete or stale")
+startup = asset_by_id["compat.startup-synth"]
+startup_tags = startup.get("tags")
+if not isinstance(startup_tags, list) or not {"synth", "synthesizer", "electronic"}.issubset(set(startup_tags)):
+    raise SystemExit("startup_synth is not declared as genuine electronic synthesis")
+
+recipe_asset_ids = set()
+recipe_bed_ids = set()
+recipe_cue_ids = set()
+for recipe in recipes:
+    recipe_id = recipe["id"]
+    bed = recipe.get("bed")
+    cues = recipe.get("cues")
+    if not isinstance(bed, dict) or not isinstance(bed.get("asset_id"), str):
+        raise SystemExit(f"Modern Night Drive recipe has no declared bed: {recipe_id}")
+    bed_id = bed["asset_id"]
+    if bed_id in recipe_bed_ids or bed_id not in asset_by_id or asset_by_id[bed_id].get("kind") != "ad_bed":
+        raise SystemExit(f"Modern Night Drive recipe has a missing or repeated bed: {recipe_id}")
+    if not isinstance(cues, list) or len(cues) != 2:
+        raise SystemExit(f"Modern Night Drive recipe must contain exactly two cues: {recipe_id}")
+    cue_ids = [cue.get("asset_id") for cue in cues if isinstance(cue, dict)]
+    if len(cue_ids) != 2 or len(set(cue_ids)) != 2:
+        raise SystemExit(f"Modern Night Drive recipe has an invalid cue pair: {recipe_id}")
+    for cue_id in cue_ids:
+        if (
+            not isinstance(cue_id, str)
+            or cue_id in recipe_cue_ids
+            or cue_id not in asset_by_id
+            or asset_by_id[cue_id].get("kind") != "ad_cue"
+        ):
+            raise SystemExit(f"Modern Night Drive recipe has a missing or reused cue: {recipe_id}")
+        recipe_cue_ids.add(cue_id)
+    recipe_bed_ids.add(bed_id)
+    recipe_asset_ids.update({bed_id, *cue_ids})
+if set(asset_by_id) != {*EXPECTED_CORE_ASSETS, *EXPECTED_COMPATIBILITY_IDS, *recipe_asset_ids}:
+    raise SystemExit("installed Modern Night Drive asset roles differ from the approved 47-member contract")
+
+pack_digest = sha256()
+for relative, checksum, _asset_id in sorted(asset_digest_records, key=lambda item: (item[0], item[2])):
+    pack_digest.update(relative.encode("utf-8"))
+    pack_digest.update(b"\0")
+    pack_digest.update(checksum.encode("ascii"))
+    pack_digest.update(b"\n")
+if manifest["pack_digest"] != pack_digest.hexdigest():
+    raise SystemExit("installed Modern Night Drive pack digest is stale")
+
+source_by_id = {}
+for index, entry in enumerate(sources):
+    if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+        raise SystemExit(f"invalid retained source entry {index}: {entry!r}")
+    source_id = entry["id"]
+    if not source_id or source_id in source_by_id:
+        raise SystemExit(f"installed imaging manifest repeats retained source id: {source_id!r}")
+    relative = require_path(entry.get("original_path"), label=f"sources[{index}].original_path")
+    if not relative.startswith("provenance/source-masters/"):
+        raise SystemExit(f"retained source is outside provenance/source-masters: {relative}")
+    checksum = require_sha256(entry.get("source_sha256"), label=f"sources[{index}].source_sha256")
+    if entry.get("provenance_type") != "project-authored-deterministic-master":
+        raise SystemExit(f"retained source has stale provenance: {source_id}")
+    if relative in declared_files:
+        raise SystemExit(f"installed imaging manifest repeats runtime path: {relative}")
+    declared_files[relative] = checksum
+    source_by_id[source_id] = entry
+
+referenced_source_ids = set()
+for asset_id, entry in asset_by_id.items():
+    source_id = entry["source_ids"][0]
+    source = source_by_id.get(source_id)
+    layer = entry["layers"][0]
+    if source is None or layer.get("source_sha256") != source.get("source_sha256"):
+        raise SystemExit(f"installed imaging asset has stale retained-source provenance: {asset_id}")
+    referenced_source_ids.add(source_id)
+if referenced_source_ids != set(source_by_id):
+    raise SystemExit("installed imaging source ledger is not one-to-one with the asset inventory")
+
+inventory = manifest.get("inventory")
+if not isinstance(inventory, dict) or set(inventory) != {"schema_version", "files", "digest"}:
+    raise SystemExit("installed Modern Night Drive manifest has no exact runtime inventory")
+if type(inventory.get("schema_version")) is not int or inventory["schema_version"] != 1:
+    raise SystemExit("installed Modern Night Drive inventory has the wrong schema")
+raw_inventory_files = inventory.get("files")
+if not isinstance(raw_inventory_files, list) or not raw_inventory_files:
+    raise SystemExit("installed Modern Night Drive runtime inventory is empty")
+inventory_records = []
+inventory_files = {}
+for index, entry in enumerate(raw_inventory_files):
+    if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
+        raise SystemExit(f"invalid runtime inventory entry {index}: {entry!r}")
+    relative = require_path(entry.get("path"), label=f"inventory.files[{index}].path")
+    checksum = require_sha256(entry.get("sha256"), label=f"inventory.files[{index}].sha256")
+    if relative == "manifest.json" or relative in inventory_files:
+        raise SystemExit(f"runtime inventory repeats or self-declares path: {relative}")
+    inventory_records.append((relative, checksum))
+    inventory_files[relative] = checksum
+if [path for path, _checksum in inventory_records] != sorted(inventory_files):
+    raise SystemExit("installed Modern Night Drive runtime inventory is not canonically sorted")
+if inventory_files.get("README.md") is None or inventory_files.get("ATTRIBUTION.md") is None:
+    raise SystemExit("installed Modern Night Drive runtime inventory omits its control files")
+if set(inventory_files) != {"README.md", "ATTRIBUTION.md", *declared_files}:
+    raise SystemExit("installed runtime inventory differs from controls, outputs, and retained sources")
+if any(inventory_files[path] != checksum for path, checksum in declared_files.items()):
+    raise SystemExit("installed runtime inventory hashes differ from asset/source metadata")
+declared_inventory_digest = require_sha256(inventory.get("digest"), label="inventory.digest")
+if declared_inventory_digest != inventory_digest(inventory_records):
+    raise SystemExit("installed Modern Night Drive runtime inventory digest is stale")
+
+actual_files = installed_tree(imaging_dir)
+actual_files.pop("manifest.json", None)
+if actual_files != inventory_files:
+    missing = sorted(set(inventory_files) - set(actual_files))
+    extra = sorted(set(actual_files) - set(inventory_files))
+    changed = sorted(
+        path for path in set(actual_files) & set(inventory_files) if actual_files[path] != inventory_files[path]
+    )
+    raise SystemExit(
+        f"installed Modern Night Drive runtime tree differs from its inventory "
+        f"(missing={missing}, extra={extra}, changed={changed})"
+    )
+
+print(
+    "Modern Night Drive imaging pack OK: "
+    f"{len(assets)} assets, {len(sources)} retained sources, {len(recipes)} recipes"
+)
 PY
     then
-        pass "Installed Night Drive imaging pack present and ffprobe-playable"
+        pass "Installed Modern Night Drive imaging pack is identity-bound, inventory-exact, and ffprobe-playable"
         return 0
     else
-        fail "Installed Night Drive imaging pack missing, incomplete, or unplayable"
+        fail "Installed Modern Night Drive imaging pack is stale, incomplete, modified, or unplayable"
         return 1
     fi
 }
@@ -923,7 +1237,7 @@ if [ "${1:-}" = "--build" ]; then
         echo "  Checking installed recovery assets..."
         assert_image_recovery_assets "mammamiradio-addon-test:local" || true
 
-        echo "  Checking installed Night Drive imaging assets..."
+        echo "  Checking installed Modern Night Drive imaging pack..."
         assert_image_imaging_assets "mammamiradio-addon-test:local" || true
 
         echo "  Checking installed model registry..."

@@ -175,7 +175,7 @@ as `cache_limit_mb`. The add-on Configuration tab continues to show the value yo
 entered. If songs still repeat after raising the setting, check `ha apps logs`
 for a trim warning.
 
-## Audition the recorded Night Drive imaging pack
+## Audition the Modern Night Drive imaging pack
 
 From the repository root, run:
 
@@ -185,18 +185,22 @@ From the repository root, run:
 
 It writes a timestamped local review directory under
 `tmp/sonic-brand-auditions/` with an `index.html` listening page and a manifest.
-The top half compares the procedural baseline with the recorded packaged asset
-for the station ID, sweeper, time check, both transition directions, ad bumper,
-and Casa Notte room bed. The lower scene board plays all nine fictional-ad
-recipes as a real bed plus at most two real cues (for example applause, trumpet,
-espresso, till, telephone, or cassette). Open that generated HTML file in a
-browser; the script does not open a browser itself.
+Before writing the board, the command also verifies that every electronic
+compatibility alias is present. The board plays the Neon Relay station ID and
+sweeper, the time check, both directional transitions, distinct `in`, `mid`,
+and `out` ad bumpers, Casa Notte, and all nine fictional-ad recipes. Open that
+generated HTML file in a browser; the script does not open a browser itself.
 
 Use `--output-dir PATH` to choose the parent directory and `--timestamp
 YYYYMMDDTHHMMSSZ` for a deterministic review location. The script validates the
 complete pack before it writes a listening directory and is local-only: it does
-not call TTS providers, start the app, or touch the playback queue. Pack layout,
-provenance, selection precedence, and recovery/broadcast-chain boundaries are in
+not call TTS providers, start the app, or touch the playback queue. The shipped
+runtime pack has 47 checksum-bound outputs, 47 retained project-authored sources,
+and nine recipes. Release approval is a separate receipt binding the exact
+board content digest to the immutable pack digest after Mac, small-speaker, and
+Sonos listening. That receipt and the board previews stay outside the immutable
+installed runtime manifest. Pack layout, provenance, selection precedence, and
+recovery/broadcast-chain boundaries are in
 [`mammamiradio/assets/imaging/README.md`](../mammamiradio/assets/imaging/README.md).
 
 ## Startup model

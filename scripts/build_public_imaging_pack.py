@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Build the redistributable recorded imaging pack from verified CC0 masters.
+"""Render historical motif and core-cadence audition boards.
 
-The public add-on ships the rendered MP3 clips, not the large source masters.
-This script is intentionally offline: a curator supplies a local directory of
-the reviewed masters, their hashes are verified first, and FFmpeg makes only
-the declared trims and mixes below.  It never downloads an asset or uses a
-stock-library preview.
+This script does not build the installed imaging pack. The rejected Recorded
+Night Drive source/rebuild path is retained only as archived lineage and cannot
+be invoked. Modern Night Drive pack materialization belongs to
+``complete_audio_pack_gate.py`` and ``promote_complete_audio_pack.py``; the
+current approved identity is Neon Relay with Velvet Horizon's atmosphere.
 
 Usage:
-    python scripts/build_public_imaging_pack.py --source-dir /path/to/masters
-    python scripts/build_public_imaging_pack.py --source-dir /path/to/masters --output-root /tmp/imaging
-    python scripts/build_public_imaging_pack.py --source-dir /path/to/masters --verify-sources
     python scripts/build_public_imaging_pack.py --prototype-motifs --source-dir /path/to/hq-derivatives
     python scripts/build_public_imaging_pack.py --core-audition --selected-motif warm_resolve \
         --selected-motif-artifact /path/to/listened/warm_resolve.mp3 \
@@ -50,10 +47,13 @@ from mammamiradio.audio.normalizer import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_ROOT = REPO_ROOT / "mammamiradio" / "assets" / "imaging"
 DEFAULT_PROTOTYPE_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions" / "motif-prototypes"
 DEFAULT_CORE_AUDITION_OUTPUT_ROOT = REPO_ROOT / "tmp" / "sonic-brand-auditions" / "core-audition"
 FORMAT = {"codec": "mp3", "sample_rate_hz": 48_000, "channels": 2, "bitrate_kbps": 192}
+REJECTED_REBUILD_MESSAGE = (
+    "The rejected Recorded Night Drive rebuild is retired; use "
+    "complete_audio_pack_gate.py and promote_complete_audio_pack.py."
+)
 
 # Immutable lineage from the first human selection board.  A direction choice
 # is not the same thing as the required Mac/Sonos listening approval, so the
@@ -191,6 +191,9 @@ class CoreGeneratedCue:
     fade_out_sec: float
 
 
+# Archived rejected-pack lineage. Nothing below this marker is a claim about
+# the installed Modern Night Drive pack, and the old verifier/builder reject
+# every invocation before reading a source or writing an output.
 SOURCES: tuple[SourceSpec, ...] = (
     SourceSpec(
         "cafe-kentspublicdomain",
@@ -1285,18 +1288,9 @@ def _source_map() -> dict[str, SourceSpec]:
 
 
 def verify_sources(source_root: Path) -> None:
-    """Fail closed when the curator points us at the wrong or altered master."""
-    failures: list[str] = []
-    for source in SOURCES:
-        path = source_root / source.filename
-        if not path.is_file():
-            failures.append(f"missing {source.filename}")
-            continue
-        actual = _sha256(path)
-        if actual != source.source_sha256:
-            failures.append(f"SHA-256 mismatch for {source.filename}: {actual}")
-    if failures:
-        raise ValueError("Reviewed source masters are not intact:\n- " + "\n- ".join(failures))
+    """Reject the retired Recorded Night Drive source-verification route."""
+    del source_root
+    raise RuntimeError(REJECTED_REBUILD_MESSAGE)
 
 
 def _motif_prototype_source_map() -> dict[str, MotifPrototypeSource]:
@@ -2261,7 +2255,7 @@ def _core_audition_manifest(
             preview_id="station-id",
             label="Station ID",
             path="station_id.mp3",
-            purpose="Warm Resolve under the current full station ident.",
+            purpose=f"{selected_motif.label} under the representative full station ident.",
             layers=station_layers,
             mastering_dsp=[
                 "runtime topology: sting volume=0.15",
@@ -2275,7 +2269,7 @@ def _core_audition_manifest(
             preview_id="sweeper",
             label="Sweeper",
             path="sweeper.mp3",
-            purpose="Warm Resolve under a longer representative Italian sweeper.",
+            purpose=f"{selected_motif.label} under a longer representative Italian sweeper.",
             layers=sweeper_layers,
             mastering_dsp=[
                 "runtime topology: sting volume=0.15",
@@ -2543,6 +2537,7 @@ def _core_audition_manifest(
         "stage": "core-cadence",
         "generated_at": generated_at,
         "selected_motif_id": selected_motif.id,
+        "selected_motif_label": selected_motif.label,
         "motif_selection": {
             "schema_version": 1,
             "status": "selected",
@@ -2579,7 +2574,7 @@ def _core_audition_manifest(
                 {
                     "asset_ids": ["station-id", "sweeper"],
                     "reason": (
-                        "Both identity roles intentionally state Warm Resolve once; "
+                        f"Both identity roles intentionally state {selected_motif.label} once; "
                         "their 3s/2s tails diverge and the contour appears nowhere else."
                     ),
                 }
@@ -2616,7 +2611,10 @@ def _core_audition_readme(manifest: dict[str, Any]) -> str:
             "",
             "[Open the listening board](./index.html)",
             "",
-            f"Selected direction: `{manifest['selected_motif_id']}`. This records a direction choice only; ",
+            (
+                f"Selected direction: {manifest['selected_motif_label']} "
+                f"(`{manifest['selected_motif_id']}`). This records a direction choice only; "
+            ),
             "Mac and Wohnzimmer Sonos Arc approval are still pending.",
             "",
             "## Five previews",
@@ -2626,7 +2624,10 @@ def _core_audition_readme(manifest: dict[str, Any]) -> str:
             "## Procedure",
             "",
             "1. Keep Mac volume fixed. Play Station ID and Sweeper three times each.",
-            "2. Confirm the Warm Resolve contour stays restrained and is used only on those two identity surfaces.",
+            (
+                f"2. Confirm the {manifest['selected_motif_label']} contour stays restrained and is used only "
+                "on those two identity surfaces."
+            ),
             (
                 "3. Play Ad in, Ad out, then the full cadence twice. Listen for distinct entry/exit cues, "
                 "clear Italian speech, and no trumpet or mandolin character."
@@ -2708,7 +2709,7 @@ code {{ color: #efc27a; }}
 </head>
 <body>
 <h1>Modern Night Drive — core cadence approval</h1>
-<p class="notice"><strong>Audition only.</strong> Warm Resolve is direction-selected,
+<p class="notice"><strong>Audition only.</strong> {manifest["selected_motif_label"]} is direction-selected,
 but no Mac or Wohnzimmer Sonos Arc pass is recorded. Nothing here is release-ready.</p>
 <p>Keep volume fixed. Hear the two identity surfaces three times, then Ad in, Ad out,
 and the full cadence twice. The cadence exposes every bumper and boundary transition
@@ -2913,123 +2914,21 @@ def _render_core_audition_in_place(
 
 
 def _render_asset(spec: AssetSpec, source_root: Path, output_root: Path) -> None:
-    output_path = output_root / spec.path
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_name(f".{output_path.stem}.tmp.mp3")
-    temporary_path.unlink(missing_ok=True)
-
-    sources = _source_map()
-    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
-    for layer in spec.layers:
-        command.extend(["-i", str(source_root / sources[layer.source_id].filename)])
-
-    filters: list[str] = []
-    labels: list[str] = []
-    for index, layer in enumerate(spec.layers):
-        clip = (
-            f"[{index}:a]atrim=start={_number(layer.start_sec)}:duration={_number(layer.duration_sec)},"
-            "asetpts=N/SR/TB,aresample=48000,aformat=channel_layouts=stereo,"
-            f"volume={_number(layer.gain_db)}dB"
-        )
-        if layer.fade:
-            fade_in = min(0.018, layer.duration_sec / 6)
-            fade_out = min(0.10, layer.duration_sec / 4)
-            clip += (
-                f",afade=t=in:st=0:d={_number(fade_in)}"
-                f",afade=t=out:st={_number(max(layer.duration_sec - fade_out, 0))}:d={_number(fade_out)}"
-            )
-        if layer.offset_sec:
-            delay_ms = round(layer.offset_sec * 1_000)
-            clip += f",adelay={delay_ms}|{delay_ms}"
-        label = f"clip{index}"
-        filters.append(f"{clip}[{label}]")
-        labels.append(f"[{label}]")
-
-    filters.append(
-        f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:dropout_transition=0:normalize=0,"
-        f"apad=whole_dur={_number(spec.duration_sec)},atrim=duration={_number(spec.duration_sec)},"
-        f"highpass=f=45,lowpass=f=16000,loudnorm=I={_number(spec.target_lufs)}:LRA=7:TP=-1.5,"
-        "aformat=sample_rates=48000:channel_layouts=stereo[out]"
-    )
-    command.extend(
-        [
-            "-filter_complex",
-            ";".join(filters),
-            "-map",
-            "[out]",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-b:a",
-            "192k",
-            "-write_xing",
-            "0",
-            "-f",
-            "mp3",
-            str(temporary_path),
-        ]
-    )
-    try:
-        subprocess.run(command, check=True)
-        os.replace(temporary_path, output_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    """Reject direct rendering through the archived pack definition."""
+    del spec, source_root, output_root
+    raise RuntimeError(REJECTED_REBUILD_MESSAGE)
 
 
 def _manifest(output_root: Path) -> dict[str, object]:
-    source_ids_by_asset = {
-        asset.id: tuple(dict.fromkeys(layer.source_id for layer in asset.layers)) for asset in ASSETS
-    }
-    return {
-        "schema_version": 2,
-        "pack": "Mamma Mi Radio — Recorded Night Drive",
-        "provenance": "CC0 source recordings, clipped and mixed locally by scripts/build_public_imaging_pack.py.",
-        "sources": [
-            {
-                "id": source.id,
-                "license": "CC0-1.0",
-                "source_url": source.source_url,
-                "source_sha256": source.source_sha256,
-                "creator": source.creator,
-                "title": source.title,
-                "modification": "Trimmed, gain-staged, and mixed into a Mamma Mi Radio station-imaging asset.",
-            }
-            for source in SOURCES
-        ],
-        "assets": [
-            {
-                "id": asset.id,
-                "path": asset.path,
-                "purpose": asset.purpose,
-                "kind": asset.kind,
-                "tags": list(asset.tags),
-                "source_ids": list(source_ids_by_asset[asset.id]),
-                "sha256": _sha256(output_root / asset.path),
-                "format": FORMAT,
-                "duration_target_sec": asset.duration_sec,
-                "license": "CC0-1.0",
-            }
-            for asset in ASSETS
-        ],
-        "recipes": list(RECIPES),
-    }
+    """Reject manifest creation through the archived pack definition."""
+    del output_root
+    raise RuntimeError(REJECTED_REBUILD_MESSAGE)
 
 
 def build(source_root: Path, output_root: Path) -> None:
-    verify_sources(source_root)
-    for index, asset in enumerate(ASSETS, start=1):
-        print(f"[{index:02d}/{len(ASSETS):02d}] {asset.path}")
-        _render_asset(asset, source_root, output_root)
-    manifest_path = output_root / "manifest.json"
-    temporary_path = manifest_path.with_name(".manifest.tmp.json")
-    try:
-        temporary_path.write_text(
-            json.dumps(_manifest(output_root), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        os.replace(temporary_path, manifest_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    """Reject the retired Recorded Night Drive materialization route."""
+    del source_root, output_root
+    raise RuntimeError(REJECTED_REBUILD_MESSAGE)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3038,11 +2937,13 @@ def main(argv: list[str] | None = None) -> int:
         "--source-dir",
         type=Path,
         required=True,
-        help="Directory holding final masters, or hash-pinned HQ derivatives in prototype mode",
+        help="Directory holding the hash-pinned HQ derivatives used by audition modes",
     )
     parser.add_argument("--output-root", type=Path, help="Rendered pack or motif-prototype directory")
     parser.add_argument(
-        "--verify-sources", action="store_true", help="Check the curated masters without writing assets"
+        "--verify-sources",
+        action="store_true",
+        help="Verify audition-lineage HQ derivatives without rendering",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -3071,14 +2972,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional local representative spot voice; other declared lines use macOS say locally",
     )
     args = parser.parse_args(argv)
-    if args.prototype_motifs:
-        default_output_root = DEFAULT_PROTOTYPE_OUTPUT_ROOT
-    elif args.core_audition:
-        default_output_root = DEFAULT_CORE_AUDITION_OUTPUT_ROOT
-    else:
-        default_output_root = DEFAULT_OUTPUT_ROOT
-    output_root = args.output_root or default_output_root
     try:
+        if not args.prototype_motifs and not args.core_audition:
+            raise ValueError(REJECTED_REBUILD_MESSAGE)
+        default_output_root = (
+            DEFAULT_PROTOTYPE_OUTPUT_ROOT if args.prototype_motifs else DEFAULT_CORE_AUDITION_OUTPUT_ROOT
+        )
+        output_root = args.output_root or default_output_root
         if args.core_audition:
             if args.selected_motif is None:
                 raise ValueError("--selected-motif is required with --core-audition")
@@ -3107,16 +3007,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"Built Modern Night Drive motif prototypes: {output_root} ({len(manifest['candidates'])} candidates)"
             )
             return 0
-        verify_sources(args.source_dir)
-        if args.verify_sources:
-            print(f"Reviewed CC0 masters OK: {len(SOURCES)}")
-            return 0
-        build(args.source_dir, output_root)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    print(f"Built public recorded imaging pack: {output_root} ({len(ASSETS)} assets)")
-    return 0
+    raise AssertionError("unreachable audition mode")
 
 
 if __name__ == "__main__":

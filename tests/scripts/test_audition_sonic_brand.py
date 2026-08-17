@@ -30,7 +30,8 @@ def test_required_pack_paths_covers_manifest_core_surfaces_and_sfx() -> None:
 
     assert "manifest.json" in required
     assert "station_id.mp3" in required
-    assert "bumpers/ad_break.mp3" in required
+    assert {"bumpers/ad_in.mp3", "bumpers/ad_mid.mp3", "bumpers/ad_out.mp3"} <= required
+    assert "bumpers/ad_break.mp3" not in required
     assert "stingers/music_to_speech.mp3" in required
     assert "stingers/speech_to_music.mp3" in required
     assert "beds/casa_notte.mp3" in required
@@ -53,18 +54,21 @@ def test_main_uses_deterministic_timestamp_and_writes_manifest_and_html(tmp_path
 
     assert manifest["generated_at"] == timestamp
     assert manifest["mode"] == "local-only"
-    assert manifest["pack"] == "Recorded Night Drive"
+    assert manifest["pack"] == "Modern Night Drive — Neon Relay × Velvet Horizon"
     assert manifest["scene_recipes"] == []
     assert len(manifest["samples"]) == len(audition.SAMPLES)
     assert page.count("<audio controls") == len(audition.SAMPLES) * 2
-    assert "Night Drive packaged asset" in page
+    assert "Modern Night Drive packaged asset" in page
+    assert "Neon Relay" in page
+    assert "Velvet Horizon" in page
+    assert "Recorded Night Drive" not in page
     assert "https://" not in page
 
     for result in manifest["samples"]:
         baseline = run_dir / result["baseline"]
-        night_drive = run_dir / result["night_drive"]
+        modern_night_drive = run_dir / result["modern_night_drive"]
         assert baseline.read_bytes() == f"baseline:{result['key']}".encode()
-        assert night_drive.read_bytes() == (assets_dir / result["source_asset"]).read_bytes()
+        assert modern_night_drive.read_bytes() == (assets_dir / result["source_asset"]).read_bytes()
 
 
 def test_main_reports_invalid_timestamp_without_creating_output(tmp_path, monkeypatch, capsys) -> None:
@@ -81,7 +85,7 @@ def test_main_reports_invalid_timestamp_without_creating_output(tmp_path, monkey
     assert not output_dir.exists()
 
 
-def test_main_fails_clearly_when_the_night_drive_pack_is_incomplete(tmp_path, monkeypatch, capsys) -> None:
+def test_main_fails_clearly_when_the_modern_night_drive_pack_is_incomplete(tmp_path, monkeypatch, capsys) -> None:
     assets_dir = tmp_path / "pack"
     assets_dir.mkdir()
     monkeypatch.setattr(audition, "PACKAGED_ASSETS_DIR", assets_dir)
@@ -90,11 +94,29 @@ def test_main_fails_clearly_when_the_night_drive_pack_is_incomplete(tmp_path, mo
     assert audition.main(["--output-dir", str(output_dir), "--timestamp", "20260710T120000Z"]) == 2
 
     error = capsys.readouterr().err
-    assert "Night Drive pack is incomplete" in error
+    assert "Modern Night Drive pack is incomplete" in error
     assert "manifest.json" in error
     assert "station_id.mp3" in error
     assert "sfx/chime.mp3" in error
     assert not output_dir.exists()
+
+
+def test_role_bumper_baselines_render_in_mid_and_out_independently(tmp_path, monkeypatch) -> None:
+    calls: list[Path] = []
+
+    def fake_bumper(output_path: Path) -> Path:
+        calls.append(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"bumper")
+        return output_path
+
+    monkeypatch.setattr(audition, "generate_bumper_jingle", fake_bumper)
+    role_samples = [sample for sample in audition.SAMPLES if sample.key in {"ad_in", "ad_mid", "ad_out"}]
+
+    for sample in role_samples:
+        audition.render_baseline_sample(sample, tmp_path / sample.output_name)
+
+    assert [path.name for path in calls] == ["ad_in.mp3", "ad_mid.mp3", "ad_out.mp3"]
 
 
 def test_render_audition_refuses_to_overwrite_a_prior_deterministic_run(tmp_path, monkeypatch) -> None:
@@ -147,6 +169,21 @@ def test_motif_source_verification_fails_closed_on_any_hash_mismatch(tmp_path, m
 
     with pytest.raises(ValueError, match=r"SHA-256 mismatch for source\.mp3"):
         pack_builder.verify_motif_prototype_sources(tmp_path)
+
+
+def test_rejected_recorded_pack_source_and_build_routes_are_disabled(tmp_path, capsys) -> None:
+    with pytest.raises(RuntimeError, match="rejected Recorded Night Drive rebuild is retired"):
+        pack_builder.verify_sources(tmp_path)
+    with pytest.raises(RuntimeError, match="rejected Recorded Night Drive rebuild is retired"):
+        pack_builder._render_asset(pack_builder.ASSETS[0], tmp_path, tmp_path / "output")
+    with pytest.raises(RuntimeError, match="rejected Recorded Night Drive rebuild is retired"):
+        pack_builder._manifest(tmp_path / "output")
+    with pytest.raises(RuntimeError, match="rejected Recorded Night Drive rebuild is retired"):
+        pack_builder.build(tmp_path, tmp_path / "output")
+
+    assert pack_builder.main(["--source-dir", str(tmp_path)]) == 2
+    assert "rejected Recorded Night Drive rebuild is retired" in capsys.readouterr().err
+    assert not (tmp_path / "output").exists()
 
 
 def test_motif_manifest_records_exact_layers_digest_and_pending_receipt(tmp_path) -> None:
@@ -627,6 +664,8 @@ def test_core_audition_builds_five_pending_previews_without_touching_shipped_pac
         "candidate_sha256": pack_builder.MOTIF_PROTOTYPE_SHA256["warm_resolve"],
         "recorded_at": "20260815T120000Z",
     }
+    assert manifest["selected_motif_label"] == "Warm Resolve"
+    assert manifest["previews"][0]["purpose"].startswith("Warm Resolve")
     assert manifest["release_ready"] is False
     assert manifest["listening_receipt"]["status"] == "pending"
     assert next(speech for speech in pack_builder.CORE_AUDITION_SPEECH if speech.id == "speech.station-id").text == (
@@ -678,7 +717,11 @@ def test_core_audition_builds_five_pending_previews_without_touching_shipped_pac
         0,
     )
     assert (output_root / "README.md").is_file()
-    assert (output_root / "index.html").read_text().count("<audio controls") == 5
+    readme = (output_root / "README.md").read_text()
+    page = (output_root / "index.html").read_text()
+    assert "Selected direction: Warm Resolve (`warm_resolve`)" in readme
+    assert "Warm Resolve is direction-selected" in page
+    assert page.count("<audio controls") == 5
 
 
 @pytest.mark.requires_ffmpeg
