@@ -265,8 +265,27 @@ def _probe_audio(path: Path) -> tuple[dict[str, object], float]:
         "json",
         str(path.resolve()),
     ]
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
-    payload = json.loads(result.stdout)
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(
+            f"ffprobe could not inspect the treatment output {path.name}. "
+            "Confirm that ffprobe is installed and responsive, then retry validation or render a fresh board at a new "
+            "output path."
+        ) from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "unknown ffprobe error"
+        raise ValueError(
+            f"ffprobe rejected the treatment output {path.name}: {detail}. "
+            "Inspect the source audio, then retry validation or render a fresh board at a new output path."
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"The treatment output {path.name} has unreadable ffprobe evidence. "
+            "Inspect the source audio, then retry validation or render a fresh board at a new output path."
+        ) from exc
     streams = payload.get("streams")
     if not isinstance(streams, list) or len(streams) != 1 or not isinstance(streams[0], Mapping):
         raise ValueError(f"Treatment output has no single audio stream: {path}")

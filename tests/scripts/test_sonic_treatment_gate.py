@@ -134,10 +134,10 @@ def test_audio_probe_passes_an_absolute_input_path(tmp_path: Path, monkeypatch: 
     monkeypatch.chdir(tmp_path)
     path = Path("-treatment.mp3")
     path.write_bytes(b"audio")
-    commands: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_ffprobe(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
-        commands.append(command)
+    def fake_ffprobe(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
         payload = {
             "streams": [{"codec_name": "mp3", "sample_rate": "48000", "channels": 2, "bit_rate": "192000"}],
             "format": {"duration": "0.92", "bit_rate": "192000"},
@@ -150,7 +150,102 @@ def test_audio_probe_passes_an_absolute_input_path(tmp_path: Path, monkeypatch: 
 
     assert audio_format == EXPECTED_FORMAT
     assert duration == 0.92
-    assert commands[0][-1] == str(path.resolve())
+    assert calls == [
+        (
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_name,sample_rate,channels,bit_rate:format=duration,bit_rate",
+                "-of",
+                "json",
+                str(path.resolve()),
+            ],
+            {
+                "check": False,
+                "capture_output": True,
+                "text": True,
+                "timeout": 10,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError("ffprobe is unavailable"),
+        subprocess.TimeoutExpired(["ffprobe"], 10),
+    ],
+    ids=["os-error", "timeout"],
+)
+def test_audio_probe_converts_process_failures_to_repairable_value_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    path = tmp_path / "treatment.mp3"
+
+    def fail_ffprobe(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(gate.subprocess, "run", fail_ffprobe)
+
+    with pytest.raises(ValueError) as caught:
+        gate._probe_audio(path)
+
+    assert str(caught.value) == (
+        "ffprobe could not inspect the treatment output treatment.mp3. "
+        "Confirm that ffprobe is installed and responsive, then retry validation or render a fresh board at a new "
+        "output path."
+    )
+    assert caught.value.__cause__ is failure
+
+
+def test_audio_probe_converts_nonzero_exit_to_repairable_value_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "treatment.mp3"
+
+    monkeypatch.setattr(
+        gate.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 17, "", "invalid audio data\n"),
+    )
+
+    with pytest.raises(ValueError) as caught:
+        gate._probe_audio(path)
+
+    assert str(caught.value) == (
+        "ffprobe rejected the treatment output treatment.mp3: invalid audio data. "
+        "Inspect the source audio, then retry validation or render a fresh board at a new output path."
+    )
+
+
+def test_audio_probe_converts_invalid_json_to_repairable_value_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "treatment.mp3"
+
+    monkeypatch.setattr(
+        gate.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "not-json", ""),
+    )
+
+    with pytest.raises(ValueError) as caught:
+        gate._probe_audio(path)
+
+    assert str(caught.value) == (
+        "The treatment output treatment.mp3 has unreadable ffprobe evidence. "
+        "Inspect the source audio, then retry validation or render a fresh board at a new output path."
+    )
+    assert isinstance(caught.value.__cause__, json.JSONDecodeError)
 
 
 def test_render_treatment_gate_binds_approved_identity_and_writes_exact_board(
