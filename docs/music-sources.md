@@ -121,7 +121,10 @@ The transient boundary is deliberately narrow:
 - Jamendo audio and lease data never enter the persistent cache, SQLite,
   restart handoff, continuity/rescue, clips, derivatives, or offline access;
 - at most one prepared Jamendo track is inserted after two starter/local
-  tracks. If none is ready, base music continues immediately.
+  tracks. If none is ready, base music continues immediately. When the base
+  rotation is empty (no starter or local tracks available), this cadence
+  gate is bypassed and a prepared track may insert immediately — there is no
+  base rotation left to wait for.
 
 An adverse written provider response disables the integration pending an
 explicit reassessment. A positive response may inform a later change, but it

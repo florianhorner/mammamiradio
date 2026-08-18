@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **An empty music crate no longer loops the station ident every second.** With no starter tracks, no local MP3s, and Jamendo waiting for two songs that cannot exist, Home Assistant Green kept rebuilding its four-second send-ahead cushion by bursting `continuity_1.mp3` from the first syllable. The recovery clip now follows the same send timeline as any other segment, operator files in the music folder are picked up while the crate is empty, and Jamendo can start when there is no base rotation to wait for.
+
 - **A steered stretch stops replaying the same few songs.** Point the station somewhere with Record Hunt and it favours what it found, for as long as you leave the course set. When the hunt only resolved a handful of tracks, that favouring kept landing on the same ones, and a song could come back within half an hour. A found track now waits for the rest of its set before it can play again. The course still gets the same share of the show; it works through the crate instead of reaching for the same record.
 - **Now Playing no longer credits a host who was not on the break.** External players had no way to tell who was speaking during a host break, so they listed every host the station has configured, including the rotating guest host on breaks he never joined. The live feed now names only the hosts who spoke, and names nobody on a pre-recorded clip rather than guessing.
 - **Hosts no longer invent how many people are home.** The station knows whether someone is home or away. It does not know how many people are there, or which room anyone is in. That gap could come out on air as a confident guess. The hosts are now told not to fill it in, and the experimental setting that names your home's mood follows the same rule.

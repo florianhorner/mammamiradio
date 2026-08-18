@@ -512,6 +512,25 @@ def test_load_local_music_tracks_parses_names_and_paths(tmp_path):
     assert tracks["NoHyphen"].local_path == unnamed
 
 
+def test_load_operator_local_tracks_tags_shuffles_and_drops_blocklisted(tmp_path):
+    from mammamiradio.playlist.playlist import load_operator_local_tracks
+
+    (tmp_path / "Banned Artist - Banned Song.mp3").write_bytes(b"id3")
+    (tmp_path / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    config = load_config()
+    config.music_dir = tmp_path
+    config.playlist.shuffle = False
+
+    tracks = load_operator_local_tracks(
+        config,
+        blocklist={("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}},
+    )
+
+    assert [track.title for track in tracks] == ["Carefree"]
+    assert tracks[0].source == "local"
+    assert tracks[0].artist == "Kevin MacLeod"
+
+
 def test_load_local_music_tracks_missing_directory_is_empty(tmp_path):
     from mammamiradio.playlist.playlist import _load_local_music_tracks
 
