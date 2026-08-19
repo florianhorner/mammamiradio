@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,7 +22,9 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.scheduling.handoff import PreparedMusicHandoff, commit_music_handoff
 from mammamiradio.web.listener_requests import router as listener_requests_router
+from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -210,6 +213,118 @@ async def test_fire_interrupt_drains_queue_and_fires_skip(tmp_path: Path):
         "force_next safety belt must be set; producer clears it after URGENT_INTERRUPT renders"
     )
     assert state.last_interrupt_ts > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_mode", ["unlink", "accounting", "orphan_accounting"])
+async def test_fire_interrupt_item_failure_still_drains_and_reconciles_handoff(
+    tmp_path: Path,
+    failure_mode: str,
+):
+    """One broken item cannot strand its successor or unfinished queue work."""
+    from mammamiradio.scheduling.producer import _fire_interrupt
+
+    source = tmp_path / "song.mp3"
+    head = tmp_path / "song_head.mp3"
+    tail = tmp_path / "song_tail.mp3"
+    successor_path = tmp_path / "banter.mp3"
+    for path, payload in (
+        (source, b"song"),
+        (head, b"head"),
+        (tail, b"tail"),
+        (successor_path, b"banter"),
+    ):
+        path.write_bytes(payload)
+
+    music = Segment(type=SegmentType.MUSIC, path=source, duration_sec=120.0, ephemeral=False)
+    successor = Segment(type=SegmentType.BANTER, path=successor_path, ephemeral=True)
+    prepared = PreparedMusicHandoff(
+        music_segment=music,
+        source_path=source,
+        split=Mp3HandoffSplit(
+            head_path=head,
+            tail_path=tail,
+            playable_start_byte=0,
+            head_end_byte=4,
+            playable_end_byte=8,
+            head_duration_sec=112.0,
+            tail_duration_sec=8.0,
+            source_duration_sec=120.0,
+            frame_count=10,
+            head_frame_count=8,
+            tail_frame_count=2,
+        ),
+    )
+    state = StationState(
+        playlist=[Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="t1")],
+        queued_segments=[{"id": "music", "type": "music", "label": "Song"}],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=4)
+    queue.put_nowait(music)
+    assert commit_music_handoff(
+        queue,
+        state,
+        prepared,
+        successor,
+        {"id": "banter", "type": "banter", "label": "Banter"},
+    )
+    # A committed successor already contains the tail; the live control owns
+    # only the queued head and successor paths at this point.
+    tail.unlink()
+    skip_event = asyncio.Event()
+    real_unlink = Path.unlink
+    real_record_discard = state.record_discard
+    real_get_nowait = queue.get_nowait
+    head_exists_after_interrupt = False
+    get_calls = 0
+
+    def _flaky_unlink(path: Path, *args, **kwargs):
+        if failure_mode == "unlink" and path == head:
+            raise PermissionError(head)
+        return real_unlink(path, *args, **kwargs)
+
+    def _flaky_record_discard(segment: Segment, **kwargs):
+        if failure_mode == "accounting" and segment is music:
+            raise RuntimeError("accounting unavailable")
+        if failure_mode == "orphan_accounting" and segment is successor:
+            raise RuntimeError("orphan accounting unavailable")
+        return real_record_discard(segment, **kwargs)
+
+    def _flaky_get_nowait():
+        nonlocal get_calls
+        get_calls += 1
+        if failure_mode == "orphan_accounting" and get_calls == 2:
+            raise RuntimeError("one-shot queue read failure")
+        return real_get_nowait()
+
+    try:
+        with (
+            patch.object(Path, "unlink", _flaky_unlink),
+            patch.object(state, "record_discard", side_effect=_flaky_record_discard),
+            patch.object(queue, "get_nowait", side_effect=_flaky_get_nowait),
+        ):
+            fired = await _fire_interrupt(
+                state,
+                InterruptSpec(directive="Urgente!", urgency="urgent", cooldown=60),
+                queue,
+                skip_event,
+                bridge_tmp_dir=tmp_path,
+            )
+            head_exists_after_interrupt = head.exists()
+    finally:
+        real_unlink(head, missing_ok=True)
+
+    assert fired is True
+    assert queue.empty()
+    unfinished_tasks_attr = "_unfinished_tasks"
+    assert cast(int, getattr(queue, unfinished_tasks_attr)) == 0
+    assert state.queued_segments == []
+    assert state.handoff_reservations == {}
+    assert music.handoff_id is None
+    assert successor.handoff_id is None
+    assert not successor_path.exists()
+    assert skip_event.is_set()
+    assert head_exists_after_interrupt is (failure_mode == "unlink")
 
 
 @pytest.mark.asyncio

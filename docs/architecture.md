@@ -251,6 +251,46 @@ always remains best-effort and never blocks or delays audio.
   - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
 
+### Exact-once music-to-speech handoffs
+
+When a generated banter, impossible moment, news flash, or ad intro follows a
+queued normal music segment, the station may keep the host-over-outro effect
+without replaying the song. The invariant is deliberately strict: **every
+playable music sample belongs to exactly one emitted segment**. Decoder-only
+MP3 reservoir context may be duplicated in a scratch input, but those preroll
+samples are trimmed before the tail is mixed and are never emitted twice.
+
+1. Before touching the queue, the producer indexes the actual queued/egressed
+   MP3 with the same validated ID3/Xing-skipping boundaries used by playback.
+   It writes a frame-aligned head plus a decoder-tail input containing bounded
+   reservoir preroll. The logical tail still begins at the head ownership
+   boundary; the normalizer sample-trims the preroll before mixing. Malformed,
+   short, stale, rescue, fallback, and unsupported files fail closed to
+   ordinary dry/generic speech.
+2. It renders both the tail-mixed speech and a dry/generic fallback. At one
+   no-await queue mutation, it rechecks that the exact unstarted music object
+   is still the queue tail, replaces it with the shortened head (including its
+   real queue-shadow duration), and appends the tail-bearing speech successor.
+   `has_music_tail` becomes true only at this paired commit, not when a render
+   happened to find a song file.
+3. The private pair is reconciled by every queue rewrite. Before playback,
+   removing the successor or breaking adjacency while the head remains restores
+   the full music predecessor and drops the successor. Explicitly removing the
+   head instead honors that removal: it drops the successor without putting the
+   song back. Once the head starts, a clean EOF marks its successor due before
+   the active pointer is cleared; ordinary rewrites preserve that due successor
+   and place Air Next immediately after it. Skips and destructive source,
+   chaos, ban, purge, interrupt, or Stop controls cancel the successor. The pair
+   and its scratch artifacts are never serialized into public status or restart
+   state.
+
+The normalizer receives only the bounded decoder-tail artifact and trims its
+recorded preroll by sample count before mixing; it never uses `-sseof` or
+`last_music_file` to seek back into a full song. The rest of a host break uses a
+packaged or synthetic talk bed, never the outgoing song from its beginning.
+Restart-handoff spooling also ignores a shortened private head, preserving only
+ordinary full music entries for a future boot.
+
 Every finished segment then passes a final **loudness-reconciliation** step: it is
 measured (`measure_lufs`, EBU R128) and nudged with a single corrective `volume`
 gain so music, hosts, beds, and ads all air at one integrated-LUFS target
