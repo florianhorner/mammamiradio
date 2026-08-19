@@ -1,0 +1,14 @@
+{
+  "name": "mammami-radio-interactive-explainer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node server.mjs",
+    "test": "node --test tests/site.test.mjs tests/motion-contract.test.mjs tests/rendered-html.test.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "type": "module"
+}
