@@ -1800,11 +1800,18 @@ def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) 
     """Guarantee ad attention while keeping packaged recipes in sole control of sound.
 
     A recipe already has a reviewed bed and up to two timed real-world details.
-    Letting the LLM add its historical synthetic opener and mid-ad SFX on top
+    Letting the LLM add its historical synthetic opener or mid-ad SFX on top
     would break that cap and recreate the very layered drone the recipe avoids.
+
+    The recipe branch keeps the allowlist the prompt itself states — "only voice
+    and optional pause parts" — rather than naming the types to drop. ``type``
+    is copied straight from model JSON with no validation, so a denylist only
+    ever catches the tokens we already thought of: ``sfx`` was caught, then
+    ``environment`` had to be added behind it. Nothing else is renderable for a
+    recipe spot anyway.
     """
     if sonic.is_recipe_driven:
-        return [part for part in parts if part.type != "sfx"]
+        return [part for part in parts if part.type in ("voice", "pause")]
 
     updated = list(parts)
     motif = sonic.transition_motif or "chime"
