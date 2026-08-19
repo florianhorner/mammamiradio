@@ -204,17 +204,19 @@ the `media_player.mammamiradio` card are never affected.
 
 ## Play it through Music Assistant
 
-Music Assistant is adding a Mamma Mi Radio provider, so you can add the station
-there directly instead of going through Media Source. Add it under **Providers**,
-give it the add-on's base URL, and the station appears as a single entry under
-**Radio**. Live titles, hosts, and cover art follow the same versioned contract
-described in [now-playing.md](now-playing.md).
+Music Assistant merged a Mamma Mi Radio provider on 11 August 2026, so you can
+add the station there directly instead of going through Media Source, once
+you're running a Music Assistant 2.10.0 pre-release build. Add it under
+**Providers**, give it the add-on's base URL, and the station appears as a
+single entry under **Radio**. Live titles, hosts, and cover art follow the
+same versioned contract described in [now-playing.md](now-playing.md).
 
-**Availability:** the provider is in Music Assistant's beta channel (the 2.10.0
-betas) and has not reached a stable release. On current stable it is missing from
-the provider list, which is expected rather than a fault at your end. Wait for a
-stable Music Assistant that includes it, or use the Media Source route above,
-which works on every version.
+**Availability:** the provider is in Music Assistant's 2.10.0 pre-release
+track (beta and release-candidate builds) and has not reached a stable
+release. On current stable (2.9.x) it is missing from the provider list,
+which is expected rather than a fault at your end. Wait for a stable Music
+Assistant that includes it, or use the Media Source route above, which works
+on every version.
 
 Two things to expect:
 
