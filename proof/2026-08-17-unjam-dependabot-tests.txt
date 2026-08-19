@@ -1,0 +1,23 @@
+Unjam the dependabot queue — local verification, 2026-08-17
+commit under test: 473b670033aedc3d8f2d7177d9d8af493b27c989
+
+$ .venv/bin/ruff check mammamiradio/core/first_listen.py
+All checks passed!
+
+$ .venv/bin/ruff format --check mammamiradio/core/first_listen.py
+1 file already formatted
+
+$ .venv/bin/mypy mammamiradio/core/first_listen.py
+Success: no issues found in 1 source file
+
+$ .venv/bin/python -m pytest tests/core/test_first_listen.py -q
+31 passed in 2.46s
+
+$ make check   (full suite + coverage floors)
+6797 passed, 3 skipped, 25 deselected, 1 warning in 378.50s (0:06:18)
+All coverage floors held. Total: 93% (floor: 92%)
+All checks passed
+
+$ bash scripts/check-release-invariants.sh
+  Passed: 16  Failed: 0
+All invariants passed.
