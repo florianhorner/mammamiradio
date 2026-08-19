@@ -145,9 +145,22 @@ function primeAudio(scenarioId) {
   hostAudio.src = src;
   hostAudio.load();
 }
+function revealResult() {
+  // On a narrow viewport the two panels stack, which puts the answer roughly two
+  // screens below the button that asks for it: you tap "Make sense of this home"
+  // and nothing you can see changes. Bring the result to the reader when it is
+  // off-screen, and only then, so the desktop side-by-side layout is untouched.
+  const panel = document.querySelector(".meaning-panel");
+  if (!panel) return;
+  const box = panel.getBoundingClientRect();
+  if (box.top >= 0 && box.top < window.innerHeight * 0.75) return;
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  panel.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+}
 function runTranslation() {
   clearTimers(); stopSpeech();
   primeAudio(activeScenario);
+  revealResult();
   body.dataset.phase = "gathering";
   translateButton.disabled = true;
   translateLabel.textContent = "Listening to the house…";
