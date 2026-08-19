@@ -1,0 +1,36 @@
+proof: recipe-driven ad part filter -> allowlist
+commit: 74c54dca08e6e36867b231673589261fa951c9ec
+branch: fix/recipe-ads-strip-environment
+date:   2026-08-19T22:13:35Z
+host:   Python 3.11.15
+
+=== $ pytest tests/hosts/test_ads.py -q ===
+..........................                                               [100%]
+26 passed, 3 deselected in 0.89s
+
+=== $ pytest tests/hosts/test_ads.py::test_recipe_driven_ad_keeps_only_voice_and_pause_parts tests/hosts/test_ads.py::test_recipe_driven_ad_strips_environment_parts_legacy_keeps_them -v ===
+tests/hosts/test_ads.py::test_recipe_driven_ad_keeps_only_voice_and_pause_parts PASSED [ 50%]
+tests/hosts/test_ads.py::test_recipe_driven_ad_strips_environment_parts_legacy_keeps_them PASSED [100%]
+============================== 2 passed in 0.76s ===============================
+
+=== full suite ($ pytest tests/ -q) ===
+7302 passed, 4 skipped, 43 deselected in 292.03s (0:04:52)
+
+=== guard is real: new test vs the previous denylist ===
+input:         [voice, ambience, music, pause]
+old denylist:  ['voice', 'ambience', 'music', 'pause']  -> assertion FAILS
+new allowlist: ['voice', 'pause']                        -> assertion PASSES
+
+=== $ ruff check . ===
+All checks passed!
+
+=== $ ruff format --check . ===
+386 files already formatted
+
+=== $ mypy mammamiradio/ tests/ ===
+tests/web/test_main.py:1980: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 343 source files
+
+=== $ make coverage-check ===
+Required test coverage of 92.0% reached. Total coverage: 92.40%
+All coverage floors held. Total: 92% (floor: 92%)
