@@ -1856,6 +1856,65 @@ def generate_brand_motif(output_path: Path, sonic_signature: str, sfx_dir: Path 
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def crossfade_voice_over_tail(
+    music_tail_path: Path,
+    voice_path: Path,
+    output_path: Path,
+    *,
+    tail_duration_sec: float | None = None,
+    decoder_preroll_samples: int = 0,
+    tail_sample_count: int | None = None,
+    voice_volume: float = 1.0,
+    music_fade_volume: float = 0.5,
+    voice_delay_ms: int = 150,
+) -> Path:
+    """Overlay voice on a reserved, optionally decoder-prefixed music tail.
+
+    This renderer never seeks back into a full, already-aired music file.
+    ``decoder_preroll_samples`` may describe bounded MPEG Layer III decoder
+    context prepended by the frame splitter; those samples are discarded exactly
+    before the audible tail is faded and mixed. When no explicit frame metadata
+    is supplied, the path remains compatible with an ordinary standalone tail.
+    """
+    duration = tail_duration_sec if tail_duration_sec is not None else probe_duration_sec(music_tail_path)
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        raise ValueError("crossfade_voice_over_tail requires a positive tail duration")
+    if not isinstance(decoder_preroll_samples, int) or decoder_preroll_samples < 0:
+        raise ValueError("crossfade_voice_over_tail requires non-negative decoder preroll samples")
+    if tail_sample_count is None:
+        if decoder_preroll_samples:
+            raise ValueError("crossfade_voice_over_tail requires a tail sample count with decoder preroll")
+        trim_expr = f"duration={_fmt_num(duration)}"
+    else:
+        if not isinstance(tail_sample_count, int) or tail_sample_count <= 0:
+            raise ValueError("crossfade_voice_over_tail requires a positive tail sample count")
+        trim_expr = f"start_sample={decoder_preroll_samples}:end_sample={decoder_preroll_samples + tail_sample_count}"
+
+    duration_expr = _fmt_num(duration)
+    delay_ms = max(0, int(voice_delay_ms))
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(music_tail_path),
+        "-i",
+        str(voice_path),
+        "-filter_complex",
+        f"[0:a]atrim={trim_expr},asetpts=PTS-STARTPTS,"
+        f"afade=t=out:st=0:d={duration_expr},volume={_fmt_num(music_fade_volume)}[music];"
+        f"[1:a]volume={_fmt_num(voice_volume)},adelay={delay_ms}|{delay_ms}[voice];"
+        f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
+        f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "crossfade voice over music")
+    logger.info("Crossfade voice over reserved tail -> %s", output_path.name)
+    return output_path
+
+
 def crossfade_voice_over_music(
     music_path: Path,
     voice_path: Path,
@@ -1865,24 +1924,26 @@ def crossfade_voice_over_music(
     music_fade_volume: float = 0.5,
     voice_delay_ms: int = 150,
 ) -> Path:
-    """Overlay voice on the tail of a music track, fading music down underneath.
+    """Overlay voice on the final ``tail_seconds`` of a complete music track.
 
-    Takes the last `tail_seconds` of the music, fades it to `music_fade_volume`,
-    and mixes the voice on top. The result is a "DJ talking over the outro" effect.
+    This preserves the historic keyword and full-track behavior for callers of
+    the legacy helper. Production handoffs use :func:`crossfade_voice_over_tail`
+    so already-aired music is never re-extracted there.
     """
+    tail_expr = _fmt_num(tail_seconds)
     delay_ms = max(0, int(voice_delay_ms))
     cmd = [
         "ffmpeg",
         "-y",
         "-sseof",
-        f"-{tail_seconds}",
+        f"-{tail_expr}",
         "-i",
         str(music_path),
         "-i",
         str(voice_path),
         "-filter_complex",
-        f"[0:a]afade=t=out:st=0:d={tail_seconds},volume={music_fade_volume}[music];"
-        f"[1:a]volume={voice_volume},adelay={delay_ms}|{delay_ms}[voice];"
+        f"[0:a]afade=t=out:st=0:d={tail_expr},volume={_fmt_num(music_fade_volume)}[music];"
+        f"[1:a]volume={_fmt_num(voice_volume)},adelay={delay_ms}|{delay_ms}[voice];"
         f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
         f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",

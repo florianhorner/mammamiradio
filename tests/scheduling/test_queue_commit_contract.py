@@ -1426,6 +1426,10 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
         ("artista", "canzone uno"): {"display": "Artista - Canzone Uno"},
         ("artista", "canzone due"): {"display": "Artista - Canzone Due"},
     }
+    # Pin the cache path under assertion. Without this, two probes can both
+    # belong to the randomly selected second track while this test checks the
+    # first track's cache, making the queue contract spuriously order-dependent.
+    state.pinned_track = state.playlist[0]
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     cache_path = _normalized_cache_path(state.playlist[0], config)

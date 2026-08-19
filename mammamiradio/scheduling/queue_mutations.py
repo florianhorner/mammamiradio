@@ -26,6 +26,7 @@ from collections.abc import Callable
 from mammamiradio.core.models import Segment, StationState
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.scheduling.handoff import reconcile_handoff_queue_items
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,11 @@ def drop_matching_segments(
             queue.task_done()
         except asyncio.QueueEmpty:
             break
+        except Exception:
+            # A broken queue read must not abort the rewrite mid-flight: keep
+            # what was drained, let the caller reconcile any residual items.
+            logger.error("Queue drain stopped before the queue was empty", exc_info=True)
+            break
 
     dropped: list[Segment] = []
     survivors: list[Segment] = []
@@ -94,6 +100,14 @@ def drop_matching_segments(
             queue.put_nowait(segment)
         raise
 
+    # A drop can remove either half of a private music/speech handoff pair.
+    # Reconciling against the survivor topology restores a complete unstarted
+    # song when its tail successor was removed, and folds a now-untruthful
+    # successor into the same discard accounting as the predicate's own drops.
+    for segment in reconcile_handoff_queue_items(state, survivors):
+        if not any(existing is segment for existing in dropped):
+            dropped.append(segment)
+
     for segment in survivors:
         queue.put_nowait(segment)
 
@@ -106,7 +120,12 @@ def drop_matching_segments(
         state.queued_segments = [entry for entry in state.queued_segments if entry.get("id") not in dropped_ids]
 
     for segment in dropped:
-        state.record_discard(segment, reason=reason, already_counted_in_produced=True)
+        try:
+            state.record_discard(segment, reason=reason, already_counted_in_produced=True)
+        except Exception:
+            # Discard accounting is telemetry. One broken item must not strand
+            # its siblings' cleanup or abort the control action mid-rewrite.
+            logger.warning("Queue-drop accounting failed for %s; continuing", segment.path, exc_info=True)
         _drop_moment_receipts(state, segment, reason)
         _unlink_ephemeral_best_effort(segment)
 
