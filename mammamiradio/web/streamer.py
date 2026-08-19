@@ -1555,6 +1555,14 @@ def _stamp_continuity_runway_epoch(q, state: StationState) -> None:
             metadata[_CONTINUITY_ADMISSION_EPOCH] = state.continuity_epoch
 
 
+def _segment_is_canned_recovery(segment: Segment) -> bool:
+    """True for packaged ident/recovery speech, not for a real queued song."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return bool(metadata.get("canned")) and bool(
+        metadata.get("rescue") or metadata.get("fallback") or metadata.get("playback_gap_fill")
+    )
+
+
 def _stamp_playback_gap_fill(segment: Segment, state: StationState) -> Segment:
     """Bind a playback-built rescue fill to the current continuity timeline."""
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
@@ -4806,7 +4814,8 @@ async def run_playback_loop(app) -> None:
             # queue (and any interrupt bridge) has no audio left.
             segment = continuity_slot
             state.queue_empty_since = None
-            gap_clips_served = 0
+            if not _segment_is_canned_recovery(segment):
+                gap_clips_served = 0
         else:
             if segment_queue.empty() and state.queue_empty_since is None:
                 # Mark the exact moment playback ran out of audio. The
@@ -4817,7 +4826,8 @@ async def run_playback_loop(app) -> None:
                 segment = await asyncio.wait_for(segment_queue.get(), timeout=FIRST_BYTE_GRACE_SECONDS)
                 pulled_from_queue = True
                 state.queue_empty_since = None
-                gap_clips_served = 0
+                if not _segment_is_canned_recovery(segment):
+                    gap_clips_served = 0
             except TimeoutError:
                 if state.session_stopped:
                     pacer.reset_timeline("playback_stop_resume")
@@ -4834,7 +4844,11 @@ async def run_playback_loop(app) -> None:
                 if state.queue_empty_since is None:
                     state.queue_empty_since = _runtime_monotonic()
                 elapsed = _runtime_monotonic() - state.queue_empty_since
-                pacer.reset_timeline("queue_gap_fallback")
+                # Do not reset the send timeline here. The 1s grace timeout is
+                # not a transport discontinuity: the next packaged clip is the
+                # following segment. Resetting rebuilds the 4s lead cushion by
+                # bursting continuity_1.mp3 from byte 0, so a speaker hears the
+                # opening ident on a one-second loop.
 
                 from mammamiradio.scheduling.producer import _pick_recovery_clip
 
@@ -4970,6 +4984,7 @@ async def run_playback_loop(app) -> None:
                         continue
                     else:
                         logger.warning("Queue empty for %ds, no fallback clips available", int(elapsed))
+                        pacer.reset_timeline("queue_gap_fallback")
                         continue
 
                 # Building a packaged fill can await a bounded probe while a

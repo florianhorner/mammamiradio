@@ -1,0 +1,17 @@
+mammamiradio test evidence — florianhorner/fix/ha-green-stream-broken
+Commit: fff31818eb49b80b48edc24a91fd903ef21c45fc
+Generated: 2026-08-17T23:15:14Z
+
+$ python -m pytest tests/ -q
+........................................................................ [ 99%]
+................................                                         [100%]
+7300 passed, 4 skipped, 43 deselected in 269.04s (0:04:29)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+386 files already formatted
+
+$ mypy mammamiradio/ tests/
+Success: no issues found in 343 source files

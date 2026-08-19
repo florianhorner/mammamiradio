@@ -3070,6 +3070,150 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
     assert not reserves
 
 
+@pytest.mark.asyncio
+async def test_run_playback_loop_recovery_fills_keep_the_send_timeline(tmp_path, caplog):
+    """Empty-crate recovery must not reset the pacer on every 1s grace timeout.
+
+    Resetting rebuilds the 4s delivery cushion by bursting the ident from
+    byte 0, so a speaker hears the opening of continuity_1.mp3 on a loop.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    _, listener_queue = app.state.stream_hub.subscribe()
+    caplog.set_level(logging.INFO)
+    app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(
+        bytes_per_second, target_lead_seconds=STREAM_TARGET_LEAD_SECONDS
+    )
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+
+    async def _always_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        return recovery_path if subdir == "recovery" else None
+
+    resets: list[str] = []
+    original_reset = StreamPacer.reset_timeline
+
+    def _spy_reset(self, reason: str) -> None:
+        resets.append(str(reason))
+        return original_reset(self, reason)
+
+    async def _drain_listener_queue() -> None:
+        # A real client keeps reading. Without this, the timeout-driven loop
+        # below fills the listener's bounded queue within a handful of fast
+        # iterations, the hub drops it as "slow", and the very next iteration's
+        # no-listener branch resets the pacer right before the assertion —
+        # a test-harness artifact, not the send-timeline behavior under test.
+        while True:
+            await listener_queue.get()
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_always_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=4.4),
+        patch.object(StreamPacer, "reset_timeline", _spy_reset),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        drain_task = asyncio.create_task(_drain_listener_queue())
+        try:
+            deadline = time.monotonic() + 3.0
+            while len(app.state.station_state.stream_log) < 2:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not serve two recovery fills")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            drain_task.cancel()
+            await asyncio.gather(task, drain_task, return_exceptions=True)
+
+    assert "queue_gap_fallback" not in resets
+    stream_log = list(app.state.station_state.stream_log)
+    assert len(stream_log) >= 2
+    assert all(entry.metadata.get("canned") for entry in stream_log[:2])
+    pacer = app.state.stream_pacer
+    assert pacer.media_seconds > 0
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_still_resets_timeline_on_true_dead_air(tmp_path):
+    """The queue_gap_fallback reset is deferred, not deleted.
+
+    The sibling ``..._keep_the_send_timeline`` test proves the pacer reset is
+    skipped while a packaged recovery clip IS being served. This proves the
+    other half: when there is truly no packaged clip and no norm-cache
+    rescue available (real dead air), the deferred reset must still fire so
+    a later real segment doesn't inherit a stale send-ahead cushion.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    _, listener_queue = app.state.stream_hub.subscribe()
+    app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(
+        bytes_per_second, target_lead_seconds=STREAM_TARGET_LEAD_SECONDS
+    )
+
+    async def _always_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    resets: list[str] = []
+    original_reset = StreamPacer.reset_timeline
+
+    def _spy_reset(self, reason: str) -> None:
+        resets.append(str(reason))
+        return original_reset(self, reason)
+
+    async def _drain_listener_queue() -> None:
+        while True:
+            await listener_queue.get()
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_always_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch.object(StreamPacer, "reset_timeline", _spy_reset),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        drain_task = asyncio.create_task(_drain_listener_queue())
+        try:
+            deadline = time.monotonic() + 5.0
+            while "queue_gap_fallback" not in resets:
+                if time.monotonic() > deadline:
+                    raise AssertionError("dead-air grace timeout never reset the send timeline")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            drain_task.cancel()
+            await asyncio.gather(task, drain_task, return_exceptions=True)
+
+    assert "queue_gap_fallback" in resets
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"canned": True, "rescue": True}, True),
+        ({"canned": True, "fallback": True}, True),
+        ({"canned": True, "playback_gap_fill": True}, True),
+        ({"canned": True}, False),
+        ({"rescue": True}, False),
+        ({}, False),
+        (None, False),
+    ],
+)
+def test_segment_is_canned_recovery_requires_canned_plus_a_recovery_flag(metadata, expected):
+    from mammamiradio.web.streamer import _segment_is_canned_recovery
+
+    segment = Segment(type=SegmentType.BANTER, path=Path("x.mp3"), duration_sec=1.0, metadata=metadata)
+    assert _segment_is_canned_recovery(segment) is expected
+
+
 def test_silence_gate_requires_no_air_not_just_an_empty_queue():
     """/healthz must not report a station audibly bridging on clips as silent.
 

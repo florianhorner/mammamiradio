@@ -1002,6 +1002,35 @@ def _pick_recovery_clip(state: StationState) -> Path | None:
     return None
 
 
+async def _recover_local_rotation(state: StationState, config: StationConfig) -> bool:
+    """Load operator MP3s into an empty crate without claiming bundled rights."""
+    from mammamiradio.playlist.playlist import load_operator_local_tracks, local_source
+
+    music_dir = getattr(config, "music_dir", None)
+    if music_dir is None:
+        return False
+    try:
+        # Directory scan runs off the event loop: an empty crate condition can
+        # persist for as long as the operator has no music, and this check
+        # re-runs on every generation cycle until it does — a blocking scan
+        # here would stall concurrent playback/stream coroutines exactly like
+        # the pacer-reset bug this same diff fixes.
+        tracks = await asyncio.to_thread(load_operator_local_tracks, config, blocklist=state.blocklist)
+    except OSError:
+        logger.warning("Could not recover local music from %s", music_dir, exc_info=True)
+        return False
+    if not tracks:
+        return False
+    # Re-check right before committing: the scan above ran off the event loop
+    # (asyncio.to_thread), so an admin source switch could have repopulated
+    # state.playlist while it was in flight. restore_playlist_if_still_empty
+    # backs off rather than clobbering a switch that landed in the meantime.
+    if not state.restore_playlist_if_still_empty(tracks, local_source(len(tracks))):
+        return False
+    logger.info("Recovered %d local track(s) into the empty rotation", len(tracks))
+    return True
+
+
 _AUDIBLE_PROVIDER_CLASSES = frozenset({"script_provider", "tts_provider"})
 
 
@@ -5494,13 +5523,8 @@ async def _run_producer_inner(
                         seg_type.value,
                     )
                     seg_type = SegmentType.MUSIC
-        if seg_type == SegmentType.MUSIC and not state.playlist:
-            logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
-            seg_type = SegmentType.BANTER
+        if seg_type == SegmentType.MUSIC and not state.playlist and await _recover_local_rotation(state, config):
             natural_banter_candidate = False
-            if is_operator_forced:
-                state.operator_force_pending = None
-                is_operator_forced = False
         segment: Segment | None = None
         companionship_claim: ListenerSessionCueClaim | None = None
         audio_path: Path | None = None
@@ -5603,6 +5627,14 @@ async def _run_producer_inner(
 
                     success_callback = _jamendo_callback
                     logger.info("Using prepared transient Jamendo track: %s", transient_track.display)
+
+        if seg_type is SegmentType.MUSIC and segment is None and not state.playlist:
+            logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
+            seg_type = SegmentType.BANTER
+            natural_banter_candidate = False
+            if is_operator_forced:
+                state.operator_force_pending = None
+                is_operator_forced = False
 
         async def _sleep_post_failure_backoff(delay: float | None) -> None:
             if delay is not None:
