@@ -3,11 +3,21 @@
 When a listener hears something wild, they press a button and the last ~30
 seconds of audio is trimmed into a shareable MP3 clip.  Since the ring buffer
 already contains raw MP3 frames, no re-encoding is needed.
+
+Clips expire.  **Keepsakes do not.**  Everything the station records is deleted
+on a timer: a clip after ``CLIP_TTL_SECONDS``, the provenance-ledger row holding
+its script after ``MAMMAMIRADIO_LEDGER_RETENTION_DAYS``.  A segment worth
+keeping is therefore destroyed twice over by default, and nothing in the product
+could say "not this one".  A keepsake is that sentence: a durable, voice-only
+export that no retention window may collect.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
 import time
 import uuid
 from collections import deque
@@ -16,6 +26,20 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 CLIP_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+
+# Keepsakes live beside `clips/` rather than inside it, which is what makes them
+# durable: `cleanup_old_clips` and the CLIP_MAX_SAVED cap both operate on the
+# clips directory alone, and the cache evictor globs `cache_dir/*.mp3` without
+# recursing, so nothing that prunes the cache can see this directory at all.
+KEEPSAKES_DIRNAME = "keepsakes"
+
+# Segment types whose audio is wholly the station's own work: generated script,
+# generated speech, synthesized bed (`generate_music_bed`), own foley and SFX.
+# A keepsake is publishable by construction, so it may only ever be cut from
+# one of these.  Music segments carry third-party recordings and are refused —
+# not as a policy preference but because a durable, shareable export of somebody
+# else's master is the one thing this feature must never produce.
+KEEPSAKE_SEGMENT_TYPES = frozenset({"banter", "ad", "news_flash", "station_id", "sweeper", "time_check"})
 
 
 def extract_clip(
@@ -61,13 +85,96 @@ def save_clip(clip_data: bytes, clips_dir: Path) -> str:
     return clip_id
 
 
+def is_keepsake_eligible(segment_type: object, metadata: object = None) -> bool:
+    """Whether this segment may be kept durably.
+
+    Two independent gates, and both must pass.
+
+    **Type.** Voice-only by construction (see ``KEEPSAKE_SEGMENT_TYPES``).
+    Anything unrecognised — a future segment type, ``None``, a non-string — is
+    refused. Failing closed is the point: a new segment type must be reviewed
+    and added deliberately rather than inheriting publish rights by default.
+
+    **Music tail.** Type alone is not proof of provenance and stopped being a
+    usable proxy when the music-to-speech handoff landed: `commit_music_handoff`
+    crossfades the outgoing song's real master under the opening seconds of the
+    next BANTER/AD/NEWS_FLASH segment and marks it ``has_music_tail``. That
+    segment is still voice by type and now contains someone else's recording.
+    A keepsake never expires and is served unauthenticated, so a tailed segment
+    is refused outright rather than trimmed: guessing where the master ends is
+    exactly the kind of near-miss this feature must not take.
+    """
+    if not (isinstance(segment_type, str) and segment_type in KEEPSAKE_SEGMENT_TYPES):
+        return False
+    meta = metadata if isinstance(metadata, dict) else {}
+    return not meta.get("has_music_tail")
+
+
+def save_keepsake(
+    clip_data: bytes,
+    keepsakes_dir: Path,
+    *,
+    sidecar: dict | None = None,
+) -> str:
+    """Write keepsake bytes plus its sidecar durably and return the keepsake id.
+
+    No TTL and no eviction: nothing that prunes the cache can see this
+    directory. The count ceiling and the free-space check live at the route, so
+    a refusal can name the situation and offer a way out instead of failing
+    here with an errno.
+
+    The sidecar write is best-effort. Losing the metadata is survivable; losing
+    the audio is the failure this whole feature exists to prevent, so a sidecar
+    error never discards a file that is already safely on disk.
+    """
+    keepsakes_dir.mkdir(parents=True, exist_ok=True)
+    keepsake_id = uuid.uuid4().hex[:12]
+    keepsake_path = keepsakes_dir / f"{keepsake_id}.mp3"
+    # Atomic publish. A plain write leaves a truncated file behind if the process
+    # is killed mid-write (an add-on update, which this repo designs around) or
+    # the disk fills, and in this directory alone there is no TTL, no cap and no
+    # evictor to ever collect it: a permanent file that looks like a keepsake and
+    # plays as garbage. Same mkstemp-then-replace shape as `restart_handoff`.
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=keepsakes_dir, prefix=".keepsake-", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(tmp_fd, "wb") as handle:
+            handle.write(clip_data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, keepsake_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    if sidecar is not None:
+        # Catch the serializer too, not just the disk. `json.dumps` raises
+        # TypeError on a value nobody expected to be there, and with only OSError
+        # caught here that escaped the route's own `except OSError` as an
+        # uncaught 500 — with the audio already safely on disk and its id thrown
+        # away. That is the exact outcome the docstring promises cannot happen.
+        try:
+            (keepsakes_dir / f"{keepsake_id}.json").write_text(json.dumps(sidecar))
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("keepsake sidecar write failed for %s: %s", keepsake_id, exc)
+    logger.info("Saved keepsake %s (%d bytes)", keepsake_id, len(clip_data))
+    return keepsake_id
+
+
 def cleanup_old_clips(clips_dir: Path, max_age_hours: int = 24) -> int:
     """Delete clips older than *max_age_hours*. Returns count of MP3s removed.
 
     Also prunes the matching ``{clip_id}.json`` sidecar so metadata does not
     accumulate after the audio is gone.
+
+    Refuses to run against the keepsakes directory. Keepsakes are durable by
+    living somewhere this function is never pointed at, which is a property of
+    the call sites rather than of the data; this guard makes one wrong argument
+    a no-op instead of the silent deletion of the only copy of a moment.
     """
     if not clips_dir.is_dir():
+        return 0
+    if clips_dir.name == KEEPSAKES_DIRNAME:
+        logger.error("refusing to expire keepsakes: %s", clips_dir)
         return 0
     cutoff = time.time() - max_age_hours * 3600
     removed = 0

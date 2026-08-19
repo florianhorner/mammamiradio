@@ -16,6 +16,7 @@ import os
 import random as _random
 import re as _re
 import secrets
+import shutil
 import stat as _stat
 import time
 import unicodedata
@@ -5407,6 +5408,11 @@ async def run_playback_loop(app) -> None:
                                 "ended_monotonic": time.monotonic(),
                                 "type": segment.type.value,
                                 "title": str(_meta.get("title") or "").strip(),
+                                # Carried so a keepsake cut from this snapshot can
+                                # tell whether the segment opened with the previous
+                                # song's master crossfaded under the voice. Type
+                                # alone does not answer that.
+                                "has_music_tail": bool(_meta.get("has_music_tail")),
                             }
                 except Exception as exc:
                     logger.warning("lookback snapshot failed for %s segment: %s", segment.type.value, exc)
@@ -10464,6 +10470,216 @@ async def create_clip(request: Request):
     }
 
 
+# A segment shorter than this has not aired enough to be worth keeping, and the
+# arithmetic that would pad it out reaches into the previous segment.
+KEEPSAKE_MIN_SECONDS = 3.0
+# Keepsakes are the one thing in the cache directory that nothing reclaims, so
+# the ceiling has to be explicit rather than emergent. At roughly 4 MB for a
+# long segment this bounds the archive at a few hundred MB, and the refusal is
+# honest rather than a silent stop.
+KEEPSAKE_MAX_SAVED = 200
+# Never let keeping a moment be the write that fills the disk and takes the
+# station off air with it (leadership principle #2).
+KEEPSAKE_MIN_FREE_MB = 256
+
+
+async def _snapshot_ring(ring_buffer, duration_seconds: int, bitrate_kbps: int) -> bytes | None:
+    """Copy the ring buffer on the event loop, then join the bytes off it.
+
+    Two constraints pull in opposite directions. ``extract_clip`` iterates the
+    deque that the playback loop appends to, so iterating it from a worker
+    thread is a ``RuntimeError: deque mutated during iteration`` waiting to
+    happen. But joining up to ~4 MB on the loop stalls every coroutine including
+    the sender, whose delivery cushion is four seconds.
+
+    So: take a shallow list copy here, where nothing else can run, and hand the
+    copy to a thread. The copy is references, not payload, so it is cheap.
+    """
+    from collections import deque
+
+    from mammamiradio.scheduling.clip import extract_clip
+
+    frozen = deque(list(ring_buffer))
+    return await asyncio.to_thread(extract_clip, frozen, duration_seconds=duration_seconds, bitrate_kbps=bitrate_kbps)
+
+
+@router.post("/api/clip/keep")
+async def keep_this(request: Request, _: None = Depends(require_admin_access)):
+    """Keep the voice segment on air right now, durably and forever.
+
+    The on-air console's "Keep this" button. Clips expire after 24 hours and the
+    provenance ledger prunes after two weeks, so a segment worth keeping is
+    deleted twice over by default and nothing in the product could say "not this
+    one". This is that sentence.
+
+    Voice-only, and that is a hard refusal rather than a preference: a keepsake
+    has no expiry and is meant to be shareable, so it may never contain a
+    third-party master. ``is_keepsake_eligible`` fails closed on any segment
+    type it does not recognise.
+    """
+    from mammamiradio.scheduling.clip import (
+        KEEPSAKES_DIRNAME,
+        is_keepsake_eligible,
+        save_keepsake,
+    )
+
+    config = request.app.state.config
+    bitrate = config.audio.bitrate if hasattr(config, "audio") else DEFAULT_CLIP_BITRATE_KBPS
+    station_state = getattr(request.app.state, "station_state", None)
+    now_streaming = getattr(station_state, "now_streaming", None) or {}
+    if not isinstance(now_streaming, dict):
+        now_streaming = {}
+    ring_buffer = getattr(request.app.state, "clip_ring_buffer", None)
+    now = time.time()
+
+    seg_type = now_streaming.get("type")
+    clip_data: bytes | None = None
+    kept_type: str | None = None
+    kept_title = ""
+    source = ""
+
+    raw_meta_now = now_streaming.get("metadata", {})
+    if is_keepsake_eligible(seg_type, raw_meta_now) and ring_buffer:
+        # Only what has actually aired of THIS segment. /api/clip floors the
+        # window at CLIP_DURATION_SECONDS because it means "the last 30
+        # seconds"; keeping means "this segment", and the same floor would reach
+        # back past the segment boundary into whatever preceded it and then
+        # label the result with this segment's title. Pressing Keep two seconds
+        # into a host break would have saved twenty-eight seconds of the ad
+        # before it.
+        started = float(now_streaming.get("started") or now)
+        duration_sec = float(now_streaming.get("duration_sec") or CLIP_DURATION_SECONDS)
+        elapsed = max(0.0, now - started)
+        cap = min(float(CLIP_MAX_SEGMENT_SECONDS), duration_sec)
+        secs = min(cap, elapsed)
+        if secs >= KEEPSAKE_MIN_SECONDS:
+            clip_data = await _snapshot_ring(ring_buffer, math.ceil(secs), bitrate)
+        if clip_data:
+            kept_type = str(seg_type)
+            raw_meta = now_streaming.get("metadata", {})
+            meta = raw_meta if isinstance(raw_meta, dict) else {}
+            kept_title = str(meta.get("title") or "").strip()
+            source = "live"
+
+    if clip_data is None:
+        # Reaching for the button a second late is the normal case, not the edge
+        # case: the payoff lands, the segment ends, music starts. The lookback
+        # snapshot is only ever written for AD/BANTER, and its own recorded type
+        # is re-checked here rather than trusted.
+        snap = getattr(request.app.state, "last_shareworthy_clip", None)
+        if (
+            isinstance(snap, dict)
+            and snap.get("bytes")
+            and is_keepsake_eligible(snap.get("type"), snap)
+            and (time.monotonic() - float(snap.get("ended_monotonic", 0))) < CLIP_LOOKBACK_SECONDS
+        ):
+            clip_data = snap["bytes"]
+            kept_type = str(snap.get("type"))
+            kept_title = str(snap.get("title") or "").strip()
+            source = "lookback"
+
+    if not clip_data:
+        from fastapi.responses import JSONResponse
+
+        # Name the actual reason. One catch-all message asserted "a song can't be
+        # saved" for a stopped station, an empty buffer and a segment that ended
+        # unwitnessed, so four times in five the stated cause was false and the
+        # offered next step was wrong advice.
+        if seg_type in ("stopped", None, "") or not now_streaming:
+            reason, message = (
+                "not_on_air",
+                "The station isn't on air right now. Press Start, and Keep will be here when the hosts are.",
+            )
+        elif seg_type == "music":
+            reason, message = (
+                "music",
+                "A song can't be kept, because that recording isn't ours to hand out. "
+                "Wait for the hosts to come back and tap Keep while they're talking.",
+            )
+        elif is_keepsake_eligible(seg_type) and not is_keepsake_eligible(seg_type, raw_meta_now):
+            reason, message = (
+                "music_tail",
+                "This break opens over the end of the last song, so it isn't ours to hand out. "
+                "The next one will be clean.",
+            )
+        else:
+            reason, message = (
+                "too_early",
+                "Give it a couple of seconds and tap Keep again — there isn't enough of this one yet.",
+            )
+        return JSONResponse({"ok": False, "reason": reason, "message": message}, status_code=409)
+
+    keepsakes_dir = config.cache_dir / KEEPSAKES_DIRNAME
+    # The one directory nothing reclaims, so the ceiling is checked here rather
+    # than left to the disk. Both refusals name the situation and a way out.
+    from fastapi.responses import JSONResponse
+
+    existing = sorted(keepsakes_dir.glob("*.mp3")) if keepsakes_dir.is_dir() else []
+    if len(existing) >= KEEPSAKE_MAX_SAVED:
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "archive_full",
+                "message": (
+                    f"You've kept {len(existing)} moments and that's the shelf full. "
+                    "Delete a few from the keepsakes folder to make room."
+                ),
+            },
+            status_code=409,
+        )
+    try:
+        free_mb = shutil.disk_usage(config.cache_dir).free / (1024 * 1024)
+    except OSError:
+        free_mb = None  # unreadable mount: do not invent a reason to refuse
+    if free_mb is not None and free_mb < KEEPSAKE_MIN_FREE_MB:
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "no_room",
+                "message": (
+                    "The station is low on disk, so this one wasn't saved. Free some space and tap Keep again."
+                ),
+            },
+            status_code=507,
+        )
+    # `track_title` / `track_artist` are the keys `clip_landing` reads, so a
+    # keepsake renders on the existing share page with no template change.
+    # `segment_type` and `source` are extra provenance the clip sidecar lacks.
+    sidecar = {
+        "station_name": config.display_station_name,
+        "track_title": kept_title,
+        "track_artist": "",
+        "segment_type": kept_type,
+        "source": source,
+        "created_at": int(now),
+    }
+    try:
+        # Off the loop: this writes up to ~4 MB to eMMC or SD while the playback
+        # sender is working against a four-second cushion.
+        keepsake_id = await asyncio.to_thread(save_keepsake, clip_data, keepsakes_dir, sidecar=sidecar)
+    except OSError as exc:
+        logger.warning("keepsake write failed: %s", exc)
+
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "write_failed",
+                "message": "Couldn't save that one — check the station has room on disk, then tap Keep again.",
+            },
+            status_code=500,
+        )
+
+    _record_operator_action(request, "keep_this", kept_type, keepsake_id)
+    return {
+        "ok": True,
+        "keepsake_id": keepsake_id,
+        "segment_type": kept_type,
+        "title": kept_title,
+        "url": f"/clips/{keepsake_id}.mp3",
+        "share_url": f"/clips/{keepsake_id}",
+    }
+
+
 @router.get("/clips/{clip_id}.mp3")
 async def serve_clip(clip_id: str, request: Request):
     """Serve a saved clip file — no auth required (clips are for sharing)."""
@@ -10478,6 +10694,16 @@ async def serve_clip(clip_id: str, request: Request):
     config = request.app.state.config
     clip_path = config.cache_dir / "clips" / f"{clip_id}.mp3"
     if not clip_path.exists():
+        # Keepsakes share the /clips/ URL space so a link that was shared once
+        # keeps working, and they are checked second so an id can never resolve
+        # to a keepsake while a live clip of the same id exists.
+        from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME
+
+        keepsake_path = config.cache_dir / KEEPSAKES_DIRNAME / f"{clip_id}.mp3"
+        if keepsake_path.exists():
+            # No TTL check: never expiring is the entire point of a keepsake.
+            return FileResponse(keepsake_path, media_type="audio/mpeg")
+
         from fastapi.responses import JSONResponse
 
         return JSONResponse({"ok": False, "error": "Clip not found"}, status_code=404)
@@ -10507,6 +10733,8 @@ async def clip_landing(clip_id: str, request: Request):
     if "/" in clip_id or "\\" in clip_id or ".." in clip_id:
         return JSONResponse({"ok": False, "error": "Invalid clip ID"}, status_code=400)
 
+    from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME
+
     config = request.app.state.config
     clips_dir = config.cache_dir / "clips"
     clip_path = clips_dir / f"{clip_id}.mp3"
@@ -10522,6 +10750,17 @@ async def clip_landing(clip_id: str, request: Request):
             expired = True
     except FileNotFoundError:
         expired = True
+
+    # A keepsake never expires, so it is consulted only once the clips dir has
+    # already come up empty or stale — an id can never resolve to a keepsake
+    # while a live clip of the same id is still servable.
+    if expired:
+        keepsakes_dir = config.cache_dir / KEEPSAKES_DIRNAME
+        keepsake_path = keepsakes_dir / f"{clip_id}.mp3"
+        if keepsake_path.exists():
+            clip_path = keepsake_path
+            sidecar_path = keepsakes_dir / f"{clip_id}.json"
+            expired = False
 
     # Sidecar read is best-effort. read_text() already raises FileNotFoundError
     # when missing, so an explicit exists() check would be a redundant syscall.

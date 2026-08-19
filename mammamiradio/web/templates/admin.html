@@ -1947,6 +1947,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <button type="button" id="prefDownNowBtn" class="btn-icon pref-btn down" title="Play this song less often" aria-label="Dislike this song" aria-pressed="false" data-preference-target="now" data-preference-vote="down" style="display:none">
               <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-down"/></svg>
             </button>
+            <button type="button" id="keepNowBtn" class="btn-icon" title="Keep this — save it for good" aria-label="Keep this moment, saved for good" onclick="doKeepThis(this)" style="display:none">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2.5h8v11l-4-3-4 3z"/></svg>
+            </button>
             <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
             </button>
@@ -3327,6 +3330,32 @@ async function doSkip(el){
     toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
   }catch(_){toast(offlineMsg());}
 }
+// Keep-this stays reachable for a beat after a host break ends, because the
+// moment you want is usually the one that JUST finished — the payoff lands, the
+// segment ends, music starts, and only then do you reach for the button. Mirrors
+// the server's lookback window (CLIP_LOOKBACK_SECONDS).
+const KEEP_GRACE_MS=15000;
+// Mirrors KEEPSAKE_SEGMENT_TYPES in mammamiradio/scheduling/clip.py. The server
+// is the authority; this only decides when offering the press is honest.
+const KEEPABLE_TYPES=new Set(['banter','ad','news_flash','station_id','sweeper','time_check']);
+let _keepGraceUntil=0;
+async function doKeepThis(el){
+  flash(el);
+  const r=await api('POST','/api/clip/keep');
+  if(!(r&&r.ok)){
+    toast((r&&r.message)||wayOut('keep this moment'));
+    return;
+  }
+  const label=r.title?`Kept — ${r.title}`:'Kept — saved for good';
+  if(typeof window.undoableToast==='function'){
+    // Nothing to undo: keeping is additive and the file is meant to outlive
+    // everything. Offer the share link instead, which is the actual next step.
+    toast(`${label}. Share link copied.`);
+    try{await navigator.clipboard.writeText(new URL(r.share_url,location.href).href);}catch(e){}
+  }else{
+    toast(label);
+  }
+}
 async function doBanNowPlaying(el){
   // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
   // the segment leaves the air the instant the skip lands.
@@ -3661,6 +3690,20 @@ function updateNow(ns){
   const onAir=document.getElementById('on-air');
   const isMusic=!!(ns&&ns.type&&segmentTypeKey(ns.type)==='music');
   if(banBtn)banBtn.style.display=isMusic?'':'none';
+  // Keep-this follows the inverse of Ban: it is meaningful while the hosts are
+  // talking, and for KEEP_GRACE_MS after, so the segment that just ended is
+  // still reachable. The server decides what may actually be kept; this only
+  // decides when asking is worth offering.
+  const keepBtn=document.getElementById('keepNowBtn');
+  if(keepBtn){
+    // Match the server's KEEPSAKE_SEGMENT_TYPES rather than testing "not music".
+    // segmentTypeKey passes 'stopped' and 'skipping' through unchanged, so
+    // not-music armed the button and its grace window against a station that is
+    // not on air, inviting a press that can only ever be refused.
+    const isVoiceNow=!!(ns&&ns.type)&&KEEPABLE_TYPES.has(segmentTypeKey(ns.type));
+    if(isVoiceNow)_keepGraceUntil=Date.now()+KEEP_GRACE_MS;
+    keepBtn.style.display=(isVoiceNow||Date.now()<_keepGraceUntil)?'':'none';
+  }
   prefBtns.forEach(btn=>{btn.style.display=isMusic?'':'none';});
   syncNowPreferenceButtons(isMusic?(_st.current_track_preference||0):0);
   if(!ns||!ns.type){

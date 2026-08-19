@@ -176,3 +176,46 @@ def test_extract_clip_returns_empty_bytes_for_empty_ring_buffer():
     buf: deque[bytes] = deque(maxlen=100)
     result = extract_clip(buf)
     assert result is None
+
+
+def test_save_keepsake_without_a_sidecar_writes_only_the_audio(tmp_path):
+    from mammamiradio.scheduling.clip import save_keepsake
+
+    keepsake_id = save_keepsake(b"\xff\xfbaudio", tmp_path / "keepsakes")
+    assert (tmp_path / "keepsakes" / f"{keepsake_id}.mp3").read_bytes() == b"\xff\xfbaudio"
+    assert not (tmp_path / "keepsakes" / f"{keepsake_id}.json").exists()
+
+
+def test_a_sidecar_failure_still_returns_the_saved_audio(tmp_path):
+    """Losing the metadata is survivable. Losing the audio is the failure this
+    whole feature exists to prevent, so the id must still come back and the mp3
+    must still be on disk."""
+    from mammamiradio.scheduling.clip import save_keepsake
+
+    class Unserializable:
+        pass
+
+    keepsake_id = save_keepsake(b"\xff\xfbaudio", tmp_path / "keepsakes", sidecar={"bad": Unserializable()})
+    assert (tmp_path / "keepsakes" / f"{keepsake_id}.mp3").read_bytes() == b"\xff\xfbaudio"
+    assert not (tmp_path / "keepsakes" / f"{keepsake_id}.json").exists()
+
+
+def test_cache_eviction_never_reaches_into_keepsakes(tmp_path):
+    """Durability rests on four other modules globbing cache_dir non-recursively.
+    That is a property of their call sites, not of this data, so it needs a guard
+    here: changing one of them to rglob would otherwise delete every keepsake
+    and no test would notice."""
+    import os
+
+    from mammamiradio.playlist.downloader import evict_cache_lru
+    from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME, save_keepsake
+
+    (tmp_path / "norm_song.mp3").write_bytes(b"\xff\xfb" + b"x" * 5000)
+    keepsake_id = save_keepsake(b"\xff\xfbkept", tmp_path / KEEPSAKES_DIRNAME)
+    kept = tmp_path / KEEPSAKES_DIRNAME / f"{keepsake_id}.mp3"
+    ancient = 1_000_000.0
+    os.utime(kept, (ancient, ancient))
+
+    evict_cache_lru(tmp_path, max_size_mb=0)
+
+    assert kept.exists(), "the cache evictor reached into keepsakes"

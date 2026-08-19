@@ -202,7 +202,8 @@ playing.
 
 - **Keeps playing:** the app does not stop for a backup.
 - **Stays with you:** app settings, provider keys, station memory and state,
-  retained history, and files stored in `/data/music`.
+  retained history, moments you kept with **Keep this**, and files stored in
+  `/data/music`.
 - **Builds again:** temporary renders, downloaded and normalized cache audio,
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.

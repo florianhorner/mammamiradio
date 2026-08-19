@@ -653,6 +653,38 @@ class TestBanNowPlayingEndpoint:
         assert "doBanNowPlaying(this)" in html
         assert "/api/track/ban-now-playing" in _admin_function_block("doBanNowPlaying")
 
+    def test_admin_html_has_keep_this_button_and_handler(self):
+        """Same contract as Ban: the button calls the handler, and the handler
+        hits the dedicated endpoint. Without this the wiring can vanish in an
+        HTML refactor and nothing notices."""
+        html = ADMIN_HTML.read_text()
+        assert 'id="keepNowBtn"' in html
+        assert "doKeepThis(this)" in html
+        assert "/api/clip/keep" in _admin_function_block("doKeepThis")
+
+    def test_keep_this_button_stays_hidden_while_the_station_is_stopped(self):
+        """Keep is only meaningful while the hosts are talking. segmentTypeKey
+        passes 'stopped' and 'skipping' through unchanged, so gating on
+        not-music armed the button, and its 15s grace window, against a station
+        that is not on air, inviting a press that could only ever be refused.
+
+        The allowlist must also stay in step with the server's
+        KEEPSAKE_SEGMENT_TYPES, or the console offers a press the route rejects.
+        """
+        from mammamiradio.scheduling.clip import KEEPSAKE_SEGMENT_TYPES
+
+        html = ADMIN_HTML.read_text()
+        block = _admin_function_block("updateNow")
+        assert "KEEPABLE_TYPES.has(segmentTypeKey(ns.type))" in block, (
+            "Keep is gated on not-music, which arms it while the station is stopped"
+        )
+        declared = re.search(r"const KEEPABLE_TYPES=new Set\(\[([^\]]*)\]\)", html)
+        assert declared, "KEEPABLE_TYPES is not declared"
+        client_types = {t.strip().strip("'\"") for t in declared.group(1).split(",") if t.strip()}
+        assert client_types == set(KEEPSAKE_SEGMENT_TYPES), (
+            f"console allowlist {client_types} drifted from the server's {set(KEEPSAKE_SEGMENT_TYPES)}"
+        )
+
     def test_admin_direction_control_has_busy_and_keyboard_guards(self):
         html = ADMIN_HTML.read_text()
         handler = _admin_function_block("setDirectionText")

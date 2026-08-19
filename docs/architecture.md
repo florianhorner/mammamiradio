@@ -1198,7 +1198,8 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 | `/api/clip` | POST | Public | Capture eligible material; music requires a complete bundled-starter-only window, otherwise `403 music_share_unavailable` |
-| `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
+| `/api/clip/keep` | POST | Admin | Keep the airing voice segment (or the one just ended) durably in `cache_dir/keepsakes/`; refuses music, a segment carrying a music tail, a stopped station, and a segment too short to have aired |
+| `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing). Falls back to `keepsakes/` when the clip is missing or expired, and keepsakes carry no TTL |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout |
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |

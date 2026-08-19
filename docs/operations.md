@@ -344,7 +344,8 @@ Public:
 - `GET /sw.js`, `GET /static/{filename:path}` (PWA assets)
 - `POST /api/clip` (rate-limited; music sharing is available only for a
   complete single bundled-track window)
-- `GET /clips/{id}.mp3` (no auth, for sharing)
+- `GET /clips/{id}.mp3` (no auth, for sharing). Serves shared clips, which
+  expire after 24 hours, and kept moments, which do not expire at all
 - `POST /api/listener-request`, `GET /public-listener-requests` (sanitized feed for the on-page sidebar)
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
@@ -372,6 +373,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `GET /admin`, `GET /dashboard`
 - `GET /status`, `GET /api/capabilities`
+- `POST /api/clip/keep` (keep the airing voice segment durably; voice-only)
 - `PUT /api/media-sources/jamendo`, `POST /api/media-sources/jamendo/retry`
 - `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
