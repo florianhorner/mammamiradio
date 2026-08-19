@@ -24,16 +24,16 @@ import httpx
 
 import mammamiradio.hosts.scriptwriter as _sw
 from mammamiradio.audio.audio_quality import AudioQualityError, AudioToolError, validate_segment_audio
-from mammamiradio.audio.imaging import ImagingLibrary
+from mammamiradio.audio.imaging import ImagingLibrary, reserve_unique_recipe_foreground_sources
 from mammamiradio.audio.norm_cache import select_norm_cache_rescue
 from mammamiradio.audio.normalizer import (
     apply_broadcast_chain,
     broadcast_chain_version,
     concat_files,
     crossfade_voice_over_music,
-    generate_bumper_jingle,
-    generate_station_id_bed,
-    generate_tone,
+    generate_bumper_jingle,  # noqa: F401  test seam — recovery/ad tests patch this name
+    generate_station_id_bed,  # noqa: F401  test seam — station-id tests patch this name
+    generate_tone,  # noqa: F401  test seam — recovery tests patch this name
     humanize_norm_filename,
     load_track_metadata,
     mix_oneshot_sfx,
@@ -990,6 +990,35 @@ def _pick_recovery_clip(state: StationState) -> Path | None:
         if clip:
             return clip
     return None
+
+
+async def _recover_local_rotation(state: StationState, config: StationConfig) -> bool:
+    """Load operator MP3s into an empty crate without claiming bundled rights."""
+    from mammamiradio.playlist.playlist import load_operator_local_tracks, local_source
+
+    music_dir = getattr(config, "music_dir", None)
+    if music_dir is None:
+        return False
+    try:
+        # Directory scan runs off the event loop: an empty crate condition can
+        # persist for as long as the operator has no music, and this check
+        # re-runs on every generation cycle until it does — a blocking scan
+        # here would stall concurrent playback/stream coroutines exactly like
+        # the pacer-reset bug this same diff fixes.
+        tracks = await asyncio.to_thread(load_operator_local_tracks, config, blocklist=state.blocklist)
+    except OSError:
+        logger.warning("Could not recover local music from %s", music_dir, exc_info=True)
+        return False
+    if not tracks:
+        return False
+    # Re-check right before committing: the scan above ran off the event loop
+    # (asyncio.to_thread), so an admin source switch could have repopulated
+    # state.playlist while it was in flight. restore_playlist_if_still_empty
+    # backs off rather than clobbering a switch that landed in the meantime.
+    if not state.restore_playlist_if_still_empty(tracks, local_source(len(tracks))):
+        return False
+    logger.info("Recovered %d local track(s) into the empty rotation", len(tracks))
+    return True
 
 
 _AUDIBLE_PROVIDER_CLASSES = frozenset({"script_provider", "tts_provider"})
@@ -4840,13 +4869,8 @@ async def _run_producer_inner(
                         seg_type.value,
                     )
                     seg_type = SegmentType.MUSIC
-        if seg_type == SegmentType.MUSIC and not state.playlist:
-            logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
-            seg_type = SegmentType.BANTER
+        if seg_type == SegmentType.MUSIC and not state.playlist and await _recover_local_rotation(state, config):
             natural_banter_candidate = False
-            if is_operator_forced:
-                state.operator_force_pending = None
-                is_operator_forced = False
         segment: Segment | None = None
         companionship_claim: ListenerSessionCueClaim | None = None
         generation_revision = state.playlist_revision
@@ -4917,6 +4941,14 @@ async def _run_producer_inner(
 
                     success_callback = _jamendo_callback
                     logger.info("Using prepared transient Jamendo track: %s", transient_track.display)
+
+        if seg_type is SegmentType.MUSIC and segment is None and not state.playlist:
+            logger.warning("Rotation pool empty; producing recovery banter until tracks are re-added")
+            seg_type = SegmentType.BANTER
+            natural_banter_candidate = False
+            if is_operator_forced:
+                state.operator_force_pending = None
+                is_operator_forced = False
 
         async def _sleep_post_failure_backoff(delay: float | None) -> None:
             if delay is not None:
@@ -6251,18 +6283,19 @@ async def _run_producer_inner(
                                 state=state,
                             )
 
+                    imaging_lib = _make_imaging_lib(config)
+
                     async def _build_station_sting(
                         _loop=loop,
                         _path=sting_path,
-                        _notes=sb.motif_notes,
+                        _imaging_lib=imaging_lib,
                     ) -> None:
                         with _timed_render_stage(state, "mix"):
                             await _loop.run_in_executor(
                                 None,
-                                generate_station_id_bed,
+                                _imaging_lib.pick_station_id_bed,
                                 _path,
                                 3.0,
-                                _notes,
                             )
 
                     station_results = await _gather_all_settled(
@@ -6366,9 +6399,15 @@ async def _run_producer_inner(
                                 state=state,
                             )
 
-                    async def _build_time_chime(_loop=loop, _path=chime_path) -> None:
+                    imaging_lib = _make_imaging_lib(config)
+
+                    async def _build_time_chime(
+                        _loop=loop,
+                        _path=chime_path,
+                        _imaging_lib=imaging_lib,
+                    ) -> None:
                         with _timed_render_stage(state, "mix"):
-                            await _loop.run_in_executor(None, generate_tone, _path, 1047, 0.3)
+                            await _loop.run_in_executor(None, _imaging_lib.pick_time_check_sting, _path)
 
                     time_results = await _gather_all_settled(
                         _build_time_voice(),
@@ -6416,9 +6455,12 @@ async def _run_producer_inner(
                 break_summaries: list[str] = []
                 break_texts: list[str] = []
                 break_sonic_worlds: list[str] = []
-
                 loop = asyncio.get_running_loop()
-                sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                imaging_lib = _make_imaging_lib(config)
+                reserved_recipe_foreground_sources = set(imaging_lib.core_break_foreground_source_ids())
+                configured_sfx_dir = Path(config.ads.sfx_dir) if config.ads.sfx_dir else None
+                sfx_dir = imaging_lib.ad_sfx_dir(configured_sfx_dir)
+                bed_assets_dir = imaging_lib.ad_beds_dir()
 
                 # ── Pre-compute brand selections (pure sync, no I/O) ──
                 used_brands_this_break: list[str] = []
@@ -6439,15 +6481,47 @@ async def _run_producer_inner(
                         break
                     brand, ad_format, sonic, voice_map = selection
                     used_brands_this_break.append(brand.name)
+                    recipe = (
+                        imaging_lib.resolve_ad_recipe(
+                            sonic.recipe_id,
+                            variant_key=f"{brand.name}:{spot_idx}:{len(state.ad_history)}",
+                        )
+                        if sonic.recipe_id
+                        else None
+                    )
+                    if recipe is not None:
+                        recipe, suppressed_cues = reserve_unique_recipe_foreground_sources(
+                            recipe,
+                            reserved_recipe_foreground_sources,
+                        )
+                        if suppressed_cues:
+                            logger.info(
+                                "Suppressed %d repeated foreground cue(s) from ad recipe %s in spot %d",
+                                len(suppressed_cues),
+                                recipe.id,
+                                spot_idx + 1,
+                            )
+                    render_sonic = sonic
+                    if sonic.recipe_id and recipe is None:
+                        logger.warning(
+                            "Ad recipe %s for %s is unavailable; restoring the legacy sonic path",
+                            sonic.recipe_id,
+                            brand.name,
+                        )
+                        # Recipe mode suppresses generated accents. Only the
+                        # producer knows whether the configured recipe actually
+                        # resolved, so turn it off before the script is written.
+                        render_sonic = replace(sonic, recipe_id="")
                     logger.info(
-                        "  Spot %d/%d: %s (format=%s, roles=%s)",
+                        "  Spot %d/%d: %s (format=%s, recipe=%s, roles=%s)",
                         spot_idx + 1,
                         num_spots,
                         brand.name,
                         ad_format,
+                        recipe.id if recipe is not None else "compatibility",
                         list(voice_map.keys()),
                     )
-                    spot_params.append((brand, ad_format, sonic, voice_map))
+                    spot_params.append((brand, ad_format, render_sonic, voice_map, recipe))
 
                 if not spot_params:
                     logger.warning("No safe ad campaigns configured — skipping ad break")
@@ -6549,6 +6623,7 @@ async def _run_producer_inner(
                     _num_spots=num_spots,
                     _loop=loop,
                     _scratch=render_failure_scratch,
+                    _imaging_lib=imaging_lib,
                 ):
                     """Opening bumper + sparse mid-spot bumpers.
 
@@ -6556,15 +6631,29 @@ async def _run_producer_inner(
                     synthetic SFX overwhelming the ad break.
                     """
                     bumper_in = config.tmp_dir / f"bumper_in_{uuid4().hex[:8]}.mp3"
-                    mid_bumpers = [
-                        config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"
-                        for _ in range(max(0, _num_spots - 1))
-                        if random.random() < 0.25
-                    ]
+                    # One neutral mid cue is enough even in the longest break.
+                    # Repeating the same mid asset between several spots would
+                    # recreate the foreground-source repetition this role split
+                    # is designed to remove.
+                    mid_bumpers = (
+                        [config.tmp_dir / f"bumper_mid_{uuid4().hex[:8]}.mp3"]
+                        if _num_spots > 1 and random.random() < 0.25
+                        else []
+                    )
                     _scratch.update({bumper_in, *mid_bumpers})
-                    tasks = [_loop.run_in_executor(None, generate_bumper_jingle, bumper_in)]
+                    tasks = [
+                        _loop.run_in_executor(
+                            None,
+                            partial(_imaging_lib.pick_ad_bumper, bumper_in, role="in"),
+                        )
+                    ]
                     for mb in mid_bumpers:
-                        tasks.append(_loop.run_in_executor(None, generate_bumper_jingle, mb, 0.8))
+                        tasks.append(
+                            _loop.run_in_executor(
+                                None,
+                                partial(_imaging_lib.pick_ad_bumper, mb, 0.8, role="mid"),
+                            )
+                        )
                     with _timed_render_stage(state, "mix"):
                         bumper_results = await _gather_all_settled(*tasks)
                         _raise_first_settled_error(bumper_results)
@@ -6620,7 +6709,7 @@ async def _run_producer_inner(
                                     callback_gag=(_callback_gag_text if i == 0 else None),
                                     submission_guard=_home_submission_guard,
                                 )
-                                for i, (brand, af, sn, vm) in enumerate(_spot_params)
+                                for i, (brand, af, sn, vm, _recipe) in enumerate(_spot_params)
                             )
                         )
                     _raise_first_settled_error(script_results)
@@ -6662,8 +6751,10 @@ async def _run_producer_inner(
                                 state=state,
                                 cache_dir=config.cache_dir,
                                 default_voice=_direct_campaign_default_voice(brand, vm),
+                                bed_assets_dir=bed_assets_dir,
+                                recipe=recipe,
                             )
-                            for script, (brand, _, _, vm) in zip(scripts, spot_params, strict=False)
+                            for script, (brand, _, _, vm, recipe) in zip(scripts, spot_params, strict=False)
                         ),
                         scratch=render_failure_scratch,
                     )
@@ -6705,9 +6796,16 @@ async def _run_producer_inner(
                 render_failure_scratch.update({bumper_out, outro_path})
                 outro_text = _select_ad_wrapper_text(config, "select_ad_break_outro", "AD_BREAK_OUTROS")
 
-                async def _build_closing_bumper(_loop=loop, _path=bumper_out) -> None:
+                async def _build_closing_bumper(
+                    _loop=loop,
+                    _path=bumper_out,
+                    _imaging_lib=imaging_lib,
+                ) -> None:
                     with _timed_render_stage(state, "mix"):
-                        await _loop.run_in_executor(None, generate_bumper_jingle, _path)
+                        await _loop.run_in_executor(
+                            None,
+                            partial(_imaging_lib.pick_ad_bumper, _path, role="out"),
+                        )
 
                 async def _build_outro_voice(
                     _text=outro_text,

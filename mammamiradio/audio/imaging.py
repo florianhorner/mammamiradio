@@ -2,22 +2,157 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import shutil
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
+from mammamiradio.audio.imaging_schema import (
+    RECIPE_MANIFEST_SCHEMA_VERSION,
+    RecipeSpec,
+    parse_recipe_specs,
+)
 from mammamiradio.audio.normalizer import (
     _MP3_OUTPUT_ARGS,
     _fmt_num,
     _run_ffmpeg,
+    fit_audio_oneshot,
+    generate_bumper_jingle,
     generate_station_id_bed,
+    generate_sweep,
+    generate_tone,
     generate_transition_sting,
 )
 from mammamiradio.audio.synth_cache import duration_bucket_sec, materialize_synth_mp3, next_synth_variant
 from mammamiradio.core.models import SegmentType
 
 logger = logging.getLogger(__name__)
+
+_CACHE_UNSET = object()
+_CORE_BREAK_ASSET_PATHS = frozenset(
+    {
+        "bumpers/ad_break.mp3",
+        "bumpers/ad_in.mp3",
+        "bumpers/ad_mid.mp3",
+        "bumpers/ad_out.mp3",
+        "stingers/music_ad.mp3",
+        "stingers/ad_music.mp3",
+        "stingers/music_to_speech.mp3",
+        "stingers/speech_to_music.mp3",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ResolvedRecipeCue:
+    """One dry cue selected from a validated imaging recipe.
+
+    ``anchor`` deliberately stays as the canonical manifest symbol. The ad
+    renderer owns dialogue timing, so the imaging layer must not turn a stable
+    editorial anchor into an invented offset.
+    """
+
+    anchor: str
+    asset_path: Path
+    gain_db: float
+    max_duration_sec: float
+    asset_kind: str = "cue"
+    source_ids: tuple[str, ...] = ()
+    foreground_source_ids: tuple[str, ...] | None = None
+
+    @property
+    def recorded_foreground_source_ids(self) -> tuple[str, ...]:
+        """Recorded sources that make this cue a foreground event.
+
+        New manifests provide exact layer roles. Older schema-v2 packs only
+        provide asset-level source ids, so cue assets conservatively treat all
+        of those sources as foreground. Explicit bed/texture kinds never enter
+        the foreground reservation set.
+        """
+        if self.foreground_source_ids is not None:
+            return self.foreground_source_ids
+        if self.asset_kind.casefold() in {"ad_bed", "background", "bed", "texture"}:
+            return ()
+        return self.source_ids
+
+
+@dataclass(frozen=True)
+class ResolvedAdRecipe:
+    """A safe, concrete recipe ready for the ad renderer to time and mix."""
+
+    id: str
+    bed_path: Path | None
+    bed_gain_db: float
+    cues: tuple[ResolvedRecipeCue, ...]
+
+    @property
+    def oneshots(self) -> tuple[ResolvedRecipeCue, ...]:
+        """Compatibility name for callers that describe cues as one-shots."""
+        return self.cues
+
+
+@dataclass(frozen=True)
+class _RecipeAsset:
+    """Validated private representation of one manifest asset."""
+
+    id: str
+    path: Path
+    kind: str
+    tags: tuple[str, ...]
+    source_ids: tuple[str, ...]
+    foreground_source_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _RecipeCueDefinition:
+    anchor: str
+    asset_id: str
+    gain_db: float
+    max_duration_sec: float
+
+
+@dataclass(frozen=True)
+class _RecipeDefinition:
+    id: str
+    bed_asset_id: str | None
+    bed_gain_db: float
+    cues: tuple[_RecipeCueDefinition, ...]
+
+
+@dataclass(frozen=True)
+class _RecipeManifest:
+    assets: Mapping[str, _RecipeAsset]
+    recipes: Mapping[str, _RecipeDefinition]
+
+
+def reserve_unique_recipe_foreground_sources(
+    recipe: ResolvedAdRecipe,
+    reserved_source_ids: set[str],
+) -> tuple[ResolvedAdRecipe, tuple[ResolvedRecipeCue, ...]]:
+    """Reserve a recipe's foreground recordings and suppress later conflicts.
+
+    The mutable reservation set is scoped by the producer to one assembled ad
+    break. A conflict removes only the later decorative cue; the recipe's bed
+    and the spoken spot remain unchanged. Cues without recorded-source
+    provenance remain usable for backward compatibility.
+    """
+    kept: list[ResolvedRecipeCue] = []
+    suppressed: list[ResolvedRecipeCue] = []
+    for cue in recipe.cues:
+        foreground_sources = set(cue.recorded_foreground_source_ids)
+        if foreground_sources & reserved_source_ids:
+            suppressed.append(cue)
+            continue
+        kept.append(cue)
+        reserved_source_ids.update(foreground_sources)
+
+    if not suppressed:
+        return recipe, ()
+    return replace(recipe, cues=tuple(kept)), tuple(suppressed)
 
 
 class ImagingLibrary:
@@ -36,12 +171,296 @@ class ImagingLibrary:
         self.bed_volume_db = bed_volume_db
         self.assets_dir = assets_dir or Path(__file__).resolve().parent.parent / "assets" / "imaging"
         self.cache_dir = cache_dir
+        self._recipe_manifest_signature: object = _CACHE_UNSET
+        self._recipe_manifest: _RecipeManifest | None = None
+        self._resolved_ad_recipe_cache: dict[tuple[str, str], ResolvedAdRecipe] = {}
+
+    def resolve_ad_recipe(self, recipe_id: str, variant_key: str = "") -> ResolvedAdRecipe | None:
+        """Resolve one schema-v2 ad recipe without ever trusting pack input.
+
+        The parsed manifest and successful selections are cached by manifest
+        metadata plus ``variant_key``.  A missing/corrupt manifest, an unknown
+        recipe, or any missing selected asset returns ``None`` so the caller can
+        retain the proven legacy ad path instead of risking an audio failure.
+        """
+        if not isinstance(recipe_id, str) or not recipe_id:
+            return None
+        safe_variant_key = variant_key if isinstance(variant_key, str) else ""
+        manifest = self._load_recipe_manifest()
+        if manifest is None:
+            return None
+
+        cache_key = (recipe_id, safe_variant_key)
+        cached = self._resolved_ad_recipe_cache.get(cache_key)
+        if cached is not None:
+            if self._resolved_recipe_assets_exist(cached):
+                return cached
+            self._resolved_ad_recipe_cache.pop(cache_key, None)
+
+        definition = manifest.recipes.get(recipe_id)
+        if definition is None:
+            return None
+
+        bed = manifest.assets.get(definition.bed_asset_id) if definition.bed_asset_id else None
+        if definition.bed_asset_id and (bed is None or not bed.path.is_file()):
+            return None
+
+        cues: list[ResolvedRecipeCue] = []
+        for cue in definition.cues:
+            asset = manifest.assets.get(cue.asset_id)
+            if asset is None or not asset.path.is_file():
+                return None
+            cues.append(
+                ResolvedRecipeCue(
+                    anchor=cue.anchor,
+                    asset_path=asset.path,
+                    gain_db=cue.gain_db,
+                    max_duration_sec=cue.max_duration_sec,
+                    asset_kind=asset.kind,
+                    source_ids=asset.source_ids,
+                    foreground_source_ids=asset.foreground_source_ids,
+                )
+            )
+
+        resolved = ResolvedAdRecipe(
+            id=definition.id,
+            bed_path=bed.path if bed is not None else None,
+            bed_gain_db=definition.bed_gain_db,
+            cues=tuple(cues),
+        )
+        self._resolved_ad_recipe_cache[cache_key] = resolved
+        return resolved
+
+    def core_break_foreground_source_ids(self) -> tuple[str, ...]:
+        """Recorded foregrounds reserved by bumpers and boundary transitions."""
+        manifest = self._load_recipe_manifest()
+        if manifest is None:
+            return ()
+        targets = {
+            target
+            for relative_path in _CORE_BREAK_ASSET_PATHS
+            if (target := self._safe_pack_asset_path(relative_path)) is not None
+        }
+        reserved: list[str] = []
+        for asset in manifest.assets.values():
+            if asset.path not in targets:
+                continue
+            for source_id in asset.foreground_source_ids:
+                if source_id not in reserved:
+                    reserved.append(source_id)
+        return tuple(reserved)
+
+    def _load_recipe_manifest(self) -> _RecipeManifest | None:
+        """Load and cache only a fully validated schema-v2 recipe manifest."""
+        manifest_path = self.assets_dir / "manifest.json"
+        try:
+            stat = manifest_path.stat()
+            signature: tuple[int, int] | None = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+
+        if signature == self._recipe_manifest_signature:
+            return self._recipe_manifest
+
+        self._recipe_manifest_signature = signature
+        self._recipe_manifest = None
+        self._resolved_ad_recipe_cache.clear()
+        if signature is None or not manifest_path.is_file():
+            return None
+
+        try:
+            raw_manifest: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring unreadable imaging recipe manifest %s: %s", manifest_path, exc)
+            return None
+
+        parsed = self._parse_recipe_manifest(raw_manifest)
+        if parsed is None:
+            logger.warning("Ignoring malformed imaging recipe manifest: %s", manifest_path)
+            return None
+        self._recipe_manifest = parsed
+        return parsed
+
+    def _parse_recipe_manifest(self, raw_manifest: object) -> _RecipeManifest | None:
+        if not isinstance(raw_manifest, Mapping):
+            return None
+        if raw_manifest.get("schema_version") != RECIPE_MANIFEST_SCHEMA_VERSION:
+            return None
+        raw_assets = raw_manifest.get("assets")
+        raw_recipes = raw_manifest.get("recipes")
+        if not isinstance(raw_assets, list) or not isinstance(raw_recipes, list):
+            return None
+
+        assets: dict[str, _RecipeAsset] = {}
+        for raw_asset in raw_assets:
+            asset = self._parse_recipe_asset(raw_asset)
+            if asset is None or asset.id in assets:
+                return None
+            assets[asset.id] = asset
+
+        recipe_specs, errors = parse_recipe_specs(raw_recipes, assets.keys())
+        for error in errors:
+            logger.warning("Ignoring malformed imaging recipe: %s", error)
+        recipes = {spec.id: self._recipe_definition_from_spec(spec) for spec in recipe_specs}
+        return _RecipeManifest(assets=assets, recipes=recipes)
+
+    @staticmethod
+    def _recipe_definition_from_spec(spec: RecipeSpec) -> _RecipeDefinition:
+        return _RecipeDefinition(
+            id=spec.id,
+            bed_asset_id=spec.bed_asset_id,
+            bed_gain_db=spec.bed_gain_db if spec.bed_gain_db is not None else 0.0,
+            cues=tuple(
+                _RecipeCueDefinition(
+                    anchor=cue.anchor,
+                    asset_id=cue.asset_id,
+                    gain_db=cue.gain_db,
+                    max_duration_sec=cue.max_duration_sec,
+                )
+                for cue in spec.cues
+            ),
+        )
+
+    def _parse_recipe_asset(self, raw_asset: object) -> _RecipeAsset | None:
+        if not isinstance(raw_asset, Mapping):
+            return None
+        asset_id = self._nonempty_string(raw_asset.get("id"))
+        relative_path = self._nonempty_string(raw_asset.get("path"))
+        kind = self._nonempty_string(raw_asset.get("kind"))
+        tags = self._string_list(raw_asset.get("tags"))
+        if asset_id is None or relative_path is None or kind is None or tags is None:
+            return None
+        source_ids = self._string_list(raw_asset.get("source_ids", []))
+        if source_ids is None:
+            return None
+        foreground_source_ids = self._foreground_source_ids(raw_asset, kind, source_ids)
+        asset_path = self._safe_pack_asset_path(relative_path)
+        if asset_path is None:
+            return None
+        return _RecipeAsset(
+            id=asset_id,
+            path=asset_path,
+            kind=kind,
+            tags=tags,
+            source_ids=source_ids,
+            foreground_source_ids=foreground_source_ids,
+        )
+
+    @classmethod
+    def _foreground_source_ids(
+        cls,
+        raw_asset: Mapping[object, object],
+        kind: str,
+        source_ids: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Read exact foreground layer roles, with a conservative v2 fallback."""
+        raw_layers = raw_asset.get("layers")
+        if isinstance(raw_layers, list) and raw_layers:
+            foreground: list[str] = []
+            covered: set[str] = set()
+            for raw_layer in raw_layers:
+                if not isinstance(raw_layer, Mapping):
+                    break
+                source_id = cls._nonempty_string(raw_layer.get("source_id"))
+                role = cls._nonempty_string(raw_layer.get("role"))
+                if source_id is None or role not in {"foreground", "texture"} or source_id not in source_ids:
+                    break
+                covered.add(source_id)
+                if role == "foreground" and source_id not in foreground:
+                    foreground.append(source_id)
+            else:
+                if covered == set(source_ids):
+                    return tuple(foreground)
+
+        if kind.casefold() in {"ad_bed", "background", "bed", "texture"}:
+            return ()
+        return source_ids
+
+    @staticmethod
+    def _nonempty_string(value: object) -> str | None:
+        return value if isinstance(value, str) and value.strip() else None
+
+    @classmethod
+    def _string_list(cls, value: object) -> tuple[str, ...] | None:
+        if not isinstance(value, list):
+            return None
+        values = tuple(cls._nonempty_string(item) for item in value)
+        if any(item is None for item in values):
+            return None
+        return tuple(item for item in values if item is not None)
+
+    def _safe_pack_asset_path(self, relative_path: str) -> Path | None:
+        """Return a safe in-pack asset path, whether or not its file exists yet."""
+        candidate = Path(relative_path)
+        if candidate.is_absolute():
+            return None
+        try:
+            pack_root = self.assets_dir.resolve(strict=False)
+            resolved = (pack_root / candidate).resolve(strict=False)
+            resolved.relative_to(pack_root)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        # A missing in-pack file is not an unsafe path. Keep it in the manifest
+        # so only recipes that depend on it fall back; unrelated scenes remain
+        # usable and a restored operator file can recover without rewriting JSON.
+        return resolved
+
+    @staticmethod
+    def _resolved_recipe_assets_exist(recipe: ResolvedAdRecipe) -> bool:
+        paths = [recipe.bed_path] if recipe.bed_path is not None else []
+        paths.extend(cue.asset_path for cue in recipe.cues)
+        return all(path.is_file() for path in paths)
+
+    def _copy_pack_asset(self, output_path: Path, *relative_paths: str) -> bool:
+        """Copy the first matching packaged or operator-provided imaging asset.
+
+        The runtime must never need to render an identity sound just to keep the
+        station moving.  Every caller in this class therefore treats the pack as
+        an optional, immediate override and retains its existing synthetic
+        fallback when an operator supplies an incomplete custom asset directory.
+        """
+        for relative_path in relative_paths:
+            asset = self.assets_dir / relative_path
+            if asset.is_file():
+                try:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(asset, output_path)
+                except OSError as exc:
+                    try:
+                        output_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    logger.warning("Could not copy packaged imaging asset %s: %s", asset.name, exc)
+                    continue
+                logger.info("Using packaged imaging asset: %s", asset.name)
+                return True
+        return False
+
+    def ad_sfx_dir(self, configured_dir: Path | None = None) -> Path | None:
+        """Return a real custom SFX directory, otherwise the bundled identity pack."""
+        if configured_dir is not None and configured_dir.is_dir():
+            return configured_dir
+        bundled = self.assets_dir / "sfx"
+        return bundled if bundled.is_dir() else configured_dir
+
+    def ad_beds_dir(self) -> Path | None:
+        """Return the bundled/overridden bed directory when it contains MP3 assets."""
+        beds_dir = self.assets_dir / "beds"
+        if beds_dir.is_dir() and any(path.is_file() for path in beds_dir.glob("*.mp3")):
+            return beds_dir
+        return None
 
     def pick_stinger(self, from_seg: SegmentType, to_seg: SegmentType, output_path: Path) -> Path:
         """Pick or synthesize a transition stinger for a segment boundary."""
-        asset = self.assets_dir / "stingers" / f"{from_seg.value}_{to_seg.value}.mp3"
-        if asset.exists():
-            shutil.copy2(asset, output_path)
+        specific_asset = f"stingers/{from_seg.value}_{to_seg.value}.mp3"
+        generic_asset = (
+            "stingers/music_to_speech.mp3"
+            if from_seg == SegmentType.MUSIC
+            else "stingers/speech_to_music.mp3"
+            if to_seg == SegmentType.MUSIC
+            else ""
+        )
+        if self._copy_pack_asset(output_path, specific_asset, generic_asset):
             return output_path
 
         params = {
@@ -63,6 +482,8 @@ class ImagingLibrary:
 
     def pick_sweeper_sting(self, output_path: Path) -> Path:
         """Generate the motif underlay used below short station sweepers."""
+        if self._copy_pack_asset(output_path, "sweeper.mp3"):
+            return output_path
         params = {
             "duration_sec": duration_bucket_sec(2.0),
             "motif_notes": self.motif_notes,
@@ -75,6 +496,86 @@ class ImagingLibrary:
             lambda path: generate_station_id_bed(path, 2.0, self.motif_notes),
         )
 
+    def pick_station_id_bed(self, output_path: Path, duration_sec: float = 3.0) -> Path:
+        """Pick the canonical station-ID bed, falling back to the configured motif."""
+        if self._copy_pack_asset(output_path, "station_id.mp3"):
+            return output_path
+        return generate_station_id_bed(output_path, duration_sec, self.motif_notes)
+
+    def pick_time_check_sting(self, output_path: Path) -> Path:
+        """Pick the short time-check cue without introducing a render dependency."""
+        if self._copy_pack_asset(output_path, "time_check.mp3"):
+            return output_path
+        return generate_tone(output_path, freq_hz=1047, duration_sec=0.3)
+
+    def pick_ad_bumper(
+        self,
+        output_path: Path,
+        duration_sec: float = 1.5,
+        *,
+        role: Literal["in", "mid", "out"] = "in",
+    ) -> Path:
+        """Pick one role-specific ad bumper without repeating the break's foreground cue.
+
+        ``role`` is keyword-only so existing callers retain the historical
+        entry-bumper behavior.  The legacy ``ad_break.mp3`` is accepted only
+        for that entry role: reusing it for the middle and exit positions was
+        the runtime seam that let one foreground recording recur throughout a
+        normal break.
+        """
+        if role not in {"in", "mid", "out"}:
+            raise ValueError(f"unsupported ad bumper role: {role}")
+        duration = max(float(duration_sec), 0.5)
+
+        def _render_short_recording(source_path: Path) -> bool:
+            if duration >= 1.2 or not source_path.is_file():
+                return False
+            try:
+                fit_audio_oneshot(
+                    source_path,
+                    output_path,
+                    duration,
+                    target_lufs=-16.0,
+                    fade_out_sec=min(0.08, duration / 4),
+                )
+                return True
+            except Exception as exc:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                logger.warning("Could not render short recorded ad bumper: %s", exc)
+                return False
+
+        relative_path = f"bumpers/ad_{role}.mp3"
+        packaged_bumper = self.assets_dir / relative_path
+        # Mid-break punctuation is deliberately shorter than the entry/exit
+        # bumper. Trim and fade its own reviewed recording rather than silently
+        # inserting a longer master.
+        if _render_short_recording(packaged_bumper):
+            return output_path
+        if self._copy_pack_asset(output_path, relative_path):
+            return output_path
+
+        # Compatibility for operator packs and releases that predate
+        # role-aware bumpers.  Limit it to the entry so one legacy master can
+        # never become the in, mid, and out foreground in the same break.
+        if role == "in":
+            legacy_bumper = self.assets_dir / "bumpers" / "ad_break.mp3"
+            if _render_short_recording(legacy_bumper):
+                return output_path
+            if self._copy_pack_asset(output_path, "bumpers/ad_break.mp3"):
+                return output_path
+
+        # Keep incomplete custom packs audible with distinct, bounded
+        # synthetic punctuation for each role.  These are fallbacks, not the
+        # station identity, so they deliberately avoid sharing one motif.
+        if role == "mid":
+            return generate_tone(output_path, freq_hz=784, duration_sec=min(duration, 0.8))
+        if role == "out":
+            return generate_sweep(output_path, start_hz=760, end_hz=240, duration_sec=duration)
+        return generate_bumper_jingle(output_path, duration)
+
     def pick_talk_bed(
         self,
         duration_sec: float,
@@ -83,16 +584,16 @@ class ImagingLibrary:
     ) -> Path:
         """Pick or synthesize a quiet bed for spoken segments."""
         duration = max(float(duration_sec), 0.5)
+        if source_track is not None:
+            if source_track.exists():
+                return self._loop_bed(source_track, duration, output_path)
+            logger.warning("pick_talk_bed: source_track %s not found, using packaged/synthetic bed", source_track.name)
+
         beds_dir = self.assets_dir / "beds"
         if beds_dir.is_dir():
             candidates = sorted(p for p in beds_dir.glob("*.mp3") if p.is_file())
             if candidates:
                 return self._loop_bed(random.choice(candidates), duration, output_path)
-
-        if source_track is not None:
-            if source_track.exists():
-                return self._loop_bed(source_track, duration, output_path)
-            logger.warning("pick_talk_bed: source_track %s not found, using synthetic drone", source_track.name)
 
         if self.cache_dir is None:
             return self._generate_synthetic_drone(duration, output_path)

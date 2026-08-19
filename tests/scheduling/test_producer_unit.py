@@ -35,7 +35,7 @@ from mammamiradio.home.evening_memory import EveningLedger
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.home.radio_events import RadioEventMatch
 from mammamiradio.home.ritual_recipes import clear_ritual_recipe_cooldowns, match_ritual_recipes
-from mammamiradio.hosts.ad_creative import AdPart, AdScript, AdVoice, SonicWorld
+from mammamiradio.hosts.ad_creative import AdBrand, AdPart, AdScript, AdVoice, SonicWorld
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.hosts.scriptwriter import (
     BanterCommit,
@@ -349,9 +349,9 @@ async def test_home_context_generation_gate_rechecks_after_egress_await(tmp_path
     assert state.discard_by_reason[GenerationWasteReason.OPERATOR_PURGE] == 1
 
 
-async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, timeout: float = 5.0):
+async def _run_until_queued(queue: asyncio.Queue, state: StationState, config, timeout: float = 5.0, **producer_kwargs):
     """Run the producer, waiting until at least one segment is queued, then cancel."""
-    task = asyncio.create_task(run_producer(queue, state, config))
+    task = asyncio.create_task(run_producer(queue, state, config, **producer_kwargs))
     try:
         # Poll until at least one segment appears
         deadline = asyncio.get_event_loop().time() + timeout
@@ -643,6 +643,7 @@ async def test_runway_governor_empty_playlist_falls_back_to_banter(tmp_path):
     config = _make_config()
     config.tmp_dir = tmp_path
     config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "empty-music"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     host = config.hosts[0]
     banter_lines = [(host, "Restiamo in onda.")]
@@ -664,6 +665,190 @@ async def test_runway_governor_empty_playlist_falls_back_to_banter(tmp_path):
         await _run_until_queued(queue, state, config, timeout=2.0)
 
     assert queue.get_nowait().type == SegmentType.BANTER
+
+
+@pytest.mark.asyncio
+async def test_empty_crate_airs_ready_jamendo_instead_of_recovery_banter(tmp_path):
+    """A prepared Jamendo lease must air when there is no starter/local crate."""
+    audio = tmp_path / "jamendo.mp3"
+    audio.write_bytes(b"JAMENDO")
+    ready = Segment(
+        type=SegmentType.MUSIC,
+        path=audio,
+        duration_sec=181.0,
+        metadata={
+            "queue_id": "jamendo-ready",
+            "title_only": "Transient title",
+            "artist": "Provider artist",
+            "provider_track_id": "12345",
+            "audio_source": "jamendo",
+            "music_attribution": {
+                "provider": "jamendo",
+                "license_id": "CC-BY-4.0",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "source_url": "https://www.jamendo.com/track/12345/transient-title",
+                "credit": "Provider artist - Transient title, provided by Jamendo, CC-BY-4.0",
+                "modified": True,
+                "basis": "provider_reported",
+            },
+        },
+        ephemeral=True,
+    )
+    remaining = [ready]
+    provider = SimpleNamespace(take_ready_segment=lambda: remaining.pop(0) if remaining else None)
+    state = StationState(playlist=[], listeners_active=1)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.music_dir = tmp_path / "empty-music"
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config, jamendo_provider=provider)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("audio_source") == "jamendo"
+    assert seg.metadata.get("title_only") == "Transient title"
+
+
+async def test_empty_crate_recovers_local_files_and_airs_a_real_music_segment(tmp_path):
+    """The empty-crate recovery path must end in a real playing MUSIC segment.
+
+    A unit test on ``_recover_local_rotation`` alone only proves state.playlist
+    gets repopulated — it can't prove the producer's generation loop actually
+    picks up a recovered track, renders it, and queues real audio.
+    """
+    from mammamiradio.scheduling.producer import RenderedMusicTrack
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+
+    rendered_path = tmp_path / "rendered.mp3"
+    rendered_path.write_bytes(b"audio")
+
+    async def _render_recovered_track(track, *_args, **_kwargs):
+        return RenderedMusicTrack(track=track, path=rendered_path, cache_path=rendered_path, cache_hit=True)
+
+    state = StationState(playlist=[], listeners_active=1)
+    config = _make_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.music_dir = music_dir
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.MUSIC),
+        patch(f"{PRODUCER_MODULE}._render_music_track", side_effect=_render_recovered_track),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=200.0),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.MUSIC
+    assert seg.metadata.get("title_only") == "Carefree"
+    assert state.playlist_source is not None
+    assert state.playlist_source.kind == "local"
+
+
+async def test_recover_local_rotation_loads_operator_mp3s(tmp_path):
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    (music_dir / "Kevin MacLeod - Allada.mp3").write_bytes(b"id3")
+    config = load_config(TOML_PATH)
+    config.music_dir = music_dir
+    state = StationState(playlist=[])
+
+    assert await _recover_local_rotation(state, config) is True
+    assert len(state.playlist) == 2
+    assert state.playlist_source is not None
+    assert state.playlist_source.kind == "local"
+    assert {track.title for track in state.playlist} == {"Carefree", "Allada"}
+    assert {track.source for track in state.playlist} == {"local"}
+
+
+async def test_recover_local_rotation_drops_blocklisted_operator_files(tmp_path):
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    (music_dir / "Banned Artist - Banned Song.mp3").write_bytes(b"id3")
+    (music_dir / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    config = load_config(TOML_PATH)
+    config.music_dir = music_dir
+    state = StationState(
+        playlist=[],
+        blocklist={("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}},
+    )
+
+    assert await _recover_local_rotation(state, config) is True
+    assert [track.title for track in state.playlist] == ["Carefree"]
+    assert state.playlist[0].source == "local"
+
+
+async def test_recover_local_rotation_stays_empty_without_mp3s(tmp_path):
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    config = load_config(TOML_PATH)
+    config.music_dir = tmp_path / "music"
+    state = StationState(playlist=[])
+
+    assert await _recover_local_rotation(state, config) is False
+    assert state.playlist == []
+
+
+async def test_recover_local_rotation_returns_false_on_oserror(tmp_path):
+    """The blocking scan is offloaded via asyncio.to_thread and its OSError
+    is caught without propagating into the producer loop."""
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    config = load_config(TOML_PATH)
+    config.music_dir = tmp_path / "music"
+    state = StationState(playlist=[])
+
+    with patch("mammamiradio.playlist.playlist.load_operator_local_tracks", side_effect=OSError("boom")):
+        assert await _recover_local_rotation(state, config) is False
+    assert state.playlist == []
+
+
+async def test_recover_local_rotation_never_clobbers_a_concurrent_source_switch(tmp_path):
+    """The directory scan runs off the event loop (asyncio.to_thread). If a
+    concurrent writer (e.g. an admin source switch) repopulates state.playlist
+    while the scan is still in flight, recovery must back off, not overwrite
+    the winner with stale recovered-local-file data."""
+    from mammamiradio.core.models import PlaylistSource, Track
+    from mammamiradio.scheduling.producer import _recover_local_rotation
+
+    config = load_config(TOML_PATH)
+    config.music_dir = tmp_path / "music"
+    state = StationState(playlist=[])
+
+    admin_track = Track(title="Admin Pick", artist="Admin", duration_ms=180_000, source="youtube")
+    admin_source = PlaylistSource(kind="charts", source_id="apple_music_it_top_100", label="Charts", track_count=1)
+
+    def _concurrent_switch_lands_during_scan(*_args, **_kwargs):
+        # Simulates an admin source switch completing while this scan runs
+        # off-loop; the recovered tracks below must lose to it.
+        state.playlist = [admin_track]
+        state.playlist_source = admin_source
+        return [Track(title="Recovered", artist="Operator", duration_ms=180_000, source="local")]
+
+    with patch(
+        "mammamiradio.playlist.playlist.load_operator_local_tracks",
+        side_effect=_concurrent_switch_lands_during_scan,
+    ):
+        assert await _recover_local_rotation(state, config) is False
+
+    assert state.playlist == [admin_track]
+    assert state.playlist_source is admin_source
 
 
 def test_producer_buffered_seconds_uses_real_queue_and_fails_safe():
@@ -825,12 +1010,14 @@ async def test_station_id_uses_host_engine_when_sweeper_voice_is_host_based():
     config.sonic_brand.sweeper_voice = ""
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
         patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -856,11 +1043,13 @@ async def test_station_id_uses_configured_sweeper_engine():
     config.sonic_brand.sweeper_engine = "openai"
     config.sonic_brand.sweeper_edge_fallback_voice = "it-IT-GiuseppeMultilingualNeural"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_station_id_bed.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.STATION_ID),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_station_id_bed", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.mix_voice_with_sting", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -965,12 +1154,14 @@ async def test_time_check_uses_host_engine_for_tts():
     config.identity.station_name = "Radio Test"
     host = config.hosts[0]
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_time_check_sting.side_effect = _fake_path
 
     with (
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
         patch(f"{PRODUCER_MODULE}.random.choice", return_value=host),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -1013,6 +1204,12 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         roles_used=["hammer"],
     )
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    packaged_sfx = Path("/tmp/night-drive/sfx")
+    packaged_beds = Path("/tmp/night-drive/beds")
+    imaging.ad_sfx_dir.return_value = packaged_sfx
+    imaging.ad_beds_dir.return_value = packaged_beds
 
     async def _same_intro_path(path, *_args, **_kwargs):
         return path
@@ -1029,8 +1226,12 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
         ),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()) as mock_synthesize,
-        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad",
+            new_callable=AsyncMock,
+            return_value=_fake_path(),
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -1046,6 +1247,374 @@ async def test_ad_promo_tag_uses_configured_ad_voice_engine():
     assert promo_call.args[1] == "elevenlabs-voice-id"
     assert promo_call.kwargs["engine"] == "elevenlabs"
     assert promo_call.kwargs["edge_fallback_voice"] == "it-IT-DiegoNeural"
+    assert mock_synthesize_ad.call_args.args[3] == packaged_sfx
+    assert mock_synthesize_ad.call_args.kwargs["bed_assets_dir"] == packaged_beds
+
+
+@pytest.mark.asyncio
+async def test_ad_break_requests_each_foreground_bumper_role_once():
+    """A normal multi-spot break must not reuse one foreground bumper source."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 3
+    host = config.hosts[0]
+    script = AdScript(
+        brand=config.ads.brands[0].name,
+        parts=[AdPart(type="voice", text="Compra subito.", role="hammer")],
+        summary="Promo",
+        format="classic_pitch",
+        sonic=SonicWorld(),
+        roles_used=["hammer"],
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    requested_roles: list[str] = []
+
+    def _record_bumper(
+        output_path: Path,
+        _duration_sec: float = 1.5,
+        *,
+        role: str = "in",
+    ) -> Path:
+        requested_roles.append(role)
+        return output_path
+
+    imaging.pick_ad_bumper.side_effect = _record_bumper
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+
+    async def _same_intro_path(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=0.0),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro_path),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.AD
+    assert requested_roles == ["in", "mid", "out"]
+    assert len(set(requested_roles)) == len(requested_roles)
+
+
+@pytest.mark.asyncio
+async def test_ad_recipe_resolves_once_and_reaches_tts_renderer():
+    """Official brand recipes cross the producer boundary without LLM SFX state."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.brands = [AdBrand(name="Vittoria", tagline="Sempre avanti", sonic_recipe="stadium_win")]
+    config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+    sonic = SonicWorld(recipe_id="stadium_win", transition_motif="", sonic_signature="")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=None, bed_gain_db=0.0, cues=())
+    script = AdScript(
+        brand="Vittoria",
+        summary="A winner",
+        parts=[AdPart(type="voice", text="Una vittoria.", role="hammer")],
+        sonic=sonic,
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = Path("/tmp/recorded-sfx")
+    imaging.ad_beds_dir.return_value = Path("/tmp/recorded-beds")
+    imaging.resolve_ad_recipe.return_value = recipe
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", sonic, ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    imaging.resolve_ad_recipe.assert_called_once()
+    assert mock_synthesize_ad.call_args.kwargs["recipe"] is recipe
+
+
+async def _render_two_spot_recipe_break(recipes, *, core_foreground_source_ids=()):
+    """Return the concrete recipes handed to each ad renderer in one break."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 2
+    host = config.hosts[0]
+    brands = [
+        AdBrand(name="Prima", tagline="Prima", sonic_recipe="first"),
+        AdBrand(name="Seconda", tagline="Seconda", sonic_recipe="second"),
+    ]
+    config.ads.brands = brands
+    voice_map = {"hammer": config.ads.voices[0]}
+    sonics = [
+        SonicWorld(recipe_id="first", transition_motif="", sonic_signature=""),
+        SonicWorld(recipe_id="second", transition_motif="", sonic_signature=""),
+    ]
+    selections = [
+        (brands[0], "classic_pitch", sonics[0], voice_map),
+        (brands[1], "classic_pitch", sonics[1], voice_map),
+    ]
+    scripts = [
+        AdScript(
+            brand=brand.name,
+            parts=[AdPart(type="voice", text=f"{brand.name} parla.", role="hammer")],
+            summary=brand.name,
+            format="classic_pitch",
+            sonic=sonic,
+            roles_used=["hammer"],
+        )
+        for brand, sonic in zip(brands, sonics, strict=True)
+    ]
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+    imaging.resolve_ad_recipe.side_effect = recipes
+    imaging.core_break_foreground_source_ids.return_value = core_foreground_source_ids
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{PRODUCER_MODULE}._select_safe_ad_spot", side_effect=selections),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_transition",
+            new_callable=AsyncMock,
+            return_value=(host, "Pubblicita.", None),
+        ),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, side_effect=scripts),
+        patch(f"{PRODUCER_MODULE}.random.random", return_value=1.0),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(
+            f"{PRODUCER_MODULE}.synthesize_ad",
+            new_callable=AsyncMock,
+            return_value=_fake_path(),
+        ) as mock_synthesize_ad,
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    segment = queue.get_nowait()
+    assert segment.type == SegmentType.AD
+    assert segment.metadata["brands"] == ["Prima", "Seconda"]
+    assert [call.args[0].brand for call in mock_synthesize_ad.await_args_list] == ["Prima", "Seconda"]
+    return [call.kwargs["recipe"] for call in mock_synthesize_ad.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_ad_break_suppresses_only_later_recipe_cues_with_repeated_foreground_sources():
+    """Two spots keep their copy/beds while the later repeated recording is removed."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    first = ResolvedAdRecipe(
+        id="first",
+        bed_path=Path("/tmp/first-bed.mp3"),
+        bed_gain_db=-22.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/shared-first.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("shared-recording",),
+            ),
+        ),
+    )
+    second = ResolvedAdRecipe(
+        id="second",
+        bed_path=Path("/tmp/second-bed.mp3"),
+        bed_gain_db=-21.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/shared-later.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("shared-recording",),
+            ),
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/fresh-later.mp3"),
+                -12.0,
+                0.5,
+                source_ids=("fresh-recording",),
+            ),
+        ),
+    )
+
+    rendered_recipes = await _render_two_spot_recipe_break([first, second])
+
+    assert rendered_recipes[0] is first
+    assert rendered_recipes[1].bed_path == second.bed_path
+    assert [cue.asset_path.name for cue in rendered_recipes[1].cues] == ["fresh-later.mp3"]
+
+
+@pytest.mark.asyncio
+async def test_ad_break_suppresses_recipe_cues_that_repeat_core_bumpers_or_transitions():
+    """Core in/mid/out and boundary foregrounds reserve their sources before spots."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    conflicting = ResolvedAdRecipe(
+        id="first",
+        bed_path=Path("/tmp/first-bed.mp3"),
+        bed_gain_db=-22.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/core-repeat.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("core-transition",),
+            ),
+        ),
+    )
+    fresh = ResolvedAdRecipe(
+        id="second",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/fresh.mp3"),
+                -11.0,
+                0.5,
+                source_ids=("fresh-recording",),
+            ),
+        ),
+    )
+
+    rendered = await _render_two_spot_recipe_break(
+        [conflicting, fresh],
+        core_foreground_source_ids=("core-transition",),
+    )
+
+    assert rendered[0].bed_path == conflicting.bed_path
+    assert rendered[0].cues == ()
+    assert rendered[1] is fresh
+
+
+@pytest.mark.asyncio
+async def test_ad_break_preserves_non_overlapping_recipe_cues():
+    """Unique foreground recordings cross the producer boundary unchanged."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+
+    first = ResolvedAdRecipe(
+        id="first",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "intro",
+                Path("/tmp/first.mp3"),
+                -10.0,
+                0.5,
+                source_ids=("first-recording",),
+            ),
+        ),
+    )
+    second = ResolvedAdRecipe(
+        id="second",
+        bed_path=None,
+        bed_gain_db=0.0,
+        cues=(
+            ResolvedRecipeCue(
+                "outro",
+                Path("/tmp/second.mp3"),
+                -11.0,
+                0.5,
+                source_ids=("second-recording",),
+            ),
+        ),
+    )
+
+    rendered_recipes = await _render_two_spot_recipe_break([first, second])
+
+    assert rendered_recipes == [first, second]
+    assert rendered_recipes[0] is first
+    assert rendered_recipes[1] is second
+
+
+@pytest.mark.asyncio
+async def test_unresolved_ad_recipe_restores_legacy_sonic_mode_before_writing():
+    """Configured recipe IDs suppress accents only after they actually resolve."""
+    state = _make_state()
+    config = _make_config()
+    config.pacing.ad_spots_per_break = 1
+    config.ads.brands = [AdBrand(name="Vittoria", tagline="Sempre avanti", sonic_recipe="stadium_win")]
+    config.ads.voices = [AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm", role="hammer")]
+    configured_sonic = SonicWorld(
+        recipe_id="stadium_win",
+        transition_motif="whoosh",
+        sonic_signature="ice_clink+startup_synth",
+    )
+    fallback_script = AdScript(
+        brand="Vittoria",
+        summary="A winner",
+        parts=[AdPart(type="voice", text="Una vittoria.", role="hammer")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
+    )
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _fake_path
+    imaging.ad_sfx_dir.return_value = Path("/tmp/recorded-sfx")
+    imaging.ad_beds_dir.return_value = Path("/tmp/recorded-beds")
+    imaging.resolve_ad_recipe.return_value = None
+
+    async def _same_intro(path, *_args, **_kwargs):
+        return path
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.AD),
+        patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fallback_script) as write_ad,
+        patch(
+            f"{PRODUCER_MODULE}._select_ad_creative",
+            return_value=("classic_pitch", configured_sonic, ["hammer"]),
+        ),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=_same_intro),
+        patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()) as synthesize_ad,
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
+        patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_fake_path),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+    ):
+        await _run_until_queued(queue, state, config)
+
+    rendered_sonic = write_ad.call_args.kwargs["sonic"]
+    assert rendered_sonic.recipe_id == ""
+    assert rendered_sonic.transition_motif == "whoosh"
+    assert rendered_sonic.sonic_signature == "ice_clink+startup_synth"
+    assert synthesize_ad.call_args.kwargs["recipe"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -5108,7 +5677,7 @@ async def test_ad_break_sets_sonic_worlds_and_roles_in_last_ad_script():
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()) as mock_synth_ad,
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=_fake_path()),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", return_value=_fake_path()),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=_fake_path()),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio"),
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),

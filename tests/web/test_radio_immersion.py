@@ -96,6 +96,30 @@ def test_mix_voice_with_sting(mock_subprocess, tmp_path):
     assert "volume=0.15" in cmd  # sting very quiet — background texture only
 
 
+def test_mix_voice_with_sting_sets_filter_threads_before_inputs(mock_subprocess, tmp_path):
+    """Complex-filter thread selection must be a global input option."""
+    from mammamiradio.audio.normalizer import mix_voice_with_sting
+
+    voice = tmp_path / "voice.mp3"
+    voice.write_bytes(b"voice")
+    sting = tmp_path / "sting.mp3"
+    sting.write_bytes(b"sting")
+
+    mix_voice_with_sting(voice, sting, tmp_path / "mixed.mp3")
+
+    mock_run, _ = mock_subprocess
+    cmd = mock_run.call_args[0][0]
+    thread_option_index = cmd.index("-filter_complex_threads")
+    input_indexes = [index for index, argument in enumerate(cmd) if argument == "-i"]
+
+    assert cmd[thread_option_index : thread_option_index + 2] == ["-filter_complex_threads", "1"]
+    assert input_indexes
+    assert thread_option_index < min(input_indexes)
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "amix=inputs=2:duration=longest:normalize=0" in filter_complex
+    assert "dropout_transition" not in filter_complex
+
+
 # ---------------------------------------------------------------------------
 # Scheduler: station ID and time check pacing
 # ---------------------------------------------------------------------------

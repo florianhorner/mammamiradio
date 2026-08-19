@@ -407,7 +407,12 @@ async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_p
     track.local_path.write_bytes(b"audio")
     state = StationState(playlist=[track], listeners_active=1)
     config = _make_config(tmp_path)
-    config.music_dir = tmp_path
+    # Empty and separate from tmp_path: a real operator music_dir holds only
+    # operator files, never the render/cache scratch this test writes below.
+    # Pointing it at tmp_path would let the empty-crate recovery path in
+    # producer.py rediscover this test's own scratch files as "operator
+    # tracks" and reopen the source the ban just closed.
+    config.music_dir = tmp_path / "music"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     rendered_path = tmp_path / "rendered.mp3"
     rendered_path.write_bytes(b"audio")

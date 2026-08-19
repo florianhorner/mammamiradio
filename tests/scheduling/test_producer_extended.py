@@ -27,6 +27,7 @@ from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorization
 from mammamiradio.home.ha_context import HomeContext, ScoredEntity, _HomeContextFetchOutcome
 from mammamiradio.home.ha_enrichment import HomeEvent
 from mammamiradio.hosts.ad_creative import (
+    _CATEGORY_SONIC,
     AdBrand,
     AdFormat,
     AdPart,
@@ -230,7 +231,7 @@ async def test_ad_break_segment_queued(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock) as mock_synthesize,
-        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}._make_imaging_lib"),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -311,7 +312,7 @@ async def test_ad_intro_crossfade_severed_when_no_adjacent_song(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
-        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}._make_imaging_lib"),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{MODULE}.crossfade_voice_over_music") as mock_xfade,
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -379,7 +380,7 @@ async def test_ad_break_host_fallback_voice(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
-        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}._make_imaging_lib"),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
     ):
@@ -1482,7 +1483,7 @@ async def test_ad_quality_reject_resets_pacing_and_continues(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
-        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}._make_imaging_lib"),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
         patch(f"{MODULE}.download_track", new_callable=AsyncMock, return_value=_fake_path()),
@@ -1685,7 +1686,7 @@ async def test_audio_tool_error_in_ad_does_not_drop_segment(tmp_path):
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=_fake_path()),
         patch(f"{MODULE}.synthesize", new_callable=AsyncMock),
-        patch(f"{MODULE}.generate_bumper_jingle", side_effect=_fake_path),
+        patch(f"{MODULE}._make_imaging_lib"),
         patch(f"{MODULE}.concat_files", side_effect=_fake_path),
         patch(f"{MODULE}.validate_segment_audio", side_effect=_quality_side_effect),
         patch(f"{MODULE}.fetch_home_context", new_callable=AsyncMock),
@@ -2137,7 +2138,33 @@ def test_select_ad_creative_category_sonic_defaults():
     _fmt, sonic, _roles = _select_ad_creative(brand, state, len(config.ads.voices))
     assert sonic.environment in {"cafe", "shopping_channel"}
     assert sonic.music_bed in {"tarantella_pop", "cheap_synth_romance", "upbeat"}
-    assert sonic.transition_motif in {"register_hit", "ice_clink", "mandolin_sting"}
+    assert sonic.transition_motif in {"register_hit", "ice_clink", "chime"}
+
+
+@pytest.mark.parametrize(
+    ("category", "expected_motifs"),
+    [
+        ("food", {"register_hit", "ice_clink", "chime"}),
+        ("beauty", {"startup_synth", "ice_clink"}),
+        ("tourism", {"whoosh"}),
+    ],
+)
+def test_category_sonic_fallbacks_exclude_rejected_semantics(
+    category: str,
+    expected_motifs: set[str],
+) -> None:
+    variants = _CATEGORY_SONIC[category]
+
+    assert {variant.transition_motif for variant in variants} == expected_motifs
+    for variant in variants:
+        semantic_fields = (
+            variant.environment,
+            variant.music_bed,
+            variant.transition_motif,
+            variant.sonic_signature,
+        )
+        semantic_blob = " ".join(semantic_fields).casefold()
+        assert all(term not in semantic_blob for term in ("mandolin", "trumpet", "brass"))
 
 
 def test_select_ad_creative_avoids_last_sonic_variant_when_possible():
