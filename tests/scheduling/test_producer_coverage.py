@@ -440,16 +440,16 @@ async def test_try_crossfade_failure(tmp_path):
 
     voice_path = tmp_path / "voice.mp3"
     voice_path.write_bytes(b"voice")
-    music_path = tmp_path / "music.mp3"
-    music_path.write_bytes(b"music")
+    tail_path = tmp_path / "reserved_tail.mp3"
+    tail_path.write_bytes(b"tail")
     config = MagicMock()
     config.tmp_dir = tmp_path
 
     with patch(
-        "mammamiradio.scheduling.producer.crossfade_voice_over_music",
+        "mammamiradio.scheduling.producer.crossfade_voice_over_tail",
         side_effect=Exception("ffmpeg failed"),
     ):
-        result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3", music_path)
+        result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3", tail_path)
         assert result == voice_path
 
 
@@ -2196,9 +2196,13 @@ async def test_drain_guard_does_not_record_bridge_fire_when_enqueue_rejected(tmp
 
 
 @pytest.mark.asyncio
-async def test_banter_metadata_includes_has_music_tail(tmp_path):
-    """Banter segments produced after a crossfade transition must carry
-    has_music_tail=True so the sting layer does not double-stack."""
+async def test_banter_metadata_has_no_tail_before_a_pair_commits(tmp_path):
+    """A render alone must never claim a music tail in public metadata.
+
+    The producer only sets ``has_music_tail`` during the final synchronous
+    music-head/speech-successor admission, after the exact queued predecessor
+    has been revalidated.
+    """
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
@@ -2254,8 +2258,7 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
     assert not queue.empty(), "Producer must have queued a banter segment"
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
-    # When _try_crossfade produces xfade_out (different from input path), has_music_tail must be True
-    assert seg.metadata.get("has_music_tail") is True
+    assert seg.metadata.get("has_music_tail") is False
 
 
 @pytest.mark.asyncio
