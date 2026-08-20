@@ -58,7 +58,10 @@
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+/* The body font belongs on the root, not only on body: anything that ends up
+   outside that inheritance chain otherwise renders in the browser's default
+   serif, which is a typeface nobody here chose. */
+html { scroll-behavior: smooth; font-family: var(--font-body); }
 body {
   margin: 0;
   min-width: 320px;
@@ -267,8 +270,12 @@ body[data-phase="gathering"] .translation-gate p, body[data-phase="translating"]
 .teaser-stack strong { color: var(--cream); font-family: var(--font-display); font-size: 22px; font-style: italic; font-weight: 600; line-height: 1.15; }
 .idle-prompt { max-width: 245px; margin: 7px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 /* The one place the page makes a claim about itself that is not a disclaimer:
-   the scenario is invented, the voices are the real product. */
+   the scenario is invented, the voices are the real product. It sits on the same
+   screen as the privacy note, at the same size and colour, so without the
+   emphasis a reader takes it for a fourth disclaimer and skips it. The stressed
+   clause is the only positive claim the page makes about itself. */
 .voice-note { margin: 10px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.voice-note strong { color: var(--cream-dk); font-weight: 600; }
 body[data-phase="gathering"] .meaning-idle { opacity: .62; transform: scale(.94); }
 body[data-phase="translating"] .meaning-idle { opacity: .48; transform: scale(.9); filter: blur(1.5px); }
 body[data-phase="translating"] .hero-wave .waveform-bar { box-shadow: 0 0 12px rgba(var(--scenario-rgb),.75); }
