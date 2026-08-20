@@ -136,18 +136,37 @@ hostAudio.addEventListener("error", () => {
   speakButton.innerHTML = '<span aria-hidden="true">▶</span> Clip unavailable — try again';
 });
 function primeAudio(scenarioId) {
-  // Start fetching the clip while the 2.9s translation animation runs, so the
-  // voice begins the instant it is asked for rather than after a download. The
-  // station's own second rule is that a listener never waits for audio; a page
-  // that argues for the station should not make them wait either.
+  // Start fetching the clip while the translation animation runs, so the voice
+  // begins the instant it is asked for rather than after a download.
   const src = audioSrcFor(scenarioId);
   if (hostAudio.src.endsWith(src)) return;
   hostAudio.src = src;
   hostAudio.load();
 }
+function startSpeaking() {
+  // Reflect playback in the control without duplicating the click handler.
+  isSpeaking = true;
+  speakButton.classList.add("is-speaking");
+  speakButton.innerHTML = '<span aria-hidden="true">■</span> Stop';
+}
+function playFromGesture() {
+  // The voice IS the product; everything above it is setup. Waiting for a
+  // second click meant a visitor could read the whole page and never hear the
+  // one thing that is not copyable. This call sits inside the button's own
+  // click handler, so it counts as a user gesture and autoplay rules allow it.
+  // The manual control stays exactly where it was: if a browser refuses, the
+  // page falls back to the old two-click path rather than to silence.
+  hostAudio.currentTime = 0;
+  const played = hostAudio.play();
+  if (played && typeof played.catch === "function") {
+    played.then(startSpeaking).catch(() => stopSpeech());
+  } else {
+    startSpeaking();
+  }
+}
 function revealResult() {
   // On a narrow viewport the two panels stack, which puts the answer roughly two
-  // screens below the button that asks for it: you tap "Make sense of this home"
+  // screens below the button that asks for it: you tap the hero button
   // and nothing you can see changes. Bring the result to the reader when it is
   // off-screen, and only then, so the desktop side-by-side layout is untouched.
   const panel = document.querySelector(".meaning-panel");
@@ -157,9 +176,10 @@ function revealResult() {
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   panel.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
 }
-function runTranslation() {
+function runTranslation({ fromGesture = false } = {}) {
   clearTimers(); stopSpeech();
   primeAudio(activeScenario);
+  if (fromGesture) playFromGesture();
   revealResult();
   body.dataset.phase = "gathering";
   translateButton.disabled = true;
@@ -178,7 +198,7 @@ function runTranslation() {
   later(() => {
     body.dataset.phase = "speaking";
     translateButton.disabled = false;
-    translateLabel.textContent = "Show me another moment";
+    translateLabel.textContent = "Hear another one";
     gateLabel.textContent = "On air";
     const scenario = scenarios[activeScenario];
     translationAnnouncement.textContent = `${scenario.heading} ${scenario.summary} On air: ${scenario.quote}`;
@@ -187,16 +207,17 @@ function runTranslation() {
 }
 function resetExperience() {
   clearTimers(); stopSpeech(); body.dataset.phase = "idle"; translateButton.disabled = false;
-  translateLabel.textContent = "Make sense of this home"; gateLabel.textContent = "Ready to listen"; translationAnnouncement.textContent = ""; resetButton.hidden = true; updateJourney("sensors");
+  translateLabel.textContent = "Hear a moment"; gateLabel.textContent = "Ready to listen"; translationAnnouncement.textContent = ""; resetButton.hidden = true; updateJourney("sensors");
 }
 translateButton.addEventListener("click", () => {
   if (body.dataset.phase === "speaking") { const currentIndex = scenarioIds.indexOf(activeScenario); paintScenario(scenarioIds[(currentIndex + 1) % scenarioIds.length]); }
-  runTranslation();
+  runTranslation({ fromGesture: true });
 });
 resetButton.addEventListener("click", resetExperience);
 scenarioButtons.forEach((button) => {
   button.setAttribute("aria-pressed", String(button.classList.contains("is-active")));
-  button.addEventListener("click", () => { const id = button.dataset.scenarioId; if (!id || id === activeScenario) return; paintScenario(id); if (body.dataset.phase !== "idle") runTranslation(); });
+  // Picking a different moment mid-demo is a gesture too, so it plays as well.
+  button.addEventListener("click", () => { const id = button.dataset.scenarioId; if (!id || id === activeScenario) return; paintScenario(id); if (body.dataset.phase !== "idle") runTranslation({ fromGesture: true }); });
 });
 speakButton.addEventListener("click", () => {
   if (isSpeaking) { stopSpeech(); return; }
