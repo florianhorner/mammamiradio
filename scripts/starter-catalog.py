@@ -1038,7 +1038,11 @@ def approve(candidate: str, *, replace_isrc: str, decisions_path: Path) -> tuple
     }
     row["modification_notice"] = stage_data["modification_notice"]
     evidence = dict(row["evidence"])
-    evidence["source_receipt"] = approval_relative
+    # Two different claims, two different receipts. `source_receipt` says where
+    # the bytes came from and what they hashed to; `audition_receipt` says a
+    # human listened and what licence was proved. Pointing both at the approval
+    # file collapses them and orphans the acquisition evidence, leaving the
+    # manifest referencing nothing that records the download at all.
     evidence["audition_receipt"] = approval_relative
     row["evidence"] = evidence
     row["approval"] = {"status": "approved", "reviewed_at": reviewed_at}
@@ -1196,27 +1200,6 @@ def check(*, allow_incomplete: bool = False) -> dict[str, Any]:
                         receipt_source_sha != source.get("sha256") or receipt_source_bytes != source.get("bytes")
                     ):
                         raise ToolError("source receipt does not match manifest facts")
-                    # An approval receipt records the licence the acquisition
-                    # proved against the provider. Editing the manifest's licence
-                    # without the receipt agreeing is exactly the tamper this
-                    # catches — and it is checked offline, with no credential.
-                    if receipt_data.get("receipt_type") == "starter-track-approval":
-                        receipt_license = receipt_data.get("license")
-                        if not isinstance(receipt_license, dict):
-                            raise ToolError(
-                                "approval receipt records no licence — re-run approve to bind it to the manifest"
-                            )
-                        declared = _required_license_block(row, isrc)
-                        if (receipt_license.get("id"), receipt_license.get("url")) != declared:
-                            raise ToolError(
-                                f"manifest declares {declared[0]} but the approval receipt proves "
-                                f"{receipt_license.get('id')}"
-                            )
-                        if receipt_license.get("provider") != provider:
-                            raise ToolError(
-                                f"manifest says provider {provider} but the approval receipt says "
-                                f"{receipt_license.get('provider')}"
-                            )
                 except ToolError as exc:
                     approval_value = row.get("approval")
                     pending_row = not isinstance(approval_value, dict) or approval_value.get("status") != "approved"
@@ -1259,6 +1242,24 @@ def check(*, allow_incomplete: bool = False) -> dict[str, Any]:
                     or receipt_derivative.get("sha256") != derivative.get("sha256")
                 ):
                     raise ToolError("audition receipt facts do not match the manifest")
+                # The licence the acquisition proved, checked against what the
+                # manifest claims. The manifest generates the shipped attribution
+                # notice and is otherwise just committed JSON anyone can edit, so
+                # a licence claim must not be changeable in one file alone. Offline,
+                # no credential.
+                receipt_license = approval_receipt.get("license")
+                if not isinstance(receipt_license, dict):
+                    raise ToolError("audition receipt records no licence — re-run approve to bind it")
+                declared = _required_license_block(row, str(isrc))
+                if (receipt_license.get("id"), receipt_license.get("url")) != declared:
+                    raise ToolError(
+                        f"manifest declares {declared[0]} but the audition receipt proves {receipt_license.get('id')}"
+                    )
+                if receipt_license.get("provider") != _provider_of(row):
+                    raise ToolError(
+                        f"manifest says provider {_provider_of(row)} but the audition receipt says "
+                        f"{receipt_license.get('provider')}"
+                    )
             except ToolError as exc:
                 record("MEDIA-EVIDENCE", f"{isrc}: {exc}")
 
