@@ -1,0 +1,43 @@
+proof: ci(nudge) — re-ask GitHub for mergeability and surface parked PRs
+commit: 5804c147a4c01b204f78b477c966b72bcfe2a6a8
+date:   2026-08-20T09:03:06Z
+host:   Darwin 25.5.0 arm64
+
+$ shellcheck scripts/nudge-dependabot-rebase.sh tests/workflows/test_dependabot_nudge.sh
+(no output — clean)
+
+$ bash tests/workflows/test_dependabot_nudge.sh
+PASS: behind PR gets @dependabot rebase comment
+PASS: un-actioned nudge is not repeated (idempotent)
+PASS: re-nudges after the previous nudge was actioned
+PASS: no behind PRs is a no-op
+PASS: list failure degrades to no-op
+PASS: comment failure is non-fatal
+PASS: multiple behind PRs each nudged once
+PASS: non-numeric list entries never reach gh
+PASS: per-PR view failure skips that PR, continues
+PASS: re-asks while GitHub reports UNKNOWN, then nudges
+PASS: permanent UNKNOWN is bounded, announced, and never guessed
+PASS: non-numeric retry delay falls back to the default
+PASS: zero open PRs is a clean no-op
+PASS: one settled list call serves both audiences
+PASS: list call passes --limit 100
+PASS: non-numeric list limit falls back to the default
+PASS: armed-but-behind human PR is surfaced, not silently skipped
+PASS: non-numeric human PR id is dropped, not rendered
+PASS: behind but un-armed PR is not reported
+PASS: armed behind bot PR is nudged, never escalated to a human
+PASS: bot nudge and human report coexist on disjoint sets
+PASS: step summary names the landing-contract command
+PASS: unwritable step summary degrades quietly and silently
+PASS: non-numeric retry budget falls back to the default
+PASS: zero retry budget is clamped to one attempt
+PASS: missing gh degrades to a clean skip
+PASS: missing jq degrades to a clean skip
+
+All 26 dependabot nudge cases passed.
+
+mutation checks (each applied to a temp copy; suite must FAIL):
+  remove all three PR-id guards        -> FAIL: junk identifier must never be passed to gh
+  remove step-summary appendability probe -> FAIL: an unwritable summary must not leak shell noise into the log
+  (both survived the suite before this change)
