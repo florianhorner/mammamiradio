@@ -24,24 +24,10 @@ def tool():
     return module
 
 
-def test_strict_check_stays_red_for_pending_human_auditions() -> None:
+def test_shipped_catalog_passes_the_strict_gate() -> None:
+    """The crate is complete: twelve audited derivatives, every gate green."""
     result = subprocess.run(
-        [sys.executable, os.fspath(SCRIPT), "check"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert "full-track human audition is pending" in result.stdout
-    assert "approved derivatives 0/12" in result.stdout
-    assert "source receipt is missing" not in result.stdout
-
-
-def test_incomplete_check_is_green_only_as_explicit_scaffold_mode() -> None:
-    result = subprocess.run(
-        [sys.executable, os.fspath(SCRIPT), "check", "--allow-incomplete", "--json"],
+        [sys.executable, os.fspath(SCRIPT), "check", "--json"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -49,11 +35,34 @@ def test_incomplete_check_is_green_only_as_explicit_scaffold_mode() -> None:
     )
 
     report = json.loads(result.stdout)
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout
     assert report["ok"] is True
-    assert report["allow_incomplete"] is True
-    assert report["groups"]["MEDIA-EVIDENCE"]["status"] == "WARN"
-    assert report["groups"]["MEDIA-PACKAGE"]["status"] == "PASS"
+    assert all(group["status"] == "PASS" for group in report["groups"].values()), report["groups"]
+
+
+def test_incomplete_mode_is_green_while_strict_mode_is_red(tmp_path: Path, monkeypatch, tool) -> None:
+    """Scaffold mode downgrades a pending audition to a warning, never a pass."""
+    data = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    # Flip every row, not one: a catalog with some rows approved and their audio
+    # still on disk is a state that cannot occur, and asserting against it would
+    # be testing an artifact of the fixture rather than the gate.
+    for row in data["tracks"]:
+        row["approval"] = {"status": "pending_full_audition"}
+        row["derivative"] = None
+    pending = tmp_path / "catalog.json"
+    pending.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(tool, "CATALOG_PATH", pending)
+
+    strict = tool.check()
+    lenient = tool.check(allow_incomplete=True)
+
+    # The claim under test is exactly this downgrade: a pending audition is fatal
+    # in strict mode and a warning in scaffold mode. The byte/audio groups are
+    # deliberately not asserted — this fixture has no asset tree beside it, so
+    # their status here would describe the fixture, not the gate.
+    assert strict["groups"]["MEDIA-EVIDENCE"]["status"] == "FAIL"
+    assert lenient["groups"]["MEDIA-EVIDENCE"]["status"] == "WARN"
+    assert "full-track human audition is pending" in json.dumps(lenient)
 
 
 def test_validator_wrapper_forwards_scaffold_mode() -> None:
@@ -66,7 +75,7 @@ def test_validator_wrapper_forwards_scaffold_mode() -> None:
     )
 
     assert result.returncode == 0
-    assert "MEDIA-EVIDENCE WARN" in result.stdout
+    assert "MEDIA-EVIDENCE PASS" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -603,3 +612,79 @@ def test_written_receipt_carries_no_credential(tool, monkeypatch, tmp_path: Path
     # being useful evidence of which track was acquired.
     assert receipt["evidence"]["jamendo_track_id"] == "1093607"
     assert receipt["evidence"]["license_id"] == "CC-BY-3.0"
+
+
+def test_strict_check_goes_red_when_an_audition_is_pending(tmp_path: Path, monkeypatch, tool) -> None:
+    """The pending-is-red guard, held against a synthetic catalog.
+
+    This used to lean on the shipped catalog being unaudited. That made it stop
+    testing anything the moment the crate was completed, so it now builds its own
+    pending row instead — the invariant must hold regardless of what ships.
+    """
+    data = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    # Flip every row, not one: a catalog with some rows approved and their audio
+    # still on disk is a state that cannot occur, and asserting against it would
+    # be testing an artifact of the fixture rather than the gate.
+    for row in data["tracks"]:
+        row["approval"] = {"status": "pending_full_audition"}
+        row["derivative"] = None
+    pending = tmp_path / "catalog.json"
+    pending.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(tool, "CATALOG_PATH", pending)
+
+    report = tool.check()
+
+    assert report["ok"] is False
+    assert "full-track human audition is pending" in json.dumps(report)
+
+
+def _tampered_catalog(tmp_path: Path, mutate) -> Path:
+    data = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    mutate(data)
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        # Claim a different licence than the acquisition proved.
+        (
+            lambda d: d["tracks"][-1].update(
+                license={"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}
+            ),
+            "but the audition receipt proves",
+        ),
+        # Claim a different provider than the receipt records.
+        (lambda d: d["tracks"][-1].update(provider="incompetech"), "the audition receipt says"),
+    ],
+)
+def test_manifest_licence_must_agree_with_the_signed_approval_receipt(
+    tmp_path: Path, monkeypatch, tool, mutate, expected
+) -> None:
+    """The manifest may not assert a licence the receipt does not corroborate.
+
+    The manifest generates the shipped attribution notice, and on its own it is
+    just committed JSON anyone can edit. Binding it to the human-signed approval
+    receipt — the same place `check` already compares source hashes — means a
+    licence claim cannot be changed in one file alone. Verified offline, with no
+    credential.
+    """
+    monkeypatch.setattr(tool, "CATALOG_PATH", _tampered_catalog(tmp_path, mutate))
+
+    report = tool.check()
+
+    assert report["ok"] is False
+    assert expected in json.dumps(report)
+
+
+def test_every_shipped_approval_receipt_binds_its_licence(tool) -> None:
+    """A receipt without a licence block is unbound and must not pass."""
+    catalog = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    for row in catalog["tracks"]:
+        receipt_path = ROOT / row["evidence"]["audition_receipt"]
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        assert receipt["license"]["id"] == row["license"]["id"], row["isrc"]
+        assert receipt["license"]["url"] == row["license"]["url"], row["isrc"]
+        assert receipt["license"]["provider"] == row.get("provider", "incompetech"), row["isrc"]

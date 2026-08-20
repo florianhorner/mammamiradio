@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -14,21 +15,23 @@ def _read(relative: str) -> str:
 def test_canonical_music_source_guide_records_the_rights_boundaries() -> None:
     guide = _read("docs/music-sources.md")
     flat_guide = " ".join(guide.split())
-    for track in (
-        "Carefree",
-        "Miami Viceroy",
-        "Floating Cities",
-        "Allada",
-        "Life of Riley",
-        "Night in Venice",
-        "Pride",
-        "Casa Bossa Nova",
-        "Cipher",
-        "Daily Beetle",
-        "Local Forecast – Elevator",
-        "Wallpaper",
-    ):
-        assert track in flat_guide
+
+    # Derived from the manifest rather than hardcoded. This guide is the
+    # project's public rights statement, and a hardcoded list let it keep
+    # naming twelve tracks that had been removed from the bundle — the doc was
+    # wrong in every particular while its own guard stayed green. Reading the
+    # catalog means the two cannot drift again.
+    catalog = json.loads(_read("mammamiradio/assets/starter/catalog.json"))
+    titles = [row["title"].strip() for row in catalog["tracks"]]
+    assert len(titles) == 12, "the guide describes a twelve-track bundle"
+    for track in titles:
+        assert track in flat_guide, f"{track!r} is bundled but absent from the rights guide"
+
+    # Both licence tiers must be stated: they differ by provider, and a reader
+    # cannot comply with a licence the doc does not name.
+    for license_id in {row["license"]["id"] for row in catalog["tracks"]}:
+        version = license_id.rsplit("-", 1)[-1]
+        assert f"CC BY {version}" in flat_guide, f"{license_id} is bundled but unstated in the rights guide"
     for boundary in (
         "default-off",
         "provider confirmation",

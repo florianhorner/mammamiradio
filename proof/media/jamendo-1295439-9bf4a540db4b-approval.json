@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "JAMENDO-1295439",
+  "title": "Set Me On Fire (feat. Ashley Jana)",
+  "artist": "David Amber",
+  "reviewed_at": "2026-08-20T20:01:11Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-3.0",
+    "url": "https://creativecommons.org/licenses/by/3.0/",
+    "provider": "jamendo"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://prod-1.storage.jamendo.com/?trackid=1295439&format=mp31",
+    "final_url": "https://prod-1.storage.jamendo.com/?trackid=1295439&format=mp31",
+    "sha256": "acef57ff5eb2562961cb98d88f0887cab3b1a081956086b78ed76622f1cf10dd",
+    "bytes": 2448896,
+    "acquired_at": "2026-08-20T19:52:53Z",
+    "piece_sha256": "bdaebb981b4759c1c3488b28e831b8ce5bbd770a68a49356bee2e225626774ac",
+    "pieces_sha256": "bdaebb981b4759c1c3488b28e831b8ce5bbd770a68a49356bee2e225626774ac"
+  },
+  "derivative": {
+    "sha256": "9bf4a540db4b3db9b6f595aa687018682ed39bb5c71938bd802ec7b75e418ff2",
+    "bytes": 4849389,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 201.985,
+    "integrated_loudness_lufs": -16.2,
+    "staged_at": "2026-08-20T19:55:22Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}

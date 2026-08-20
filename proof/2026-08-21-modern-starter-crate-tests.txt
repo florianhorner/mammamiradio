@@ -1,0 +1,21 @@
+proof: feat(media) ship the modern twelve-track starter crate
+commit: df063bce95fc2ec03a3c77ff581bcc6f87fa95d0
+base:   florianhorner/feat/starter-jamendo-provider 535ca144
+date:   2026-08-20T23:07:18Z
+
+$ .venv/bin/python scripts/starter-catalog.py check
+MEDIA-EVIDENCE PASS: all checks passed
+MEDIA-BYTES PASS: all checks passed
+MEDIA-AUDIO PASS: all checks passed
+MEDIA-PACKAGE PASS: all checks passed
+
+crate facts:
+  12/12 approved, 47:08 (floor 45:00), 64.8 MiB (ceiling 75 MiB)
+  licences: {'CC-BY-4.0': 6, 'CC-BY-3.0': 6}
+  providers: {'incompetech': 6, 'jamendo': 6}
+
+$ .venv/bin/python -m pytest tests/ -q -o addopts=
+7490 passed, 4 skipped in 559s
+
+every bundled track surfaces its CC BY credit:
+  12/12 surfaced; missing: none

@@ -146,7 +146,7 @@ review.
 Acquire only one exact predeclared catalog row:
 
 ```bash
-python scripts/starter-catalog.py acquire --isrc USUAN1900056
+python scripts/starter-catalog.py acquire --isrc USUAN1900042
 ```
 
 Two providers are supported, selected by the row's `provider` field. Absent
@@ -181,7 +181,7 @@ repository (for example `/tmp/starter-decision.json`) with this exact shape:
 ```json
 {
   "schema_version": "1",
-  "isrc": "USUAN1900056",
+  "isrc": "USUAN1900042",
   "reviewed_at": "2026-07-16T12:00:00Z",
   "reviewer_role": "release maintainer",
   "listened_from_start_to_finish": true,
@@ -198,7 +198,7 @@ the derivative, redacted receipt, and manifest row as one bounded operation:
 ```bash
 python scripts/starter-catalog.py approve \
   --candidate <candidate-id> \
-  --replace USUAN1900056 \
+  --replace USUAN1900042 \
   --decisions /tmp/starter-decision.json
 ```
 

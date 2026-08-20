@@ -298,7 +298,9 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Starter-catalog changes must update the canonical manifest, source evidence,
   human audition record, and media proof together; never substitute unverified
-  demo or fallback music.
+  demo or fallback music. The exact crate is additionally pinned by
+  `LOCKED_TRACKS` in `tests/media/test_starter.py`, so swapping it is a
+  deliberate test change and can never happen silently.
 - **Bundled music is attribution-only, and that is a hard boundary, not a
   preference.** Two providers are supported: Incompetech (CC BY 4.0, keyless)
   and Jamendo (CC BY 3.0, needs a client id to prove the licence). A row's
