@@ -48,7 +48,10 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
+from mammamiradio.scheduling.handoff import PreparedMusicHandoff, commit_music_handoff
+from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow
 from mammamiradio.web.listener_requests import router as listener_requests_router
+from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 from mammamiradio.web.streamer import (
     _ASSET_VERSION,
     _DEMO_ASSETS_DIR,
@@ -219,6 +222,68 @@ def _install_late_blocklisted_continuity_slot(
     )
     state.blocklist = {("late artist", "late song"): {"display": "Late Artist - Late Song"}}
     return blocked_audio
+
+
+def _commit_playback_handoff(
+    app: FastAPI,
+    tmp_path: Path,
+    *,
+    head_payload: bytes = b"head-audio",
+) -> tuple[Segment, Segment, Path]:
+    """Commit a real queue pair for playback lifecycle regressions."""
+
+    original = tmp_path / "full_song.mp3"
+    head = tmp_path / "song_head.mp3"
+    tail = tmp_path / "song_tail.mp3"
+    speech_path = tmp_path / "speech.mp3"
+    original.write_bytes(b"full-song-audio")
+    head.write_bytes(head_payload)
+    tail.write_bytes(b"tail-audio")
+    speech_path.write_bytes(b"speech-audio")
+    music = Segment(
+        type=SegmentType.MUSIC,
+        path=original,
+        duration_sec=10.0,
+        metadata={"queue_id": "music", "artist": "Artist", "title_only": "Song"},
+        ephemeral=False,
+    )
+    successor = Segment(
+        type=SegmentType.BANTER,
+        path=speech_path,
+        duration_sec=2.0,
+        metadata={
+            "queue_id": "speech",
+            "title": "Host transition",
+            "transition_track_ref": "youtube|song",
+        },
+    )
+    prepared = PreparedMusicHandoff(
+        music_segment=music,
+        source_path=original,
+        split=Mp3HandoffSplit(
+            head_path=head,
+            tail_path=tail,
+            playable_start_byte=0,
+            head_end_byte=len(head_payload),
+            playable_end_byte=len(head_payload) + 10,
+            head_duration_sec=8.0,
+            tail_duration_sec=2.0,
+            source_duration_sec=10.0,
+            frame_count=2,
+            head_frame_count=1,
+            tail_frame_count=1,
+        ),
+    )
+    app.state.queue.put_nowait(music)
+    app.state.station_state.queued_segments = [{"id": "music", "duration_sec": 10.0}]
+    assert commit_music_handoff(
+        app.state.queue,
+        app.state.station_state,
+        prepared,
+        successor,
+        {"id": "speech", "duration_sec": 2.0},
+    )
+    return music, successor, original
 
 
 # ---------------------------------------------------------------------------
@@ -1052,6 +1117,126 @@ async def test_run_playback_loop_persists_music_only_after_segment_finishes(tmp_
 
     persist_completed.assert_awaited_once()
     assert not audio_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next(tmp_path: Path) -> None:
+    """Scenario 1: a committed head and successor each air once across the EOF yield."""
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    _, listener_queue = app.state.stream_hub.subscribe()
+    music, successor, original = _commit_playback_handoff(app, tmp_path)
+    forced_path = tmp_path / "forced.mp3"
+    forced_path.write_bytes(b"forced-audio")
+    forced = Segment(
+        type=SegmentType.BANTER,
+        path=forced_path,
+        duration_sec=1.0,
+        metadata={"title": "Air next"},
+        ephemeral=False,
+    )
+    successor_finished = asyncio.Event()
+    observed: dict[str, object] = {}
+    emitted: list[Segment] = []
+
+    def _capture_boundary(_state, segment, *_args, **_kwargs):
+        emitted.append(segment)
+        if segment is music:
+
+            def _air_next_at_eof() -> None:
+                observed["active"] = app.state.station_state.active_playback_segment
+                observed["accepted"] = _front_insert_queue_and_shadow(
+                    app.state.queue,
+                    app.state.station_state,
+                    forced,
+                    {"id": "forced", "duration_sec": 1.0},
+                )
+                observed["queue"] = list(app.state.queue._queue)  # type: ignore[attr-defined]
+
+            asyncio.get_running_loop().call_soon(_air_next_at_eof)
+        elif segment is successor:
+            successor_finished.set()
+
+    with (
+        patch("mammamiradio.web.streamer._emit_stream_result", side_effect=_capture_boundary),
+        patch("mammamiradio.web.streamer._persist_completed_music", new=AsyncMock()),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            await asyncio.wait_for(successor_finished.wait(), timeout=1.0)
+            # Let the loop's next wait_for(queue.get()) install its child task
+            # before cancellation. Cancelling on the exact creation tick can
+            # strand Python 3.11's wait_for teardown even though playback and
+            # the handoff lifecycle have already completed successfully.
+            await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    queued_at_boundary = observed["queue"]
+    assert observed == {
+        "active": None,
+        "accepted": True,
+        "queue": [successor, forced],
+    }
+    assert queued_at_boundary == [successor, forced]
+    assert listener_queue.get_nowait() == b"head-audio"
+    assert listener_queue.get_nowait() == b"speech-audio"
+    assert sum(segment is music for segment in emitted) == 1
+    assert sum(segment is successor for segment in emitted) == 1
+    assert original.exists()
+    assert successor.metadata["has_music_tail"] is True
+    assert not app.state.station_state.handoff_reservations
+
+
+@pytest.mark.asyncio
+async def test_handoff_pre_send_callback_failure_finalizes_selected_head(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    music, successor, original = _commit_playback_handoff(app, tmp_path)
+    head_path = music.path
+
+    with patch.object(
+        app.state.station_state, "on_stream_segment_selected", side_effect=RuntimeError("callback failed")
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        with pytest.raises(RuntimeError, match="callback failed"):
+            await asyncio.wait_for(task, timeout=1.0)
+
+    await asyncio.wait_for(app.state.queue.join(), timeout=0.1)
+    assert app.state.station_state.active_playback_segment is None
+    assert app.state.queue.empty()
+    assert app.state.station_state.queued_segments == []
+    assert not app.state.station_state.handoff_reservations
+    assert not head_path.exists()
+    assert not successor.path.exists()
+    assert original.exists()
+
+
+@pytest.mark.asyncio
+async def test_empty_handoff_head_cancels_successor_instead_of_marking_due(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    _, listener_queue = app.state.stream_hub.subscribe()
+    music, successor, _original = _commit_playback_handoff(app, tmp_path, head_payload=b"")
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        for _ in range(50):
+            if not app.state.station_state.handoff_reservations:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert not app.state.station_state.handoff_reservations
+    assert successor not in list(app.state.queue._queue)  # type: ignore[attr-defined]
+    assert not successor.path.exists()
+    assert music.handoff_id is None
+    assert listener_queue.empty()
 
 
 @pytest.mark.asyncio
@@ -2885,6 +3070,150 @@ async def test_run_playback_loop_clip_rearms_for_next_gap_after_real_segment(tmp
     assert not reserves
 
 
+@pytest.mark.asyncio
+async def test_run_playback_loop_recovery_fills_keep_the_send_timeline(tmp_path, caplog):
+    """Empty-crate recovery must not reset the pacer on every 1s grace timeout.
+
+    Resetting rebuilds the 4s delivery cushion by bursting the ident from
+    byte 0, so a speaker hears the opening of continuity_1.mp3 on a loop.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    _, listener_queue = app.state.stream_hub.subscribe()
+    caplog.set_level(logging.INFO)
+    app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(
+        bytes_per_second, target_lead_seconds=STREAM_TARGET_LEAD_SECONDS
+    )
+
+    recovery_path = tmp_path / "continuity_1.mp3"
+    recovery_path.write_bytes(b"recovery-audio" * 512)
+
+    async def _always_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    def _pick_canned_clip(subdir, *, state=None):
+        return recovery_path if subdir == "recovery" else None
+
+    resets: list[str] = []
+    original_reset = StreamPacer.reset_timeline
+
+    def _spy_reset(self, reason: str) -> None:
+        resets.append(str(reason))
+        return original_reset(self, reason)
+
+    async def _drain_listener_queue() -> None:
+        # A real client keeps reading. Without this, the timeout-driven loop
+        # below fills the listener's bounded queue within a handful of fast
+        # iterations, the hub drops it as "slow", and the very next iteration's
+        # no-listener branch resets the pacer right before the assertion —
+        # a test-harness artifact, not the send-timeline behavior under test.
+        while True:
+            await listener_queue.get()
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_always_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", side_effect=_pick_canned_clip),
+        patch("mammamiradio.web.streamer.probe_duration_sec", return_value=4.4),
+        patch.object(StreamPacer, "reset_timeline", _spy_reset),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        drain_task = asyncio.create_task(_drain_listener_queue())
+        try:
+            deadline = time.monotonic() + 3.0
+            while len(app.state.station_state.stream_log) < 2:
+                if time.monotonic() > deadline:
+                    raise AssertionError("playback loop did not serve two recovery fills")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            drain_task.cancel()
+            await asyncio.gather(task, drain_task, return_exceptions=True)
+
+    assert "queue_gap_fallback" not in resets
+    stream_log = list(app.state.station_state.stream_log)
+    assert len(stream_log) >= 2
+    assert all(entry.metadata.get("canned") for entry in stream_log[:2])
+    pacer = app.state.stream_pacer
+    assert pacer.media_seconds > 0
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_still_resets_timeline_on_true_dead_air(tmp_path):
+    """The queue_gap_fallback reset is deferred, not deleted.
+
+    The sibling ``..._keep_the_send_timeline`` test proves the pacer reset is
+    skipped while a packaged recovery clip IS being served. This proves the
+    other half: when there is truly no packaged clip and no norm-cache
+    rescue available (real dead air), the deferred reset must still fire so
+    a later real segment doesn't inherit a stale send-ahead cushion.
+    """
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.config.cache_dir = tmp_path
+    _, listener_queue = app.state.stream_hub.subscribe()
+    app.state.stream_pacer_factory = lambda bytes_per_second: StreamPacer(
+        bytes_per_second, target_lead_seconds=STREAM_TARGET_LEAD_SECONDS
+    )
+
+    async def _always_timeout(awaitable, *_args, **_kwargs):
+        awaitable.close()
+        await asyncio.sleep(0)
+        raise TimeoutError
+
+    resets: list[str] = []
+    original_reset = StreamPacer.reset_timeline
+
+    def _spy_reset(self, reason: str) -> None:
+        resets.append(str(reason))
+        return original_reset(self, reason)
+
+    async def _drain_listener_queue() -> None:
+        while True:
+            await listener_queue.get()
+
+    with (
+        patch("mammamiradio.web.streamer.asyncio.wait_for", new=AsyncMock(side_effect=_always_timeout)),
+        patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None),
+        patch.object(StreamPacer, "reset_timeline", _spy_reset),
+    ):
+        task = asyncio.create_task(run_playback_loop(app))
+        drain_task = asyncio.create_task(_drain_listener_queue())
+        try:
+            deadline = time.monotonic() + 5.0
+            while "queue_gap_fallback" not in resets:
+                if time.monotonic() > deadline:
+                    raise AssertionError("dead-air grace timeout never reset the send timeline")
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            drain_task.cancel()
+            await asyncio.gather(task, drain_task, return_exceptions=True)
+
+    assert "queue_gap_fallback" in resets
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"canned": True, "rescue": True}, True),
+        ({"canned": True, "fallback": True}, True),
+        ({"canned": True, "playback_gap_fill": True}, True),
+        ({"canned": True}, False),
+        ({"rescue": True}, False),
+        ({}, False),
+        (None, False),
+    ],
+)
+def test_segment_is_canned_recovery_requires_canned_plus_a_recovery_flag(metadata, expected):
+    from mammamiradio.web.streamer import _segment_is_canned_recovery
+
+    segment = Segment(type=SegmentType.BANTER, path=Path("x.mp3"), duration_sec=1.0, metadata=metadata)
+    assert _segment_is_canned_recovery(segment) is expected
+
+
 def test_silence_gate_requires_no_air_not_just_an_empty_queue():
     """/healthz must not report a station audibly bridging on clips as silent.
 
@@ -3766,6 +4095,8 @@ async def test_run_playback_loop_post_restart_rejects_blocked_slot_and_serves_re
         entry.metadata.get("continuity_reservation_id") != "post-restart-blocked-slot" for entry in state.stream_log
     )
     assert any("rescuing with norm cache" in record.message for record in caplog.records)
+    assert state.now_streaming.get("metadata", {}).get("has_music_tail") is not True
+    assert not state.handoff_reservations
 
 
 @pytest.mark.asyncio
@@ -3817,6 +4148,8 @@ async def test_run_playback_loop_rejects_blocked_slot_in_fully_empty_container_a
             await asyncio.gather(task, return_exceptions=True)
 
     assert state.force_next == SegmentType.BANTER
+    assert not state.handoff_reservations
+    assert state.now_streaming.get("metadata", {}).get("has_music_tail") is not True
     assert state.queue_empty_since is not None, (
         "queue_empty_since must stay set so /readyz keeps reporting 503 starting until real audio resumes"
     )

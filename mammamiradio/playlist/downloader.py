@@ -282,13 +282,15 @@ def evict_cache_lru(
 
 
 def prune_stale_tmp_files(tmp_dir: Path, max_age_hours: float = 6) -> int:
-    """Delete ``*.mp3`` render scratch in *tmp_dir* older than *max_age_hours*.
+    """Delete completed and atomic render scratch older than *max_age_hours*.
 
     ``tmp_dir`` holds only ephemeral ``{prefix}_{uuid}.mp3`` segment renders that
     the producer consumes within seconds. A crash or restart can orphan them, and
     on the HA add-on they pile up unbounded in ``/data/tmp``. Startup runs before
     the producer/playback loop, so nothing in tmp is in-flight — but the age gate
-    keeps the prune conservative regardless. Best-effort: never raises into startup.
+    keeps the prune conservative regardless. ``.mmr-atomic-*.part`` is the exact
+    private staging contract used by frame-safe artifact publication; unrelated
+    partial files remain untouched. Best-effort: never raises into startup.
     """
     if not tmp_dir.is_dir():
         return 0
@@ -303,15 +305,16 @@ def prune_stale_tmp_files(tmp_dir: Path, max_age_hours: float = 6) -> int:
         return 0
     cutoff = time.time() - max_age_hours * 3600
     pruned = 0
-    for f in tmp_dir.glob("*.mp3"):
-        try:
-            if safe_path_within(f, tmp_dir, reject_symlinks=True) is None:
+    for pattern in ("*.mp3", ".mmr-atomic-*.part"):
+        for f in tmp_dir.glob(pattern):
+            try:
+                if safe_path_within(f, tmp_dir, reject_symlinks=True) is None:
+                    continue
+                if f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+                    pruned += 1
+            except OSError:
                 continue
-            if f.stat().st_mtime < cutoff:
-                f.unlink(missing_ok=True)
-                pruned += 1
-        except OSError:
-            continue
     return pruned
 
 

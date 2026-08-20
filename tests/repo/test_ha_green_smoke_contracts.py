@@ -37,6 +37,25 @@ def test_launch_smoke_names_the_listener_timing_boundary_honestly() -> None:
     assert "request-to-first-byte, not" in workflow_body
 
 
+def test_pi_smoke_btbn_fallback_tracks_supported_assets_and_verifies_digest() -> None:
+    workflow_body = PI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    asset_pattern = (
+        r"^ffmpeg-n(7\\.[0-9]+-latest-linuxarm64-gpl-7\\.[0-9]+|"
+        r"8\\.[0-9]+-latest-linuxarm64-gpl-8\\.[0-9]+)\\.tar\\.xz$"
+    )
+
+    assert "Install static ffmpeg compatibility build (arm64)" in workflow_body
+    assert "api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest" in workflow_body
+    assert f'test("{asset_pattern}")' in workflow_body
+    assert "[.browser_download_url, .digest]" in workflow_body
+    assert '[[ ! "$asset_digest" =~ ^sha256:[0-9a-f]{64}$ ]]' in workflow_body
+    assert "sha256sum --check --strict -" in workflow_body
+    assert workflow_body.count("--retry-all-errors") >= 3
+    assert "BtbN/FFmpeg-Builds/releases/download/latest/" not in workflow_body
+    assert "BtbN/FFmpeg-Builds/releases/download/autobuild-" not in workflow_body
+    assert "matching HA addon runtime" not in workflow_body
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

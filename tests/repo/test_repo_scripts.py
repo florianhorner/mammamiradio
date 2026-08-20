@@ -1724,10 +1724,119 @@ def test_validate_addon_build_passes_home_assistant_label_args() -> None:
     assert '--build-arg BUILD_ARCH="$BUILD_ARCH"' in validator
 
 
+def _installed_imaging_validator_python() -> str:
+    validator = VALIDATE_ADDON.read_text()
+    function = validator.split("assert_image_imaging_assets() {", 1)[1].split("assert_image_model_registry() {", 1)[0]
+    return function.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+
+
+def _run_installed_imaging_validator(
+    package_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from importlib import resources
+
+    monkeypatch.setattr(resources, "files", lambda _package: package_root)
+
+    def fake_ffprobe(
+        command: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        assert command[0] == "ffprobe"
+        assert capture_output is True
+        assert text is True
+        assert timeout == 10
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"streams": [{"codec_name": "mp3", "sample_rate": "48000", "channels": 2}]}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_ffprobe)
+    exec(compile(_installed_imaging_validator_python(), str(VALIDATE_ADDON), "exec"), {})
+
+
+def _copy_installed_imaging_pack(tmp_path: Path) -> tuple[Path, Path]:
+    package_root = tmp_path / "package"
+    imaging_dir = package_root / "assets" / "imaging"
+    shutil.copytree(
+        ROOT / "mammamiradio" / "assets" / "imaging",
+        imaging_dir,
+        ignore=shutil.ignore_patterns(".DS_Store"),
+    )
+    return package_root, imaging_dir
+
+
+def test_validate_addon_build_checks_installed_modern_night_drive_pack() -> None:
+    validator = VALIDATE_ADDON.read_text()
+
+    assert "assert_image_imaging_assets" in validator
+    assert "Installed Modern Night Drive matches its manifest" in validator
+    assert 'joinpath("assets", "imaging")' in validator
+    assert '"signature": "neon_relay"' in validator
+    assert '"atmospheric_character": "velvet_horizon"' in validator
+    assert '"ad_bumper_roles") != ["in", "mid", "out"]' in validator
+    assert "len(assets) != 47" in validator
+    assert "len(sources) != 47" in validator
+    assert "len(recipes) != 9" in validator
+    assert "actual_files != inventory_files" in validator
+
+
+def test_validate_addon_accepts_exact_installed_modern_pack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_root, _imaging_dir = _copy_installed_imaging_pack(tmp_path)
+
+    _run_installed_imaging_validator(package_root, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("stale_identity", "stale Neon Relay / Velvet Horizon direction"),
+        ("embedded_receipt", "wrong immutable runtime field set"),
+        ("reused_recipe_cue", "missing or reused cue"),
+        ("changed_output", "runtime tree differs from its inventory"),
+    ],
+)
+def test_validate_addon_rejects_stale_or_modified_modern_pack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    package_root, imaging_dir = _copy_installed_imaging_pack(tmp_path)
+    manifest_path = imaging_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "stale_identity":
+        manifest["design_direction"]["signature"] = "rejected_direction"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    elif mutation == "embedded_receipt":
+        manifest["listening_receipt"] = {"status": "approved"}
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    elif mutation == "reused_recipe_cue":
+        manifest["recipes"][1]["cues"][0]["asset_id"] = manifest["recipes"][0]["cues"][0]["asset_id"]
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    elif mutation == "changed_output":
+        output_path = imaging_dir / manifest["assets"][0]["path"]
+        output_path.write_bytes(output_path.read_bytes() + b"tampered")
+    else:  # pragma: no cover - parametrization invariant
+        raise AssertionError(mutation)
+
+    with pytest.raises(SystemExit, match=message):
+        _run_installed_imaging_validator(package_root, monkeypatch)
+
+
 @pytest.mark.parametrize(
     ("validator_path", "start_marker", "end_marker"),
     [
-        (VALIDATE_ADDON, "assert_image_recovery_assets() {", "assert_image_model_registry() {"),
+        (VALIDATE_ADDON, "assert_image_recovery_assets() {", "assert_image_imaging_assets() {"),
         (
             ADDON_BUILD_WORKFLOW,
             "- name: Assert installed recovery assets",

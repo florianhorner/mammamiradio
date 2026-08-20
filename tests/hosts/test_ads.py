@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import shutil
 import tempfile
 from pathlib import Path
@@ -21,8 +22,9 @@ from mammamiradio.hosts.ad_creative import (
     CampaignSpine,
     SonicWorld,
     _pick_brand,
+    _select_ad_creative,
 )
-from mammamiradio.hosts.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS
+from mammamiradio.hosts.scriptwriter import AD_BREAK_INTROS, AD_BREAK_OUTROS, _ensure_attention_grabbing_ad_parts
 
 # --- _pick_brand tests ---
 
@@ -227,12 +229,15 @@ def test_sonic_world_defaults():
     assert sw.music_bed == "lounge"
     assert sw.transition_motif == "chime"
     assert sw.sonic_signature == ""
+    assert sw.recipe_id == ""
+    assert sw.is_recipe_driven is False
 
 
 def test_campaign_spine_defaults():
     cs = CampaignSpine()
     assert cs.premise == ""
     assert cs.sonic_signature == ""
+    assert cs.sonic_recipe == ""
     assert cs.format_pool == []
     assert cs.spokesperson == ""
     assert cs.escalation_rule == ""
@@ -249,6 +254,110 @@ def test_ad_brand_with_campaign():
     assert brand.campaign is not None
     assert brand.campaign.premise == "Test premise"
     assert len(brand.campaign.format_pool) == 2
+
+
+def test_campaign_recipe_overrides_brand_recipe_and_retains_legacy_recovery_palette():
+    """Recipe failure can restore a campaign's original motif without reselection."""
+    brand = AdBrand(
+        name="Test",
+        tagline="Tag",
+        category="food",
+        sonic_recipe="supermarket_dash",
+        campaign=CampaignSpine(
+            sonic_recipe="cafe_testimonial",
+            sonic_signature="chime+whoosh",
+        ),
+    )
+
+    _format, sonic, _roles = _select_ad_creative(brand, StationState(), num_voices=2)
+
+    assert sonic.recipe_id == "cafe_testimonial"
+    assert sonic.is_recipe_driven is True
+    assert sonic.sonic_signature == "chime+whoosh"
+    assert sonic.transition_motif == "chime"
+
+
+def test_recipe_driven_ad_strips_llm_sfx_before_audio_rendering():
+    """The recipe is the only source of accents for an official spot."""
+    sonic = SonicWorld(recipe_id="stadium_win")
+    parts = [
+        AdPart(type="sfx", sfx="whoosh"),
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="sfx", sfx="chime"),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    assert _ensure_attention_grabbing_ad_parts(parts, sonic) == [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+
+def test_recipe_driven_ad_strips_environment_parts_legacy_keeps_them():
+    """The recipe filter matches the prompt: no sfx or environment parts."""
+    recipe_sonic = SonicWorld(recipe_id="stadium_win")
+    recipe_parts = [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="environment", environment="cafe"),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    assert _ensure_attention_grabbing_ad_parts(recipe_parts, recipe_sonic) == [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    # Opener plus mid-ad SFX already present, so the legacy path must not mutate.
+    legacy_sonic = SonicWorld()
+    legacy_parts = [
+        AdPart(type="sfx", sfx="chime"),
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="environment", environment="cafe"),
+        AdPart(type="sfx", sfx="whoosh"),
+        AdPart(type="pause", duration=0.4),
+    ]
+    # Snapshot first: the legacy branch shallow-copies the list and writes fields
+    # on the caller's own AdPart objects, so comparing the result against
+    # ``legacy_parts`` itself would read as equal even after an in-place edit.
+    expected_legacy = copy.deepcopy(legacy_parts)
+    assert _ensure_attention_grabbing_ad_parts(legacy_parts, legacy_sonic) == expected_legacy
+
+
+def test_recipe_driven_ad_keeps_only_voice_and_pause_parts():
+    """An invented part type cannot leak: the recipe branch is an allowlist.
+
+    ``AdPart.type`` is copied verbatim from model JSON, so a denylist would pass
+    anything nobody had thought to name yet.
+    """
+    sonic = SonicWorld(recipe_id="stadium_win")
+    parts = [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="ambience", environment="cafe"),
+        AdPart(type="music", sfx="tarantella"),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    assert _ensure_attention_grabbing_ad_parts(parts, sonic) == [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+
+def test_legacy_sonic_signature_still_selects_procedural_motif():
+    """Old custom campaigns continue to work when no recipe is configured."""
+    brand = AdBrand(
+        name="Legacy",
+        tagline="Tag",
+        category="food",
+        campaign=CampaignSpine(sonic_signature="ice_clink+startup_synth"),
+    )
+
+    _format, sonic, _roles = _select_ad_creative(brand, StationState(), num_voices=2)
+
+    assert sonic.recipe_id == ""
+    assert sonic.is_recipe_driven is False
+    assert sonic.sonic_signature == "ice_clink+startup_synth"
+    assert sonic.transition_motif == "ice_clink"
 
 
 def test_ad_brand_without_campaign_compat():

@@ -1797,7 +1797,22 @@ async def _generate_json_response_with_language_guard(
 
 
 def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) -> list[AdPart]:
-    """Guarantee each ad has a distinct opener and at least one internal accent."""
+    """Guarantee ad attention while keeping packaged recipes in sole control of sound.
+
+    A recipe already has a reviewed bed and up to two timed real-world details.
+    Letting the LLM add its historical synthetic opener or mid-ad SFX on top
+    would break that cap and recreate the very layered drone the recipe avoids.
+
+    The recipe branch keeps the allowlist the prompt itself states — "only voice
+    and optional pause parts" — rather than naming the types to drop. ``type``
+    is copied straight from model JSON with no validation, so a denylist only
+    ever catches the tokens we already thought of: ``sfx`` was caught, then
+    ``environment`` had to be added behind it. Nothing else is renderable for a
+    recipe spot anyway.
+    """
+    if sonic.is_recipe_driven:
+        return [part for part in parts if part.type in ("voice", "pause")]
+
     updated = list(parts)
     motif = sonic.transition_motif or "chime"
     if not updated or updated[0].type != "sfx":
@@ -3555,6 +3570,7 @@ async def write_ad(
     ``callback_gag`` is an optional single verbal gag (chosen by the producer via
     the verbal-gag ledger) to land cross-domain; None means no callback.
     """
+    sonic = sonic or SonicWorld()
     direct_primary_role = (
         brand.campaign.spokesperson_role.strip()
         if brand.campaign and isinstance(brand.campaign.spokesperson_role, str)
@@ -3563,11 +3579,14 @@ async def write_ad(
     if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)],
+            parts=_ensure_attention_grabbing_ad_parts(
+                [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)],
+                sonic,
+            ),
             summary=brand.tagline,
             format=ad_format,
+            sonic=sonic,
         )
-    sonic = sonic or SonicWorld()
 
     # Build context for cross-referencing
     recent_ads = (
@@ -3642,6 +3661,29 @@ CAMPAIGN SPINE:
 
     role_names = list(voices.keys())
 
+    if sonic.is_recipe_driven:
+        sonic_rule = (
+            f"- Station recipe: {sonic.recipe_id}. It supplies the bed and any sound details after speech is rendered. "
+            "Return only voice and optional pause parts; do not return an sfx or environment part."
+        )
+        parts_example = f'''    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+    {{"type": "pause", "duration": 0.5}},
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+    else:
+        sonic_rule = (
+            "- You may interleave sound effect cues and environment cues between voice lines. "
+            "Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.\n"
+            f'- Available SFX types for "sfx" cues — use ONLY these exact strings, never the music bed or '
+            f"environment name above, never invent new ones: {sfx_types}"
+        )
+        parts_example = f'''    {{"type": "sfx", "sfx": "{sonic.transition_motif}"}},
+    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
+    {{"type": "sfx", "sfx": "sweep"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+    {{"type": "pause", "duration": 0.5}},
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+
     prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
 Tagline: "{brand.tagline}"
 Category: {brand.category}
@@ -3672,21 +3714,14 @@ RULES:
 - Follow the ad format rules above. Use the assigned speakers by their role names.
 {direct_spokesperson_rule}
 - Open HARD. The first beat should grab attention immediately.
-- You may interleave sound effect cues and environment cues between voice lines.
-- Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.
-- Available SFX types for "sfx" cues — use ONLY these exact strings, never the music bed or environment name above, never invent new ones: {sfx_types}
+{sonic_rule}
 - {language_mode_rule(config.super_italian_mode, config.station.language)}
 - You may reference what the hosts said, what other ads claimed, or current music.
 
 Return JSON:
 {{
   "parts": [
-    {{"type": "sfx", "sfx": "{sonic.transition_motif}"}},
-    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
-    {{"type": "sfx", "sfx": "sweep"}},
-    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
-    {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}
+{parts_example}
   ],
   "mood": "{sonic.music_bed}",
   "summary": "One sentence summary IN ENGLISH for internal tracking",
@@ -3795,7 +3830,7 @@ Return JSON:
                 fallback_parts.append(
                     AdPart(type="voice", text=_pharma_disclaimer_text(config), role="disclaimer_goblin")
                 )
-            parts = fallback_parts
+            parts = _ensure_attention_grabbing_ad_parts(fallback_parts, sonic)
             actual_format = AdFormat.CLASSIC_PITCH
             roles_found = {p.role for p in parts if p.type == "voice" and p.role}
             used_owned_fallback = True
@@ -3820,7 +3855,10 @@ Return JSON:
         text = _ad_fallback_text(brand, config)
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=text, role=direct_primary_role)],
+            parts=_ensure_attention_grabbing_ad_parts(
+                [AdPart(type="voice", text=text, role=direct_primary_role)],
+                sonic,
+            ),
             summary=f"Fallback ad for {brand.name}",
             format=ad_format,
             sonic=sonic,

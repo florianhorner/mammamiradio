@@ -1,0 +1,15 @@
+commit-lint re-pin — local verification, 2026-08-20
+commit under test: b0bbf7757acd9d89da8046c36d7f041b11a650fe
+
+$ .venv/bin/python -m pytest tests/repo/ tests/workflows -q
+308 passed in 33.53s
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ python3 -m json.tool .config/commit-rules.json  (validity)
+schema_version: 1.2.0
+trusted_bot_skips: ['WHY_REQUIRED', 'SUBJECT_TOO_LONG']
+
+vendored file is byte-identical to engineering-standards at b7f5ba76:
+  cmp: identical

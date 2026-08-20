@@ -844,6 +844,10 @@ class Segment:
         default_factory=dict,
         repr=False,
     )
+    # Private queue-lifecycle marker for a music-head / speech-tail handoff.
+    # It deliberately lives outside ``metadata`` because metadata is projected
+    # through public/admin status payloads.
+    handoff_id: str | None = field(default=None, repr=False, compare=False)
     # Provider-owned single-use resources are released only through this hook;
     # queue mutation and playback finalizers call ``release()`` exactly once.
     playback_start_callback: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
@@ -1175,6 +1179,15 @@ class StationState:
     _last_audible_stream: dict = field(default_factory=dict, repr=False)
     # Pre-produced segments waiting to play (shadow of asyncio.Queue for UI display)
     queued_segments: list[dict] = field(default_factory=list)
+    # Private exact-once music→speech handoffs.  Entries are owned by
+    # ``scheduling.handoff`` and are never serialized into status payloads or
+    # restart-handoff manifests.
+    handoff_reservations: dict[str, object] = field(default_factory=dict, repr=False, compare=False)
+    # The playback loop owns the actual Segment while ``now_streaming`` remains
+    # a public projection.  Keeping this private pointer lets a Skip/Panic
+    # cancel the matching tail-bearing successor without leaking internal
+    # handoff state into the wire contract.
+    active_playback_segment: Segment | None = field(default=None, repr=False, compare=False)
     # Every live control-plane change that can invalidate queued/in-flight audio
     # bumps this generation. Producer commits compare it before admission.
     continuity_epoch: int = 0
@@ -2214,6 +2227,32 @@ class StationState:
         self.heading_pending_narration_kind = ""
         self.heading_announced_id = ""
 
+    def restore_playlist_if_still_empty(self, tracks: list[Track], source: PlaylistSource | None = None) -> bool:
+        """Repopulate an empty crate without the full source-switch reset.
+
+        Unlike ``switch_playlist`` (an operator-initiated source override),
+        this is a mid-session recovery from an empty rotation. It preserves
+        heading (Record Hunt steering), pending listener requests, the pinned
+        track, force_next/operator_force_pending, and play history — none of
+        that operator intent should be wiped just because the crate briefly
+        went empty and refilled.
+
+        Returns False and mutates nothing if the playlist is no longer empty
+        (e.g. an admin source switch landed while the caller's directory scan
+        was still in flight) — the caller must not clobber it.
+        """
+        if self.playlist:
+            return False
+        self.playlist = tracks
+        self.playlist_source = source
+        self.playlist_revision += 1
+        self.startup_source_error = ""
+        self._reset_source_readiness()
+        self.music_admission_reservations.clear()
+        self.music_admission_changed.set()
+        self.jamendo_base_music_since_last = 0
+        return True
+
     def _mark_pending_requests_source_changed(self) -> None:
         if not self.pending_requests:
             return
@@ -2518,9 +2557,13 @@ class StationState:
 
     def jamendo_insert_eligible(self) -> bool:
         """Return whether cadence permits exactly one new transient insert."""
-        return self.jamendo_base_music_since_last >= 2 and not any(
-            track.source == "jamendo" for track in self.music_admission_reservations.values()
-        )
+        if any(track.source == "jamendo" for track in self.music_admission_reservations.values()):
+            return False
+        if self.jamendo_base_music_since_last >= 2:
+            return True
+        # No starter/local crate exists to satisfy the two-track gate.
+        # Jamendo is then the only remaining legal music path.
+        return not self.playlist
 
     async def wait_for_music_admission_change(self, *, timeout: float = 1.0) -> None:
         """Wait without spinning while a full starter lookahead owns the cycle."""

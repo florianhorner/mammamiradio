@@ -237,18 +237,59 @@ always remains best-effort and never blocks or delays audio.
 - `BANTER`
   - asks Claude (or OpenAI as fallback) for structured dialogue JSON
   - synthesizes one line per host via the configured TTS engine (see [TTS architecture](#tts-architecture) below)
-  - passes generated host speech through the imaging layer so banter and news can sit over a quiet music bed, falling back to a synthetic pad on cold starts
+  - passes generated host speech through the imaging layer so banter and news use eligible adjacent music first, then a selected-pack talk bed, then a synthetic pad on cold starts
   - preserves running jokes in `StationState`
   - snapshots the generated evidence needed for station/song memory, but persists it only after the final aired banter script has streamed cleanly
   - when Chaos Mode is active, applies the per-call `CHAOS_MODE_BLOCK` and one `ChaosSubtype` prompt fragment while keeping the segment type as `BANTER`
 - `AD`
   - picks brands with recurrence weighting and recent-brand avoidance
   - selects one of 6 ad formats: classic pitch, testimonial, duo scene, live remote, late-night whisper, or institutional PSA
-  - resolves a sonic world (SFX, music bed mood, environment bed) per brand category
+  - resolves a sonic world and a named scene recipe for every shipped brand
   - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
-  - generates a brand motif jingle for recurring brands from their sonic signature
-  - builds a break from host intro, bumpers, one or more ad spots, and host outro
+  - uses one quiet bed and at most two timed dry cues for a resolved recipe, keeping only speech and pauses from the LLM output so generic SFX and legacy motifs cannot layer on top
+  - preserves generated brand motifs for legacy/custom campaigns with no recipe and for configured recipes that cannot resolve
+  - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
+
+### Exact-once music-to-speech handoffs
+
+When a generated banter, impossible moment, news flash, or ad intro follows a
+queued normal music segment, the station may keep the host-over-outro effect
+without replaying the song. The invariant is deliberately strict: **every
+playable music sample belongs to exactly one emitted segment**. Decoder-only
+MP3 reservoir context may be duplicated in a scratch input, but those preroll
+samples are trimmed before the tail is mixed and are never emitted twice.
+
+1. Before touching the queue, the producer indexes the actual queued/egressed
+   MP3 with the same validated ID3/Xing-skipping boundaries used by playback.
+   It writes a frame-aligned head plus a decoder-tail input containing bounded
+   reservoir preroll. The logical tail still begins at the head ownership
+   boundary; the normalizer sample-trims the preroll before mixing. Malformed,
+   short, stale, rescue, fallback, and unsupported files fail closed to
+   ordinary dry/generic speech.
+2. It renders both the tail-mixed speech and a dry/generic fallback. At one
+   no-await queue mutation, it rechecks that the exact unstarted music object
+   is still the queue tail, replaces it with the shortened head (including its
+   real queue-shadow duration), and appends the tail-bearing speech successor.
+   `has_music_tail` becomes true only at this paired commit, not when a render
+   happened to find a song file.
+3. The private pair is reconciled by every queue rewrite. Before playback,
+   removing the successor or breaking adjacency while the head remains restores
+   the full music predecessor and drops the successor. Explicitly removing the
+   head instead honors that removal: it drops the successor without putting the
+   song back. Once the head starts, a clean EOF marks its successor due before
+   the active pointer is cleared; ordinary rewrites preserve that due successor
+   and place Air Next immediately after it. Skips and destructive source,
+   chaos, ban, purge, interrupt, or Stop controls cancel the successor. The pair
+   and its scratch artifacts are never serialized into public status or restart
+   state.
+
+The normalizer receives only the bounded decoder-tail artifact and trims its
+recorded preroll by sample count before mixing; it never uses `-sseof` or
+`last_music_file` to seek back into a full song. The rest of a host break uses a
+packaged or synthetic talk bed, never the outgoing song from its beginning.
+Restart-handoff spooling also ignores a shortened private head, preserving only
+ordinary full music entries for a future boot.
 
 Every finished segment then passes a final **loudness-reconciliation** step: it is
 measured (`measure_lufs`, EBU R128) and nudged with a single corrective `volume`
@@ -341,6 +382,44 @@ through a small variant pool so repeated breaks do not expose one identical ambi
 loop. Startup's suspect-file purge preserves `synth_` files even when they are short;
 normal LRU eviction still treats them as regular cache files, evicting them before
 `norm_`/`fm_` processed audio.
+
+### Modern Night Drive imaging pack
+
+`mammamiradio/assets/imaging/` is the default imaging root for the standalone
+app and HA add-on. Both shipped `radio.toml` files leave
+`[imaging].assets_dir = ""`, so the add-on does not need a separate asset copy.
+Only the station ID and sweeper use the Neon Relay signature. Velvet Horizon
+defines the production style for the remaining cues and beds. Ad breaks have
+separate `in`, `mid`, and `out` bumpers. Operators still use the existing
+compatibility filenames. The pack contains 47 stereo MP3 files at 48 kHz, each
+with its own retained project-authored source. Nine recipes define the ad scenes.
+
+The schema-v2 `manifest.json` defines the runtime pack. It records asset and
+source paths with their checksums. It also records each layer's timing, gain,
+DSP, and license metadata, plus the selected design and checksum inventory.
+The separate listening board stores the pack-scoped approval receipt. The
+installed manifest omits that receipt and the board previews. CI and add-on
+validation check the installed files against the inventory. `ATTRIBUTION.md`
+is generated from the runtime ledger. The exact inventory is in
+[`manifest.json`](../mammamiradio/assets/imaging/manifest.json); the local
+audition procedure is in
+[Operations](operations.md#audition-the-modern-night-drive-imaging-pack).
+
+Setting `[imaging].assets_dir` replaces the packaged root with a custom root.
+When the custom root lacks an asset, the runtime uses its procedural or cached
+fallback. It does not read the missing asset from the packaged root. Within the
+selected root, a transition tries `stingers/{from}_{to}.mp3` before the generic
+directional stinger. Talk beds use eligible adjacent music first, followed by a
+bundled bed or synthetic drone. For ads, a configured `[ads].sfx_dir` takes
+priority over the selected root's `sfx/` directory. A resolved recipe uses its
+declared bed and no more than two cue files. A missing or corrupt recipe falls
+back without downloading or rendering source audio.
+
+The runtime reads recovery audio from `mammamiradio/assets/demo/` and honors the
+explicit `rescue` flag. Bridge and rescue fills still skip the egress pipeline.
+The optional FM broadcast chain is independent. When enabled,
+`[audio].broadcast_chain` colours the finished normal segment after the pack has
+been mixed in.
 
 ### Queue commit (the per-path gate matrix)
 
@@ -602,7 +681,11 @@ Script generation never names a model in code. Each call site asks for a model b
   and no queue purge — only the next generated segment changes model.
 
 Every produced segment becomes a temporary MP3 on disk and is pushed into `asyncio.Queue[Segment]`.
-Before queueing, `mammamiradio/audio/imaging.py` may prepend transition stings at music/speech boundaries and mix motif stings under sweepers. Optional operator assets live under `mammamiradio/assets/imaging/`; otherwise FFmpeg-generated stings and beds are used, with synthetic fallback renders reused through the `synth_` cache when their inputs match.
+Before queueing, `mammamiradio/audio/imaging.py` may add transition stings at
+music/speech boundaries or mix an electronic scene recipe around ad dialogue.
+It also mixes identity stings under sweepers. Modern Night Drive is the default
+root, and a custom root can replace it. Generated stings and beds provide the
+legacy fallback and reuse matching `synth_` cache renders.
 
 Bounded state lists (`played_tracks`, `running_jokes`, `segment_log`, `stream_log`, `ad_history`, `recent_outcomes`) use `deque(maxlen=N)` for automatic memory management — no manual truncation needed.
 
@@ -1256,7 +1339,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/hosts/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |
 | `mammamiradio/hosts/context_cues.py` | Time-of-day and cultural context for prompts |
 | `mammamiradio/hosts/ad_creative.py` | Brand and voice selection, campaign-spine sampling for ad breaks |
-| `mammamiradio/audio/imaging.py` | station imaging selector for transition stings, sweeper stings, and talk beds |
+| `mammamiradio/audio/imaging.py` | station imaging selector and safe schema-v2 ad-recipe resolver |
 | `mammamiradio/audio/synth_cache.py` | reusable `synth_*.mp3` cache for generated ad/imaging layers |
 | `mammamiradio/audio/normalizer.py` | ffmpeg helpers for normalization, mixing, tones, bumpers, bleed, and SFX |
 | `mammamiradio/audio/audio_quality.py` | Audio quality gate: duration and silence checks before segments reach the queue |

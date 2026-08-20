@@ -92,6 +92,22 @@ def _shuffle_if_needed(config: StationConfig, tracks: list[Track]) -> list[Track
     return tracks
 
 
+def load_operator_local_tracks(
+    config: StationConfig,
+    *,
+    blocklist: Mapping[tuple[str, str], object] | None = None,
+) -> list[Track]:
+    """Load operator MP3s with the same ingest rules as first startup.
+
+    Files are source-tagged as local, shuffled when configured, and dropped when
+    they match the operator blocklist. Callers never claim bundled rights.
+    """
+    tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
+    if not tracks:
+        return []
+    return filter_blocklisted(_shuffle_if_needed(config, tracks), blocklist)
+
+
 def _local_source(track_count: int) -> PlaylistSource:
     return PlaylistSource(
         kind="local",
@@ -101,6 +117,11 @@ def _local_source(track_count: int) -> PlaylistSource:
         selected_at=time.time(),
         url="",
     )
+
+
+# Public alias: producer.py's empty-crate recovery path builds a PlaylistSource
+# for recovered operator tracks and should not reach into a private name.
+local_source = _local_source
 
 
 def _charts_source(track_count: int) -> PlaylistSource:
@@ -670,10 +691,10 @@ def fetch_startup_playlist(
     # Operator-owned local files remain the base when present. They are never
     # blended with bundled files or assigned license claims by the application.
     evidence.mark_attempted("local")
-    local_tracks = _copy_tracks_with_source(_load_local_music_tracks(config.music_dir), "local")
+    local_tracks = load_operator_local_tracks(config)
     if local_tracks:
         logger.info("Using local music files from %s (%d tracks)", config.music_dir, len(local_tracks))
-        tracks = _shuffle_if_needed(config, local_tracks)
+        tracks = local_tracks
         evidence.mark_candidates("local", len(tracks))
         source = _local_source(len(tracks))
         if migrate_legacy_jamendo:

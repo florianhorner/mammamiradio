@@ -19,10 +19,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # The workflow self-tests resolve HEAD~1 (ancestor cases in the
-          # squad-gate and landing-wrapper suites); a depth-1 clone has no
-          # parent commit and they die with "Needed a single revision".
-          fetch-depth: 2
+          # The audio-pack validator reads generator inputs at the exact Git
+          # revision pinned in the provenance manifest. That revision can be
+          # older than HEAD~1, so a shallow checkout cannot prove the hashes.
+          fetch-depth: 0
 
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
