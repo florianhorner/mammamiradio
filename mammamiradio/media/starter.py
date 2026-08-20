@@ -37,6 +37,7 @@ class StarterEntry:
     """One approved derivative from the canonical starter manifest."""
 
     isrc: str
+    provider: str
     title: str
     artist: str
     duration_seconds: float
@@ -93,6 +94,49 @@ def _required_dict(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise StarterCatalogError(f"{field} must be an object")
     return value
+
+
+def _require_attribution_only_license(license_id: str, license_url: str, prefix: str) -> None:
+    """Reject anything the bundle is not allowed to carry.
+
+    Bundled music must be attribution-only. Two clauses are fatal and neither is
+    a matter of taste:
+
+    * **NoDerivatives** — every bundled track is normalized to a fixed loudness
+      and re-encoded, which is a derivative work. ND forbids distributing one, so
+      an ND track can never ship no matter how good it sounds.
+    * **NonCommercial** — the package is redistributed by every operator who
+      installs it, and we will not pin that on an NC boundary.
+
+    ShareAlike is refused too: it is viral, and the bundle sits inside a project
+    that does not carry a copyleft media obligation.
+
+    Versions 3.0 and 4.0 are both accepted. They are materially equivalent for
+    bundle-and-attribute — 4.0 mainly improves international wording, adds
+    database rights and a cure period. Jamendo publishes no 4.0 at all, so
+    requiring it would exclude that catalog entirely. Older versions (2.x) stay
+    out: they are rarer, and their wording has drifted furthest from 4.0.
+
+    Matching is exact equality against an allowlist, after normalizing only the
+    scheme and a trailing slash. Deliberately not a substring or path check: a
+    substring test would let ``licenses/by-nc/`` satisfy ``licenses/by``, which
+    is the exact hole this gate exists to close. An unrecognised variant fails
+    closed.
+    """
+    allowed = {
+        "CC-BY-3.0": "https://creativecommons.org/licenses/by/3.0/",
+        "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
+    }
+    expected_url = allowed.get(license_id)
+    if expected_url is None:
+        raise StarterCatalogError(f"{prefix}.license.id must be attribution-only CC BY 3.0 or 4.0, got {license_id!r}")
+    # Compare scheme-insensitively: Creative Commons serves both, and Jamendo
+    # reports http:// while the canonical form is https://.
+    normalized = license_url.replace("http://", "https://", 1)
+    if not normalized.endswith("/"):
+        normalized += "/"
+    if normalized != expected_url:
+        raise StarterCatalogError(f"{prefix}.license.url does not match {license_id}: {license_url!r}")
 
 
 def _safe_asset_path(root: Path, relative: str) -> Path:
@@ -207,8 +251,7 @@ def load_starter_catalog(
             if status != "approved":
                 continue
 
-            if license_id != "CC-BY-4.0" or license_url != "https://creativecommons.org/licenses/by/4.0/":
-                raise StarterCatalogError(f"{prefix} is not approved under CC BY 4.0")
+            _require_attribution_only_license(license_id, license_url, prefix)
             source_sha = _required_text(source.get("sha256"), f"{prefix}.source.sha256")
             if len(source_sha) != 64:
                 raise StarterCatalogError(f"{prefix}.source.sha256 must be SHA-256")
@@ -232,8 +275,17 @@ def load_starter_catalog(
             audition_receipt = _required_text(evidence.get("audition_receipt"), f"{prefix}.evidence.audition_receipt")
             modification = _required_text(row.get("modification_notice"), f"{prefix}.modification_notice")
             asset_path = _safe_asset_path(root, relative_path)
+            # Absent means Incompetech: rows predating the second provider omit
+            # the field. Naming the real provider matters beyond bookkeeping —
+            # it is what lets the attribution gate accept the row, and a CC BY
+            # track whose credit is dropped is a licence breach, not a cosmetic
+            # gap.
+            provider = row.get("provider", "incompetech")
+            if provider not in {"incompetech", "jamendo"}:
+                raise StarterCatalogError(f"{prefix}.provider is not a known source: {provider!r}")
             entry = StarterEntry(
                 isrc=isrc,
+                provider=str(provider),
                 title=title,
                 artist=artist,
                 duration_seconds=float(duration),
@@ -337,7 +389,7 @@ def starter_track(entry: StarterEntry) -> Track:
         source="starter",
         provider_track_id=entry.isrc,
         attribution=MediaAttribution(
-            provider="incompetech",
+            provider=entry.provider,
             license_id=entry.license_id,
             license_url=entry.license_url,
             source_url=entry.official_piece_url,

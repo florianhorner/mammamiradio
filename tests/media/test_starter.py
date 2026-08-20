@@ -258,8 +258,24 @@ def test_shuffle_bag_consumes_corrupt_entry_before_failing_cycle(tmp_path: Path)
         bag.next_track()
 
 
-def test_empty_catalog_cannot_create_shuffle_bag() -> None:
-    catalog = load_starter_catalog(require_complete=False)
+def test_empty_catalog_cannot_create_shuffle_bag(tmp_path: Path) -> None:
+    """A catalog with nothing approved must refuse to hand out audio.
+
+    Built from a synthetic pending manifest rather than the shipped one: this
+    invariant has to hold whatever state the real crate happens to be in, and
+    tying it to "the shipped catalog is empty" made it silently stop testing
+    anything the moment the crate was filled.
+    """
+    manifest_path = _approved_manifest(tmp_path, count=1)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for row in data["tracks"]:
+        row["approval"] = {"status": "pending_full_audition"}
+        row["derivative"] = None
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    catalog = load_starter_catalog(manifest_path, require_complete=False)
+
+    assert catalog.entries == ()
     with pytest.raises(StarterCatalogExhaustedError, match="no approved"):
         StarterShuffleBag(catalog)
 
@@ -334,7 +350,7 @@ def test_loader_rejects_missing_manifest(tmp_path: Path) -> None:
         ),
         (
             lambda data: data["tracks"][0]["license"].update(id="CC-BY-NC"),
-            "not approved under CC BY 4.0",
+            "must be attribution-only CC BY 3.0 or 4.0",
         ),
         (lambda data: data.update(release_requirements=[]), "release_requirements must be an object"),
         (
@@ -403,4 +419,49 @@ def test_loader_reports_duration_and_payload_release_failures(tmp_path: Path) ->
     manifest_path.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(StarterCatalogError, match=r"below|exceeds"):
+        load_starter_catalog(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("license_id", "license_url"),
+    [
+        ("CC-BY-4.0", "https://creativecommons.org/licenses/by/4.0/"),
+        ("CC-BY-3.0", "https://creativecommons.org/licenses/by/3.0/"),
+        # Jamendo reports http:// and sometimes omits the trailing slash, so both
+        # normalizations have to hold at the loader gate too — not just in the
+        # acquire tool, which is where they were previously only covered.
+        ("CC-BY-3.0", "http://creativecommons.org/licenses/by/3.0/"),
+        ("CC-BY-3.0", "http://creativecommons.org/licenses/by/3.0"),
+    ],
+)
+def test_loader_accepts_attribution_only_in_every_reported_spelling(
+    tmp_path: Path, license_id: str, license_url: str
+) -> None:
+    manifest_path = _approved_manifest(tmp_path, count=1)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["tracks"][0]["license"] = {"id": license_id, "url": license_url}
+    if license_id != "CC-BY-4.0":
+        data["tracks"][0]["provider"] = "jamendo"
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    catalog = load_starter_catalog(manifest_path)
+
+    assert catalog.entries[0].license_id == license_id
+
+
+def test_loader_rejects_an_unknown_provider(tmp_path: Path) -> None:
+    """An unrecognised provider must fail loudly, not lose the credit quietly.
+
+    `starter_track` feeds the provider straight into `MediaAttribution`, and the
+    public attribution gate branches on it — an unknown value falls through and
+    returns None, stripping the CC BY credit. That is the licence breach this
+    catalog already shipped once, so the value is checked at load rather than
+    trusted downstream.
+    """
+    manifest_path = _approved_manifest(tmp_path, count=1)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["tracks"][0]["provider"] = "soundcloud"
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(StarterCatalogError, match="not a known source"):
         load_starter_catalog(manifest_path)
