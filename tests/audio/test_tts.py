@@ -46,6 +46,12 @@ def _mix_side_effect(voice_path, bed_path, output_path, volume_scale=0.12):
     return output_path
 
 
+def _recipe_mix_side_effect(base_path, layers, output_path):
+    """Side-effect for the bounded real-cue mix primitive."""
+    _touch(output_path)
+    return output_path
+
+
 def _music_bed_side_effect(output_path, mood, duration):
     """Side-effect for generate_music_bed(output, mood, duration)."""
     _touch(output_path)
@@ -102,7 +108,12 @@ def _mock_all(monkeypatch):
         patch("mammamiradio.audio.tts.generate_sfx", side_effect=_single_path_side_effect) as mock_sfx,
         patch("mammamiradio.audio.tts.generate_silence", side_effect=_single_path_side_effect) as mock_silence,
         patch("mammamiradio.audio.tts.generate_foley_loop", side_effect=_single_path_side_effect) as mock_foley,
+        patch(
+            "mammamiradio.audio.tts.loop_audio_bed",
+            side_effect=lambda _src, out, _duration: _touch(out),
+        ) as mock_loop,
         patch("mammamiradio.audio.tts.mix_with_bed", side_effect=_mix_side_effect) as mock_mix,
+        patch("mammamiradio.audio.tts.mix_oneshot_layers", side_effect=_recipe_mix_side_effect) as mock_recipe_mix,
         patch("mammamiradio.audio.tts.generate_brand_motif", side_effect=_single_path_side_effect) as mock_motif,
         patch("mammamiradio.audio.tts.probe_duration_sec", return_value=1.0) as mock_duration,
     ):
@@ -115,7 +126,9 @@ def _mock_all(monkeypatch):
             "generate_sfx": mock_sfx,
             "generate_silence": mock_silence,
             "generate_foley_loop": mock_foley,
+            "loop_audio_bed": mock_loop,
             "mix_with_bed": mock_mix,
+            "mix_oneshot_layers": mock_recipe_mix,
             "generate_brand_motif": mock_motif,
             "ffprobe_duration": mock_duration,
         }
@@ -4120,3 +4133,774 @@ async def test_synthesize_ad_forwards_state_billing(_mock_all, tmp_path, monkeyp
     ):
         await synthesize_ad(script, voices, tmp_path, state=state)
     assert state.tts_characters == len(text)
+
+
+# ---------------------------------------------------------------------------
+# Night Drive recorded recipes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_skips_unknown_sfx_instead_of_reusing_generic_chime(_mock_all, tmp_path, caplog):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    script = AdScript(
+        brand="EspressoPlus",
+        parts=[
+            AdPart(type="voice", text="Vuoi un caffè?"),
+            AdPart(type="sfx", sfx="unapproved_laser"),
+        ],
+        mood="lounge",
+    )
+    voices = {"default": AdVoice(name="Announcer", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_not_called()
+    assert "Skipping unsupported ad SFX 'unapproved_laser'" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_corrupt_packaged_bed_retries_synthetic_layers(_mock_all, tmp_path, caplog):
+    """A corrupt selected pack behaves like a missing pack, never a dry ad."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    (beds_dir / "casa_notte.mp3").write_bytes(b"corrupt-night-drive-bed")
+    _mock_all["loop_audio_bed"].side_effect = RuntimeError("invalid mp3")
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="suspicious_jazz",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    _mock_all["generate_music_bed"].assert_called()
+    _mock_all["generate_foley_loop"].assert_called_once()
+    assert _mock_all["mix_with_bed"].call_count >= 2
+    assert "retrying synthetic fallback" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_packaged_bed_replaces_layered_drone(_mock_all, tmp_path):
+    """The default pack is one authored bed, not three tonal layers under voice."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    (beds_dir / "casa_notte.mp3").write_bytes(b"night-drive-bed")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="suspicious_jazz",
+        sonic=SonicWorld(environment="beach"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, bed_assets_dir=beds_dir)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    assert _mock_all["loop_audio_bed"].call_args.args[0] == beds_dir / "casa_notte.mp3"
+    _mock_all["generate_music_bed"].assert_not_called()
+    _mock_all["generate_foley_loop"].assert_not_called()
+    assert _mock_all["mix_with_bed"].call_args.args[3] == 0.14
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_owns_bed_and_two_real_cues(_mock_all, tmp_path):
+    """A resolved recipe bypasses legacy motifs, LLM SFX, and tonal layers."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    applause = _touch(tmp_path / "applause.mp3")
+    trumpet = _touch(tmp_path / "trumpet.mp3")
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=bed,
+        bed_gain_db=-25.0,
+        cues=(
+            ResolvedRecipeCue("intro", applause, -11.0, 0.7),
+            ResolvedRecipeCue("outro", trumpet, -13.0, 0.5),
+        ),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[
+            AdPart(type="sfx", sfx="whoosh"),
+            AdPart(type="voice", text="Una vittoria molto seria."),
+            AdPart(type="sfx", sfx="chime"),
+        ],
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_not_called()
+    _mock_all["generate_brand_motif"].assert_not_called()
+    _mock_all["generate_music_bed"].assert_not_called()
+    _mock_all["generate_foley_loop"].assert_not_called()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    assert _mock_all["loop_audio_bed"].call_args.args[0] == bed
+    assert _mock_all["mix_with_bed"].call_args.args[3] == pytest.approx(10 ** (-25.0 / 20.0))
+    _mock_all["mix_oneshot_layers"].assert_called_once()
+    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
+    assert len(layers) == 2
+    assert [layer[0] for layer in layers] == [applause, trumpet]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_render_failure_restores_legacy_opener_and_motif(_mock_all, tmp_path):
+    """A recipe that resolves but fails in FFmpeg gets the complete legacy identity back."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
+    )
+    voices = {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+    _mock_all["loop_audio_bed"].side_effect = RuntimeError("corrupt recorded bed")
+
+    result = await synthesize_ad(script, voices, tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_called_once()
+    assert _mock_all["generate_sfx"].call_args.args[1] == "whoosh"
+    _mock_all["generate_brand_motif"].assert_called_once()
+    assert _mock_all["generate_brand_motif"].call_args.args[1] == "ice_clink+startup_synth"
+
+
+def test_after_first_voice_anchor_uses_the_rendered_pause_and_join_timeline():
+    from mammamiradio.audio.tts import _first_voice_end_in_rendered_timeline, _recipe_cue_offset
+
+    first_voice_end = _first_voice_end_in_rendered_timeline([("pause", 0.5), ("voice", 1.0), ("voice", 1.0)])
+
+    assert first_voice_end == pytest.approx(1.8)
+    assert _first_voice_end_in_rendered_timeline([("pause", 0.4)]) is None
+    assert _recipe_cue_offset(
+        "after_first_voice",
+        voice_duration_sec=3.1,
+        first_voice_end_sec=first_voice_end,
+        max_duration_sec=0.5,
+    ) == pytest.approx(1.8)
+    assert (
+        _recipe_cue_offset(
+            "after_first_voice",
+            voice_duration_sec=3.1,
+            first_voice_end_sec=None,
+            max_duration_sec=0.5,
+        )
+        == 2.6
+    )
+    assert _recipe_cue_offset("intro", voice_duration_sec=4.0, first_voice_end_sec=1.5, max_duration_sec=0.5) == 0.0
+    assert _recipe_cue_offset("mid", voice_duration_sec=4.0, first_voice_end_sec=1.5, max_duration_sec=0.5) == 1.75
+    assert _recipe_cue_offset("outro", voice_duration_sec=4.0, first_voice_end_sec=1.5, max_duration_sec=0.5) == 3.5
+    with pytest.raises(ValueError, match="Unsupported recipe cue anchor"):
+        _recipe_cue_offset(
+            "after_hook",
+            voice_duration_sec=3.1,
+            first_voice_end_sec=first_voice_end,
+            max_duration_sec=0.5,
+        )
+
+
+def _night_drive_voices() -> dict[str, AdVoice]:
+    return {"default": AdVoice(name="Ann", voice="it-IT-DiegoNeural", style="warm")}
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_without_bed_mixes_cues_only(_mock_all, tmp_path):
+    """A cue-only recipe still times its details and skips the recorded bed mix."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    applause = _touch(tmp_path / "applause.mp3")
+    recipe = ResolvedAdRecipe(
+        id="sting_only",
+        bed_path=None,
+        bed_gain_db=-25.0,
+        cues=(ResolvedRecipeCue("intro", applause, -11.0, 0.7),),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Un piccolo applauso.")],
+    )
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_not_called()
+    _mock_all["mix_with_bed"].assert_not_called()
+    _mock_all["mix_oneshot_layers"].assert_called_once()
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_missing_bed_file_falls_back_to_legacy(_mock_all, tmp_path):
+    """A resolved recipe whose bed disappeared on disk keeps the legacy identity."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=tmp_path / "missing-bed.mp3",
+        bed_gain_db=-25.0,
+        cues=(),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink+startup_synth"),
+    )
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["mix_oneshot_layers"].assert_not_called()
+    _mock_all["generate_sfx"].assert_called_once()
+    _mock_all["generate_brand_motif"].assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_missing_cue_falls_back_to_legacy(_mock_all, tmp_path):
+    """One missing dry cue disables the whole recipe instead of mixing a hole."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=bed,
+        bed_gain_db=-25.0,
+        cues=(ResolvedRecipeCue("intro", tmp_path / "gone-applause.mp3", -11.0, 0.7),),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink"),
+    )
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["mix_oneshot_layers"].assert_not_called()
+    _mock_all["generate_sfx"].assert_called_once()
+    _mock_all["generate_brand_motif"].assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_after_first_voice_uses_rendered_timeline(_mock_all, tmp_path):
+    """Cue timing is measured on the assembled pause+voice timeline, not the first file alone."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    sting = _touch(tmp_path / "sting.mp3")
+    recipe = ResolvedAdRecipe(
+        id="after_voice",
+        bed_path=None,
+        bed_gain_db=-25.0,
+        cues=(ResolvedRecipeCue("after_first_voice", sting, -12.0, 0.4),),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[
+            AdPart(type="pause", duration=0.5),
+            AdPart(type="voice", text="Prima la voce, poi il dettaglio."),
+        ],
+    )
+    # pause file, voice file, then the concatenated voice_path duration
+    _mock_all["ffprobe_duration"].side_effect = [0.5, 1.0, 3.1]
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
+    assert layers[0][0] == sting
+    assert layers[0][1] == pytest.approx(1.8)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_timeline_probe_exception_uses_duration_fallbacks(_mock_all, tmp_path, caplog):
+    """An instrumentation failure cannot discard already rendered recipe speech."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    sting = _touch(tmp_path / "sting.mp3")
+    recipe = ResolvedAdRecipe(
+        id="after_voice",
+        bed_path=None,
+        bed_gain_db=-25.0,
+        cues=(ResolvedRecipeCue("after_first_voice", sting, -12.0, 0.4),),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[
+            AdPart(type="pause", duration=0.5),
+            AdPart(type="voice", text="Prima la voce, poi il dettaglio."),
+        ],
+    )
+
+    def _probe(path: Path) -> float:
+        if path.name.startswith("adpart_"):
+            raise RuntimeError("ffprobe instrumentation failed")
+        return 3.1
+
+    _mock_all["ffprobe_duration"].side_effect = _probe
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
+    assert layers[0][1] == pytest.approx(2.7)
+    assert caplog.text.count("could not probe 2 timeline part(s)") == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_voice_probe_exception_uses_duration_estimate(_mock_all, tmp_path, caplog):
+    """An assembled-voice probe failure keeps the selected recipe on air."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    _mock_all["ffprobe_duration"].side_effect = [1.0, RuntimeError("ffprobe instrumentation failed")]
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    _mock_all["generate_music_bed"].assert_not_called()
+    assert caplog.text.count("could not probe assembled voice") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_probe_call", [1, 2])
+async def test_synthesize_ad_recipe_probe_cancellation_drains_then_cleans_speech(
+    _mock_all,
+    tmp_path,
+    blocked_probe_call,
+):
+    """Both recipe probes drain their executor worker before removing speech."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(id="sting_only", bed_path=None, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+    probe_calls = 0
+
+    def _blocking_probe(_path: Path) -> float:
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls != blocked_probe_call:
+            return 1.0
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        worker_finished.set()
+        return 1.0
+
+    _mock_all["ffprobe_duration"].side_effect = _blocking_probe
+    task = asyncio.create_task(synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe))
+    async with asyncio.timeout(1.0):
+        while not worker_started.is_set():
+            await asyncio.sleep(0.001)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must drain the duration probe worker"
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert worker_finished.is_set()
+    assert not list(tmp_path.glob("adpart_*.mp3"))
+    assert not list(tmp_path.glob("adpart_*.raw.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_normalize_ad_returns_broadcast(_mock_all, tmp_path):
+    """A successful recipe mix still takes the same broadcast loudness pass as legacy ads."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+
+    def _normalize_ad_creates(input_path, broadcast_path):
+        _touch(broadcast_path)
+        return broadcast_path
+
+    with patch("mammamiradio.audio.tts.normalize_ad", side_effect=_normalize_ad_creates):
+        result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    assert "broadcast" in result.name
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_normalize_ad_empty_uses_unprocessed_mix(_mock_all, tmp_path):
+    """An empty recipe broadcast file must not replace the already mixed recipe audio."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+
+    def _normalize_ad_empty(input_path, broadcast_path):
+        broadcast_path.touch()
+        return broadcast_path
+
+    with patch("mammamiradio.audio.tts.normalize_ad", side_effect=_normalize_ad_empty):
+        result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    assert "broadcast" not in result.name
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_does_not_swallow_cancellation(_mock_all, tmp_path):
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    _mock_all["loop_audio_bed"].side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    _mock_all["generate_sfx"].assert_not_called()
+    _mock_all["generate_brand_motif"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_cancellation_waits_for_executor_before_cleanup(_mock_all, tmp_path):
+    """Recipe cancellation must not unlink a bed while its worker still writes."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+
+    def _slow_bed(_source: Path, output: Path, _duration: float) -> Path:
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        _touch(output)
+        worker_finished.set()
+        return output
+
+    _mock_all["loop_audio_bed"].side_effect = _slow_bed
+    task = asyncio.create_task(synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe))
+    async with asyncio.timeout(1.0):
+        while not worker_started.is_set():
+            await asyncio.sleep(0.001)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must drain the recipe FFmpeg worker"
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert worker_finished.is_set()
+    assert not list(tmp_path.glob("recipe_bed_*.mp3"))
+    assert not list(tmp_path.glob("recipe_bed_mix_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_recovery_cancellation_drains_and_cleans_opener(_mock_all, tmp_path):
+    """Legacy recovery must settle its SFX worker before removing scratch."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=tmp_path / "missing-bed.mp3",
+        bed_gain_db=-25.0,
+        cues=(),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink"),
+    )
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+
+    def _slow_opener(output: Path, *_args: object, **_kwargs: object) -> Path:
+        worker_started.set()
+        assert release_worker.wait(timeout=2.0)
+        _touch(output)
+        worker_finished.set()
+        return output
+
+    _mock_all["generate_sfx"].side_effect = _slow_opener
+    task = asyncio.create_task(synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe))
+    async with asyncio.timeout(1.0):
+        while not worker_started.is_set():
+            await asyncio.sleep(0.001)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must drain the recovery SFX worker"
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert worker_finished.is_set()
+    assert not list(tmp_path.glob("recipe_recovery_opener_*.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_does_not_swallow_tts_unavailable(_mock_all, tmp_path):
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import TTSUnavailableError, synthesize_ad
+
+    bed = _touch(tmp_path / "recorded-bed.mp3")
+    recipe = ResolvedAdRecipe(id="stadium_win", bed_path=bed, bed_gain_db=-25.0, cues=())
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+    )
+    _mock_all["loop_audio_bed"].side_effect = TTSUnavailableError("recipe mix lost TTS")
+
+    with pytest.raises(TTSUnavailableError, match="recipe mix lost TTS"):
+        await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_packaged_bed_falls_back_to_any_mp3(_mock_all, tmp_path):
+    """A custom pack without casa_notte still supplies one authored bed."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    custom = beds_dir / "custom_room.mp3"
+    custom.write_bytes(b"custom-night-drive-bed")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="lounge",
+    )
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, bed_assets_dir=beds_dir)
+
+    assert result.exists()
+    _mock_all["loop_audio_bed"].assert_called_once()
+    assert _mock_all["loop_audio_bed"].call_args.args[0] == custom
+    _mock_all["generate_music_bed"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_cache_fingerprints_packaged_sfx_assets(_mock_all, tmp_path):
+    """Cached motifs must notice when the on-disk SFX files that built them change."""
+    from mammamiradio.audio.tts import synthesize_ad
+
+    cache_dir = tmp_path / "cache"
+    sfx_dir = tmp_path / "sfx"
+    sfx_dir.mkdir()
+    (sfx_dir / "ice_clink.mp3").write_bytes(b"clink-asset")
+    (sfx_dir / "startup_synth.wav").write_bytes(b"synth-asset")
+    script = AdScript(
+        brand="CacheBrand",
+        parts=[AdPart(type="voice", text="Sempre pronto.")],
+        mood="lounge",
+        sonic=SonicWorld(sonic_signature="ice_clink+startup_synth+missing_cue"),
+    )
+
+    result = await synthesize_ad(
+        script,
+        _night_drive_voices(),
+        tmp_path,
+        cache_dir=cache_dir,
+        sfx_dir=sfx_dir,
+    )
+
+    assert result.exists()
+    _mock_all["generate_brand_motif"].assert_called_once()
+    assert len(list(cache_dir.glob("synth_brand_motif_*.mp3"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_cache_reuses_packaged_ad_bed(_mock_all, tmp_path):
+    from mammamiradio.audio.tts import synthesize_ad
+
+    cache_dir = tmp_path / "cache"
+    beds_dir = tmp_path / "imaging" / "beds"
+    beds_dir.mkdir(parents=True)
+    (beds_dir / "casa_notte.mp3").write_bytes(b"night-drive-bed")
+    script = AdScript(
+        brand="NightDrive",
+        parts=[AdPart(type="voice", text="Una notte tutta italiana.")],
+        mood="suspicious_jazz",
+    )
+
+    first = await synthesize_ad(
+        script,
+        _night_drive_voices(),
+        tmp_path,
+        cache_dir=cache_dir,
+        bed_assets_dir=beds_dir,
+    )
+    second = await synthesize_ad(
+        script,
+        _night_drive_voices(),
+        tmp_path,
+        cache_dir=cache_dir,
+        bed_assets_dir=beds_dir,
+    )
+
+    assert first.exists()
+    assert second.exists()
+    assert _mock_all["loop_audio_bed"].call_count == 1
+    assert len(list(cache_dir.glob("synth_packaged_ad_bed_*.mp3"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_timeline_falls_back_when_probe_is_silent(_mock_all, tmp_path):
+    """Unprobeable parts still get a first-voice boundary from pause length and file size."""
+    from mammamiradio.audio.imaging import ResolvedAdRecipe, ResolvedRecipeCue
+    from mammamiradio.audio.tts import synthesize_ad
+
+    sting = _touch(tmp_path / "sting.mp3")
+    recipe = ResolvedAdRecipe(
+        id="after_voice",
+        bed_path=None,
+        bed_gain_db=-25.0,
+        cues=(ResolvedRecipeCue("after_first_voice", sting, -12.0, 0.5),),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[
+            AdPart(type="pause", duration=0.5),
+            AdPart(type="voice", text="Prima la voce, poi il dettaglio."),
+        ],
+    )
+    _mock_all["ffprobe_duration"].return_value = None
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    layers = _mock_all["mix_oneshot_layers"].call_args.args[1]
+    assert layers[0][1] == pytest.approx(4.5)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_restore_keeps_going_if_opener_concat_fails(_mock_all, tmp_path, caplog):
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=tmp_path / "missing-bed.mp3",
+        bed_gain_db=-25.0,
+        cues=(),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink"),
+    )
+    _mock_all["concat_files"].side_effect = RuntimeError("concat failed")
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    assert "Could not restore legacy ad opener after recipe failure" in caplog.text
+    _mock_all["generate_brand_motif"].assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_restore_keeps_going_if_motif_fails(_mock_all, tmp_path, caplog):
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=tmp_path / "missing-bed.mp3",
+        bed_gain_db=-25.0,
+        cues=(),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature="ice_clink"),
+    )
+    _mock_all["generate_brand_motif"].side_effect = RuntimeError("motif boom")
+    caplog.set_level("WARNING", logger="mammamiradio.audio.tts")
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    assert "Could not restore legacy ad motif after recipe failure" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_synthesize_ad_recipe_restore_skips_motif_without_signature(_mock_all, tmp_path):
+    from mammamiradio.audio.imaging import ResolvedAdRecipe
+    from mammamiradio.audio.tts import synthesize_ad
+
+    recipe = ResolvedAdRecipe(
+        id="stadium_win",
+        bed_path=tmp_path / "missing-bed.mp3",
+        bed_gain_db=-25.0,
+        cues=(),
+    )
+    script = AdScript(
+        brand="Night Drive",
+        parts=[AdPart(type="voice", text="Una vittoria molto seria.")],
+        sonic=SonicWorld(transition_motif="whoosh", sonic_signature=""),
+    )
+
+    result = await synthesize_ad(script, _night_drive_voices(), tmp_path, recipe=recipe)
+
+    assert result.exists()
+    _mock_all["generate_sfx"].assert_called_once()
+    _mock_all["generate_brand_motif"].assert_not_called()

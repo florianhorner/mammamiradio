@@ -40,12 +40,18 @@ class AdFormat(StrEnum):
 
 @dataclass
 class SonicWorld:
-    """Sonic palette for an ad: environment, music bed, and transition motif."""
+    """Sonic palette for an ad, including an optional packaged recipe."""
 
     environment: str = ""
     music_bed: str = "lounge"
     transition_motif: str = "chime"
     sonic_signature: str = ""  # e.g. "ice_clink+startup_synth" for brand motif generation
+    recipe_id: str = ""  # packaged sonic recipe; replaces synthetic motif generation
+
+    @property
+    def is_recipe_driven(self) -> bool:
+        """Whether this spot is rendered from a packaged sonic recipe."""
+        return bool(self.recipe_id)
 
 
 @dataclass
@@ -54,6 +60,7 @@ class CampaignSpine:
 
     premise: str = ""
     sonic_signature: str = ""  # e.g. "ice_clink+startup_synth"
+    sonic_recipe: str = ""  # optional campaign-level override of AdBrand.sonic_recipe
     format_pool: list[str] = field(default_factory=list)
     # The configured character identity. This is an ``AdVoice.name`` rather
     # than a provider ID, so a character stays the same through a TTS rescue.
@@ -78,6 +85,7 @@ class AdBrand:
     tagline: str
     category: str = "general"
     recurring: bool = True
+    sonic_recipe: str = ""  # packaged recipe selected for shipped/official brands
     campaign: CampaignSpine | None = None
     # Derived at config load. Invalid directly-owned campaigns stay visible in
     # inventory but are never selected for airtime.
@@ -241,14 +249,14 @@ _CATEGORY_SONIC: dict[str, list[SonicWorld]] = {
     "food": [
         SonicWorld(environment="cafe", music_bed="tarantella_pop", transition_motif="register_hit"),
         SonicWorld(environment="shopping_channel", music_bed="cheap_synth_romance", transition_motif="ice_clink"),
-        SonicWorld(environment="cafe", music_bed="upbeat", transition_motif="mandolin_sting"),
+        SonicWorld(environment="cafe", music_bed="upbeat", transition_motif="chime"),
     ],
     "fashion": [
         SonicWorld(environment="showroom", music_bed="suspicious_jazz", transition_motif="whoosh"),
         SonicWorld(environment="showroom", music_bed="discount_techno", transition_motif="tape_stop"),
     ],
     "beauty": [
-        SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="mandolin_sting"),
+        SonicWorld(environment="luxury_spa", music_bed="cheap_synth_romance", transition_motif="startup_synth"),
         SonicWorld(environment="showroom", music_bed="lounge", transition_motif="ice_clink"),
     ],
     "services": [
@@ -268,7 +276,7 @@ _CATEGORY_SONIC: dict[str, list[SonicWorld]] = {
         SonicWorld(environment="motorway", music_bed="discount_techno", transition_motif="startup_synth"),
     ],
     "tourism": [
-        SonicWorld(environment="beach", music_bed="tarantella_pop", transition_motif="mandolin_sting"),
+        SonicWorld(environment="beach", music_bed="tarantella_pop", transition_motif="whoosh"),
         SonicWorld(environment="shopping_channel", music_bed="overblown_epic", transition_motif="whoosh"),
     ],
 }
@@ -284,6 +292,30 @@ _FORMAT_ROLES: dict[str, list[str]] = {
 }
 
 ALL_FORMATS = [f.value for f in AdFormat]
+
+
+# The shipped inventory deliberately names its recipe on every brand.  This
+# category map is both a reviewable taxonomy and a guard against a new official
+# category quietly falling back to the old procedural chime/whoosh palette.
+OFFICIAL_CATEGORY_SONIC_RECIPES: dict[str, str] = {
+    "supermarket": "supermarket_dash",
+    "cars": "motorway_pass",
+    "telecom": "late_night_hotline",
+    "banking": "bureaucracy_stamp",
+    "food": "cafe_testimonial",
+    "fashion": "showroom_reveal",
+    "pharma": "pharmacy_whisper",
+    "tech": "showroom_reveal",
+    "tourism": "stadium_win",
+    "services": "motorway_pass",
+    "beauty": "showroom_reveal",
+    "finance": "late_night_hotline",
+    "fitness": "stadium_win",
+    "health": "pharmacy_whisper",
+    "home": "home_reveal",
+}
+
+OFFICIAL_SONIC_RECIPE_IDS = frozenset(OFFICIAL_CATEGORY_SONIC_RECIPES.values())
 
 
 def compile_ad_cast(brands: list[AdBrand], voices: list[AdVoice]) -> AdCastReport:
@@ -528,15 +560,25 @@ def _select_ad_creative(
         ] or sonic_variants
     cat_sonic = replace(random.choice(sonic_variants))
 
+    recipe_id = brand.sonic_recipe
+    if campaign and campaign.sonic_recipe:
+        recipe_id = campaign.sonic_recipe
+
     if campaign and campaign.sonic_signature:
-        sonic = SonicWorld(
+        legacy_sonic = SonicWorld(
             environment=cat_sonic.environment,
             music_bed=cat_sonic.music_bed,
             transition_motif=campaign.sonic_signature.split("+")[0],
             sonic_signature=campaign.sonic_signature,
         )
     else:
-        sonic = cat_sonic
+        legacy_sonic = cat_sonic
+
+    # Keep the proven palette attached until the producer knows a recipe has
+    # actually resolved. A successful recipe remains sole owner of accents in
+    # the writer/TTS path; an unavailable recipe can then restore the complete
+    # legacy opener and motif instead of airing a generic bed-only spot.
+    sonic = replace(legacy_sonic, recipe_id=recipe_id) if recipe_id else legacy_sonic
 
     # Preserve the format's speaker order for script structure. A direct
     # character occupies its own role slot, so Il Razzo remains the disclaimer

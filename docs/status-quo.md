@@ -1,15 +1,16 @@
 # Mamma Mi Radio status quo
 
-> Snapshot: 15 July 2026, based on remote `main` at commit
-> [`93121160`](https://github.com/florianhorner/mammamiradio/commit/93121160e43fc36a26bea210cf840251bb2d98e8).
+> Snapshot: 19 August 2026, based on remote `main` at commit
+> [`7e6deecd`](https://github.com/florianhorner/mammamiradio/commit/7e6deecdfb3723a32efbb9e7d53cd40c7942b5f5).
 > This is a dated product and market assessment, not a live health
 > page. This assessment did not audit the running Home Assistant Green
 > installation.
 
 As of this snapshot, Mamma Mi Radio is a released, voice-native Home Assistant
 product with strong engineering evidence and one useful household observation.
-Its upstream Music Assistant submission offers a path to wider distribution.
-Market evidence remains thin.
+Its Music Assistant provider is merged into the 2.10 pre-release catalog and
+offers a path to wider distribution once a stable Music Assistant release
+includes it. Market evidence remains thin.
 
 ## Status quo map
 
@@ -25,17 +26,17 @@ Market evidence remains thin.
 | Locality | The application, configuration, keys, state, mixing, and stream run on the user's hardware | Shipped |
 | Cloud boundary | Dynamic writing and the best voices still depend on external providers. Edge TTS is also an online service. Mamma Mi Radio is self-hosted and needs internet access for the full experience | Current limitation |
 | Privacy | Filtered context preview, entity muting, narrow defaults for new installations, opt-in sensitive moments, and no home-context transmission to a script model without a provider key | Shipped |
-| Reliability | Ahead-of-playback production, continuity reservations, cached recovery, emergency audio, bounded retries, provider circuit breakers, and listener-delivery receipts | Strong CI evidence |
-| Candidate reliability fix | The 2.18 work fails closed when every configured TTS route is unavailable: required speech enters canned or continuity recovery instead of becoming a silent speech file | Implemented locally; pending merge, public CI, release, and runtime soak |
-| Listener truth | The system distinguishes generated, queued, and heard content. Current `main` adds anonymous aggregate listening epochs and one bounded companionship moment after sustained listening | Unreleased, not yet cut |
-| Stable release | v2.17.0, published 12 July 2026 | Public |
-| Current development | 2.18 content sits in `## [Unreleased]`; `main` advertises the published v2.17.0 so the app stays installable; latest `main` CI is green | Not yet cut |
+| Reliability | Ahead-of-playback production, continuity reservations, cached recovery, emergency audio, bounded retries, provider circuit breakers, listener-delivery receipts, and fail-closed speech when every TTS route is down | Strong CI evidence; in the public v2.18.0 release |
+| Candidate reliability fix | An empty music crate no longer loops the station ident. Current `main` also keeps First Listen honest when only recovery audio is available | On `main`; not yet cut |
+| Listener truth | The system distinguishes generated, queued, and heard content. v2.18.0 shipped anonymous aggregate listening epochs and one bounded companionship moment after sustained listening. Current `main` adds now-playing that names only the hosts who spoke, and runtime ad session receipts | v2.18.0 public; later items not yet cut |
+| Stable release | v2.18.0, published 8 August 2026 | Public |
+| Current development | Post-2.18.0 work sits in `## [Unreleased]`; `main` advertises the published v2.18.0 so the app stays installable; latest `main` CI is green | Not yet cut |
 | Current distribution | Custom Home Assistant app repository, HACS companion, Docker, and direct installation | Available but founder-led |
-| Next distribution step | Upstream Music Assistant provider submission with typed now-playing metadata | Open, checks green, changes requested; not merged |
-| Potential reach | If accepted, it becomes discoverable in Music Assistant's built-in provider catalog. Opt-in analytics show about 64,000 active Home Assistant installations reporting Music Assistant | Potential distribution, not adoption |
+| Next distribution step | Music Assistant provider merged 11 August 2026. It is an alpha catalog entry on the 2.10.0 pre-release channel. It is not in any stable Music Assistant release | Pre-release only; not yet stable |
+| Potential reach | A stable Music Assistant release that includes it would make it discoverable in Music Assistant's built-in provider catalog. Opt-in analytics show about 53,000 active Home Assistant installations reporting Music Assistant | Potential distribution, not adoption |
 | Demand evidence | Founder use, informal interest from colleagues, and the seven-guest dinner reaction | Anecdotal |
 | Missing evidence | External household retention, repeat use, willingness to configure provider keys, willingness to pay, and a repeatable self-serve installation funnel | Unproven |
-| Public traction | Four GitHub stars, two forks, and no replies yet on the first-listen feedback discussion | Minimal |
+| Public traction | Four GitHub stars, two forks, and no replies on the first-listen feedback discussion | Minimal |
 | Business model | Users supply their hardware, music access, and provider keys. No demonstrated pricing, revenue, or hosted-service model | Unvalidated |
 | Disclosure boundary | Product thesis and public proof can be shared. Household data, pilot identities, outreach notes, and raw interviews stay private | Defined operating rule |
 | Long-term direction | Open provider choice and more local AI, aligned with Home Assistant's philosophy | Strategic direction, not today's product |
@@ -78,7 +79,9 @@ length limits, and listener-safety checks.
 Provider failures hit bounded retries and circuit breakers. Slow generation
 cannot stop the music. The station writes durable memory after the material
 reaches a listener without a delivery failure. Public and operator surfaces
-distinguish generated, queued, and received content.
+distinguish generated, queued, and received content. If every configured voice
+route fails, required speech falls through to canned copy or music rather than
+a silent file.
 
 Voice carries the product identity. Hosts and advertising characters have
 distinct voices, delivery settings, and fallback identities. ElevenLabs
@@ -102,45 +105,46 @@ start with a narrow context set. Sensitive presence and household moments
 require explicit enablement. The privacy target is the smallest amount of
 context that creates recognition without becoming creepy.
 
-The current remote `main` passes 5,199 tests at 92.44% coverage. Its ARM smoke
-test reaches the first stream byte in 0.81 seconds. The latest work also adds
-truthful aggregate listener sessions: short connection gaps remain part of one
-anonymous station epoch, and a sustained listening period can earn one
-companionship beat without pretending a specific person arrived or returned.
-These numbers describe engineering behavior. They do not measure household
-demand.
+The current remote `main` passes 7,300 tests at 92.40% coverage. Its ARM smoke
+test reaches the first stream byte in 0.01 seconds. Since v2.18.0, `main` has
+also taken a First Listen path from setup to real radio, copyright-safe starter
+music with on-air attribution, the Modern Night Drive imaging pack, runtime ad
+session receipts, now-playing that names only who spoke, and a fix that stops
+an empty crate from looping the recovery ident. These numbers describe
+engineering behavior. They do not measure household demand.
 
-Version 2.17.0 remains the stable release. The repository is preparing v2.18.0,
-which adds more honest listener-session semantics, better continuity
-diagnostics, narrower fresh-install context, improved language enforcement,
-and stronger protection against stale or failed audio returning later. Current
-CI and repository state do not establish present device uptime.
+Version 2.18.0 remains the stable release. The unpublished work on `main` does
+not yet have a version number. It adds a guided First Listen, a rights-aware
+starter catalog that is not yet in a published package, recorded station
+imaging, more honest now-playing and ad receipts, and the empty-crate recovery
+fix. Current CI and repository state do not establish present device uptime.
 
-Distribution is the next engineering milestone. An upstream Music Assistant
-submission would make Mamma Mi Radio a built-in provider alongside services
-such as ORF Radiothek, BBC Sounds, and Radio Paradise. It already uses a
-versioned now-playing contract with typed music, voice, and interstitial
-segments, host attribution, audio-format discovery, and conditional metadata
-polling. The submission is open and its checks pass, but maintainers have
-requested changes. It is not merged or released.
+Distribution is the next engineering milestone. The upstream Music Assistant
+provider was merged on 11 August 2026. It already uses a versioned now-playing
+contract with typed music, voice, and interstitial segments, host attribution,
+audio-format discovery, and conditional metadata polling. Beta and
+release-candidate Music Assistant 2.10.0 users can add it as an alpha
+provider; stable 2.9.x users cannot, since it is not in a stable Music
+Assistant release.
 
-A Music Assistant merge would improve discoverability and reduce integration
-friction. Household adoption remains a separate test.
+A stable Music Assistant release that includes the provider would improve
+discoverability and reduce integration friction. Household adoption remains a
+separate test.
 
 The product has answered much of its engineering question: it can behave like a
-radio station through provider failures and thin queues. The current v2.18
-candidate closes the all-routes TTS silence path in code, but it is not yet
-merged, publicly CI-verified, released, or runtime-soaked. It has not answered
-the market question. Five outside households now need to show whether people
-want to keep it in the room.
+radio station through provider failures and thin queues. v2.18.0 closed the
+all-routes TTS silence path in a public release. Current `main` also stops an
+empty crate from looping the recovery ident, but that fix is not yet cut. It
+has not answered the market question. Five outside households now need to show
+whether people want to keep it in the room.
 
 ## Public evidence
 
 - [GitHub repository](https://github.com/florianhorner/mammamiradio)
-- [v2.17.0 release](https://github.com/florianhorner/mammamiradio/releases/tag/v2.17.0)
-- [Quality run: 5,199 passing tests and 92.44% coverage](https://github.com/florianhorner/mammamiradio/actions/runs/29401501565)
-- [ARM smoke: first stream byte in 0.81 seconds](https://github.com/florianhorner/mammamiradio/actions/runs/29401501465)
-- [Music Assistant provider submission](https://github.com/music-assistant/server/pull/3836)
+- [v2.18.0 release](https://github.com/florianhorner/mammamiradio/releases/tag/v2.18.0)
+- [Quality run: 7,300 passing tests and 92.40% coverage](https://github.com/florianhorner/mammamiradio/actions/runs/32087219116)
+- [ARM smoke: first stream byte in 0.01 seconds](https://github.com/florianhorner/mammamiradio/actions/runs/32087219082)
+- [Music Assistant provider, merged 11 August 2026](https://github.com/music-assistant/server/pull/3836)
 - [First-listen feedback discussion](https://github.com/florianhorner/mammamiradio/discussions/831)
 - [Music Assistant integration](https://www.home-assistant.io/integrations/music_assistant/)
 - [Home Assistant analytics](https://analytics.home-assistant.io/)

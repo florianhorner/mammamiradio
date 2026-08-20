@@ -23,7 +23,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | "Why this track?" rationale generation             | `mammamiradio/playlist/track_rationale.py`   |
 | FFmpeg normalize / mix / concat / SFX              | `mammamiradio/audio/normalizer.py`           |
 | Generated ad/imaging layer cache                   | `mammamiradio/audio/synth_cache.py`          |
-| Station imaging stingers and talk beds             | `mammamiradio/audio/imaging.py`              |
+| Station imaging stingers, beds, and recipe resolver | `mammamiradio/audio/imaging.py`             |
+| Ad-recipe schema contract                          | `mammamiradio/audio/imaging_schema.py`       |
 | Edge / OpenAI / Azure / ElevenLabs TTS synthesis   | `mammamiradio/audio/tts.py`                  |
 | Audio quality gate (duration, silence checks)      | `mammamiradio/audio/audio_quality.py`        |
 | Voice catalog (Edge, OpenAI, Azure voice IDs)      | `mammamiradio/audio/voice_catalog.py`        |
@@ -99,6 +100,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Adding a new party mode theme    | `docs/party-mode-extension.md`   |
 | Design system (colors, fonts)    | `docs/design/system.md`          |
 | Admin panel layout standards     | `docs/design/admin-panel.md`     |
+| Admitted-audio queue refactor    | `docs/2026-07-27-admitted-audio-queue-refactor.md` |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
 | Listener QS integration train    | `docs/listener-qs-train.md`      |
 | Cathedral restructure plan       | `docs/archive/2026-04-28-cathedral-restructure.md` |

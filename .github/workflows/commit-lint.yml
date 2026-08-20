@@ -1,8 +1,14 @@
 # Per-repo includer for the engineering-standards reusable commit-lint workflow.
 # Canonical workflow: https://github.com/florianhorner/engineering-standards/blob/main/.github/workflows/commit-lint-reusable.yml
-# Pin to a SHA in production. 502b48e0521350509f06cd3c6ad65a7c848f23af carries the
-# injection-safe fix: PR title / SHAs are passed via env, so an apostrophe in the
-# PR title no longer crashes the validate step ("unexpected EOF").
+# Pin to a SHA in production. b7f5ba76136c577f511edaa0f59d50b06bfd3c1a carries two
+# fixes on top of the earlier injection-safe pin (PR title / SHAs passed via env, so
+# an apostrophe in the title no longer crashes the validate step):
+#   - CI now reads `exemptions.trusted_bot_skips` from the vendored rules instead of
+#     hardcoding a lone WHY_REQUIRED, so that array is no longer decorative.
+#   - The bot allowlist applies to the PR title, not only to the commits in range.
+# Together with SUBJECT_TOO_LONG joining the skip list in rules schema 1.2.0, this
+# stops grouped Dependabot titles ("...in the <group> group across 1 directory")
+# failing the 72-character subject limit on every single dependency PR.
 name: commit-lint
 
 on:
@@ -15,4 +21,4 @@ permissions:
 
 jobs:
   commit-lint:
-    uses: florianhorner/engineering-standards/.github/workflows/commit-lint-reusable.yml@502b48e0521350509f06cd3c6ad65a7c848f23af
+    uses: florianhorner/engineering-standards/.github/workflows/commit-lint-reusable.yml@b7f5ba76136c577f511edaa0f59d50b06bfd3c1a

@@ -1,0 +1,1606 @@
+# Audio asset attribution
+
+This file is generated from `manifest.json` by `scripts/validate_audio_asset_pack.py`.
+Do not edit it by hand; run `python scripts/validate_audio_asset_pack.py --write-attribution`.
+
+All external recordings and project-authored masters listed here are approved for public redistribution.
+
+## Source recordings and masters
+
+### `project.ad-bed.bureaucracy-stamp` — Midnight document room
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `737b006914e1f428f347c73e4068738a998cda0bd731879c343b077689475ae4`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.bureaucracy-stamp`
+
+### `project.ad-bed.cafe-testimonial` — After-hours cafe glass
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `4050cf6dea1e3e6a9e239e314aa6c1533ef5c757966228184408b50f855b33bb`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.cafe-testimonial`
+
+### `project.ad-bed.home-reveal` — Apartment window glow
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `4e89197a03e22b275083d10e015221666643beed41b7dd1008bade1675efc51d`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.home-reveal`
+
+### `project.ad-bed.late-night-hotline` — Private-line haze
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `54f7e697f0550bdc7da112757ca231308bc66e02f305f6988c8e901ed1e293b0`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.late-night-hotline`
+
+### `project.ad-bed.motorway-pass` — Wet motorway pulse
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `3303d62ff8fad411a496488fb9fca5ad9fc815dfc81222f48001ea0782530a3f`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.motorway-pass`
+
+### `project.ad-bed.pharmacy-whisper` — Clean counter air
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `2184242348a64001e83e8e1df0e7d9c77904c605669a2f7ad10be7de82e80fe5`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.pharmacy-whisper`
+
+### `project.ad-bed.showroom-reveal` — Velvet showroom
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `22f672e938667c4655e7eeb396d935a4ff653cd83d3c8cee8d289d0bc6462014`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.showroom-reveal`
+
+### `project.ad-bed.stadium-win` — Measured arena lift
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `37e2323e500817038e14336cb3e62e86e6d92f0baf91ff3a99bdffb3c713e856`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.stadium-win`
+
+### `project.ad-bed.supermarket-dash` — Neon aisle motion
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `6358b718480d56c81667a67eedde50c5ca9e2eb39b18fa7dad84446c3ca804d2`
+- Modification: Deterministic local advertising-bed synthesis.
+- Used by: `ad-bed.supermarket-dash`
+
+### `project.ad-cue.checkout_glide` — Checkout glide
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `099587808273337cf8e5f7313625cc11dcb87c5aa23f9feaceca2f0ca799c25e`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.checkout_glide`
+
+### `project.ad-cue.clean_release` — Clean release
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `67e64461f617366d93b904c52b328e3435de2bebfbebc91389e461f8a12fe631`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.clean_release`
+
+### `project.ad-cue.crowd_lift` — Crowd lift abstraction
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `c3176cad6530a972cbc867ac17640d637d0c164b8dbe59f6b11d22f353321ee4`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.crowd_lift`
+
+### `project.ad-cue.door_glow` — Door glow
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `5aa599356462780f3f25a065563bc511be00b8a0b12e6a5da15d3651ccb1396c`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.door_glow`
+
+### `project.ad-cue.espresso_glint` — Espresso glint
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `3f52bdd2ae4232d23dbea795d4a8a48c9557613ce75a9e215143d76d818f6ad3`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.espresso_glint`
+
+### `project.ad-cue.glass_open` — Glass open
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `07acd67c5cff8135093cb0c945845295aaa3e3c32307fc6fbd4b8ba08c494b82`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.glass_open`
+
+### `project.ad-cue.lamp_resolve` — Lamp resolve
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `060f4607cfba7d2512f6b13d63261be28c6bc715f5acb3026d13d4c67795f116`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.lamp_resolve`
+
+### `project.ad-cue.lane_rise` — Lane rise
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `d1f5ed8adeae74cda0be391ef2c400a2b3b065878647fc5cd9abfadd1b6a9d72`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.lane_rise`
+
+### `project.ad-cue.line_open` — Private line open
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `06885ea9b1f0b6c025287244e75bc564fd1c5bcf0791db96ddd2051d9ce7dc54`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.line_open`
+
+### `project.ad-cue.line_release` — Private line release
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `a60c7a697e51a1ed633154e4fc7cd01f1400795f58d351450e026f84f32185d4`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.line_release`
+
+### `project.ad-cue.paper_tick` — Paper tick abstraction
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `799ea501799fcc33c5356caa4755ec8ab19049706cdb8e87c23ad8347da7b173`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.paper_tick`
+
+### `project.ad-cue.room_smile` — Room smile
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `82dd85dd9c87214e459c26bfbded476c1cb2a6e5c367ad9397a8f0770178823e`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.room_smile`
+
+### `project.ad-cue.scanner_ping` — Scanner ping abstraction
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `005dce19e809f0d65735049489a78fcbfa724f88caa34c787ee4615b4542931d`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.scanner_ping`
+
+### `project.ad-cue.score_flash` — Score flash
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `f14971eed66faae7466b81ff325f213c647b8ac792740af3bb1b42010761f6b8`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.score_flash`
+
+### `project.ad-cue.seal_close` — Seal close
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `8f5804dc0c6048447217d99f429865f4056edfb56c3c3ba11eda0bb0e8ddf5bf`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.seal_close`
+
+### `project.ad-cue.soft_dose` — Soft dose signal
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `9c511c8ce828ca324fce70f997191d58be5e56746bc1696527563fa1a4d33c76`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.soft_dose`
+
+### `project.ad-cue.tail_light` — Tail-light resolve
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `8bcccff89a259a655821504461fe4604cdba96f38aa95baf65d004a1808707f0`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.tail_light`
+
+### `project.ad-cue.velvet_drop` — Velvet drop
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `c2297214667b5ee50798133d021e422437fb6b3b98ed6f9f7fe8f4897bab5ee1`
+- Modification: Deterministic local recipe-foreground synthesis.
+- Used by: `ad-cue.velvet_drop`
+
+### `project.bed.casa-notte` — Casa Notte atmosphere
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `5a60d765d6ea8e2c69e1a028263d26ae5950e3a90af91ded57d9aacd7f726afd`
+- Modification: Deterministic local atmospheric synthesis.
+- Used by: `bed.casa-notte`
+
+### `project.bumper.ad-in` — Approved core artifact cue.ad-in
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `ff245baad8800304d70776a0af25e9cb0eba3eb621d5756c8dc055299075c0b3`
+- Modification: Exact byte copy from the digest-approved project-authored core cadence.
+- Used by: `bumper.ad-in`
+
+### `project.bumper.ad-mid` — Project-authored electronic mid-break separator
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `61bda349959c8485658ebbb2b5e59838bb07c7fc9ad175b88723f0d44170dcf8`
+- Modification: Deterministic local synthesis retained raw for one runtime fit.
+- Used by: `bumper.ad-mid`
+
+### `project.bumper.ad-out` — Approved core artifact cue.ad-out
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `cf3e99a465cd62d659a49cf36657b3c57983fe5767b686bcb44726800e2f8eb7`
+- Modification: Exact byte copy from the digest-approved project-authored core cadence.
+- Used by: `bumper.ad-out`
+
+### `project.compat.cash-register` — Transaction shimmer
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `b7490cebcd76d64ad36420b90d941207d8bcb36e12f48bb21f2f784a1bd1d6d7`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.cash-register`
+
+### `project.compat.chime` — Glass resolve
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `41419ca8ade8e313a2312b2d0924901640879c4b3936c2517a139d2a44567865`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.chime`
+
+### `project.compat.ding` — Soft signal
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `3b7473b851a90445e91629aa6930ee400f3ed176fb2e7f1f092ed118dfe5266f`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.ding`
+
+### `project.compat.hotline-beep` — Private line
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `eaa935e9aaeeb4aab4f1f867ec7ae7bd4d497ee4a941aa892119d76fef4a159c`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.hotline-beep`
+
+### `project.compat.ice-clink` — Crystal edge
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `265f8bedf0177929fb31bce43e88b4569c696290fbbda1695e3f3367abff4630`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.ice-clink`
+
+### `project.compat.legacy-relay` — Legacy relay alias
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `9c148c788a11fe705ecb8825a84213e728081d3731fb88d5332890fdd49280e6`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.mandolin-sting`
+
+### `project.compat.register-hit` — Checkout relay
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `4612e31879d062dfe220d5a3c135ad21229eddff05e5a69e434e1a7cd4394e31`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.register-hit`
+
+### `project.compat.startup-synth` — Night console synthesizer bloom
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `d645181f0b31abd6a56032b575b1303b6bc948ee614f3ad329ee33733378e938`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.startup-synth`
+
+### `project.compat.sweep` — Night rise
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `77337f87a2be0c7582783511f6cf2a0d1ff07a985bc1a944f6e5b4b371aec581`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.sweep`
+
+### `project.compat.tape-stop` — Tape descent
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `7a3a5dba703614fe5d10ba0722c0b55e513af4b8052e9cbfa498132205b2a202`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.tape-stop`
+
+### `project.compat.whoosh` — Airline glide
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `791c816ffae1ad3bdc71f4ac48e038839dbc54c7bbaae660e15a4434ce7add7c`
+- Modification: Deterministic local electronic compatibility synthesis.
+- Used by: `compat.whoosh`
+
+### `project.identity.station-id` — Approved core artifact render.station-bed
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `4b18dd717ca0927e1479d6825cf08d8ea03955cbf59145fb90e78349f4999d58`
+- Modification: Exact byte copy from the digest-approved project-authored core cadence.
+- Used by: `identity.station-id`
+
+### `project.identity.sweeper` — Approved core artifact render.sweeper-bed
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `dae7871e29bc32f27d649e8e8a829e17113f62f5ecc28251d949090fbf6e67d7`
+- Modification: Exact byte copy from the digest-approved project-authored core cadence.
+- Used by: `identity.sweeper`
+
+### `project.identity.time-check` — Clock relay
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `c2356470774b11d77e6b5ee6077fb2d97d2ec0549e1b0e2ad6fc1f1a41bbd85b`
+- Modification: Deterministic local electronic time-check synthesis.
+- Used by: `identity.time-check`
+
+### `project.transition.music-to-speech` — Approved core artifact cue.music-to-speech
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `0e4865d2918bc8a942fc5f82c150ee593932bed4ca8afb8ebc5b1fbe8688b6f4`
+- Modification: Exact byte copy from the digest-approved project-authored core cadence.
+- Used by: `transition.music-to-speech`
+
+### `project.transition.speech-to-music` — Approved core artifact cue.speech-to-music
+
+- Creator: Mammami Radio project
+- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Generator: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py)
+- Generator revision: `7a903df26748dbf40b9dd3e0dd6bb524b861491a`
+- Generator SHA-256: `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/complete_audio_pack_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/complete_audio_pack_gate.py) — `ef13752d39db64d7adfdae282b029c371cb71554a40c3c0fecce2235f1d29ad5`
+- Generator dependency: [`scripts/promote_complete_audio_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/promote_complete_audio_pack.py) — `0c67cf8ebc2af34bd7296bc6e726fe9ba40480a31d90fe3bb492fab7c228e38d`
+- Generator dependency: [`scripts/core_cadence_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/core_cadence_gate.py) — `4349316110261a472c04cc71deb388b7918870d62ef9febb5490ce0a8ccee4a9`
+- Generator dependency: [`scripts/freeze_core_cadence_speech.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/freeze_core_cadence_speech.py) — `c8e837dcbcaf5270c38faf58e373b1cccc9e08c908ed3658516b56c8f48aa713`
+- Generator dependency: [`scripts/sonic_treatment_gate.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/sonic_treatment_gate.py) — `6f3666fbd91f2b18c24774d141d0d7d870e3ca9fd49aac0bb7ca7e3083357807`
+- Generator dependency: [`scripts/audition_tts_voices.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/audition_tts_voices.py) — `c59347ef0f896ed66380533a0501d2e9913780befe73dabfcf48781b5712279a`
+- Generator dependency: [`scripts/validate_audio_asset_pack.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/scripts/validate_audio_asset_pack.py) — `62c1a9ec599fb561cd6db4a8de578b0ce5f3e4d02f27ef8cca98892873b9f832`
+- Generator dependency: [`mammamiradio/audio/admission.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/admission.py) — `eca6a559dee7fa0d8737be56d6abef85b6fb3243aceaac715b1c5c733408525a`
+- Generator dependency: [`mammamiradio/audio/imaging.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging.py) — `481e8e860cda5c8e30f5154cda2dabd4dcb826862197dd120b242f44fca3b22d`
+- Generator dependency: [`mammamiradio/audio/imaging_schema.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/imaging_schema.py) — `2e9a00400ffecfd68d65acc095c2b9c5ede7cc736a3b6cde87a7cd14c623d794`
+- Generator dependency: [`mammamiradio/audio/normalizer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/normalizer.py) — `7f04bf9d8477def092e28796707221bda024c7d7d30168d2a51b315b4a594c76`
+- Generator dependency: [`mammamiradio/audio/synth_cache.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/synth_cache.py) — `27e838f8541ebb4bed62e6ee41ab4bd9056ebbf368ee1432f24116b406520ac3`
+- Generator dependency: [`mammamiradio/audio/tts.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/tts.py) — `b79722ad9fd0a7d5d1f5199b0858370ab4c3c5e295e29d277a04c3b269083c62`
+- Generator dependency: [`mammamiradio/audio/voice_catalog.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/audio/voice_catalog.py) — `7730b77d4b60429dc8569f4295194c47d308ffb274232a7fc365fd77d1142f4d`
+- Generator dependency: [`mammamiradio/core/config.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/config.py) — `450a60efeb9a74f4277adcae37a72de10ec49483f8103ce2681c7ca04fea4c1c`
+- Generator dependency: [`mammamiradio/core/models.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/core/models.py) — `423244af5f34f2f214f92bcb4a1e3028ecdc24157d42ea6fd6abe71e3471ad03`
+- Generator dependency: [`mammamiradio/hosts/ad_creative.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/ad_creative.py) — `4f9260fe03e2a61cbf34dca5fea3862f66757ab391dfa4213babc725c8403096`
+- Generator dependency: [`mammamiradio/hosts/fallbacks.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/hosts/fallbacks.py) — `ce405ef79e9e1a83cdc92f8c3816e66bc9f3bad9a77a9c41d69be4e3e06301d0`
+- Generator dependency: [`mammamiradio/main.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/main.py) — `7efc47d56c8708822e98ca0535ea7c5223b3807e653cbab6597e22ff49a77bb3`
+- Generator dependency: [`mammamiradio/scheduling/producer.py`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/mammamiradio/scheduling/producer.py) — `ce593b6c86ee20b642195feb5006ac5b9b53ab669c148bba135eb05368fbf9fa`
+- Generator dependency: [`radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator dependency: [`ha-addon/mammamiradio/radio.toml`](https://github.com/florianhorner/mammamiradio/blob/7a903df26748dbf40b9dd3e0dd6bb524b861491a/ha-addon/mammamiradio/radio.toml) — `633eb8034f821c29c72ed06ac699fbf1fd56d3c338c04367bcda0b459c0bcde1`
+- Generator runtime: Python `3.11.15`; FFmpeg `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers`
+- Master SHA-256: `9edd30045ca2993d07ed11dd6a63c83f5c85163bd51029456ea71cde57ccacd8`
+- Modification: Exact byte copy from the digest-approved project-authored core cadence.
+- Used by: `transition.speech-to-music`
