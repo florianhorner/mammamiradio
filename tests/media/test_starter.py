@@ -350,7 +350,7 @@ def test_loader_rejects_missing_manifest(tmp_path: Path) -> None:
         ),
         (
             lambda data: data["tracks"][0]["license"].update(id="CC-BY-NC"),
-            "must be attribution-only CC BY 3.0 or 4.0",
+            "must be attribution-only",
         ),
         (lambda data: data.update(release_requirements=[]), "release_requirements must be an object"),
         (
@@ -464,4 +464,33 @@ def test_loader_rejects_an_unknown_provider(tmp_path: Path) -> None:
     manifest_path.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(StarterCatalogError, match="not a known source"):
+        load_starter_catalog(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("provider", "license_id", "license_url"),
+    [
+        # An Incompetech row declaring 3.0, a version that source does not
+        # publish. The loader used to admit this while the public attribution
+        # gate refused it, so the track played with its CC BY credit stripped.
+        (None, "CC-BY-3.0", "https://creativecommons.org/licenses/by/3.0/"),
+        ("incompetech", "CC-BY-3.0", "https://creativecommons.org/licenses/by/3.0/"),
+    ],
+)
+def test_loader_refuses_a_licence_the_attribution_gate_would_reject(
+    tmp_path: Path, provider, license_id: str, license_url: str
+) -> None:
+    """The loader and the public attribution gate must agree on what is allowed.
+
+    If the loader is the more permissive of the two, the disagreement is silent:
+    the row loads, the track plays, and the credit is dropped on the way out.
+    """
+    manifest_path = _approved_manifest(tmp_path, count=1)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["tracks"][0]["license"] = {"id": license_id, "url": license_url}
+    if provider is not None:
+        data["tracks"][0]["provider"] = provider
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(StarterCatalogError, match="attribution-only"):
         load_starter_catalog(manifest_path)

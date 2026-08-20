@@ -96,7 +96,7 @@ def _required_dict(value: Any, field: str) -> dict[str, Any]:
     return value
 
 
-def _require_attribution_only_license(license_id: str, license_url: str, prefix: str) -> None:
+def _require_attribution_only_license(license_id: str, license_url: str, provider: str, prefix: str) -> None:
     """Reject anything the bundle is not allowed to carry.
 
     Bundled music must be attribution-only. Two clauses are fatal and neither is
@@ -123,13 +123,21 @@ def _require_attribution_only_license(license_id: str, license_url: str, prefix:
     is the exact hole this gate exists to close. An unrecognised variant fails
     closed.
     """
-    allowed = {
+    by_id = {
         "CC-BY-3.0": "https://creativecommons.org/licenses/by/3.0/",
         "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
     }
-    expected_url = allowed.get(license_id)
+    # Scoped per provider, and it has to match what the public attribution gate
+    # in core.models will accept. If this admits a row that gate refuses, the
+    # track still plays but ships with no credit at all, which is the silent
+    # licence breach rather than a loud failure.
+    allowed_ids = {"incompetech": {"CC-BY-4.0"}, "jamendo": {"CC-BY-3.0", "CC-BY-4.0"}}[provider]
+    expected_url = by_id.get(license_id) if license_id in allowed_ids else None
     if expected_url is None:
-        raise StarterCatalogError(f"{prefix}.license.id must be attribution-only CC BY 3.0 or 4.0, got {license_id!r}")
+        raise StarterCatalogError(
+            f"{prefix}.license.id must be attribution-only "
+            f"{' or '.join(sorted(allowed_ids))} for {provider}, got {license_id!r}"
+        )
     # Compare scheme-insensitively: Creative Commons serves both, and Jamendo
     # reports http:// while the canonical form is https://.
     normalized = license_url.replace("http://", "https://", 1)
@@ -251,7 +259,15 @@ def load_starter_catalog(
             if status != "approved":
                 continue
 
-            _require_attribution_only_license(license_id, license_url, prefix)
+            # Absent means Incompetech: rows predating the second provider omit
+            # the field. Naming the real provider matters beyond bookkeeping —
+            # it is what lets the attribution gate accept the row, and a CC BY
+            # track whose credit is dropped is a licence breach, not a cosmetic
+            # gap.
+            provider = row.get("provider", "incompetech")
+            if provider not in {"incompetech", "jamendo"}:
+                raise StarterCatalogError(f"{prefix}.provider is not a known source: {provider!r}")
+            _require_attribution_only_license(license_id, license_url, str(provider), prefix)
             source_sha = _required_text(source.get("sha256"), f"{prefix}.source.sha256")
             if len(source_sha) != 64:
                 raise StarterCatalogError(f"{prefix}.source.sha256 must be SHA-256")
@@ -275,14 +291,6 @@ def load_starter_catalog(
             audition_receipt = _required_text(evidence.get("audition_receipt"), f"{prefix}.evidence.audition_receipt")
             modification = _required_text(row.get("modification_notice"), f"{prefix}.modification_notice")
             asset_path = _safe_asset_path(root, relative_path)
-            # Absent means Incompetech: rows predating the second provider omit
-            # the field. Naming the real provider matters beyond bookkeeping —
-            # it is what lets the attribution gate accept the row, and a CC BY
-            # track whose credit is dropped is a licence breach, not a cosmetic
-            # gap.
-            provider = row.get("provider", "incompetech")
-            if provider not in {"incompetech", "jamendo"}:
-                raise StarterCatalogError(f"{prefix}.provider is not a known source: {provider!r}")
             entry = StarterEntry(
                 isrc=isrc,
                 provider=str(provider),

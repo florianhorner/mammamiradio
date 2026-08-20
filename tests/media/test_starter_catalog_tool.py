@@ -565,3 +565,41 @@ def test_provider_defaults_to_incompetech_and_rejects_unknown(tool) -> None:
     assert tool._provider_of({"provider": "jamendo"}) == "jamendo"
     with pytest.raises(tool.ToolError, match="unknown provider"):
         tool._provider_of({"provider": "soundcloud"})
+
+
+def test_written_receipt_carries_no_credential(tool, monkeypatch, tmp_path: Path) -> None:
+    """The receipt is committed to the repository, so it must never carry the key.
+
+    Two fields strip it by a different mechanism than `_redact`: the recorded
+    piece URL is rebuilt without the credential, and the index URL is truncated
+    at `client_id=`. Neither is exercised by the error-path test, and an edit to
+    either would publish the key on the next acquisition.
+    """
+    secret = "s3cr3tid"
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", secret)
+    monkeypatch.setattr(tool, "_work_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        tool,
+        "_jamendo_track_facts",
+        lambda url, *, track_id: (b'{"headers":{"status":"success"}}', url, _api_facts()),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_fetch",
+        lambda *a, **k: (
+            b"\xff\xfb" + b"0" * 4096,
+            "https://prod-1.storage.jamendo.com/?trackid=1093607",
+            "audio/mpeg",
+        ),
+    )
+
+    candidate_dir = tool._acquire_jamendo(_jamendo_row(), "JAMENDO-1093607")
+
+    written = (candidate_dir / "candidate.json").read_text(encoding="utf-8")
+    assert secret not in written, "the committed receipt leaks the credential"
+    assert "client_id" not in written
+    receipt = json.loads(written)
+    # The diagnostic value must survive the stripping, or the receipt stops
+    # being useful evidence of which track was acquired.
+    assert receipt["evidence"]["jamendo_track_id"] == "1093607"
+    assert receipt["evidence"]["license_id"] == "CC-BY-3.0"
