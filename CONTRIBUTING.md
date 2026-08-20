@@ -424,12 +424,21 @@ For all other commits the body is optional. Acceptable terse `Why:` templates:
 
 ### Bot allowlist
 
-Commits authored by these identities skip the `WHY_REQUIRED` rule (subject banned-patterns still apply):
+Commits authored by these identities skip the rules listed in
+`exemptions.trusted_bot_skips` in `.config/commit-rules.json` — currently
+`WHY_REQUIRED` and `SUBJECT_TOO_LONG`. Every other rule still applies, and a bot
+tripping even one rule outside that list still fails, so this is not a general
+bypass. The allowlist covers the PR title as well as each commit in range.
 
 - `renovate[bot]`
 - `dependabot[bot]` (this repo's `.github/dependabot.yml` sets `commit-message.prefix: "chore"` so the format check passes)
 - `pre-commit-ci[bot]`
 - `app/github-actions`
+
+`SUBJECT_TOO_LONG` is on the list because Dependabot's grouped-update titles
+carry `in the <group> group across 1 directory` and exceed the 72-character
+subject limit by construction. No Dependabot setting shortens them, and dropping
+the groups would break the lockfile pins that must move together.
 
 ### Bypass policy
 
