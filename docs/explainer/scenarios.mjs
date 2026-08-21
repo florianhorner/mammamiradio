@@ -163,7 +163,7 @@ const scenarios = {
     time: "21:48 · Sunday",
     tag: "Day one, no permissions",
     heading: "Evening, officially.",
-    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. This is everything a brand-new station knows about your home — and it is already a segment.",
+    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. This is everything a brand-new station knows about your home, and it is already a segment.",
     host: "Giulia checks the sky",
     quote: "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
     reachability: "day-one",

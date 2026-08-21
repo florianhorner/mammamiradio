@@ -225,8 +225,8 @@ function reportFailure(kind) {
   // is the other broken promise — but the card says what should have been
   // heard, as text, and names the way forward.
   troubleLine.textContent = kind === "blocked"
-    ? "Your browser held the audio back — tap ▶ to hear it. You should have heard:"
-    : "The clip is catching its breath — try ▶ again in a moment. You should have heard:";
+    ? "Your browser held the audio back. Tap ▶ to hear it. You should have heard:"
+    : "The clip is catching its breath. Try ▶ again in a moment. You should have heard:";
   troubleTranscript.textContent = transcriptFor(scenario);
   audioTrouble.hidden = false;
   gateLabel.textContent = "Audio held back";
@@ -363,3 +363,8 @@ initWaveforms();
 paintScenario(activeScenario);
 wireInstallCta();
 renderSiteLinks();
+
+// Test hook: the funnel E2E (tests/funnel.e2e.mjs) needs to seek the module-
+// scoped audio element to exercise cue points without waiting out real clips.
+// Harmless in production — it exposes playback position, nothing else.
+globalThis.__mmrTest = { audio: hostAudio, played: playedScenarios };

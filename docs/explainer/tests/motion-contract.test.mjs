@@ -93,6 +93,21 @@ test("the waiting line escalates on the cue's own clock", () => {
   assert.equal(waitingLineIndex(25, null), 0);
 });
 
+test("display copy carries no em dashes, in any layer", () => {
+  // index.html has its own guard, but scenario display fields and the
+  // failure copy are injected from JS and slipped past it once. Spoken-line
+  // transcripts (lines[].text) keep their dashes: they transcribe speech.
+  for (const scenario of Object.values(scenarios)) {
+    for (const field of ["tag", "heading", "summary", "host", "quote", "time"]) {
+      assert.ok(!String(scenario[field]).includes("—"), `${scenario.id}.${field} carries an em dash`);
+    }
+  }
+  const uiStrings = [...js.matchAll(/"([^"\n]*)"/g)].map((m) => m[1]).filter((t) => /[a-z] [a-z]/i.test(t));
+  for (const text of uiStrings) {
+    assert.ok(!text.includes("—"), `app.js UI string carries an em dash: ${text.slice(0, 50)}`);
+  }
+});
+
 test("the transcript is derived from the beats, never stored", () => {
   // The transcript is definitionally the voice beats' lines in air order;
   // storing a second copy let it drift from the audio. Derived, it cannot.
@@ -117,7 +132,7 @@ test("a failed clip never wears the on-air treatment", () => {
   assert.match(css, /body\[data-audio="failed"\] \.on-air-card/);
   assert.match(css, /body\[data-audio="failed"\] \.live-pill i \{ animation: none/);
   // The failure copy names the way forward, not just the problem.
-  assert.match(js, /tap ▶/);
+  assert.match(js, /Tap ▶/);
 });
 
 test("the gate is a transport, not a sensors-to-meaning pipeline", () => {
