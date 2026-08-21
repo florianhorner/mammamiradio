@@ -2,50 +2,54 @@
   "generatedForPage": "docs/explainer",
   "segments": {
     "arrival": {
-      "sha256": "202dac7ce910dac858a859bcd66720af71627625ba2a0745ea1f6954ae13270d",
-      "durationSec": 23.48,
+      "sha256": "f2dabb786f49b0a0dcf76b04856a8a9c6e37b75ac59b9ac1c6a39bfbaf58e294",
+      "durationSec": 29.53,
       "revealAtSec": 15.94,
       "sources": [
         "tail:0",
         "identity.sweeper",
         "voice:2",
         "voice:3",
+        "voice:4",
         "bumper.ad-out"
       ]
     },
     "coffee": {
-      "sha256": "7ad6d917e655f1a541c9d200c7643b814b761011856df2dbbe0a0c66d18bb0ad",
-      "durationSec": 32.7,
+      "sha256": "048792796ad87f2c70580b75d697296d558fd27a87f7c95aebae7102756a6e81",
+      "durationSec": 35.55,
       "revealAtSec": 20.86,
       "sources": [
         "tail:0",
         "identity.station-id",
         "voice:2",
         "voice:3",
+        "voice:4",
         "bumper.ad-out"
       ]
     },
     "laundry": {
-      "sha256": "34653adee5476c0bca8e522536bd187757868c814e22f9654baaa1d7b7c3cf57",
-      "durationSec": 24.15,
+      "sha256": "e7607b0c05668d48829b1c0465277d3bcb043ec3c9c55536c7b25edcaf95be7e",
+      "durationSec": 30.82,
       "revealAtSec": 16.78,
       "sources": [
         "tail:0",
         "identity.sweeper",
         "voice:2",
         "voice:3",
+        "voice:4",
         "bumper.ad-out"
       ]
     },
     "quiet": {
-      "sha256": "121b3d8874c19e53fae0fcd5056d7b203d8d603a025aaaa487e09391a9bf2fb8",
-      "durationSec": 30.54,
+      "sha256": "02fc7d83734a734180608e9cf56f150ddeec3f9dc45639770b50b782a778e693",
+      "durationSec": 36.18,
       "revealAtSec": 18.87,
       "sources": [
         "tail:0",
         "identity.station-id",
         "voice:2",
         "voice:3",
+        "voice:4",
         "bumper.ad-out"
       ]
     }

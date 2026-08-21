@@ -64,10 +64,14 @@ const scenarios = {
         kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
         lines: [{ who: "marco", text: "And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa." }],
       },
+      {
+        kind: "voice", who: "giulia", note: "handover into the next section",
+        lines: [{ who: "giulia", text: "Benvenuto a casa indeed. Next up, a song for walking in the door." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 15.94,
-    transcript: "Marco: Limit 70! Kevin MacLeod. The official soundtrack of the drive home, Giulia. Giulia: You have never once driven the speed limit, Marco. Marco: And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
+    transcript: "Marco: Limit 70! Kevin MacLeod. The official soundtrack of the drive home, Giulia. Giulia: You have never once driven the speed limit, Marco. Marco: And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa. Giulia: Benvenuto a casa indeed. Next up, a song for walking in the door.",
   },
   coffee: {
     id: "coffee",
@@ -101,10 +105,14 @@ const scenarios = {
         kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true,
         lines: [{ who: "giulia", text: "Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday." }],
       },
+      {
+        kind: "voice", who: "marco", note: "handover into the next section",
+        lines: [{ who: "marco", text: "A Tuesday coffee deserves a Tuesday song. Andiamo." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 20.86,
-    transcript: "Marco: Newer Wave! Kevin MacLeod. A visionary — we are very similar, he and I. Giulia: He writes music, Marco. You read a schedule. And nobody is listening to it. Not even your mother. Giulia: Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday.",
+    transcript: "Marco: Newer Wave! Kevin MacLeod. A visionary — we are very similar, he and I. Giulia: He writes music, Marco. You read a schedule. And nobody is listening to it. Not even your mother. Giulia: Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday. Marco: A Tuesday coffee deserves a Tuesday song. Andiamo.",
   },
   laundry: {
     id: "laundry",
@@ -140,10 +148,14 @@ const scenarios = {
         kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
         lines: [{ who: "marco", text: "You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us." }],
       },
+      {
+        kind: "voice", who: "giulia", note: "handover into the next section",
+        lines: [{ who: "giulia", text: "You heard it here first. Up next: the sports desk, which is unfortunately still Marco’s." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 16.78,
-    transcript: "Giulia: Four minutes on one penalty kick tonight, Marco. Three of them were about your hair. Marco: The hair is part of the sport, Giulia. Cinema. Pure cinema. Marco: You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
+    transcript: "Giulia: Four minutes on one penalty kick tonight, Marco. Three of them were about your hair. Marco: The hair is part of the sport, Giulia. Cinema. Pure cinema. Marco: You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us. Giulia: You heard it here first. Up next: the sports desk, which is unfortunately still Marco’s.",
   },
   quiet: {
     // The one moment a brand-new install can actually produce. Narrow ambient
@@ -181,10 +193,14 @@ const scenarios = {
         kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true,
         lines: [{ who: "giulia", text: "The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly." }],
       },
+      {
+        kind: "voice", who: "marco", note: "handover into the next section",
+        lines: [{ who: "marco", text: "Officially evening means slow songs only from here. I don’t make the rules. Giulia makes the rules." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 18.87,
-    transcript: "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
+    transcript: "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly. Marco: Officially evening means slow songs only from here. I don’t make the rules. Giulia makes the rules.",
   },
 };
 
