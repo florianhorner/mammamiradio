@@ -1,0 +1,65 @@
+name: Explainer Pages
+
+# Publishes the interactive explainer (docs/explainer/dist) to GitHub Pages.
+# The page is subpath-safe by construction (all asset refs are relative and a
+# test guards it), so the project origin works as-is:
+#   https://florianhorner.github.io/mammamiradio/
+#
+# One-time repo setting required before the first run succeeds:
+# Settings -> Pages -> Source: "GitHub Actions". Pages is not enabled today
+# (the REST endpoint 404s), so nothing existing gets replaced.
+#
+# Deploys only from main, only when the explainer changes, plus a manual
+# dispatch for the first publish and for re-deploys after a Pages hiccup.
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/explainer/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: explainer-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: docs/explainer
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.17.1"
+          check-latest: false
+      - name: Install
+        run: npm ci
+      - name: Test before publishing
+        run: npm test
+      - name: Build static site
+        run: npm run build
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: docs/explainer/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
