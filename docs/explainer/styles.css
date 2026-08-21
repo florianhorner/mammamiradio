@@ -222,7 +222,9 @@ body[data-phase="onair"] .experience-card { border-color: rgba(var(--scenario-rg
 
 .experience-topline { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 46px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--bg-elevated); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .experience-topline > span { display: inline-flex; align-items: center; gap: 8px; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok-text); box-shadow: 0 0 10px rgba(96,165,250,.65); }
+/* Station gold, not connected-blue: a blue OK dot two words from
+   "no live data" claimed a connection the page does not have. */
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sun); box-shadow: 0 0 10px rgba(244,208,72,.65); }
 /* The stage leads with the show. The on-air panel comes first in DOM and in
    width; the sensor panel is the reveal, dimmed until the moment has aired.
    The old order (sensors -> gate -> meaning) was a pipeline diagram. */
