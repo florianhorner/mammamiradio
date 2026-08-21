@@ -963,6 +963,17 @@ action:
 
 **Note:** REST-pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist, Repairs, diagnostics, and media-source browsing require the HACS integration for registry visibility.
 
+## Explainer page deployment
+
+The interactive explainer (`docs/explainer/`) publishes to GitHub Pages at
+`https://florianhorner.github.io/mammamiradio/` via
+`.github/workflows/explainer-pages.yml`: on any `main` push touching
+`docs/explainer/**`, the workflow tests, builds `dist/`, and deploys it.
+One-time setup: **Settings → Pages → Source: "GitHub Actions"** (until that is
+flipped, the deploy job fails with a Pages-not-enabled error). Manual
+re-deploys run from the workflow's dispatch button. The page is static, reads
+no Home Assistant data, and streams nothing — it is not the live station.
+
 ## What is still not documented because it does not exist yet
 
 - no systemd unit
