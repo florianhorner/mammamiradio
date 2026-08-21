@@ -26,11 +26,22 @@ def config():
     return load_config()
 
 
-def test_legacy_demo_alias_fails_closed_while_starter_approval_is_pending(config):
-    from mammamiradio.playlist.playlist import ExplicitSourceError, load_explicit_source
+def test_legacy_demo_alias_resolves_to_the_completed_starter_catalog(config):
+    """The demo alias now yields real music, because the crate is complete.
 
-    with pytest.raises(ExplicitSourceError, match="Starter catalog is not release-ready"):
-        load_explicit_source(config, PlaylistSource(kind="demo", source_id="demo"))
+    It used to assert the opposite — that the alias failed closed while the
+    starter catalog was unaudited. That was correct then and is the wrong
+    assertion now: twelve audited derivatives ship, so the alias must resolve.
+    The fail-closed path is still covered where it belongs, against a catalog
+    that is actually incomplete, in tests/media/test_starter.py.
+    """
+    from mammamiradio.playlist.playlist import load_explicit_source
+
+    tracks, resolved = load_explicit_source(config, PlaylistSource(kind="demo", source_id="demo"))
+
+    assert len(tracks) == 12, "the demo alias must resolve to the full bundled crate"
+    assert all(track.source == "starter" for track in tracks)
+    assert resolved.kind == "starter"
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "USUAN1700080",
+  "title": "Andreas Theme",
+  "artist": "Kevin MacLeod",
+  "reviewed_at": "2026-08-20T15:36:25Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "provider": "incompetech"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Andreas%20Theme.mp3",
+    "final_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Andreas%20Theme.mp3",
+    "sha256": "8b5c57484705b1ffcc69d89da2f57e7159512381b377298eb2dfd4ab3b86dce2",
+    "bytes": 6958766,
+    "acquired_at": "2026-08-20T12:51:51Z",
+    "piece_sha256": "b86387a2b4de711652cd4eb4fdb4e2418ffe92878e1977f33a9217a3dfbcef37",
+    "pieces_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+  },
+  "derivative": {
+    "sha256": "2ff28fc5206226b111ae74009b43dc3b7b322fda53c8374be29f8e254d95bc1c",
+    "bytes": 5218605,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 217.391,
+    "integrated_loudness_lufs": -16.4,
+    "staged_at": "2026-08-20T12:55:38Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}

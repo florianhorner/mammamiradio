@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "JAMENDO-1564796",
+  "title": "The Tide",
+  "artist": "Square a Saw",
+  "reviewed_at": "2026-08-20T20:01:11Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-3.0",
+    "url": "https://creativecommons.org/licenses/by/3.0/",
+    "provider": "jamendo"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://prod-1.storage.jamendo.com/?trackid=1564796&format=mp31",
+    "final_url": "https://prod-1.storage.jamendo.com/?trackid=1564796&format=mp31",
+    "sha256": "cbcbb663aa66047b19730ac177db254dda375ff17f8a582635ffa4c51e2e6de3",
+    "bytes": 2729472,
+    "acquired_at": "2026-08-20T19:52:25Z",
+    "piece_sha256": "9793800bd834f05163bee23cf30de20e2ed468fc41a42806d6de296032d385a3",
+    "pieces_sha256": "9793800bd834f05163bee23cf30de20e2ed468fc41a42806d6de296032d385a3"
+  },
+  "derivative": {
+    "sha256": "e0ea828b08689f6ba72def52a358e33edd8b23931fb6731039f61969b3d22aa0",
+    "bytes": 5395437,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 224.75,
+    "integrated_loudness_lufs": -16.2,
+    "staged_at": "2026-08-20T19:55:39Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}

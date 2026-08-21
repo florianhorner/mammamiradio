@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "JAMENDO-1215805",
+  "title": "Dance with me",
+  "artist": "Manhat10",
+  "reviewed_at": "2026-08-20T20:01:11Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-3.0",
+    "url": "https://creativecommons.org/licenses/by/3.0/",
+    "provider": "jamendo"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://prod-1.storage.jamendo.com/?trackid=1215805&format=mp31",
+    "final_url": "https://prod-1.storage.jamendo.com/?trackid=1215805&format=mp31",
+    "sha256": "f5b1685cf803b9ff0eeb728d18c83328121d769e3e083b049ff1aded9c62ae23",
+    "bytes": 2471936,
+    "acquired_at": "2026-08-20T19:52:26Z",
+    "piece_sha256": "6892cb00d06df2ebbeb53a45931372755491cca92ffccb46fd079a316ec64112",
+    "pieces_sha256": "6892cb00d06df2ebbeb53a45931372755491cca92ffccb46fd079a316ec64112"
+  },
+  "derivative": {
+    "sha256": "1343e106bd684ef55501078008aedb764eda0cd0707dc6cf425f67d42dd7aa46",
+    "bytes": 4900077,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 204.103,
+    "integrated_loudness_lufs": -16.2,
+    "staged_at": "2026-08-20T19:55:07Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}

@@ -9,7 +9,7 @@ certification that a particular broadcast is cleared in every jurisdiction.
 
 | Source | Default | Persistence | What the project asserts |
 | --- | --- | --- | --- |
-| Bundled starter collection | On | Packaged with the app | Exact files and attribution are hash-pinned in the release manifest. Each derivative is CC BY 4.0 and carries a modification notice. |
+| Bundled starter collection | On | Packaged with the app | Exact files and attribution are hash-pinned in the release manifest. Every derivative is attribution-only — CC BY 4.0 from Incompetech, CC BY 3.0 from Jamendo — and carries a modification notice. |
 | Operator `music/` files | Available when mounted | Operator-managed | Mamma Mi Radio makes no rights claim. The operator is responsible for the files and their use. |
 | Jamendo transient expansion | Off | No audio or lease persistence | Jamendo reports the accepted track's source and CC BY 3.0/4.0 license. That report is attribution data, not a clearance verdict. |
 | External extraction | Off; standalone extra only | Normal standalone cache rules | Technical access is not permission. Both current Home Assistant add-ons omit yt-dlp entirely. |
@@ -20,10 +20,16 @@ obligations.
 
 ## Bundled starter collection
 
-The offline starter collection contains twelve Kevin MacLeod/Incompetech
-tracks: Carefree, Miami Viceroy, Floating Cities, Allada, Life of Riley, Night
-in Venice, Pride, Casa Bossa Nova, Cipher, Daily Beetle, Local Forecast –
-Elevator, and Wallpaper.
+The offline starter collection contains twelve tracks from two sources.
+
+Six from Incompetech under **CC BY 4.0**, all by Kevin MacLeod: Long Time Coming, Realizer, Newer Wave, Laserpack, Andreas Theme, Limit 70.
+
+Six from Jamendo under **CC BY 3.0**: Stuttgart (Portrayal), Smallest - Stories (Smallest), The Tide (Square a Saw), Dance with me (Manhat10), Stitches ft. Shane MauX (Lilly Wolf), Set Me On Fire (feat. Ashley Jana) (David Amber).
+
+Both tiers are attribution-only. Nothing carrying a NonCommercial,
+NoDerivatives or ShareAlike term can enter the bundle, and NoDerivatives is the
+clause that disqualifies otherwise-suitable tracks: every bundled derivative is
+normalized to a fixed loudness and re-encoded, which ND forbids distributing.
 
 The single authority is
 `mammamiradio/assets/starter/catalog.json`. It records the source page, exact
@@ -208,8 +214,8 @@ remain shout-outs instead of hidden downloads.
 ## Attribution and sharing
 
 The listener's **Music credits** dialog shows the current track separately from
-the complete included catalog. Bundled music links to Incompetech and CC BY
-4.0 with the modification notice. Jamendo shows provider-reported public source
+the complete included catalog. Bundled music links to its own source — Incompetech
+under CC BY 4.0, Jamendo under CC BY 3.0 — with the modification notice. Jamendo shows provider-reported public source
 and license links. Local files show the operator-responsibility statement.
 Unsafe or missing URLs render as neutral text without an anchor.
 
