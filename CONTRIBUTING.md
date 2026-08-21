@@ -143,11 +143,29 @@ the package directly, or use the workflow for an arbitrary URL. The tooling
 reports source and audio facts; a human still owns the full audition and rights
 review.
 
-Acquire only one exact predeclared Incompetech row:
+Acquire only one exact predeclared catalog row:
 
 ```bash
 python scripts/starter-catalog.py acquire --isrc USUAN1900056
 ```
+
+Two providers are supported, selected by the row's `provider` field. Absent
+means Incompetech, which needs no credential. A `provider: jamendo` row needs a
+free client id, because Jamendo's public track page publishes no licence at all
+and the API is the only authority:
+
+```bash
+JAMENDO_CLIENT_ID=... python scripts/starter-catalog.py acquire --isrc JAMENDO-1093607
+```
+
+Only `acquire` needs the key — the licence response is hashed into the receipt,
+so `check` stays entirely offline.
+
+Bundled music is **attribution-only**, and this is not a preference. A track
+carrying NonCommercial, NoDerivatives or ShareAlike cannot ship no matter how
+good it sounds. NoDerivatives is the one that catches people out: every bundled
+track is normalized to a fixed loudness and re-encoded, which is a derivative,
+and ND forbids distributing one.
 
 The command prints a candidate ID and writes source evidence under ignored
 `tmp/starter-media/`. Stage that exact candidate into the deterministic station
