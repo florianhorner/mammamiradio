@@ -80,9 +80,9 @@ await Promise.all([
   copyFile("public/share-card.png", "dist/public/share-card.png"),
   copyFile("public/favicon.svg", "dist/public/favicon.svg"),
   copyFile("public/icon-192.svg", "dist/public/icon-192.svg"),
-  copyFile("public/fonts/playfair-display.ttf", "dist/public/fonts/playfair-display.ttf"),
-  copyFile("public/fonts/playfair-display-italic.ttf", "dist/public/fonts/playfair-display-italic.ttf"),
-  copyFile("public/fonts/outfit.ttf", "dist/public/fonts/outfit.ttf"),
-  copyFile("public/fonts/jetbrains-mono.ttf", "dist/public/fonts/jetbrains-mono.ttf"),
+  copyFile("public/fonts/playfair-display.woff2", "dist/public/fonts/playfair-display.woff2"),
+  copyFile("public/fonts/playfair-display-italic.woff2", "dist/public/fonts/playfair-display-italic.woff2"),
+  copyFile("public/fonts/outfit.woff2", "dist/public/fonts/outfit.woff2"),
+  copyFile("public/fonts/jetbrains-mono.woff2", "dist/public/fonts/jetbrains-mono.woff2"),
 ]);
 console.log("Built local static site in dist/");

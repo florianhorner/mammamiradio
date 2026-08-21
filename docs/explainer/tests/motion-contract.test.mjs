@@ -21,14 +21,14 @@ test("the canonical radio identity is used instead of a standalone Mi emblem", (
   assert.match(css, /--flag-green: #009246/);
   assert.match(css, /"Playfair Display"/);
   assert.match(css, /Outfit/);
-  assert.match(css, /public\/fonts\/playfair-display-italic\.ttf/);
-  assert.match(css, /public\/fonts\/outfit\.ttf/);
+  assert.match(css, /public\/fonts\/playfair-display-italic\.woff2/);
+  assert.match(css, /public\/fonts\/outfit\.woff2/);
   // The mono face must actually load: --font-mono named JetBrains Mono for
   // weeks while no @font-face served it, so every entity id rendered in a
   // platform fallback. Self-hosted like the other faces (OFL licence).
-  assert.match(css, /public\/fonts\/jetbrains-mono\.ttf/);
-  assert.match(build, /dist\/public\/fonts\/jetbrains-mono\.ttf/);
-  assert.match(build, /dist\/public\/fonts\/playfair-display\.ttf/);
+  assert.match(css, /public\/fonts\/jetbrains-mono\.woff2/);
+  assert.match(build, /dist\/public\/fonts\/jetbrains-mono\.woff2/);
+  assert.match(build, /dist\/public\/fonts\/playfair-display\.woff2/);
 });
 
 test("the idle state previews the station, not a sensor pipeline", () => {
