@@ -24,24 +24,10 @@ def tool():
     return module
 
 
-def test_strict_check_stays_red_for_pending_human_auditions() -> None:
+def test_shipped_catalog_passes_the_strict_gate() -> None:
+    """The crate is complete: twelve audited derivatives, every gate green."""
     result = subprocess.run(
-        [sys.executable, os.fspath(SCRIPT), "check"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    assert "full-track human audition is pending" in result.stdout
-    assert "approved derivatives 0/12" in result.stdout
-    assert "source receipt is missing" not in result.stdout
-
-
-def test_incomplete_check_is_green_only_as_explicit_scaffold_mode() -> None:
-    result = subprocess.run(
-        [sys.executable, os.fspath(SCRIPT), "check", "--allow-incomplete", "--json"],
+        [sys.executable, os.fspath(SCRIPT), "check", "--json"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -49,24 +35,61 @@ def test_incomplete_check_is_green_only_as_explicit_scaffold_mode() -> None:
     )
 
     report = json.loads(result.stdout)
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout
     assert report["ok"] is True
-    assert report["allow_incomplete"] is True
-    assert report["groups"]["MEDIA-EVIDENCE"]["status"] == "WARN"
-    assert report["groups"]["MEDIA-PACKAGE"]["status"] == "PASS"
+    assert all(group["status"] == "PASS" for group in report["groups"].values()), report["groups"]
+
+
+def test_incomplete_mode_is_green_while_strict_mode_is_red(tmp_path: Path, monkeypatch, tool) -> None:
+    """Scaffold mode downgrades a pending audition to a warning, never a pass."""
+    data = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    # Flip every row, not one: a catalog with some rows approved and their audio
+    # still on disk is a state that cannot occur, and asserting against it would
+    # be testing an artifact of the fixture rather than the gate.
+    for row in data["tracks"]:
+        row["approval"] = {"status": "pending_full_audition"}
+        row["derivative"] = None
+    pending = tmp_path / "catalog.json"
+    pending.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(tool, "CATALOG_PATH", pending)
+
+    strict = tool.check()
+    lenient = tool.check(allow_incomplete=True)
+
+    # The claim under test is exactly this downgrade: a pending audition is fatal
+    # in strict mode and a warning in scaffold mode. The byte/audio groups are
+    # deliberately not asserted — this fixture has no asset tree beside it, so
+    # their status here would describe the fixture, not the gate.
+    assert strict["groups"]["MEDIA-EVIDENCE"]["status"] == "FAIL"
+    assert lenient["groups"]["MEDIA-EVIDENCE"]["status"] == "WARN"
+    assert "full-track human audition is pending" in json.dumps(lenient)
 
 
 def test_validator_wrapper_forwards_scaffold_mode() -> None:
-    result = subprocess.run(
-        [sys.executable, os.fspath(VALIDATOR), "--allow-incomplete"],
+    """Assert the mode the run reports, not a status both modes produce.
+
+    Against a complete catalog every group reads PASS with or without the flag,
+    so asserting PASS proved nothing about forwarding. The JSON report echoes
+    the mode it actually ran in, which only scaffold mode sets.
+    """
+    scaffold = subprocess.run(
+        [sys.executable, os.fspath(VALIDATOR), "--allow-incomplete", "--json"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    default = subprocess.run(
+        [sys.executable, os.fspath(VALIDATOR), "--json"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
 
-    assert result.returncode == 0
-    assert "MEDIA-EVIDENCE WARN" in result.stdout
+    assert scaffold.returncode == 0, scaffold.stdout
+    assert json.loads(scaffold.stdout)["allow_incomplete"] is True, "the wrapper dropped --allow-incomplete"
+    assert json.loads(default.stdout)["allow_incomplete"] is False
 
 
 @pytest.mark.parametrize(
@@ -296,3 +319,386 @@ def test_ebur128_measurement_accepts_a_real_in_tolerance_derivative(tmp_path: Pa
 
     assert measured_lufs >= tool.STARTER_MINIMUM_INTEGRATED_LOUDNESS_LUFS
     assert measured_lufs <= tool.STARTER_MAXIMUM_INTEGRATED_LOUDNESS_LUFS
+
+
+# --- Jamendo provider ---------------------------------------------------------
+# Acquisition-path coverage. Deliberately independent of whichever crate ships:
+# these drive the gates directly, so they keep working when the bundle changes.
+
+
+@pytest.mark.parametrize(
+    "license_url",
+    [
+        "http://creativecommons.org/licenses/by-nc-nd/3.0/",
+        "http://creativecommons.org/licenses/by-nd/3.0/",
+        "http://creativecommons.org/licenses/by-nc/3.0/",
+        "http://creativecommons.org/licenses/by-nc-sa/3.0/",
+        "http://creativecommons.org/licenses/by-sa/3.0/",
+        "http://creativecommons.org/licenses/by/2.5/",
+        "",
+    ],
+)
+def test_jamendo_licence_gate_refuses_everything_but_attribution(tool, license_url: str) -> None:
+    """ND is the one that matters: staging normalizes, which makes a derivative."""
+    with pytest.raises(tool.ToolError, match="bundle cannot carry"):
+        tool._require_jamendo_attribution_license(license_url, track_id="1")
+
+
+@pytest.mark.parametrize(
+    ("license_url", "expected"),
+    [
+        ("http://creativecommons.org/licenses/by/3.0/", "CC-BY-3.0"),
+        ("https://creativecommons.org/licenses/by/4.0/", "CC-BY-4.0"),
+        # Jamendo reports http:// and sometimes omits the trailing slash.
+        ("http://creativecommons.org/licenses/by/3.0", "CC-BY-3.0"),
+    ],
+)
+def test_jamendo_licence_gate_accepts_attribution_only(tool, license_url: str, expected: str) -> None:
+    assert tool._require_jamendo_attribution_license(license_url, track_id="1") == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "audio"),
+    [
+        ("https://evil.example.com/track/1", False),
+        ("http://www.jamendo.com/track/1", False),
+        # A page host must never satisfy an audio fetch, and vice versa: this is
+        # what stops a redirect walking a download onto an arbitrary endpoint.
+        ("https://www.jamendo.com/track/1", True),
+        ("https://prod-1.storage.jamendo.com/?trackid=1", False),
+        ("https://user@www.jamendo.com/track/1", False),
+        ("https://www.jamendo.com:444/track/1", False),
+    ],
+)
+def test_jamendo_url_boundary_rejects_off_provider_inputs(tool, url: str, audio: bool) -> None:
+    with pytest.raises(tool.ToolError):
+        tool._validate_jamendo_url(url, audio=audio)
+
+
+def test_jamendo_track_id_must_be_unambiguous(tool) -> None:
+    assert tool._jamendo_track_id("https://www.jamendo.com/track/1093607/stitches", field="f") == "1093607"
+    assert (
+        tool._jamendo_track_id("https://prod-1.storage.jamendo.com/?trackid=1093607&format=mp31", field="f")
+        == "1093607"
+    )
+    for bad in (
+        "https://www.jamendo.com/artist/1093607/x",
+        "https://prod-1.storage.jamendo.com/?trackid=abc",
+        "https://prod-1.storage.jamendo.com/?trackid=1&trackid=2",
+    ):
+        with pytest.raises(tool.ToolError):
+            tool._jamendo_track_id(bad, field="f")
+
+
+def test_jamendo_empty_api_reply_is_retried_not_believed(tool, monkeypatch) -> None:
+    """An empty result set is measured flakiness, never proof a track is absent.
+
+    Measured 2026-08-20: the same id answered ``results_count=0`` on four of five
+    consecutive calls. Treating that as authoritative would fail acquisition at
+    random; treating it as "no restriction" would be far worse.
+    """
+    empty = json.dumps({"headers": {"status": "success"}, "results": []}).encode()
+    good = json.dumps(
+        {"headers": {"status": "success"}, "results": [{"id": "5", "name": "T", "artist_name": "A", "duration": 100}]}
+    ).encode()
+    replies = [empty, empty, good]
+    monkeypatch.setattr(tool.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        tool, "_fetch", lambda *a, **k: (replies.pop(0), "https://api.jamendo.com/v3.0/tracks/", "json")
+    )
+
+    _raw, _url, official = tool._jamendo_track_facts("https://api.jamendo.com/v3.0/tracks/?id=5", track_id="5")
+
+    assert official["id"] == "5"
+    assert not replies, "should have consumed the empty replies before succeeding"
+
+
+def test_jamendo_persistent_empty_reply_fails_closed(tool, monkeypatch) -> None:
+    empty = json.dumps({"headers": {"status": "success"}, "results": []}).encode()
+    monkeypatch.setattr(tool.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(tool, "_fetch", lambda *a, **k: (empty, "https://api.jamendo.com/v3.0/tracks/", "json"))
+
+    with pytest.raises(tool.ToolError, match="never assumed permissive"):
+        tool._jamendo_track_facts("https://api.jamendo.com/v3.0/tracks/?id=5", track_id="5")
+
+
+def test_jamendo_api_error_is_not_retried(tool, monkeypatch) -> None:
+    """A refusal is definite information; only emptiness is ambiguous."""
+    calls = []
+
+    def fake_fetch(*_a, **_k):
+        calls.append(1)
+        body = json.dumps({"headers": {"status": "failed", "error_message": "bad credential"}, "results": []})
+        return body.encode(), "https://api.jamendo.com/v3.0/tracks/", "json"
+
+    monkeypatch.setattr(tool, "_fetch", fake_fetch)
+    with pytest.raises(tool.ToolError, match="bad credential"):
+        tool._jamendo_track_facts("https://api.jamendo.com/v3.0/tracks/?id=5", track_id="5")
+    assert len(calls) == 1
+
+
+def test_credential_never_appears_in_an_error_message(tool) -> None:
+    """The likeliest Jamendo failure is a 401 from a stale key.
+
+    That is exactly the message a maintainer pastes into an issue or a chat, and
+    the client id travels in the query string, so every `_fetch` error path would
+    have carried it verbatim.
+    """
+    leaky = "https://api.jamendo.com/v3.0/tracks/?client_id=a1b2c3d4&format=json&id=1215805"
+    redacted = tool._redact(leaky)
+
+    assert "a1b2c3d4" not in redacted
+    assert "<redacted>" in redacted
+    # The diagnostic must survive the scrub or the message stops being useful.
+    assert "id=1215805" in redacted
+    assert tool._redact("https://x/?format=json&client_id=deadbeef").endswith("<redacted>")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # Reads as track 1215805, opens track 999 in a browser. The human ticking
+        # "licence evidence reviewed" would audit a different track than the one
+        # whose licence was proven.
+        "https://www.jamendo.com/track/1215805/../../track/999",
+        "https://www.jamendo.com/track/999/slug?trackid=1215805",
+        "https://www.jamendo.com/track//1215805",
+    ],
+)
+def test_jamendo_page_url_cannot_split_the_audit_trail(tool, url: str) -> None:
+    with pytest.raises(tool.ToolError):
+        tool._jamendo_track_id(url, field="source.evidence_url")
+
+
+def test_jamendo_audio_url_is_path_locked_like_incompetech(tool) -> None:
+    """Incompetech audio URLs are locked to a download directory; so are these."""
+    tool._validate_jamendo_url("https://prod-1.storage.jamendo.com/?trackid=1215805&format=mp31", audio=True)
+    with pytest.raises(tool.ToolError, match="storage root"):
+        tool._validate_jamendo_url("https://prod-1.storage.jamendo.com/track/999/audio.mp3?trackid=1215805", audio=True)
+
+
+def test_licence_allowlist_is_scoped_per_provider(tool) -> None:
+    """Incompetech publishes 4.0 only — a 3.0 claim there would be a false notice."""
+    assert tool.PROVIDER_ALLOWED_LICENSE_IDS[tool.PROVIDER_INCOMPETECH] == {"CC-BY-4.0"}
+    assert "CC-BY-3.0" in tool.PROVIDER_ALLOWED_LICENSE_IDS[tool.PROVIDER_JAMENDO]
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    ['{"headers":[{"status":"success"}],"results":[]}', '{"headers":"success","results":[]}', "[1,2,3]"],
+)
+def test_malformed_api_envelope_is_an_actionable_error_not_a_traceback(tool, monkeypatch, envelope: str) -> None:
+    monkeypatch.setattr(tool.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(tool, "_fetch", lambda *a, **k: (envelope.encode(), tool.JAMENDO_API_URL, "json"))
+    with pytest.raises(tool.ToolError):
+        tool._jamendo_track_facts(f"{tool.JAMENDO_API_URL}?id=5", track_id="5")
+
+
+def _jamendo_row(**overrides):
+    row = {
+        "isrc": "JAMENDO-1093607",
+        "provider": "jamendo",
+        "title": "Stitches ft. Shane MauX",
+        "artist": "Lilly Wolf",
+        "expected_duration_seconds": 270,
+        "official_piece_url": "https://www.jamendo.com/track/1093607",
+        "license": {"id": "CC-BY-3.0", "url": "https://creativecommons.org/licenses/by/3.0/"},
+        "source": {
+            "url": "https://prod-1.storage.jamendo.com/?trackid=1093607&format=mp31",
+            "filename": "1093607.mp3",
+        },
+    }
+    row.update(overrides)
+    return row
+
+
+def _api_facts(**overrides):
+    facts = {
+        "id": "1093607",
+        "name": "Stitches ft. Shane MauX",
+        "artist_name": "Lilly Wolf",
+        "duration": 270,
+        "license_ccurl": "http://creativecommons.org/licenses/by/3.0/",
+    }
+    facts.update(overrides)
+    return facts
+
+
+@pytest.mark.parametrize(
+    ("api_override", "expected"),
+    [
+        # The manifest says CC BY 3.0; Jamendo says NonCommercial. The manifest is
+        # what generates the shipped attribution notice, so accepting this would
+        # print a licence the track does not carry.
+        ({"license_ccurl": "http://creativecommons.org/licenses/by-nc/3.0/"}, "bundle cannot carry"),
+        ({"license_ccurl": "http://creativecommons.org/licenses/by-nd/3.0/"}, "bundle cannot carry"),
+        # Attribution-only, but not the version the row declares.
+        ({"license_ccurl": "https://creativecommons.org/licenses/by/4.0/"}, "but Jamendo reports"),
+        # Identity drift: the row and the provider disagree about what this is.
+        ({"name": "Some Other Track"}, "official title changed"),
+        ({"artist_name": "Someone Else"}, "official artist changed"),
+        ({"duration": 999}, "official duration changed"),
+    ],
+)
+def test_acquire_refuses_when_the_manifest_and_jamendo_disagree(
+    tool, monkeypatch, tmp_path: Path, api_override, expected
+) -> None:
+    """The manifest may not assert a licence the provider does not confirm.
+
+    This is the only check binding the row's licence claim to what Jamendo
+    actually reports, and it had no test — deleting it passed the whole suite.
+    A hand-edited row could otherwise ship a false licence notice on real audio.
+    """
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", "testkey1")
+    monkeypatch.setattr(tool, "_work_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        tool,
+        "_jamendo_track_facts",
+        lambda _url, *, track_id: (b"{}", tool.JAMENDO_API_URL, _api_facts(**api_override)),
+    )
+    # Audio must never be fetched: the refusal has to happen before download.
+    monkeypatch.setattr(
+        tool, "_fetch", lambda *a, **k: pytest.fail("audio was fetched despite a licence/identity mismatch")
+    )
+
+    with pytest.raises(tool.ToolError, match=expected):
+        tool._acquire_jamendo(_jamendo_row(), "JAMENDO-1093607")
+
+
+def test_acquire_requires_a_credential_and_says_where_to_get_one(tool, monkeypatch) -> None:
+    monkeypatch.delenv("JAMENDO_CLIENT_ID", raising=False)
+    with pytest.raises(tool.ToolError, match=r"devportal\.jamendo\.com"):
+        tool._acquire_jamendo(_jamendo_row(), "JAMENDO-1093607")
+
+
+def test_acquire_refuses_a_row_whose_page_and_audio_name_different_tracks(tool, monkeypatch) -> None:
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", "testkey1")
+    row = _jamendo_row(
+        source={
+            "url": "https://prod-1.storage.jamendo.com/?trackid=999&format=mp31",
+            "filename": "999.mp3",
+        }
+    )
+    with pytest.raises(tool.ToolError, match="different one for audio"):
+        tool._acquire_jamendo(row, "JAMENDO-1093607")
+
+
+def test_provider_defaults_to_incompetech_and_rejects_unknown(tool) -> None:
+    assert tool._provider_of({}) == "incompetech"
+    assert tool._provider_of({"provider": "jamendo"}) == "jamendo"
+    with pytest.raises(tool.ToolError, match="unknown provider"):
+        tool._provider_of({"provider": "soundcloud"})
+
+
+def test_written_receipt_carries_no_credential(tool, monkeypatch, tmp_path: Path) -> None:
+    """The receipt is committed to the repository, so it must never carry the key.
+
+    Two fields strip it by a different mechanism than `_redact`: the recorded
+    piece URL is rebuilt without the credential, and the index URL is truncated
+    at `client_id=`. Neither is exercised by the error-path test, and an edit to
+    either would publish the key on the next acquisition.
+    """
+    secret = "s3cr3tid"
+    monkeypatch.setenv("JAMENDO_CLIENT_ID", secret)
+    monkeypatch.setattr(tool, "_work_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        tool,
+        "_jamendo_track_facts",
+        lambda url, *, track_id: (b'{"headers":{"status":"success"}}', url, _api_facts()),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_fetch",
+        lambda *a, **k: (
+            b"\xff\xfb" + b"0" * 4096,
+            "https://prod-1.storage.jamendo.com/?trackid=1093607",
+            "audio/mpeg",
+        ),
+    )
+
+    candidate_dir = tool._acquire_jamendo(_jamendo_row(), "JAMENDO-1093607")
+
+    written = (candidate_dir / "candidate.json").read_text(encoding="utf-8")
+    assert secret not in written, "the committed receipt leaks the credential"
+    assert "client_id" not in written
+    receipt = json.loads(written)
+    # The diagnostic value must survive the stripping, or the receipt stops
+    # being useful evidence of which track was acquired.
+    assert receipt["evidence"]["jamendo_track_id"] == "1093607"
+    assert receipt["evidence"]["license_id"] == "CC-BY-3.0"
+
+
+def test_strict_check_goes_red_when_an_audition_is_pending(tmp_path: Path, monkeypatch, tool) -> None:
+    """The pending-is-red guard, held against a synthetic catalog.
+
+    This used to lean on the shipped catalog being unaudited. That made it stop
+    testing anything the moment the crate was completed, so it now builds its own
+    pending row instead — the invariant must hold regardless of what ships.
+    """
+    data = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    # Flip every row, not one: a catalog with some rows approved and their audio
+    # still on disk is a state that cannot occur, and asserting against it would
+    # be testing an artifact of the fixture rather than the gate.
+    for row in data["tracks"]:
+        row["approval"] = {"status": "pending_full_audition"}
+        row["derivative"] = None
+    pending = tmp_path / "catalog.json"
+    pending.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(tool, "CATALOG_PATH", pending)
+
+    report = tool.check()
+
+    assert report["ok"] is False
+    assert "full-track human audition is pending" in json.dumps(report)
+
+
+def _tampered_catalog(tmp_path: Path, mutate) -> Path:
+    data = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    mutate(data)
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        # Claim a different licence than the acquisition proved.
+        (
+            lambda d: d["tracks"][-1].update(
+                license={"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}
+            ),
+            "but the audition receipt proves",
+        ),
+        # Claim a different provider than the receipt records.
+        (lambda d: d["tracks"][-1].update(provider="incompetech"), "the audition receipt says"),
+    ],
+)
+def test_manifest_licence_must_agree_with_the_signed_approval_receipt(
+    tmp_path: Path, monkeypatch, tool, mutate, expected
+) -> None:
+    """The manifest may not assert a licence the receipt does not corroborate.
+
+    The manifest generates the shipped attribution notice, and on its own it is
+    just committed JSON anyone can edit. Binding it to the human-signed approval
+    receipt — the same place `check` already compares source hashes — means a
+    licence claim cannot be changed in one file alone. Verified offline, with no
+    credential.
+    """
+    monkeypatch.setattr(tool, "CATALOG_PATH", _tampered_catalog(tmp_path, mutate))
+
+    report = tool.check()
+
+    assert report["ok"] is False
+    assert expected in json.dumps(report)
+
+
+def test_every_shipped_approval_receipt_binds_its_licence(tool) -> None:
+    """A receipt without a licence block is unbound and must not pass."""
+    catalog = json.loads((ROOT / "mammamiradio/assets/starter/catalog.json").read_text(encoding="utf-8"))
+    for row in catalog["tracks"]:
+        receipt_path = ROOT / row["evidence"]["audition_receipt"]
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        assert receipt["license"]["id"] == row["license"]["id"], row["isrc"]
+        assert receipt["license"]["url"] == row["license"]["url"], row["isrc"]
+        assert receipt["license"]["provider"] == row.get("provider", "incompetech"), row["isrc"]

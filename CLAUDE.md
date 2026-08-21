@@ -157,7 +157,7 @@ private durable system for strategy or relationship context.
   and spoken text; provider/JSON failures carry `floor: null`. Explicit unpriced models need
   `--allow-unpriced` for a real call.
 - `MAMMAMIRADIO_ALLOW_YTDLP`: standalone-only opt-in for external media resolution (`true`/`1`/`yes`). It is effective only when the optional `external-media` extra supplies the `yt-dlp` distribution/module/executable. The default package and Conductor keep it off; both Home Assistant add-ons force it off and omit the extractor entirely. Capability means `operator_enabled`, never copyright clearance.
-- `JAMENDO_CLIENT_ID`, `MAMMAMIRADIO_JAMENDO_ENABLED`, `MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED`, `MAMMAMIRADIO_JAMENDO_ACK_REVISION`: private facts for the explicit, default-off transient Jamendo source. Enabling requires a client ID and the current non-commercial-use acknowledgement. The provider owns at most one lease and one single-use artifact, and neither may enter cache, SQLite, rescue, handoff, clips, derivatives, or restart state.
+- `JAMENDO_CLIENT_ID`, `MAMMAMIRADIO_JAMENDO_ENABLED`, `MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED`, `MAMMAMIRADIO_JAMENDO_ACK_REVISION`: private facts for the explicit, default-off transient Jamendo source. Enabling requires a client ID and the current non-commercial-use acknowledgement. The provider owns at most one lease and one single-use artifact, and neither may enter cache, SQLite, rescue, handoff, clips, derivatives, or restart state. **`JAMENDO_CLIENT_ID` is separately required by `scripts/starter-catalog.py acquire` for a `provider: jamendo` row** — the *bundled* starter path, which is unrelated to the transient runtime source above and is not subject to its non-commercial acknowledgement, because only attribution-only tracks are ever bundled. Jamendo's public track page publishes no licence at all, so the API is the only authority and acquisition needs a (free) client id where Incompetech needed none. The API response is hashed into the candidate receipt so `check` stays fully offline, and the recorded URL has the credential stripped — receipts are committed. Note the asymmetry rather than assuming parity: Incompetech hashes **two independent documents** (the piece page and the `pieces.json` index), whereas Jamendo has only the one API response, so `piece_sha256` and `pieces_sha256` carry the same digest. It is one document hashed twice, not a two-source cross-check.
 - `JAMENDO_COUNTRY`: optional 3-letter uppercase ISO 3166-1 alpha-3 candidate filter (e.g. `ITA`, `DEU`); empty disables the country filter.
 - `JAMENDO_ORDER`: optional Jamendo candidate sort (`popularity_week` | `popularity_month` | `popularity_total` | `releasedate_desc` | empty).
 - `JAMENDO_LIMIT`: bounded candidate-discovery depth, integer `1`-`200`; it does not create a durable Jamendo rotation.
@@ -298,7 +298,20 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - Treat 60 minutes of uninterrupted runtime per live station object as the default minimum when tinkering around an active stream.
 - Starter-catalog changes must update the canonical manifest, source evidence,
   human audition record, and media proof together; never substitute unverified
-  demo or fallback music.
+  demo or fallback music. The exact crate is additionally pinned by
+  `LOCKED_TRACKS` in `tests/media/test_starter.py`, so swapping it is a
+  deliberate test change and can never happen silently.
+- **Bundled music is attribution-only, and that is a hard boundary, not a
+  preference.** Two providers are supported: Incompetech (CC BY 4.0, keyless)
+  and Jamendo (CC BY 3.0, needs a client id to prove the licence). A row's
+  `provider` field selects the acquisition path; absent means Incompetech.
+  NonCommercial, NoDerivatives and ShareAlike are all refused, by name, in
+  three places — `_require_attribution_only_license` in `media/starter.py`,
+  `_require_jamendo_attribution_license` in the acquire tool, and the manifest
+  gate in `check`. **ND is the one that silently disqualifies otherwise perfect
+  tracks**: every bundled track is normalized to a fixed loudness and
+  re-encoded, which is a derivative, and NoDerivatives forbids distributing
+  one. That is why a track can be great, free, and still unusable.
 - Advertisements need a convincing underlying sound bed. Prefer CC-free music or sound design beds under ad voiceovers instead of dry voice-only spots.
 - To tune host behavior without a stream gap: edit `mammamiradio/hosts/scriptwriter.py` (generation logic) and/or the prompt-data leaves — `mammamiradio/hosts/prompt_world.py` (expression banks, host fingerprints, Chaos/Festival mode blocks), `mammamiradio/hosts/transitions.py` (transition rewrite openers), `mammamiradio/hosts/fallbacks.py` (chaos stock lines, ad-break bumpers), `mammamiradio/hosts/station_name_guard.py` (foreign/competitor station-name scrubbing) — run `make check`, then `POST /api/hot-reload` (admin auth, empty body) — it reloads `prompt_world`, `transitions`, `fallbacks`, `station_name_guard` then `scriptwriter` leaves-first, so edits to any of them take effect — then `POST /api/trigger {"type": "banter"}` to generate a segment with the new code. The stream stays live throughout. If reload fails (syntax error), the endpoint returns 500 and the stream keeps running with the old code. `mammamiradio/hosts/memory_extractor.py` (post-air memory extraction) is deliberately excluded from hot-reload — it holds live in-flight task/apply-lock state that a reload would reset mid-extraction; edit it and restart to pick up changes.
 
@@ -383,13 +396,25 @@ If the behavior changed and the docs didn't, the docs are wrong. Fix them in the
 
 **Where this content belongs instead:** runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`); post-mortems and workspace archaeology go to the private durable system (see Scope discipline). **Not** PR bodies and **not** GitHub issues — the same editorial boundary applies to pull-request descriptions and to maintainer-authored issues on the public tracker.
 
-**Enforcement:** the shared pattern list lives in `scripts/lint-patterns.sh` (`LINT_PATTERNS` array). Three lints consume it:
+**Enforcement — two pattern sets, unioned.**
+
+The *baseline* lives in `florianhorner/gh-workflows` and is shared by every repo. It matches the grammatical **shape** of a violation rather than a literal phrase — a review noun near a discovery verb, a review actor mid-action, a telemetry possessive, a numeric process tally, a review-artifact heading — so a paraphrase of a banned class does not walk through. A literal-phrase list cannot do this: the previous one held a pattern for `findings raised` and still passed "Findings from review". An em-dash rule ships alongside it as advisory, not blocking.
+
+The *project* list is `scripts/lint-patterns.sh` here (`LINT_PATTERNS`), passed to the reusable workflow as `extra_patterns`. It holds only what is specific to mammamiradio: sprint labels, cathedral vocabulary, this repo's contributor archaeology. **Overlap with the baseline is deliberate and must not be tidied away.** The three local lints below source this file *alone*, so deleting a pattern because the baseline also covers it silently drops changelog and issue coverage for it.
+
+A repo may only ADD patterns. Suppressing a baseline pattern is a pull request to `gh-workflows`, not a local override.
+
+**What this cannot catch.** Regex reaches lexical tells, not meaning. Metaphor carrying no lexical signal is out of reach, and renaming a review section to a neutral label defeats the heading rule, which matches the label and never the content. A passing lint is a tripwire on habitual violations, never evidence that a body is clean.
+
+Three local lints consume `LINT_PATTERNS`:
 
 - `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
 - `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
 - `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml`).
 
 To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
+
+**Patterns are POSIX ERE and must behave identically under BSD grep and GNU grep.** The local pre-publish hook resolves BSD grep on macOS; CI runs GNU grep on ubuntu-latest. No lookahead, no non-capturing groups, no `\d`, no PCRE classes. A `(?:...)` construct sat in this array for four months: BSD grep accepted it silently, GNU grep wrote a diagnostic and matched nothing, and because the lint checks grep's exit code but not its stderr, CI read the dead pattern as a clean pass. When adding a pattern, confirm it produces **empty stderr**, not merely a tolerant exit code.
 
 ## Scope discipline
 
