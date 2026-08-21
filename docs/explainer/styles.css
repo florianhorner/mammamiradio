@@ -284,6 +284,9 @@ body[data-phase="revealed"] .sensor-icon { color: var(--scenario); background: r
    never reflows the row — the reveal fades it in where it always was. */
 .install-cta { position: relative; z-index: 2; display: inline-flex; visibility: hidden; align-items: center; justify-content: center; gap: 14px; min-height: 60px; padding: 0 27px; overflow: hidden; border-radius: 10px; background: var(--sun2); color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: .01em; text-decoration: none; box-shadow: 0 6px 26px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1); opacity: 0; transform: translateY(10px); transition: opacity 500ms ease, transform 600ms var(--ease-out), background 180ms ease, box-shadow 300ms ease, visibility 0s linear 500ms; }
 .install-cta[hidden] { display: none; }
+/* An author display beats the UA's [hidden] rule: without this, the retired
+   hero button kept rendering after the fourth moment. The E2E caught it. */
+.primary-button[hidden] { display: none; }
 .install-cta b { font-size: 18px; }
 .install-cta:hover { background: var(--sun); transform: translateY(-2px); box-shadow: 0 8px 32px rgba(236, 204, 48, 0.55), 0 0 0 7px rgba(236, 204, 48, 0.14); }
 .install-cta:active { transform: translateY(1px) scale(.98); }

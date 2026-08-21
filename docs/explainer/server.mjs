@@ -17,7 +17,29 @@ const server = createServer(async (request, response) => {
   try {
     const fileStat = await stat(filePath);
     if (!fileStat.isFile()) throw new Error("Not a file");
-    response.writeHead(200, { "Content-Type": mimeTypes[extname(filePath)] || "application/octet-stream", "Cache-Control": "no-store" });
+    const contentType = mimeTypes[extname(filePath)] || "application/octet-stream";
+    // Range support matters: without it Chromium marks the audio unseekable
+    // and snaps every currentTime assignment back to 0 — the local preview
+    // would behave differently from GitHub Pages, which serves Ranges.
+    const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range || "");
+    if (range && (range[1] || range[2])) {
+      const start = range[1] ? Number(range[1]) : Math.max(fileStat.size - Number(range[2]), 0);
+      const end = range[1] && range[2] ? Math.min(Number(range[2]), fileStat.size - 1) : fileStat.size - 1;
+      if (start > end || start >= fileStat.size) {
+        response.writeHead(416, { "Content-Range": `bytes */${fileStat.size}` }).end();
+        return;
+      }
+      response.writeHead(206, {
+        "Content-Type": contentType,
+        "Content-Range": `bytes ${start}-${end}/${fileStat.size}`,
+        "Content-Length": end - start + 1,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+      });
+      createReadStream(filePath, { start, end }).pipe(response);
+      return;
+    }
+    response.writeHead(200, { "Content-Type": contentType, "Content-Length": fileStat.size, "Accept-Ranges": "bytes", "Cache-Control": "no-store" });
     createReadStream(filePath).pipe(response);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }); response.end("Not found");
