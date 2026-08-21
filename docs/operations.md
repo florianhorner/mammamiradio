@@ -969,10 +969,29 @@ The interactive explainer (`docs/explainer/`) publishes to GitHub Pages at
 `https://florianhorner.github.io/mammamiradio/` via
 `.github/workflows/explainer-pages.yml`: on any `main` push touching
 `docs/explainer/**`, the workflow tests, builds `dist/`, and deploys it.
-One-time setup: **Settings → Pages → Source: "GitHub Actions"** (until that is
-flipped, the deploy job fails with a Pages-not-enabled error). Manual
-re-deploys run from the workflow's dispatch button. The page is static, reads
+The one-time setup (**Settings → Pages → Source: "GitHub Actions"**) is
+already done; it is listed here because a deploy job fails with a
+Pages-not-enabled error if it is ever switched back. The deploy job also
+carries `if: github.ref == 'refs/heads/main'`, so a `workflow_dispatch` from
+any other ref builds and tests but does not publish. The page is static, reads
 no Home Assistant data, and streams nothing — it is not the live station.
+
+**The trigger does not fire for workflow-only changes.** The path filter is
+`docs/explainer/**`, so a commit that touches only `explainer-pages.yml` (or
+any other file outside the explainer) lands on `main` without publishing
+anything. That is correct when the site is already live, and a trap the first
+time: when both the explainer and this workflow arrive in separate pull
+requests, whichever lands second does not match the filter, and the site stays
+a 404 until someone runs the dispatch by hand. After any change of that shape,
+run the workflow's dispatch button against `main` and confirm
+`https://florianhorner.github.io/mammamiradio/` answers 200 — a green workflow
+list with no run in it looks identical to a site that published.
+
+Link previews (`og:` / `twitter:` tags in `docs/explainer/index.html`) are the
+one place the deployed origin is written as an absolute URL, because scrapers
+do not resolve a relative `og:image`. `tests/rendered-html.test.mjs` asserts
+those URLs agree with each other, that the card ships in `dist/`, and that the
+declared width and height match the real PNG.
 
 ## What is still not documented because it does not exist yet
 

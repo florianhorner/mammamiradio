@@ -51,6 +51,13 @@ jobs:
 
   deploy:
     needs: build
+    # Defence in depth. The push trigger is already main-only, and the
+    # github-pages environment carries a main-only branch policy, so this
+    # guard exists for the case those drift: workflow_dispatch accepts any
+    # ref, and a dispatch from a branch would otherwise publish that branch.
+    # Build still runs on any ref, so a dispatch elsewhere tests without
+    # deploying.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

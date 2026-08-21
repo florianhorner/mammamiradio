@@ -51,3 +51,41 @@ test("the Pages root keeps runtime assets subpath-safe", () => {
   assert.match(html, /src="app\.js"/);
   assert.match(html, /href="public\/favicon\.svg"/);
 });
+
+test("link previews point at a card that actually ships, at its real size", async () => {
+  // A relative og:image previews as a bare link: scrapers fetch the tag value
+  // as-is and do not resolve it against the page. So these four are the only
+  // absolute URLs on an otherwise subpath-safe page, and drift between them
+  // is the failure nobody notices until a link is already posted.
+  const origin = "https://florianhorner.github.io/mammamiradio/";
+  const value = (pattern) => {
+    const match = html.match(pattern);
+    assert.ok(match, `missing link-preview tag: ${pattern}`);
+    return match[1];
+  };
+  const canonical = value(/<link rel="canonical" href="([^"]+)"/);
+  const ogUrl = value(/<meta property="og:url" content="([^"]+)"/);
+  const ogImage = value(/<meta property="og:image" content="([^"]+)"/);
+  const twitterImage = value(/<meta name="twitter:image" content="([^"]+)"/);
+  assert.equal(canonical, origin);
+  assert.equal(ogUrl, origin);
+  assert.equal(ogImage, twitterImage, "og:image and twitter:image must agree");
+  for (const url of [ogImage, twitterImage]) {
+    assert.ok(url.startsWith(origin), `${url} must be absolute and on ${origin}`);
+  }
+
+  // The card has to be in the build, not merely in source — dist/ is what
+  // Pages serves, and build.mjs's copy list is hand-maintained.
+  const imagePath = ogImage.slice(origin.length);
+  const bytes = await readFile(`dist/${imagePath}`);
+  assert.equal(bytes.subarray(1, 4).toString("ascii"), "PNG", "the share card must be a real PNG");
+
+  // Twitter/X and Slack size the card from these; a re-rendered card of a
+  // different size would otherwise preview cropped.
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  assert.equal(value(/<meta property="og:image:width" content="([^"]+)"/), String(width));
+  assert.equal(value(/<meta property="og:image:height" content="([^"]+)"/), String(height));
+  assert.match(html, /<meta name="twitter:card" content="summary_large_image"/);
+  assert.match(html, /<meta property="og:image:alt" content="[^"]{20,}"/, "the card needs alt text");
+});
