@@ -233,7 +233,9 @@ body[data-phase="revealed"] .onair-panel::before { opacity: 1; transform: scale(
 .sensor-list { display: grid; gap: 8px; }
 .sensor-row { position: relative; display: grid; grid-template-columns: 25px minmax(0,1fr); grid-template-areas: "icon name" "icon value"; column-gap: 9px; align-items: center; min-height: 55px; padding: 9px 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); transition: transform 420ms var(--ease-out), border-color 300ms ease, background 300ms ease; }
 .sensor-icon { grid-area: icon; display: grid; place-items: center; width: 25px; height: 25px; border-radius: 6px; background: var(--surface-strong); color: var(--muted); font-size: 12px; transition: color 250ms ease, background 250ms ease, transform 350ms var(--ease-out); }
-.sensor-name { grid-area: name; min-width: 0; overflow: hidden; color: var(--muted); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+/* Entity ids are content, not eyebrow labels: the design system's JetBrains
+   Mono floor is 11px (docs/design/system.md, Typography scale). */
+.sensor-name { grid-area: name; min-width: 0; overflow: hidden; color: var(--muted); font-family: var(--font-mono); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .sensor-value { grid-area: value; color: var(--cream-dk); font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
 /* The sensors are the answer, and the answer stays face-down until the moment
    has aired. Blurred, not hidden: the panel reads as "something is here",
