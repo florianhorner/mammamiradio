@@ -19,6 +19,13 @@
   font-weight: 100 900;
   font-display: swap;
 }
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("public/fonts/jetbrains-mono.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+}
 
 :root {
   color-scheme: dark;
@@ -449,7 +456,7 @@ footer strong { color: var(--text-secondary); font-family: var(--font-display); 
 }
 @media (max-width: 760px) {
   .site-header { padding: 12px 20px 0; }
-  .concept-label { max-width: 122px; font-size: 8px; text-align: right; }
+  .concept-label { max-width: 122px; font-size: 9px; text-align: right; }
   .hero { padding: 42px 20px 68px; gap: 34px; }
   h1 { font-size: clamp(42px, 12.5vw, 60px); }
   .hero-intro { font-size: 15px; }

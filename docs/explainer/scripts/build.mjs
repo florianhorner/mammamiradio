@@ -83,5 +83,6 @@ await Promise.all([
   copyFile("public/fonts/playfair-display.ttf", "dist/public/fonts/playfair-display.ttf"),
   copyFile("public/fonts/playfair-display-italic.ttf", "dist/public/fonts/playfair-display-italic.ttf"),
   copyFile("public/fonts/outfit.ttf", "dist/public/fonts/outfit.ttf"),
+  copyFile("public/fonts/jetbrains-mono.ttf", "dist/public/fonts/jetbrains-mono.ttf"),
 ]);
 console.log("Built local static site in dist/");

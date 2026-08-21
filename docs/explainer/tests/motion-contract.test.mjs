@@ -22,6 +22,11 @@ test("the canonical radio identity is used instead of a standalone Mi emblem", (
   assert.match(css, /Outfit/);
   assert.match(css, /public\/fonts\/playfair-display-italic\.ttf/);
   assert.match(css, /public\/fonts\/outfit\.ttf/);
+  // The mono face must actually load: --font-mono named JetBrains Mono for
+  // weeks while no @font-face served it, so every entity id rendered in a
+  // platform fallback. Self-hosted like the other faces (OFL licence).
+  assert.match(css, /public\/fonts\/jetbrains-mono\.ttf/);
+  assert.match(build, /dist\/public\/fonts\/jetbrains-mono\.ttf/);
   assert.match(build, /dist\/public\/fonts\/playfair-display\.ttf/);
 });
 
