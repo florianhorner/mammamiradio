@@ -255,18 +255,20 @@ The original Layer A item 3 said: *"Replace the `Track.source` / `PlaylistSource
 
 ```python
 # mammamiradio/core/models.py
-class TrackOrigin(StrEnum):       # transport / acquisition
+class TrackOrigin(StrEnum):  # transport / acquisition
     youtube = "youtube"
     jamendo = "jamendo"
     local = "local"
     demo = "demo"
 
-class SourceKind(StrEnum):        # playlist-level label
-    charts = "charts"             # → KIND_TO_TRACK_ORIGINS[charts] = {youtube} (or {youtube, local} once Blended ships)
-    jamendo = "jamendo"           # → {jamendo}
-    local = "local"               # → {local}
-    demo = "demo"                 # → {demo}
+
+class SourceKind(StrEnum):  # playlist-level label
+    charts = "charts"  # → KIND_TO_TRACK_ORIGINS[charts] = {youtube} (or {youtube, local} once Blended ships)
+    jamendo = "jamendo"  # → {jamendo}
+    local = "local"  # → {local}
+    demo = "demo"  # → {demo}
     # NOTE: 'url' is NOT in this enum. See "url is not a domain variant" below.
+
 
 KIND_TO_TRACK_ORIGINS: dict[SourceKind, set[TrackOrigin]] = {
     SourceKind.charts: {TrackOrigin.youtube},  # widen to {..., local} only if Blended is in this PR
@@ -274,6 +276,7 @@ KIND_TO_TRACK_ORIGINS: dict[SourceKind, set[TrackOrigin]] = {
     SourceKind.local: {TrackOrigin.local},
     SourceKind.demo: {TrackOrigin.demo},
 }
+
 
 def assert_source_truth(source: PlaylistSource, tracks: Sequence[Track]) -> None:
     allowed = KIND_TO_TRACK_ORIGINS[SourceKind(source.kind)]
@@ -391,12 +394,14 @@ No further iterations needed. Council confidence is very high.
 2. **Invariant map** + guard in `mammamiradio/core/models.py`:
    ```python
    KIND_TO_TRACK_ORIGINS = {
-       SourceKind.charts:  {TrackOrigin.youtube},
+       SourceKind.charts: {TrackOrigin.youtube},
        SourceKind.jamendo: {TrackOrigin.jamendo},
-       SourceKind.local:   {TrackOrigin.local},
-       SourceKind.demo:    {TrackOrigin.demo},
+       SourceKind.local: {TrackOrigin.local},
+       SourceKind.demo: {TrackOrigin.demo},
    }
-   def assert_source_truth(source, tracks): ...   # widens allowed set by source.enrichments
+
+
+   def assert_source_truth(source, tracks): ...  # widens allowed set by source.enrichments
    ```
 3. **`enrichments: tuple[str, ...] = ()`** on `PlaylistSource` — represents "charts blended with local files" honestly without a separate `Blended` variant.
 4. **`Track.source` non-defaulted** in `models.py:49` — missing → raise. Eliminates the `youtube` default that hid drift.

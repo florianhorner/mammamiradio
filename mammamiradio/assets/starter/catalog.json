@@ -15,176 +15,490 @@
   },
   "tracks": [
     {
-      "isrc": "USUAN1400037",
-      "title": "Carefree",
+      "isrc": "USUAN1100173",
+      "title": "Long Time Coming",
       "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 205,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Carefree\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Carefree.mp3", "filename": "Carefree.mp3", "sha256": "8433b770a630d9b1594fd484442c677907ece899a4d149954cd2e74fd733e311", "bytes": 6566713, "acquired_at": "2026-07-15T23:34:05Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
+      "expected_duration_seconds": 274,
+      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100173",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "attribution": "\"Long Time Coming\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
+      "source": {
+        "url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Long%20Time%20Coming.mp3",
+        "filename": "Long Time Coming.mp3",
+        "sha256": "2d0d5d087d744221e617f67c8786d940e7b40162f7aaeab49597739a73c3abfd",
+        "bytes": 11119655,
+        "acquired_at": "2026-08-20T12:52:37Z",
+        "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100173"
+      },
+      "derivative": {
+        "path": "tracks/usuan1100173-long-time-coming-dcc9f8056394.mp3",
+        "sha256": "dcc9f8056394a519428ffff648ab9b0fa59269127e78695cabc67d9e1a4be0c0",
+        "bytes": 6586029,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 274.364,
+        "integrated_loudness_lufs": -16.1
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/usuan1100173-dcc9f8056394-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T15:36:25Z"
+      }
     },
     {
-      "isrc": "USUAN1700019",
-      "title": "Miami Viceroy",
+      "isrc": "USUAN1900024",
+      "title": "Realizer",
       "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 268,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1700019",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Miami Viceroy\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Miami%20Viceroy.mp3", "filename": "Miami Viceroy.mp3", "sha256": "0abf246e903cfdfac42b600ae95646081ee97373a901d286c9cd8f5e44f87e11", "bytes": 8567053, "acquired_at": "2026-07-15T23:34:05Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1700019"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
+      "expected_duration_seconds": 310,
+      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900024",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "attribution": "\"Realizer\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
+      "source": {
+        "url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Realizer.mp3",
+        "filename": "Realizer.mp3",
+        "sha256": "6ec41cbd5fef962ec258492693c6cc050c6b27403dbbca1f42dd48af8eba409e",
+        "bytes": 12410170,
+        "acquired_at": "2026-08-20T12:51:32Z",
+        "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900024"
+      },
+      "derivative": {
+        "path": "tracks/usuan1900024-realizer-55b854fffc5f.mp3",
+        "sha256": "55b854fffc5f07a9979c11dd9b9b3e51b0591b9b1a6d5c13f50ee20e8ed118a6",
+        "bytes": 7444845,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 310.152,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/usuan1900024-55b854fffc5f-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T15:36:25Z"
+      }
     },
     {
-      "isrc": "USUAN1600018",
-      "title": "Floating Cities",
+      "isrc": "USUAN2000024",
+      "title": "Newer Wave",
       "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 184,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1600018",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Floating Cities\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Floating%20Cities.mp3", "filename": "Floating Cities.mp3", "sha256": "e7365652410d1fbc8a14d87537855d625c1a5fa8b7de8c626f47c13256ef2ddd", "bytes": 5892113, "acquired_at": "2026-07-15T23:34:06Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1600018"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
+      "expected_duration_seconds": 175,
+      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN2000024",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "attribution": "\"Newer Wave\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
+      "source": {
+        "url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Newer%20Wave.mp3",
+        "filename": "Newer Wave.mp3",
+        "sha256": "ef26589e066cc2f60f9523f8a3c17e543f57fc9e1145efc3bc46f7e5db92d0bc",
+        "bytes": 3494296,
+        "acquired_at": "2026-08-20T12:51:35Z",
+        "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN2000024"
+      },
+      "derivative": {
+        "path": "tracks/usuan2000024-newer-wave-7bd973ab1df8.mp3",
+        "sha256": "7bd973ab1df84d47861098d98570699af7e692d36fd26465b51413618a81fb38",
+        "bytes": 4192173,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 174.602,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/usuan2000024-7bd973ab1df8-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T15:36:25Z"
+      }
     },
     {
-      "isrc": "USUAN1500001",
-      "title": "Allada",
+      "isrc": "USUAN1800018",
+      "title": "Laserpack",
       "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 223,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1500001",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Allada\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Allada.mp3", "filename": "Allada.mp3", "sha256": "5afef97467ef2738016d1b604a3797165c8c076f90b86c379cae0b05c8a9ac1a", "bytes": 7151876, "acquired_at": "2026-07-15T23:34:06Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1500001"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
+      "expected_duration_seconds": 186,
+      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1800018",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "attribution": "\"Laserpack\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
+      "source": {
+        "url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Laserpack.mp3",
+        "filename": "Laserpack.mp3",
+        "sha256": "9da19607351c507328840537491030d2f31e8ee8f87b8921986a5ed11e1e8359",
+        "bytes": 8283031,
+        "acquired_at": "2026-08-20T12:51:47Z",
+        "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1800018"
+      },
+      "derivative": {
+        "path": "tracks/usuan1800018-laserpack-ccc4160b6e14.mp3",
+        "sha256": "ccc4160b6e145eef59cc1568a1c05610565e31ca4c6b2a982fc7ff1f431c40d9",
+        "bytes": 4457709,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 185.678,
+        "integrated_loudness_lufs": -16.3
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/usuan1800018-ccc4160b6e14-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T15:36:25Z"
+      }
     },
     {
-      "isrc": "USUAN1400054",
-      "title": "Life of Riley",
+      "isrc": "USUAN1700080",
+      "title": "Andreas Theme",
       "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 235,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400054",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Life of Riley\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Life%20of%20Riley.mp3", "filename": "Life of Riley.mp3", "sha256": "1916f05cd1860949f9241e17966d334c39852b531329e4a05802720bb154c564", "bytes": 7533831, "acquired_at": "2026-07-15T23:34:09Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400054"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
+      "expected_duration_seconds": 217,
+      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1700080",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "attribution": "\"Andreas Theme\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
+      "source": {
+        "url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Andreas%20Theme.mp3",
+        "filename": "Andreas Theme.mp3",
+        "sha256": "8b5c57484705b1ffcc69d89da2f57e7159512381b377298eb2dfd4ab3b86dce2",
+        "bytes": 6958766,
+        "acquired_at": "2026-08-20T12:51:51Z",
+        "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1700080"
+      },
+      "derivative": {
+        "path": "tracks/usuan1700080-andreas-theme-2ff28fc52062.mp3",
+        "sha256": "2ff28fc5206226b111ae74009b43dc3b7b322fda53c8374be29f8e254d95bc1c",
+        "bytes": 5218605,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 217.391,
+        "integrated_loudness_lufs": -16.4
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/usuan1700080-2ff28fc52062-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T15:36:25Z"
+      }
     },
     {
-      "isrc": "USUAN1900056",
-      "title": "Night in Venice",
+      "isrc": "USUAN1900042",
+      "title": "Limit 70",
       "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 218,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900056",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Night in Venice\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Night%20in%20Venice.mp3", "filename": "Night in Venice.mp3", "sha256": "c61435f6f86853b5aefcf4479f3a1266f8887da97d8022c8f1137798076129e4", "bytes": 8860758, "acquired_at": "2026-07-15T23:34:08Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900056"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
+      "expected_duration_seconds": 302,
+      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900042",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "attribution": "\"Limit 70\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
+      "source": {
+        "url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Limit%2070.mp3",
+        "filename": "Limit 70.mp3",
+        "sha256": "b3d2463a32cd6e87a2e0bdb9056113f3702883acbe617a6b029cc14c85561f33",
+        "bytes": 12201274,
+        "acquired_at": "2026-08-20T12:52:02Z",
+        "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900042"
+      },
+      "derivative": {
+        "path": "tracks/usuan1900042-limit-70-22a8f0ddd5bb.mp3",
+        "sha256": "22a8f0ddd5bb69dce75660bfbbc5a494b45b7c7ed0a522ec7ef77659dddac811",
+        "bytes": 7241517,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 301.662,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/usuan1900042-22a8f0ddd5bb-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T15:36:25Z"
+      }
     },
     {
-      "isrc": "USUAN1100106",
-      "title": "Pride",
-      "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 349,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100106",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Pride\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Pride.mp3", "filename": "Pride.mp3", "sha256": "2b8ddb507118c417a856d5a1d9b85f4e3773afe2724c2f4f8f5875bfc39508ae", "bytes": 14137670, "acquired_at": "2026-07-15T23:34:10Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100106"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
-    },
-    {
-      "isrc": "USUAN1600012",
-      "title": "Casa Bossa Nova",
-      "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 242,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1600012",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Casa Bossa Nova\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Casa%20Bossa%20Nova.mp3", "filename": "Casa Bossa Nova.mp3", "sha256": "614b43e981c3f53ad96d4f95a23738889e8dd908cc877e61487ceb12d88e2606", "bytes": 7750389, "acquired_at": "2026-07-15T23:34:10Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1600012"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
-    },
-    {
-      "isrc": "USUAN1100844",
-      "title": "Cipher",
-      "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 231,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100844",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Cipher\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Cipher2.mp3", "filename": "Cipher2.mp3", "sha256": "d3d0614535a61d748e2fd8d5117fc4d781022a7624794802a2462d8af3fdd522", "bytes": 9252699, "acquired_at": "2026-07-15T23:34:16Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100844"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
-    },
-    {
-      "isrc": "USUAN1500025",
-      "title": "Daily Beetle",
-      "artist": "Kevin MacLeod feat. Brett Van Donsel",
-      "expected_duration_seconds": 317,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1500025",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Daily Beetle\" Kevin MacLeod (incompetech.com), featuring guitar by Brett Van Donsel; licensed under CC BY 4.0.",
-      "credits": [
-        {"name": "Kevin MacLeod", "role": "composer and copyright holder"},
-        {"name": "Brett Van Donsel", "role": "featured guitar", "evidence_url": "https://incompetech.com/wordpress/2015/04/daily-beetle/"}
-      ],
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Daily%20Beetle.mp3", "filename": "Daily Beetle.mp3", "sha256": "2d90413d404ab509e7424d531c34f6b1ad281d8a36346df130a5e4c707841faa", "bytes": 10141967, "acquired_at": "2026-07-15T23:34:16Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1500025"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
-    },
-    {
-      "isrc": "USUAN1300012",
-      "title": "Local Forecast - Elevator",
-      "artist": "Kevin MacLeod",
-      "expected_duration_seconds": 189,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1300012",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Local Forecast - Elevator\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Local%20Forecast%20-%20Elevator.mp3", "filename": "Local Forecast - Elevator.mp3", "sha256": "8c46b44e65324bc339fbbc3e770611d671f6c74a40f3ec8dd50332c082b25cc9", "bytes": 7570404, "acquired_at": "2026-07-15T23:34:25Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1300012"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
-    },
-    {
-      "isrc": "USUAN1100843",
-      "title": "Wallpaper",
-      "artist": "Kevin MacLeod",
+      "isrc": "JAMENDO-1317779",
+      "provider": "jamendo",
+      "title": "Stuttgart",
+      "artist": "Portrayal",
       "expected_duration_seconds": 215,
-      "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100843",
-      "license": {"id": "CC-BY-4.0", "url": "https://creativecommons.org/licenses/by/4.0/"},
-      "attribution": "\"Wallpaper\" Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.",
-      "source": {"url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Wallpaper.mp3", "filename": "Wallpaper.mp3", "sha256": "9fa810e5193c88f1b360537366f210f16c2588106d5292f0659e9957fa274f96", "bytes": 8804339, "acquired_at": "2026-07-15T23:34:14Z", "evidence_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100843"},
-      "derivative": null,
-      "modification_notice": null,
-      "evidence": {"source_receipt": "proof/media/starter-source-evidence.json", "audition_receipt": null},
-      "approval": {"status": "pending_full_audition"}
+      "official_piece_url": "https://www.jamendo.com/track/1317779",
+      "license": {
+        "id": "CC-BY-3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      "attribution": "\"Stuttgart\" Portrayal (jamendo.com), licensed under CC BY 3.0.",
+      "source": {
+        "url": "https://prod-1.storage.jamendo.com/?trackid=1317779&format=mp31",
+        "filename": "1317779.mp3",
+        "sha256": "48e65fc42321ec7aca94d52a31d256ecb3a7e10c6b8727f9e804b6eb190e730a",
+        "bytes": 2598400,
+        "acquired_at": "2026-08-20T19:52:24Z",
+        "evidence_url": "https://www.jamendo.com/track/1317779"
+      },
+      "derivative": {
+        "path": "tracks/jamendo-1317779-stuttgart-97da800964e2.mp3",
+        "sha256": "97da800964e20dd287aafda4c3fd106f6f0189321339febb1e68c51e80673837",
+        "bytes": 5170221,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 215.376,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/jamendo-1317779-97da800964e2-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T20:01:11Z"
+      }
+    },
+    {
+      "isrc": "JAMENDO-1608716",
+      "provider": "jamendo",
+      "title": "Smallest - Stories",
+      "artist": "Smallest",
+      "expected_duration_seconds": 247,
+      "official_piece_url": "https://www.jamendo.com/track/1608716",
+      "license": {
+        "id": "CC-BY-3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      "attribution": "\"Smallest - Stories\" Smallest (jamendo.com), licensed under CC BY 3.0.",
+      "source": {
+        "url": "https://prod-1.storage.jamendo.com/?trackid=1608716&format=mp31",
+        "filename": "1608716.mp3",
+        "sha256": "b61a45f14b2ec62c6b81212c2ce9a4e05334d217a33c33d8dd5a55b05c8d9caf",
+        "bytes": 3007488,
+        "acquired_at": "2026-08-20T19:54:52Z",
+        "evidence_url": "https://www.jamendo.com/track/1608716"
+      },
+      "derivative": {
+        "path": "tracks/jamendo-1608716-smallest-stories-995e3edb3486.mp3",
+        "sha256": "995e3edb34861eedc0b87b363930d35107c12feb02cc390634b947e4727ede76",
+        "bytes": 5943213,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 247.564,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/jamendo-1608716-995e3edb3486-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T20:01:11Z"
+      }
+    },
+    {
+      "isrc": "JAMENDO-1564796",
+      "provider": "jamendo",
+      "title": "The Tide",
+      "artist": "Square a Saw",
+      "expected_duration_seconds": 224,
+      "official_piece_url": "https://www.jamendo.com/track/1564796",
+      "license": {
+        "id": "CC-BY-3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      "attribution": "\"The Tide\" Square a Saw (jamendo.com), licensed under CC BY 3.0.",
+      "source": {
+        "url": "https://prod-1.storage.jamendo.com/?trackid=1564796&format=mp31",
+        "filename": "1564796.mp3",
+        "sha256": "cbcbb663aa66047b19730ac177db254dda375ff17f8a582635ffa4c51e2e6de3",
+        "bytes": 2729472,
+        "acquired_at": "2026-08-20T19:52:25Z",
+        "evidence_url": "https://www.jamendo.com/track/1564796"
+      },
+      "derivative": {
+        "path": "tracks/jamendo-1564796-the-tide-e0ea828b0868.mp3",
+        "sha256": "e0ea828b08689f6ba72def52a358e33edd8b23931fb6731039f61969b3d22aa0",
+        "bytes": 5395437,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 224.75,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/jamendo-1564796-e0ea828b0868-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T20:01:11Z"
+      }
+    },
+    {
+      "isrc": "JAMENDO-1215805",
+      "provider": "jamendo",
+      "title": "Dance with me",
+      "artist": "Manhat10",
+      "expected_duration_seconds": 204,
+      "official_piece_url": "https://www.jamendo.com/track/1215805",
+      "license": {
+        "id": "CC-BY-3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      "attribution": "\"Dance with me\" Manhat10 (jamendo.com), licensed under CC BY 3.0.",
+      "source": {
+        "url": "https://prod-1.storage.jamendo.com/?trackid=1215805&format=mp31",
+        "filename": "1215805.mp3",
+        "sha256": "f5b1685cf803b9ff0eeb728d18c83328121d769e3e083b049ff1aded9c62ae23",
+        "bytes": 2471936,
+        "acquired_at": "2026-08-20T19:52:26Z",
+        "evidence_url": "https://www.jamendo.com/track/1215805"
+      },
+      "derivative": {
+        "path": "tracks/jamendo-1215805-dance-with-me-1343e106bd68.mp3",
+        "sha256": "1343e106bd684ef55501078008aedb764eda0cd0707dc6cf425f67d42dd7aa46",
+        "bytes": 4900077,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 204.103,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/jamendo-1215805-1343e106bd68-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T20:01:11Z"
+      }
+    },
+    {
+      "isrc": "JAMENDO-1093607",
+      "provider": "jamendo",
+      "title": "Stitches ft. Shane MauX",
+      "artist": "Lilly Wolf",
+      "expected_duration_seconds": 270,
+      "official_piece_url": "https://www.jamendo.com/track/1093607",
+      "license": {
+        "id": "CC-BY-3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      "attribution": "\"Stitches ft. Shane MauX\" Lilly Wolf (jamendo.com), licensed under CC BY 3.0.",
+      "source": {
+        "url": "https://prod-1.storage.jamendo.com/?trackid=1093607&format=mp31",
+        "filename": "1093607.mp3",
+        "sha256": "e4217d1b8b9bcf9fa650b98c7b6c56042645eb9c27b27aa29745cfc79cf5eab7",
+        "bytes": 3270656,
+        "acquired_at": "2026-08-20T19:52:27Z",
+        "evidence_url": "https://www.jamendo.com/track/1093607"
+      },
+      "derivative": {
+        "path": "tracks/jamendo-1093607-stitches-ft-shane-maux-4a55cf801ff9.mp3",
+        "sha256": "4a55cf801ff900df3a29259f2ce5bcd3b9406d9be8fa593d32af620abd16db04",
+        "bytes": 6497325,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 270.67,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/jamendo-1093607-4a55cf801ff9-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T20:01:11Z"
+      }
+    },
+    {
+      "isrc": "JAMENDO-1295439",
+      "provider": "jamendo",
+      "title": "Set Me On Fire (feat. Ashley Jana)",
+      "artist": "David Amber",
+      "expected_duration_seconds": 201,
+      "official_piece_url": "https://www.jamendo.com/track/1295439",
+      "license": {
+        "id": "CC-BY-3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      "attribution": "\"Set Me On Fire (feat. Ashley Jana)\" David Amber (jamendo.com), licensed under CC BY 3.0.",
+      "source": {
+        "url": "https://prod-1.storage.jamendo.com/?trackid=1295439&format=mp31",
+        "filename": "1295439.mp3",
+        "sha256": "acef57ff5eb2562961cb98d88f0887cab3b1a081956086b78ed76622f1cf10dd",
+        "bytes": 2448896,
+        "acquired_at": "2026-08-20T19:52:53Z",
+        "evidence_url": "https://www.jamendo.com/track/1295439"
+      },
+      "derivative": {
+        "path": "tracks/jamendo-1295439-set-me-on-fire-feat-ashley-jana-9bf4a540db4b.mp3",
+        "sha256": "9bf4a540db4b3db9b6f595aa687018682ed39bb5c71938bd802ec7b75e418ff2",
+        "bytes": 4849389,
+        "codec": "mp3",
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "bitrate_kbps": 192,
+        "duration_seconds": 201.985,
+        "integrated_loudness_lufs": -16.2
+      },
+      "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS.",
+      "evidence": {
+        "source_receipt": "proof/media/starter-source-evidence.json",
+        "audition_receipt": "proof/media/jamendo-1295439-9bf4a540db4b-approval.json"
+      },
+      "approval": {
+        "status": "approved",
+        "reviewed_at": "2026-08-20T20:01:11Z"
+      }
     }
   ]
 }
