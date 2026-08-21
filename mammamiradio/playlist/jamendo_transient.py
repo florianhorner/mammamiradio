@@ -35,6 +35,9 @@ from mammamiradio.core.models import MediaAttribution, Segment, SegmentType, saf
 logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.jamendo.com/v3.0/tracks/"
+_API_INCLUDE = "licenses"
+_BLOCKED_PROVIDER_CONTRACT_CODES = frozenset({2, 3, 4, 7, 8, 9, 10, 12, 13})
+_BLOCKED_PROVIDER_AUTH_CODES = frozenset({5, 11})
 _TRACK_ID_RE = re.compile(r"[1-9][0-9]{0,19}")
 _CLIENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,128}")
 _OPERATION_ID_RE = re.compile(r"[0-9a-f]{32}")
@@ -152,9 +155,10 @@ class _StreamWorker(Protocol):
 
 
 class _ProviderError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, provider_code: int | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.provider_code = provider_code
 
 
 class _TransientError(_ProviderError):
@@ -277,6 +281,17 @@ def _candidate_from_exact_result(item: object, expected_id: str) -> _CandidateDa
     }
 
 
+def _coarse_provider_code(value: object) -> int | None:
+    """Return a bounded numeric provider code without reflecting response text."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 <= value <= 9999 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 4:
+        return int(value)
+    return None
+
+
 def _validated_api_results(status_code: int, body: bytes) -> list[object]:
     if status_code in (401, 403):
         raise _BlockedError("api_auth_failed")
@@ -289,8 +304,15 @@ def _validated_api_results(status_code: int, body: bytes) -> list[object]:
     if not isinstance(payload, Mapping):
         raise _TransientError("api_malformed")
     headers = payload.get("headers")
-    if not isinstance(headers, Mapping) or headers.get("status") != "success" or headers.get("code") not in (0, "0"):
+    if not isinstance(headers, Mapping):
         raise _TransientError("api_failed")
+    if headers.get("status") != "success" or headers.get("code") not in (0, "0"):
+        provider_code = _coarse_provider_code(headers.get("code"))
+        if provider_code in _BLOCKED_PROVIDER_AUTH_CODES:
+            raise _BlockedError("api_auth_failed", provider_code=provider_code)
+        if provider_code in _BLOCKED_PROVIDER_CONTRACT_CODES:
+            raise _BlockedError("api_failed", provider_code=provider_code)
+        raise _TransientError("api_failed", provider_code=provider_code)
     results = payload.get("results")
     if not isinstance(results, list):
         raise _TransientError("api_malformed")
@@ -649,6 +671,11 @@ class JamendoStreamProvider:
             with self._lock:
                 self._state = JamendoProviderState.BLOCKED
                 self._last_failure_code = exc.code
+            logger.warning(
+                "Jamendo provider blocked failure_code=%s provider_code=%s",
+                exc.code,
+                exc.provider_code if exc.provider_code is not None else "none",
+            )
             return
         await self.apply_config(
             enabled=enabled,
@@ -942,8 +969,10 @@ class JamendoStreamProvider:
         task.add_done_callback(self._on_provider_task_done)
 
     def _on_provider_task_done(self, task: asyncio.Task[None]) -> None:
+        retry_delay: float | None = None
         with self._lock:
-            if self._task is task:
+            current_task = self._task is task
+            if current_task:
                 self._task = None
             if task.cancelled():
                 pass
@@ -951,10 +980,24 @@ class JamendoStreamProvider:
                 try:
                     error = task.exception()
                     if error is not None:
-                        logger.debug("Jamendo provider task ended unexpectedly: %s", type(error).__name__)
+                        if (
+                            current_task
+                            and self._started
+                            and not self._stopped
+                            and self._configuration_valid_unlocked()
+                            and self._lease is None
+                        ):
+                            retry_delay = self._record_transient_failure_unlocked("internal_error")
+                        else:
+                            logger.debug("Jamendo provider task ended unexpectedly: %s", type(error).__name__)
                 except asyncio.CancelledError:
                     logger.debug("Jamendo provider task ended unexpectedly", exc_info=True)
             self._ensure_scheduled_unlocked()
+        if retry_delay is not None:
+            logger.warning(
+                "Jamendo provider attempt failed failure_code=internal_error provider_code=none retry_in_seconds=%d",
+                int(retry_delay),
+            )
 
     async def _run_after(self, delay: float) -> None:
         try:
@@ -985,6 +1028,7 @@ class JamendoStreamProvider:
                     return
                 epoch, fingerprint, source_revision = self._snapshot_current_unlocked()
                 self._state = JamendoProviderState.DISCOVERING
+            logger.info("Jamendo provider preparation started")
             try:
                 # Discovery and every serial exact-ID revalidation share this
                 # one wall-clock budget; no candidate can reset the deadline.
@@ -1070,6 +1114,7 @@ class JamendoStreamProvider:
                 self._retry_index = 0
                 self._state = JamendoProviderState.READY
                 operation_dir = None
+            logger.info("Jamendo provider ready")
         except asyncio.CancelledError:
             with self._lock:
                 worker_running = (
@@ -1093,14 +1138,31 @@ class JamendoStreamProvider:
             with self._lock:
                 self._last_failure_code = exc.code
                 self._state = JamendoProviderState.BLOCKED
+            logger.warning(
+                "Jamendo provider blocked failure_code=%s provider_code=%s",
+                exc.code,
+                exc.provider_code if exc.provider_code is not None else "none",
+            )
         except _CandidateRejectedError as exc:
             with self._lock:
                 self._rejected_count += 1
-                self._record_transient_failure_unlocked(exc.code)
+                retry_delay = self._record_transient_failure_unlocked(exc.code)
+            logger.warning(
+                "Jamendo provider attempt failed failure_code=%s provider_code=none retry_in_seconds=%d",
+                exc.code,
+                int(retry_delay),
+            )
         except (_TransientError, httpx.HTTPError, OSError) as exc:
             code = exc.code if isinstance(exc, _TransientError) else "api_failed"
+            provider_code = exc.provider_code if isinstance(exc, _TransientError) else None
             with self._lock:
-                self._record_transient_failure_unlocked(code)
+                retry_delay = self._record_transient_failure_unlocked(code)
+            logger.warning(
+                "Jamendo provider attempt failed failure_code=%s provider_code=%s retry_in_seconds=%d",
+                code,
+                provider_code if provider_code is not None else "none",
+                int(retry_delay),
+            )
         finally:
             if operation_dir is not None:
                 _cleanup_operation(operation_dir, self._jamendo_root)
@@ -1112,7 +1174,7 @@ class JamendoStreamProvider:
             "limit": str(self._limit),
             "tags": self._tags,
             "audioformat": "mp32",
-            "include": "licenses,musicinfo",
+            "include": _API_INCLUDE,
             "ccnc": "false",
             "ccsa": "false",
             "ccnd": "false",
@@ -1158,7 +1220,7 @@ class JamendoStreamProvider:
                 "limit": "1",
                 "id": track_id,
                 "audioformat": "mp32",
-                "include": "licenses,musicinfo",
+                "include": _API_INCLUDE,
                 "ccnc": "false",
                 "ccsa": "false",
                 "ccnd": "false",
@@ -1210,12 +1272,13 @@ class JamendoStreamProvider:
                 _cleanup_operation(operation_dir, self._jamendo_root)
             self._ensure_scheduled_unlocked()
 
-    def _record_transient_failure_unlocked(self, code: str) -> None:
+    def _record_transient_failure_unlocked(self, code: str) -> float:
         self._last_failure_code = code
         self._state = JamendoProviderState.DEGRADED
         retry_index = min(self._retry_index, len(self._retry_delays) - 1)
         self._pending_delay = self._retry_delays[retry_index]
         self._retry_index += 1
+        return self._pending_delay
 
     def _expire_ready_lease(self, lease_id: str) -> None:
         with self._lock:

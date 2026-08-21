@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 from typing import Any
@@ -18,6 +19,7 @@ from mammamiradio.web.json_body import read_json_object
 from mammamiradio.web.persistence import _save_media_source_settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _JAMENDO_STATES = frozenset(
     {
@@ -188,6 +190,11 @@ def _mark_provider_apply_failure(provider: object | None) -> None:
         pass
 
 
+def _log_provider_control_failure(code: str) -> None:
+    """Log a stable failure category without reflecting exception details."""
+    logger.warning("Jamendo provider control failed failure_code=%s", code)
+
+
 def _apply_failure_status(config: object, provider: object | None) -> dict[str, Any]:
     status = safe_jamendo_status(config, provider)
     status.update(
@@ -273,9 +280,11 @@ async def _persist_and_apply_jamendo(
                 _drop_queued_jamendo(request)
             except Exception:
                 live_apply_failed = True
+                _log_provider_control_failure("queue_cleanup_failed")
         provider = getattr(request.app.state, "jamendo_provider", None)
         if not await _apply_provider_config(config, provider):
             live_apply_failed = True
+            _log_provider_control_failure("config_apply_failed")
 
         request.app.state.jamendo_apply_failed = live_apply_failed
         if live_apply_failed:
@@ -358,6 +367,7 @@ async def retry_jamendo(request: Request, _: None = Depends(require_admin_access
 
         if bool(getattr(request.app.state, "jamendo_apply_failed", False)):
             if not await _apply_provider_config(config, provider):
+                _log_provider_control_failure("config_apply_failed")
                 _mark_provider_apply_failure(provider)
                 return {
                     "started": False,
@@ -373,6 +383,7 @@ async def retry_jamendo(request: Request, _: None = Depends(require_admin_access
 
         retry = getattr(provider, "retry", None)
         if not callable(retry):
+            _log_provider_control_failure("retry_failed")
             _mark_provider_apply_failure(provider)
             request.app.state.jamendo_apply_failed = True
             return {
@@ -383,6 +394,7 @@ async def retry_jamendo(request: Request, _: None = Depends(require_admin_access
         try:
             started = bool(retry())
         except Exception:
+            _log_provider_control_failure("retry_failed")
             _mark_provider_apply_failure(provider)
             request.app.state.jamendo_apply_failed = True
             return {
