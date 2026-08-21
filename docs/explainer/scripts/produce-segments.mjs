@@ -119,7 +119,17 @@ for (const { id, beats } of plan) {
     sha256: createHash("sha256").update(bytes).digest("hex"),
     durationSec: Math.round((await durationSec(outPath)) * 100) / 100,
     revealAtSec,
-    sources: beats.map((beat) => beat.kind === "imaging" ? beat.note || beat.kind : `${beat.kind}:${beat.index}`),
+    // The tail records its content hash: the page's music credit is
+    // hard-coded to the tails' actual source, so a swapped tail must show
+    // up in the manifest diff instead of silently outdating the credit.
+    sources: await Promise.all(beats.map(async (beat) => {
+      if (beat.kind === "imaging") return beat.note || beat.kind;
+      if (beat.kind === "tail") {
+        const tailSha = createHash("sha256").update(await readFile(beat.source)).digest("hex");
+        return `tail:${tailSha.slice(0, 12)}`;
+      }
+      return `${beat.kind}:${beat.index}`;
+    })),
   };
   console.log(`rendered ${id}: ${manifest.segments[id].durationSec}s, moment at ${revealAtSec}s`);
 }

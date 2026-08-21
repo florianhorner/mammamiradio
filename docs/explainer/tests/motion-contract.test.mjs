@@ -175,9 +175,14 @@ test("the stage leads with the show and hides the answer until it airs", () => {
   assert.match(js, /revealContent\.removeAttribute\("aria-hidden"\)/);
   const rehides = js.match(/revealContent\.setAttribute\("aria-hidden", "true"\)/g);
   assert.ok(rehides && rehides.length >= 2, "aria re-hide must exist in both tuneIn and reset");
-  // The deadline covers the stalled-mid-clip case, not only never-started.
+  // The deadline covers the stalled-mid-clip case, not only never-started,
+  // is armed in the single play path (replays are watched too), and routes
+  // through reportFailure so the trouble box always carries the transcript.
   assert.match(js, /const armedAtSec = hostAudio\.currentTime/);
-  assert.match(js, /neverStarted \|\| stalled/);
+  assert.match(js, /reportFailure\("stalled"\)/);
+  // A moment counts as heard only when it actually revealed: four blocked
+  // playbacks must not retire the tour.
+  assert.match(js, /if \(audio !== "failed"\) playedScenarios\.add\(activeScenario\)/);
   assert.match(css, /body\[data-phase="revealed"\] \.reveal-waiting \{ visibility: hidden/);
   assert.match(css, /body\[data-phase="revealed"\] \.sensor-panel \.sensor-list/);
   // While the show plays, the reveal assembles itself behind the frost:

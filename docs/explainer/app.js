@@ -173,9 +173,13 @@ function armDeadline() {
   const armedAtSec = hostAudio.currentTime;
   deadlineTimer = window.setTimeout(() => {
     const stalled = hostAudio.currentTime === armedAtSec && !hostAudio.paused && !hostAudio.ended;
-    const neverStarted = hostAudio.currentTime === 0;
-    if (body.dataset.phase === "onair" && (neverStarted || stalled)) {
-      applyState(nextPhase({ phase: "onair", deadline: true }));
+    const neverStarted = hostAudio.currentTime === 0 && !hostAudio.paused;
+    // Any non-idle phase: a replay from the revealed state can stall too,
+    // and without this it left the button stuck on Stop forever. Routed
+    // through reportFailure so the trouble box and transcript appear — the
+    // old direct applyState showed failed chrome with no words in it.
+    if (body.dataset.phase !== "idle" && (neverStarted || stalled)) {
+      reportFailure("stalled");
     }
   }, AUDIO_DEADLINE_MS);
 }
@@ -209,6 +213,8 @@ function playSegment(scenarioId) {
   const src = audioSrcFor(scenarioId);
   if (!hostAudio.src.endsWith(src)) hostAudio.src = src;
   hostAudio.currentTime = 0;
+  // Armed here, in the single play path, so replays are watched too.
+  armDeadline();
   const played = hostAudio.play();
   if (played && typeof played.catch === "function") {
     played.then(startSpeaking).catch(() => { stopSpeech(); reportFailure("blocked"); });
@@ -235,6 +241,10 @@ function reportFailure(kind) {
 function onReveal(audio) {
   clearDeadline();
   const scenario = scenarios[activeScenario];
+  // Aired-truth for the played-set too: a moment counts as heard only when
+  // it actually revealed, not when playback was attempted. Four blocked
+  // playbacks must not retire the tour as if the visitor heard it all.
+  if (audio !== "failed") playedScenarios.add(activeScenario);
   translateButton.disabled = false;
   if (playedScenarios.size >= scenarioIds.length) {
     // A control must not vanish out from under the keyboard: when the tour
@@ -301,7 +311,6 @@ function revealResult() {
 function tuneIn() {
   stopSpeech();
   setWaitingLine(0, { instant: true });
-  playedScenarios.add(activeScenario);
   hostQuote.hidden = true;
   audioTrouble.hidden = true;
   // The aria state follows the phase on EVERY path into onair, not just the
@@ -318,7 +327,6 @@ function tuneIn() {
   translationAnnouncement.textContent = "Tuned in. The station is on air.";
   resetButton.hidden = false;
   updateJourney("onair");
-  armDeadline();
 }
 function resetExperience() {
   clearDeadline(); stopSpeech();

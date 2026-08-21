@@ -6,7 +6,7 @@
       "durationSec": 29.53,
       "revealAtSec": 15.94,
       "sources": [
-        "tail:0",
+        "tail:73b5781aff16",
         "identity.sweeper",
         "voice:2",
         "voice:3",
@@ -19,7 +19,7 @@
       "durationSec": 35.55,
       "revealAtSec": 20.86,
       "sources": [
-        "tail:0",
+        "tail:28300ba131ae",
         "identity.station-id",
         "voice:2",
         "voice:3",
@@ -32,7 +32,7 @@
       "durationSec": 30.82,
       "revealAtSec": 16.78,
       "sources": [
-        "tail:0",
+        "tail:357ef05fd327",
         "identity.sweeper",
         "voice:2",
         "voice:3",
@@ -45,7 +45,7 @@
       "durationSec": 36.18,
       "revealAtSec": 18.87,
       "sources": [
-        "tail:0",
+        "tail:2c69a39d84aa",
         "identity.station-id",
         "voice:2",
         "voice:3",

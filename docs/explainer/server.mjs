@@ -10,7 +10,15 @@ const port = Number(process.env.PORT || 4187);
 // GitHub Pages already maps .mjs correctly; this map is for local preview.
 const mimeTypes = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".mp3": "audio/mpeg" };
 const server = createServer(async (request, response) => {
-  const rawPath = decodeURIComponent(new URL(request.url || "/", "http://localhost").pathname);
+  let rawPath;
+  try {
+    rawPath = decodeURIComponent(new URL(request.url || "/", "http://localhost").pathname);
+  } catch {
+    // Malformed percent-encoding used to throw outside any handler and hang
+    // the socket with no response at all.
+    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Bad request");
+    return;
+  }
   const requested = rawPath === "/" ? "/index.html" : rawPath;
   const filePath = resolve(join(root, normalize(requested)));
   if (!filePath.startsWith(root)) { response.writeHead(403).end("Forbidden"); return; }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import scenarios, { transcriptFor } from "../scenarios.mjs";
@@ -56,10 +57,28 @@ for (const id of truthIds) {
     throw new Error(`Scenario "${id}" derives an empty transcript — a visitor who cannot hear the clip would get nothing`);
   }
   const produced = producedManifest?.segments?.[id];
+  if (producedManifest && !produced) {
+    // Once produced audio exists, every scenario must be in the manifest —
+    // a new scenario silently skipping validation is how stale audio ships.
+    throw new Error(`Scenario "${id}" is missing from segments.manifest.json — run produce-segments.mjs --render`);
+  }
   if (produced) {
     if (scenario.revealAtSec === null) throw new Error(`Scenario "${id}" has a produced clip but no revealAtSec cue point`);
     if (typeof produced.durationSec !== "number" || scenario.revealAtSec >= produced.durationSec) {
       throw new Error(`Scenario "${id}" revealAtSec (${scenario.revealAtSec}) must fall inside the produced clip (${produced.durationSec}s)`);
+    }
+    // The cue in scenarios.mjs must BE the measured one, not merely inside
+    // the clip: the manifest's whole promise is that the reveal lands where
+    // the producer measured the moment.
+    if (Math.abs(scenario.revealAtSec - produced.revealAtSec) > 0.01) {
+      throw new Error(`Scenario "${id}" revealAtSec (${scenario.revealAtSec}) disagrees with the measured cue (${produced.revealAtSec}) — sync from segments.manifest.json`);
+    }
+    // And the checksum must be checked, or it is decoration: a re-rendered
+    // clip with a stale manifest (or vice versa) fails here, not on air.
+    const clipBytes = await readFile(`public/audio/${id}.mp3`);
+    const clipSha = createHash("sha256").update(clipBytes).digest("hex");
+    if (clipSha !== produced.sha256) {
+      throw new Error(`Scenario "${id}" clip sha256 does not match segments.manifest.json — audio and manifest are out of sync`);
     }
   } else if (scenario.revealAtSec !== null && typeof scenario.revealAtSec !== "number") {
     throw new Error(`Scenario "${id}" revealAtSec must be a number or null`);
