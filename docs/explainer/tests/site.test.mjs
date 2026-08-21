@@ -15,9 +15,9 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 test("the signature promise is in the first viewport", () => {
   assert.match(html, /radio station/i);
   assert.match(html, /listens to the house/i);
-  assert.match(html, /Hear a moment/);
-  assert.match(html, /What Home Assistant sees/);
-  assert.match(html, /What a person understands/);
+  assert.match(html, /Tune in/);
+  assert.match(html, /What you hear first/);
+  assert.match(html, /What that moment was made of/);
 });
 
 test("the page leads with the station, not with a pipeline", () => {
@@ -30,11 +30,22 @@ test("the page leads with the station, not with a pipeline", () => {
   assert.match(h1, /radio station/i, "the headline names the station");
   assert.doesNotMatch(h1, /sensor|data|smart home/i, "the headline is not about sensors");
 
+  // The meta description is the framing search engines and link previews
+  // quote; it slid back to sensor-first once while every guard watched the
+  // <h1>. It names the station and never leads with sensor translation.
+  const meta = html.match(/<meta name="description" content="([^"]*)"/)[1];
+  assert.match(meta, /radio station/i, "the meta description names the station");
+  assert.doesNotMatch(meta, /sensor states|sensor data|plain-English/i, "the meta description is not about sensor translation");
+
   // Ordinal steps read as a pipeline whatever their labels say.
   assert.doesNotMatch(html, /class="flow-number"/, "the flow steps carry no ordinals");
+  assert.doesNotMatch(html, /class="panel-number"/, "the stage panels carry no ordinals");
 
   // The old thesis sentence is the most translator-ish line the page ever had.
   assert.doesNotMatch(html, /Sensor data, finally understandable/);
+
+  // The inversion itself: you hear the show before you see the sensors.
+  assert.ok(html.indexOf('class="onair-panel"') < html.indexOf('class="sensor-panel"'), "the on-air panel precedes the sensor panel");
 });
 
 test("the experience has multiple interactive home moments", () => {
@@ -87,12 +98,23 @@ test("the explanatory copy stays direct", () => {
 test("the voice plays on the first click, not the second", () => {
   // The voice is the only part of this page that is not copyable, and it used
   // to sit behind a second click and a 2.9s animation, so a visitor could read
-  // the whole page and never hear it. playFromGesture runs inside the button's
-  // own handler, which is what makes autoplay permissible.
-  assert.match(js, /function playFromGesture/);
-  assert.match(js, /runTranslation\(\{ fromGesture: true \}\)/);
+  // the whole page and never hear it. tuneIn calls playSegment inside the
+  // button's own click handler, which is what makes autoplay permissible —
+  // and playSegment is the ONLY play path, so cue points and failure handling
+  // exist exactly once.
+  assert.match(js, /function playSegment/);
+  assert.match(js, /function tuneIn/);
+  assert.match(js, /translateButton\.addEventListener\("click"/);
+  const playCalls = js.match(/hostAudio\.play\(\)/g);
+  assert.equal(playCalls.length, 1, "one play path, not a duplicated one");
   // The manual control stays: a browser that refuses falls back, never to silence.
   assert.match(js, /speakButton\.addEventListener\("click"/);
+});
+
+test("the day-one boundary is said in plain words", () => {
+  assert.match(html, /On day one the station knows the sky\./);
+  assert.match(html, /day-one-chip/);
+  assert.match(html, /class="aired-truth"/);
 });
 
 test("responsive and reduced-motion treatments are present", () => {

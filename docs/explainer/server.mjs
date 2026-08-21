@@ -5,7 +5,10 @@ import { extname, join, normalize, resolve } from "node:path";
 
 const root = resolve(process.cwd());
 const port = Number(process.env.PORT || 4187);
-const mimeTypes = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml" };
+// .mjs must be a JavaScript MIME type: module scripts enforce strict MIME
+// checking, so serving it as octet-stream silently kills the whole page.
+// GitHub Pages already maps .mjs correctly; this map is for local preview.
+const mimeTypes = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".mp3": "audio/mpeg" };
 const server = createServer(async (request, response) => {
   const rawPath = decodeURIComponent(new URL(request.url || "/", "http://localhost").pathname);
   const requested = rawPath === "/" ? "/index.html" : rawPath;

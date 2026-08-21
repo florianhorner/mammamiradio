@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="An interactive Mamma Mi Radio demo that turns Home Assistant sensor states into plain-English radio moments." />
+    <meta name="description" content="Mamma Mi Radio is your own Italian radio station for Home Assistant: two hosts, music, invented ads, and every so often a moment only your house could have told them." />
     <meta name="theme-color" content="#14110F" />
     <title>Mamma Mi Radio for Home Assistant | Interactive demo</title>
     <script>
@@ -22,7 +22,7 @@
     <link rel="icon" href="public/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body data-phase="idle" data-scenario="arrival">
+  <body data-phase="idle" data-audio="" data-scenario="arrival">
     <a class="skip-link" href="#experience">Skip to the experience</a>
     <div class="ambient-glow" aria-hidden="true"></div>
     <div class="noise" aria-hidden="true"></div>
@@ -45,26 +45,67 @@
           <h1>Your own radio station.<span>It listens to the house.</span></h1>
           <p class="hero-intro">Two Italian hosts, music, and ads for companies that do not exist. Every so often, something only your house could have told them.</p>
           <div class="hero-actions">
-            <button class="primary-button" id="translate-button" type="button"><span>Hear a moment</span><b aria-hidden="true">→</b></button>
+            <button class="primary-button" id="translate-button" type="button"><span>Tune in</span><b aria-hidden="true">→</b></button>
             <button class="text-button" id="reset-button" type="button" hidden>Start over</button>
           </div>
           <ol class="journey" aria-label="How the demonstration works">
-            <li class="is-current" data-step="sensors" aria-current="step"><span>The house</span></li>
-            <li data-step="meaning"><span>The moment</span></li>
-            <li data-step="feeling"><span>On air</span></li>
+            <li class="is-current" data-step="onair" aria-current="step"><span>On air</span></li>
+            <li data-step="reveal"><span>The reveal</span></li>
           </ol>
         </div>
 
-        <div class="experience-card" aria-label="Interactive sensor translation">
+        <div class="experience-card" aria-label="Interactive station demo">
           <div class="experience-topline">
-            <span><i class="status-dot"></i> The house, right now</span>
+            <span><i class="status-dot"></i> The station, right now</span>
             <time id="moment-time">18:42 · Tuesday</time>
           </div>
           <div class="translation-stage">
+            <section class="onair-panel" aria-labelledby="onair-title">
+              <div class="panel-heading">
+                <div><p>What you hear first</p><h2 id="onair-title">On air</h2></div>
+              </div>
+              <p class="sr-only" id="translation-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
+              <div class="onair-idle" aria-hidden="true">
+                <div class="idle-preview">
+                  <span class="idle-kicker"><i></i> A show is already running</span>
+                  <div class="waveform hero-wave" data-waveform="hero"></div>
+                  <div class="teaser-stack">
+                    <p><span>Marco &amp; Giulia</span><strong>Two hosts with history.</strong></p>
+                    <p><span>the ad break</span><strong>Brands that do not exist.</strong></p>
+                    <p><span>and sometimes</span><strong>Your house, on air.</strong></p>
+                  </div>
+                  <p class="idle-prompt">Tune in and listen for the moment the station notices the house.</p>
+                </div>
+              </div>
+              <div class="on-air-card">
+                <div class="on-air-meta"><span class="live-pill"><i></i> On air</span><strong id="host-name">Marco noticed</strong></div>
+                <div class="radio-controls">
+                  <div class="waveform strip-wave" data-waveform="strip" aria-hidden="true"></div>
+                  <button id="speak-button" class="listen-button" type="button"><span aria-hidden="true">▶</span> Listen again</button>
+                </div>
+                <blockquote id="host-quote" hidden>“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</blockquote>
+                <div class="audio-trouble" id="audio-trouble" hidden>
+                  <p class="trouble-line" id="trouble-line">You should have heard this:</p>
+                  <p class="trouble-transcript" id="trouble-transcript"></p>
+                </div>
+                <p class="voice-note">The sensor readings are made up. <strong>The voices are not.</strong> That is Marco and Giulia, the station's own hosts.</p>
+              </div>
+            </section>
+
+            <div class="translation-gate" aria-hidden="true">
+              <div class="gate-orbit"><img src="public/logo.svg" alt="" /></div>
+              <div class="transport-track"><i class="transport-progress" id="transport-progress"></i></div>
+              <p id="gate-label">Ready</p>
+            </div>
+
             <section class="sensor-panel" aria-labelledby="sensor-title">
               <div class="panel-heading">
-                <span class="panel-number">01</span>
-                <div><p>What Home Assistant sees</p><h2 id="sensor-title">Raw signals</h2></div>
+                <div><p>What that moment was made of</p><h2 id="sensor-title">The reveal</h2></div>
+              </div>
+              <div class="meaning-content">
+                <span class="moment-tag" id="moment-tag">Welcome home</span>
+                <h3 id="moment-heading">Someone’s home early.</h3>
+                <p id="moment-summary">The front door opened four minutes ago. Evening light is fading. The kitchen is still quiet.</p>
               </div>
               <div class="sensor-list" id="sensor-list">
                 <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">⌂</span><span class="sensor-name">person.flo</span><strong class="sensor-value">home · 4 min</strong></div>
@@ -73,55 +114,16 @@
                 <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">°</span><span class="sensor-name">sensor.outdoor_temperature</span><strong class="sensor-value">14 °C</strong></div>
                 <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">♪</span><span class="sensor-name">media_player.kitchen</span><strong class="sensor-value">idle</strong></div>
               </div>
-              <p class="sensor-footnote">Precise data, written for machines.</p>
-            </section>
-
-            <div class="translation-gate" aria-hidden="true">
-              <span class="signal-line signal-a"></span><span class="signal-line signal-b"></span><span class="signal-line signal-c"></span>
-              <div class="gate-orbit"><img src="public/logo.svg" alt="" /></div><p id="gate-label">Ready to listen</p>
-            </div>
-
-            <section class="meaning-panel" aria-labelledby="meaning-title">
-              <div class="panel-heading">
-                <span class="panel-number">02</span>
-                <div><p>What a person understands</p><h2 id="meaning-title">A home moment</h2></div>
-              </div>
-              <p class="sr-only" id="translation-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
-              <div class="meaning-idle" aria-hidden="true">
-                <div class="idle-preview">
-                  <span class="idle-kicker"><i></i> A home moment is forming</span>
-                  <div class="waveform hero-wave" data-waveform="hero"></div>
-                  <div class="teaser-stack">
-                    <p><span>door opened + person.home</span><strong>Someone came home.</strong></p>
-                    <p><span>842 W + kitchen presence</span><strong>Coffee just started.</strong></p>
-                    <p><span>finished · 2h + no motion</span><strong>The laundry was forgotten.</strong></p>
-                  </div>
-                  <p class="idle-prompt">Press the button to hear how the radio tells it.</p>
-                </div>
-              </div>
-              <div class="meaning-content">
-                <span class="moment-tag" id="moment-tag">Welcome home</span>
-                <h3 id="moment-heading">Someone’s home early.</h3>
-                <p id="moment-summary">The front door opened four minutes ago. Evening light is fading. The kitchen is still quiet.</p>
-                <div class="on-air-card">
-                  <div class="on-air-meta"><span class="live-pill"><i></i> On air</span><strong id="host-name">Marco noticed</strong></div>
-                  <blockquote id="host-quote">“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</blockquote>
-                  <div class="radio-controls">
-                    <div class="waveform strip-wave" data-waveform="strip" aria-hidden="true"></div>
-                    <button id="speak-button" class="listen-button" type="button"><span aria-hidden="true">▶</span> Hear it on air</button>
-                  </div>
-                  <p class="voice-note">The sensor readings above are made up. <strong>The voices are not.</strong> That is Marco and Giulia, the station's own hosts.</p>
-                </div>
-              </div>
+              <p class="sensor-footnote">These are the liner notes, not the show.</p>
             </section>
           </div>
           <div class="scenario-picker">
-            <p>Try another home moment</p>
+            <p>Hear another one</p>
             <div class="scenario-buttons" role="group" aria-label="Choose a home moment">
               <button class="scenario-button is-active" data-scenario-id="arrival" type="button"><span>⌂</span> Someone came home</button>
               <button class="scenario-button" data-scenario-id="coffee" type="button"><span>◌</span> Coffee just started</button>
               <button class="scenario-button" data-scenario-id="laundry" type="button"><span>↻</span> Laundry forgotten</button>
-              <button class="scenario-button" data-scenario-id="quiet" type="button"><span>☾</span> The house settled</button>
+              <button class="scenario-button" data-scenario-id="quiet" type="button"><span>☾</span> Evening arrives <em class="day-one-chip">day one</em></button>
             </div>
           </div>
         </div>
@@ -144,12 +146,13 @@
             <div class="flow-sample station-sample"><div class="mini-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><p>A home update, delivered like radio.</p></div>
           </li>
         </ol>
-        <div class="privacy-note"><span aria-hidden="true">◎</span><div><strong>You decide what the hosts may use.</strong><p>This demo reads no Home Assistant data. The real product uses home context only after you enable it.</p></div></div>
+        <div class="privacy-note"><span aria-hidden="true">◎</span><div><strong>On day one the station knows the sky.</strong><p>A fresh install shares only daylight and the weather. Giulia can call the sunset, nothing more. The other moments on this page happen after you open the door: you choose what the hosts may use, entity by entity, and until you do, they talk about the weather like every other station on earth. This demo reads no Home Assistant data.</p></div></div>
       </section>
     </main>
 
     <footer>
       <div class="flag-line" aria-hidden="true"><i></i><i></i><i></i></div>
+      <p class="aired-truth">In the real product, nothing counts as having aired until a listener actually received the audio: the hosts’ memory, the home-moment receipts, even the health check all wait for that. A radio station that only believes its own broadcast once somebody heard it.</p>
       <nav id="site-links" class="footer-links" aria-label="Project links"></nav>
       <p><strong>Mamma <em>Mi</em> Radio</strong> · Local interactive demo · No live data connected</p>
     </footer>

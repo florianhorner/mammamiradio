@@ -39,6 +39,32 @@ for (const id of truthIds) {
 if (!truthIds.some((id) => scenarios[id].reachability === "day-one")) {
   throw new Error("No scenario is fresh-install reachable (reachability: \"day-one\") — the page would demonstrate only gated capability");
 }
+// Every scenario must carry what a visitor who cannot hear the clip needs,
+// and a cue point may only exist alongside the produced manifest that
+// measured it — humans do not guess cue points. Once produce-segments.mjs
+// emits segments.manifest.json, a null revealAtSec becomes a build failure
+// too, so the page cannot ship produced audio without its reveal landing.
+let producedManifest = null;
+try {
+  producedManifest = JSON.parse(await readFile("public/audio/segments.manifest.json", "utf8"));
+} catch {
+  // No produced manifest yet: pre-producer clips reveal on `ended`.
+}
+for (const id of truthIds) {
+  const scenario = scenarios[id];
+  if (!scenario.transcript || !scenario.transcript.trim()) {
+    throw new Error(`Scenario "${id}" has no transcript — a visitor who cannot hear the clip would get nothing`);
+  }
+  const produced = producedManifest?.segments?.[id];
+  if (produced) {
+    if (scenario.revealAtSec === null) throw new Error(`Scenario "${id}" has a produced clip but no revealAtSec cue point`);
+    if (typeof produced.durationSec !== "number" || scenario.revealAtSec >= produced.durationSec) {
+      throw new Error(`Scenario "${id}" revealAtSec (${scenario.revealAtSec}) must fall inside the produced clip (${produced.durationSec}s)`);
+    }
+  } else if (scenario.revealAtSec !== null && typeof scenario.revealAtSec !== "number") {
+    throw new Error(`Scenario "${id}" revealAtSec must be a number or null`);
+  }
+}
 
 await mkdir("dist/public", { recursive: true });
 await mkdir("dist/public/fonts", { recursive: true });
