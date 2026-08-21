@@ -66,6 +66,7 @@ Old code:
 
 ```python
 import requests
+
 r = requests.get("http://host:8000/public-status")
 data = r.json()
 now = data["now_streaming"]
@@ -80,6 +81,7 @@ New code:
 
 ```python
 import requests
+
 r = requests.get("http://host:8000/api/integrations/v1/now-playing", timeout=5)
 r.raise_for_status()
 data = r.json()
