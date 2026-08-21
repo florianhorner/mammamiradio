@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [html, css, js] = await Promise.all([
+const [html, css, js, scenariosSource] = await Promise.all([
   readFile("index.html", "utf8"),
   readFile("styles.css", "utf8"),
   readFile("app.js", "utf8"),
+  readFile("scenarios.mjs", "utf8"),
 ]);
 const addonUrl = "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio";
 const sourceUrl = "https://github.com/florianhorner/mammamiradio";
@@ -39,7 +40,26 @@ test("the page leads with the station, not with a pipeline", () => {
 test("the experience has multiple interactive home moments", () => {
   for (const id of ["arrival", "coffee", "laundry", "quiet"]) {
     assert.match(html, new RegExp(`data-scenario-id="${id}"`));
-    assert.match(js, new RegExp(`${id}:`));
+    assert.match(scenariosSource, new RegExp(`${id}: \\{`));
+  }
+  // The data lives in scenarios.mjs and only there; app.js imports it.
+  assert.match(js, /import scenarios from "\.\/scenarios\.mjs"/);
+  assert.doesNotMatch(js, /binary_sensor\.front_door/, "sensor data must not creep back into app.js");
+});
+
+test("at least one moment is reachable by a fresh install", () => {
+  // Narrow ambient context projects only the sun and the weather
+  // (home/authorization.py). A page whose every demo needs a home grant
+  // sells a stranger something their install cannot do. This guard keeps
+  // the day-one scenario from being silently traded away.
+  assert.match(scenariosSource, /reachability: "day-one"/);
+  const dayOneBlocks = scenariosSource.match(/reachability: "day-one"/g);
+  assert.ok(dayOneBlocks.length >= 1);
+  // The day-one moment may only use ambient entities.
+  const quietBlock = scenariosSource.slice(scenariosSource.indexOf("quiet: {"));
+  const sensorNames = [...quietBlock.matchAll(/\["[^"]*", "([^"]+)"/g)].map((m) => m[1]);
+  for (const name of sensorNames.slice(0, 5)) {
+    assert.match(name, /^(sun\.sun|weather\.home)/, `day-one scenario uses non-ambient entity: ${name}`);
   }
 });
 

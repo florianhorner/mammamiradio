@@ -1,35 +1,9 @@
-const siteLinks = globalThis.mammamiSiteLinks ?? {};
+// The scenario data lives in scenarios.mjs — the single source of truth the
+// page, the clip producer, and the build guards all read. Nothing about a
+// moment (copy, sensors, transcript, cue point) is defined in this file.
+import scenarios from "./scenarios.mjs";
 
-const scenarios = {
-  arrival: {
-    time: "18:42 · Tuesday", tag: "Welcome home", heading: "Someone’s home early.",
-    summary: "The front door opened four minutes ago. Evening light is fading. The kitchen is still quiet.",
-    host: "Marco noticed", quote: "Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
-    color: "#f4d048", rgb: "244, 208, 72",
-    sensors: [["⌂", "person.flo", "home · 4 min"], ["↗", "binary_sensor.front_door", "closed"], ["☼", "sensor.living_room_lux", "36 lx"], ["°", "sensor.outdoor_temperature", "14 °C"], ["♪", "media_player.kitchen", "idle"]],
-  },
-  coffee: {
-    time: "14:07 · Tuesday", tag: "Classic Tuesday", heading: "The kitchen just woke up.",
-    summary: "The coffee machine started. Someone arrived earlier than usual. The room is cooler than the rest of the house.",
-    host: "Giulia connected the dots", quote: "The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.",
-    color: "#e8a030", rgb: "232, 160, 48",
-    sensors: [["◉", "sensor.coffee_machine_power", "842 W"], ["⌂", "person.flo", "home · early"], ["°", "sensor.kitchen_temperature", "14 °C"], ["◌", "binary_sensor.kitchen_presence", "detected"], ["☼", "sensor.kitchen_lux", "118 lx"]],
-  },
-  laundry: {
-    time: "20:16 · Thursday", tag: "Domestic breaking news", heading: "The laundry finished. Nobody noticed.",
-    summary: "The cycle ended more than two hours ago. People are home, but nobody has entered the laundry room since.",
-    host: "Marco has an update", quote: "Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
-    color: "#9cab7e", rgb: "156, 171, 126",
-    sensors: [["↻", "sensor.washing_machine", "finished · 2h 07m"], ["◌", "binary_sensor.laundry_motion", "clear · 2h 12m"], ["⌂", "zone.home", "2 people"], ["↗", "binary_sensor.laundry_door", "closed"], ["⚡", "sensor.washer_power", "0.4 W"]],
-  },
-  quiet: {
-    time: "22:14 · Sunday", tag: "The house exhaled", heading: "Everything has settled.",
-    summary: "The living room is occupied. The lights are low, the television is playing, and both phones are charging.",
-    host: "Giulia lowers her voice", quote: "The lights are low, the phones are charging, and nobody is going anywhere. Stay exactly where you are.",
-    color: "#60a5fa", rgb: "96, 165, 250",
-    sensors: [["◌", "binary_sensor.living_room_presence", "detected"], ["☾", "sensor.living_room_lux", "8 lx"], ["▶", "media_player.television", "playing"], ["⚡", "sensor.phone_chargers", "2 connected"], ["↗", "binary_sensor.front_door", "closed · 3h"]],
-  },
-};
+const siteLinks = globalThis.mammamiSiteLinks ?? {};
 
 const body = document.body;
 const translateButton = document.querySelector("#translate-button");

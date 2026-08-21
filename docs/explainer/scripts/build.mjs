@@ -1,5 +1,6 @@
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
+import scenarios from "../scenarios.mjs";
 
 const indexTemplate = await readFile("index.html", "utf8");
 const configMatch = indexTemplate.match(/window\.mammamiSiteLinks\s*=\s*({[\s\S]*?});/);
@@ -24,6 +25,21 @@ const scenarioIds = [...indexTemplate.matchAll(/data-scenario-id="([a-z]+)"/g)].
 const audioIds = [...new Set(scenarioIds)];
 if (audioIds.length === 0) throw new Error("No scenario ids found in index.html");
 
+// scenarios.mjs is the single source of truth; the picker buttons in
+// index.html must agree with it in both directions, and at least one moment
+// must be reachable by a fresh install (narrow ambient context: sun and
+// weather only). A page whose every demo needs a home grant oversells.
+const truthIds = Object.keys(scenarios);
+for (const id of audioIds) {
+  if (!truthIds.includes(id)) throw new Error(`index.html offers "${id}" but scenarios.mjs does not define it`);
+}
+for (const id of truthIds) {
+  if (!audioIds.includes(id)) throw new Error(`scenarios.mjs defines "${id}" but index.html never offers it`);
+}
+if (!truthIds.some((id) => scenarios[id].reachability === "day-one")) {
+  throw new Error("No scenario is fresh-install reachable (reachability: \"day-one\") — the page would demonstrate only gated capability");
+}
+
 await mkdir("dist/public", { recursive: true });
 await mkdir("dist/public/fonts", { recursive: true });
 await mkdir("dist/public/audio", { recursive: true });
@@ -32,6 +48,7 @@ await Promise.all([
   writeFile("dist/index.html", renderedIndex),
   copyFile("styles.css", "dist/styles.css"),
   copyFile("app.js", "dist/app.js"),
+  copyFile("scenarios.mjs", "dist/scenarios.mjs"),
   copyFile(".nojekyll", "dist/.nojekyll"),
   copyFile("public/logo.svg", "dist/public/logo.svg"),
   copyFile("public/favicon.svg", "dist/public/favicon.svg"),
