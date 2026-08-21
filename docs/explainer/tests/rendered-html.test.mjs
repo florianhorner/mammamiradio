@@ -82,10 +82,50 @@ test("link previews point at a card that actually ships, at its real size", asyn
 
   // Twitter/X and Slack size the card from these; a re-rendered card of a
   // different size would otherwise preview cropped.
+  assert.equal(bytes.subarray(12, 16).toString("ascii"), "IHDR", "PNG must open with IHDR before its dimensions are read");
   const width = bytes.readUInt32BE(16);
   const height = bytes.readUInt32BE(20);
   assert.equal(value(/<meta property="og:image:width" content="([^"]+)"/), String(width));
   assert.equal(value(/<meta property="og:image:height" content="([^"]+)"/), String(height));
+  assert.equal(value(/<meta property="og:image:type" content="([^"]+)"/), "image/png", "the declared type must match the bytes read above");
   assert.match(html, /<meta name="twitter:card" content="summary_large_image"/);
-  assert.match(html, /<meta property="og:image:alt" content="[^"]{20,}"/, "the card needs alt text");
+  assert.match(html, /<meta property="og:type" content="website"/);
+  assert.match(html, /<meta property="og:site_name" content="Mamma Mi Radio"/);
+  assert.match(html, /<meta property="og:locale" content="/);
+});
+
+test("the twitter card cannot drift away from the og card", () => {
+  // Four strings are written twice, once for og: and once for twitter:. The
+  // URL pair is guarded above; these three are prose, which is the half that
+  // actually gets copy-edited on one line and forgotten on the other. Drift
+  // here is invisible to any single person: X reads one string, Slack and
+  // iMessage read the other, so nobody ever sees both at once.
+  const pairs = [
+    ["og:title", "twitter:title"],
+    ["og:description", "twitter:description"],
+    ["og:image:alt", "twitter:image:alt"],
+  ];
+  for (const [ogName, twitterName] of pairs) {
+    const og = html.match(new RegExp(`<meta property="${ogName}" content="([^"]+)"`));
+    const twitter = html.match(new RegExp(`<meta name="${twitterName}" content="([^"]+)"`));
+    assert.ok(og, `missing ${ogName}`);
+    assert.ok(twitter, `missing ${twitterName}`);
+    assert.equal(twitter[1], og[1], `${twitterName} must say exactly what ${ogName} says`);
+    assert.ok(og[1].length >= 20, `${ogName} is too short to be real copy`);
+  }
+});
+
+test("the deployed origin is named only by the link-preview block", () => {
+  // The HTML comment next to those tags makes this claim. Without a count it
+  // is decoration: a later rel=alternate, a JSON-LD block, or one runtime
+  // asset hard-pinned to the origin would pass every other test here and
+  // 404 on a fork, a rename, or any other host.
+  const origin = "https://florianhorner.github.io/mammamiradio/";
+  const occurrences = html.split(origin).length - 1;
+  assert.equal(occurrences, 4, "only canonical, og:url, og:image and twitter:image may name the origin");
+  // rel=canonical is the one legitimate href on the origin. Anything else
+  // with an href or src pinned there is a runtime asset that would 404 on
+  // a fork, a rename, or any other host.
+  const pinned = [...html.matchAll(/(?:href|src)="https:\/\/florianhorner\.github\.io[^"]*"/g)].map((m) => m[0]);
+  assert.deepEqual(pinned, [`href="${origin}"`], "only rel=canonical may point an href at the origin");
 });

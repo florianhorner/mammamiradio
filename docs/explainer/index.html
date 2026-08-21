@@ -9,10 +9,11 @@
 
     <!-- Link previews. og:image must be an absolute URL, because scrapers
          fetch the tag value as-is and never resolve it against the page: a
-         relative path here previews as a bare link. This is the only place
-         the deployed origin is named. A test asserts the absolute
-         self-references agree and that the card really ships in dist/.
-         Runtime assets stay relative so the page survives any subpath. -->
+         relative path here previews as a bare link. This block is the only
+         place the PAGE names the deployed origin; the guard test pins the
+         same string, and a test counts the occurrences so a fifth one fails
+         instead of quietly appearing. Runtime assets stay relative so the
+         page survives any subpath. -->
     <link rel="canonical" href="https://florianhorner.github.io/mammamiradio/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Mamma Mi Radio" />
