@@ -65,7 +65,9 @@ async def render(force: bool) -> None:
             raise SystemExit(f"{name} is not configured with a canonical ElevenLabs voice in radio.toml")
 
     async def render_line(who: str, text: str, out_path: Path, *, loudnorm: bool) -> Path:
-        host = hosts[who]
+        # Case-normalized to match the pre-flight below, which is what makes
+        # this lookup safe rather than hopeful.
+        host = hosts[who.strip().lower()]
         return await synthesize_elevenlabs(
             text,
             host.voice,
@@ -78,6 +80,28 @@ async def render(force: bool) -> None:
         )
 
     VOICE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Every speaker in every beat, resolved before the first paid request. The
+    # old pre-flight only proved marco and giulia exist, so an unknown or
+    # differently-capitalized name failed mid-render with a KeyError and the
+    # characters already spent were not refundable.
+    unresolved: list[str] = []
+    for scenario_id, scenario in load_scenarios().items():
+        for index, beat in enumerate(scenario["beats"]):
+            if beat.get("kind") != "voice":
+                continue
+            for line in beat.get("lines") or []:
+                who = str(line.get("who", "")).strip().lower()
+                if who not in hosts:
+                    unresolved.append(f"{scenario_id} beat {index}: {line.get('who')!r}")
+    if unresolved:
+        raise SystemExit(
+            "these beats name a speaker that is not a configured host: "
+            + "; ".join(unresolved)
+            + f" — configured hosts are {', '.join(sorted(hosts))}. "
+            "Fix the name in scenarios.mjs, then run again."
+        )
+
     spent_chars = 0
     for scenario_id, scenario in load_scenarios().items():
         for index, beat in enumerate(scenario["beats"]):

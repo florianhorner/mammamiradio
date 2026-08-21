@@ -29,6 +29,10 @@ test("the canonical radio identity is used instead of a standalone Mi emblem", (
   assert.match(css, /public\/fonts\/jetbrains-mono\.woff2/);
   assert.match(build, /dist\/public\/fonts\/jetbrains-mono\.woff2/);
   assert.match(build, /dist\/public\/fonts\/playfair-display\.woff2/);
+  // The copy list is hand-maintained. phase.mjs was imported and never
+  // copied once, which would have shipped a page whose module graph 404s.
+  assert.match(build, /copyFile\("phase\.mjs", "dist\/phase\.mjs"\)/);
+  assert.match(build, /localImports/);
 });
 
 test("the idle state previews the station, not a sensor pipeline", () => {
@@ -131,7 +135,12 @@ test("a failed clip never wears the on-air treatment", () => {
   assert.match(js, /troubleTranscript\.textContent = transcriptFor\(scenario\)/);
   assert.match(css, /body\[data-audio="failed"\] \.on-air-card/);
   assert.match(css, /body\[data-audio="failed"\] \.live-pill i \{ animation: none/);
-  // The failure copy names the way forward, not just the problem.
+  // Three kinds, three answers: a missing clip must not say "retry in a
+  // moment", and a stall must not say the audio was held back.
+  assert.match(js, /Audio held back/);
+  assert.match(js, /Audio catching up/);
+  assert.match(js, /Audio did not arrive/);
+  assert.match(js, /Reloading the page usually fetches it/);
   assert.match(js, /Tap ▶/);
 });
 

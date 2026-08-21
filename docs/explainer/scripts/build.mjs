@@ -94,6 +94,7 @@ await Promise.all([
   copyFile("styles.css", "dist/styles.css"),
   copyFile("app.js", "dist/app.js"),
   copyFile("scenarios.mjs", "dist/scenarios.mjs"),
+  copyFile("phase.mjs", "dist/phase.mjs"),
   copyFile(".nojekyll", "dist/.nojekyll"),
   copyFile("public/logo.svg", "dist/public/logo.svg"),
   copyFile("public/share-card.png", "dist/public/share-card.png"),
@@ -104,4 +105,29 @@ await Promise.all([
   copyFile("public/fonts/outfit.woff2", "dist/public/fonts/outfit.woff2"),
   copyFile("public/fonts/jetbrains-mono.woff2", "dist/public/fonts/jetbrains-mono.woff2"),
 ]);
-console.log("Built local static site in dist/");
+// The copy list above is hand-maintained, so the failure it just fixed —
+// app.js importing a module dist/ never received — can come back the next time
+// a module is added. Derive what the browser actually imports and assert each
+// one arrived. A missing module fails the build here instead of failing the
+// visitor's page, where the whole module graph dies silently.
+const browserSource = await readFile("app.js", "utf8");
+const localImports = [...browserSource.matchAll(/(?:^|\n)\s*import\s[^"']*["'](\.\/[^"']+)["']/g)].map(
+  (match) => match[1].replace(/^\.\//, ""),
+);
+const missingModules = [];
+for (const moduleName of new Set(localImports)) {
+  try {
+    await readFile(`dist/${moduleName}`, "utf8");
+  } catch {
+    missingModules.push(moduleName);
+  }
+}
+if (missingModules.length > 0) {
+  throw new Error(
+    `app.js imports ${missingModules.join(", ")} but dist/ does not contain ` +
+      `${missingModules.length === 1 ? "it" : "them"} — add the copy to build.mjs, ` +
+      "or the deployed page fails to load its module graph",
+  );
+}
+
+console.log(`Built local static site in dist/ (${localImports.length} browser module(s) verified)`);

@@ -58,7 +58,16 @@ async function exists(path) {
 }
 async function durationSec(path) {
   const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path]);
-  return Number.parseFloat(stdout.trim());
+  const seconds = Number.parseFloat(stdout.trim());
+  // ffprobe prints "N/A" or nothing for a damaged input. Left alone, the NaN
+  // reaches the manifest as null and the build reports a missing cue point,
+  // which sends whoever reads it looking at the cue instead of the file.
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(
+      `ffprobe reported no usable duration for ${path} — re-cut or re-render that input, then run --render again`,
+    );
+  }
+  return seconds;
 }
 
 // Validate every beat before touching ffmpeg, and report the whole plan —

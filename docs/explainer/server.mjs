@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 const root = resolve(process.cwd());
 const port = Number(process.env.PORT || 4187);
@@ -21,7 +21,23 @@ const server = createServer(async (request, response) => {
   }
   const requested = rawPath === "/" ? "/index.html" : rawPath;
   const filePath = resolve(join(root, normalize(requested)));
-  if (!filePath.startsWith(root)) { response.writeHead(403).end("Forbidden"); return; }
+  // Not startsWith: that also accepts a sibling whose name merely begins with
+  // the root's, and join(root, "../explainer-secrets/x") resolves to exactly
+  // such a path. relative() answers the question being asked — an escape gives
+  // a result that is absolute or starts with a ".." segment.
+  const insideRoot = relative(root, filePath);
+  if (insideRoot !== "" && (isAbsolute(insideRoot) || insideRoot.split(/[\\/]/)[0] === "..")) {
+    response.writeHead(403).end("Forbidden");
+    return;
+  }
+  // The stream's error event fires after the headers are sent, so it lands
+  // outside the try/catch below. Unhandled, it ends the process instead of the
+  // request, and one truncated file stops the whole preview.
+  const pipeFile = (options) => {
+    const stream = options ? createReadStream(filePath, options) : createReadStream(filePath);
+    stream.on("error", () => response.destroy());
+    stream.pipe(response);
+  };
   try {
     const fileStat = await stat(filePath);
     if (!fileStat.isFile()) throw new Error("Not a file");
@@ -44,11 +60,11 @@ const server = createServer(async (request, response) => {
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-store",
       });
-      createReadStream(filePath, { start, end }).pipe(response);
+      pipeFile({ start, end });
       return;
     }
     response.writeHead(200, { "Content-Type": contentType, "Content-Length": fileStat.size, "Accept-Ranges": "bytes", "Cache-Control": "no-store" });
-    createReadStream(filePath).pipe(response);
+    pipeFile();
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }); response.end("Not found");
   }

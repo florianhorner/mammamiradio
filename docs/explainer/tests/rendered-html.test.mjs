@@ -22,6 +22,15 @@ test("every scenario ships a real host clip, and none is browser speech", async 
   const appJs = await readFile("dist/app.js", "utf8");
   assert.doesNotMatch(appJs, /speechSynthesis/, "browser TTS must not come back");
   assert.match(appJs, /public\/audio\//);
+  // The browser module graph dies silently if a local import is missing from
+  // dist/. phase.mjs shipped in source and not in the build once; never again.
+  const localImports = [...appJs.matchAll(/(?:^|\n)\s*import\s[^"']*["'](\.\/[^"']+)["']/g)].map(
+    (match) => match[1].replace(/^\.\//, ""),
+  );
+  assert.ok(localImports.includes("phase.mjs"), "app.js must import phase.mjs");
+  for (const moduleName of new Set(localImports)) {
+    await access(`dist/${moduleName}`);
+  }
 });
 
 test("the built root page contains both outbound exits in order", async () => {

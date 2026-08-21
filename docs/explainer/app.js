@@ -230,12 +230,31 @@ function reportFailure(kind) {
   // shown a successful on-air moment. The reveal still fires — a frozen page
   // is the other broken promise — but the card says what should have been
   // heard, as text, and names the way forward.
-  troubleLine.textContent = kind === "blocked"
-    ? "Your browser held the audio back. Tap ▶ to hear it. You should have heard:"
-    : "The clip is catching its breath. Try ▶ again in a moment. You should have heard:";
+  // Three kinds reach here and they need three answers. "Retry in a moment"
+  // is true for a stall and false for a clip that never arrived, and sending
+  // someone to tap again for a download that failed wastes their patience on
+  // the wrong fix.
+  const trouble = {
+    blocked: {
+      line: "Your browser held the audio back. Tap ▶ to hear it. You should have heard:",
+      label: "Audio held back",
+    },
+    stalled: {
+      line: "The clip is catching its breath. Try ▶ again in a moment. You should have heard:",
+      label: "Audio catching up",
+    },
+    missing: {
+      line: "This clip did not arrive. Reloading the page usually fetches it. Here it is in writing:",
+      label: "Audio did not arrive",
+    },
+  }[kind] ?? {
+    line: "The clip is catching its breath. Try ▶ again in a moment. You should have heard:",
+    label: "Audio catching up",
+  };
+  troubleLine.textContent = trouble.line;
   troubleTranscript.textContent = transcriptFor(scenario);
   audioTrouble.hidden = false;
-  gateLabel.textContent = "Audio held back";
+  gateLabel.textContent = trouble.label;
   applyState(nextPhase({ phase: body.dataset.phase === "idle" ? "onair" : body.dataset.phase, failed: true }));
 }
 function onReveal(audio) {
