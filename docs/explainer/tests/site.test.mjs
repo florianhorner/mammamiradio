@@ -117,6 +117,34 @@ test("the day-one boundary is said in plain words", () => {
   assert.match(html, /class="aired-truth"/);
 });
 
+test("exactly two calls to action carry the gold", () => {
+  // The page's funnel is two clicks: Tune in to get going, then one click
+  // into the Home Assistant install path. The install CTA appears with the
+  // reveal (the page earns the ask first), takes the gold, and the hero
+  // button demotes so the golds never compete.
+  assert.match(html, /id="install-cta" hidden/);
+  assert.match(js, /function wireInstallCta/);
+  assert.match(js, /cta\.href = addon\.href/);
+  // The install button is in layout from the start (visibility, not
+  // display), so its reveal fades in without reflowing the row.
+  assert.match(css, /\.install-cta \{[^}]*display: inline-flex; visibility: hidden/);
+  assert.match(css, /body\[data-phase="revealed"\] \.install-cta:not\(\[hidden\]\) \{ visibility: visible; opacity: 1/);
+  // Post-reveal both CTAs are gold and one spotlight alternates between
+  // them: same keyframe, offset half a cycle, both starting only after the
+  // entrance settles, with rest frames equal to the base shadow so the
+  // animation starting is invisible.
+  assert.match(css, /@keyframes cta-spotlight/);
+  assert.match(css, /\.primary-button:not\(\[hidden\]\) \{ animation: cta-spotlight 4\.8s ease-in-out 600ms infinite/);
+  assert.match(css, /\.install-cta:not\(\[hidden\]\) \{[^}]*animation: cta-spotlight 4\.8s ease-in-out 3s infinite/);
+  assert.doesNotMatch(css, /revealed"\] \.primary-button \{ background: transparent/);
+  assert.ok(html.indexOf('id="translate-button"') < html.indexOf('id="install-cta"'), "install sits beside the hero button, after it");
+  assert.match(css, /body\[data-phase="idle"\] \.primary-button \{ animation: cta-beckon/);
+  // After the last unheard moment, "Hear another one" would be a lie —
+  // the button retires and install is the only ask left standing.
+  assert.match(js, /playedScenarios\.size >= scenarioIds\.length/);
+  assert.match(js, /translateButton\.hidden = true/);
+});
+
 test("the starter-catalog music tail carries its attribution", () => {
   // The segment openers are cut from the CC BY 4.0 starter catalog; using
   // the music obliges the credit line. If the tails ever leave the clips,

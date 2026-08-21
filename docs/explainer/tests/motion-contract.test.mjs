@@ -47,9 +47,12 @@ test("audio position drives the reveal, not a stopwatch", () => {
   assert.match(js, /addEventListener\("timeupdate"/);
   assert.match(js, /revealAtSec: scenario\.revealAtSec/);
   assert.match(js, /AUDIO_DEADLINE_MS/);
-  assert.match(css, /@keyframes sensor-lock/);
-  assert.match(css, /@keyframes stage-sweep/);
   assert.match(css, /@keyframes on-air-rise/);
+  // The reveal is ONE staggered rise. The per-row lock slides and the
+  // full-card gold sweep fired on top of it and read as a glitch; they must
+  // not come back.
+  assert.doesNotMatch(css, /@keyframes sensor-lock|@keyframes stage-sweep/);
+  assert.match(css, /\.sensor-panel \.sensor-list \{ transition-delay: 140ms; \}/);
 });
 
 test("the phase machine follows aired-truth", () => {
@@ -99,9 +102,29 @@ test("the stage leads with the show and hides the answer until it airs", () => {
   // On-air panel before sensor panel, in DOM order — the inversion itself.
   assert.ok(html.indexOf('class="onair-panel"') < html.indexOf('class="sensor-panel"'), "the on-air panel must precede the sensor panel");
   assert.match(css, /grid-template-columns: minmax\(300px, 1\.14fr\) 104px minmax\(240px, \.86fr\)/);
-  // The sensors are the reveal: face-down until the moment has aired.
-  assert.match(css, /\.sensor-panel \.sensor-list[^{]*\{[^}]*opacity: 0/ms);
+  // The sensors are the reveal: face-down until the moment has aired —
+  // present as shapes (an empty panel reads as a bug), unreadable as content,
+  // with one story line over them so the wait is theater, not silence.
+  assert.match(css, /\.sensor-panel \.sensor-list[^{]*\{[^}]*opacity: \.3/ms);
+  assert.match(css, /filter: blur\(5px\)/);
+  assert.match(html, /class="reveal-waiting"/);
+  assert.match(html, /The hosts haven’t noticed yet\./);
+  // The waiting line escalates with the assembly, paced by playback
+  // position against the cue — theater moves, it does not sit still.
+  assert.match(js, /WAITING_LINES = \[/);
+  assert.match(js, /The house knows something they don’t\./);
+  assert.match(js, /Any second now…/);
+  assert.match(js, /function updateWaitingLine/);
+  assert.match(css, /body\[data-phase="revealed"\] \.reveal-waiting \{ visibility: hidden/);
   assert.match(css, /body\[data-phase="revealed"\] \.sensor-panel \.sensor-list/);
+  // While the show plays, the reveal assembles itself behind the frost:
+  // rows arrive one by one, the headline block arrives late. Every assembly
+  // animation must end on the base ghost values and be dropped at the
+  // reveal, so the sharpen transition takes over without a jump.
+  assert.match(css, /@keyframes assemble-row/);
+  assert.match(css, /@keyframes assemble-block/);
+  assert.match(css, /body\[data-phase="onair"\] \.sensor-panel \.sensor-row:nth-child\(5\) \{ animation-delay: 11\.4s/);
+  assert.match(css, /body\[data-phase="revealed"\] \.sensor-panel \.sensor-row[^{]*\{ animation: none/);
   assert.match(html, /These are the liner notes, not the show\./);
 });
 

@@ -5,8 +5,9 @@ already running, and somewhere inside it the hosts mention something only your
 house could have told them. The sensors arrive afterward, as the reveal — the
 liner notes, not the show.
 
-The scenarios are invented. The voices are not: the clips in `public/audio/`
-are Marco and Giulia, rendered in the station's own configured voices. One of
+The scenarios are invented. Marco and Giulia are not: the clips in
+`public/audio/` are the station's own hosts — characters with history, in
+their own configured voices. One of
 the four moments ("Evening, officially") uses only the sun and the weather,
 which is exactly what a fresh install can share — the other three need the
 home grant, and the page says so. The page connects to nothing, reads no Home

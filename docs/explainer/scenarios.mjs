@@ -56,18 +56,18 @@ const scenarios = {
       {
         kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house",
         lines: [
-          { who: "marco", text: "No, no, no. You cannot put cream in carbonara. This is not an opinion, Giulia, it is the law." },
-          { who: "giulia", text: "You read one cookbook, Marco. Half of it. The half with pictures." },
+          { who: "marco", text: "Limit 70! Kevin MacLeod. The official soundtrack of the drive home, Giulia." },
+          { who: "giulia", text: "You have never once driven the speed limit, Marco." },
         ],
       },
       {
         kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
-        lines: [{ who: "marco", text: "Aspetta, aspetta — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa." }],
+        lines: [{ who: "marco", text: "And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa." }],
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
-    revealAtSec: 17.94,
-    transcript: "Marco: No, no, no. You cannot put cream in carbonara. This is not an opinion, Giulia, it is the law. Giulia: You read one cookbook, Marco. Half of it. The half with pictures. Marco: Aspetta, aspetta — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
+    revealAtSec: 15.94,
+    transcript: "Marco: Limit 70! Kevin MacLeod. The official soundtrack of the drive home, Giulia. Giulia: You have never once driven the speed limit, Marco. Marco: And right on cue — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
   },
   coffee: {
     id: "coffee",
@@ -93,8 +93,8 @@ const scenarios = {
       {
         kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house",
         lines: [
-          { who: "marco", text: "The two o’clock slot is the most important slot in radio. Ask anyone. Ask me." },
-          { who: "giulia", text: "I asked the schedule. It says nobody is listening, Marco." },
+          { who: "marco", text: "Newer Wave! Kevin MacLeod. A visionary — we are very similar, he and I." },
+          { who: "giulia", text: "He writes music, Marco. You read a schedule. And nobody is listening to it. Not even your mother." },
         ],
       },
       {
@@ -103,8 +103,8 @@ const scenarios = {
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
-    revealAtSec: 17.53,
-    transcript: "Marco: The two o’clock slot is the most important slot in radio. Ask anyone. Ask me. Giulia: I asked the schedule. It says nobody is listening, Marco. Giulia: Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday.",
+    revealAtSec: 20.86,
+    transcript: "Marco: Newer Wave! Kevin MacLeod. A visionary — we are very similar, he and I. Giulia: He writes music, Marco. You read a schedule. And nobody is listening to it. Not even your mother. Giulia: Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday.",
   },
   laundry: {
     id: "laundry",
@@ -130,18 +130,18 @@ const scenarios = {
       {
         kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house",
         lines: [
-          { who: "giulia", text: "Your sports report tonight was four minutes of you describing one penalty kick." },
-          { who: "marco", text: "One perfect penalty kick. Cinema, Giulia. Pure cinema." },
+          { who: "giulia", text: "Four minutes on one penalty kick tonight, Marco. Three of them were about your hair." },
+          { who: "marco", text: "The hair is part of the sport, Giulia. Cinema. Pure cinema." },
         ],
       },
       {
         kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
-        lines: [{ who: "marco", text: "And speaking of drama nobody watched — breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us." }],
+        lines: [{ who: "marco", text: "You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us." }],
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
-    revealAtSec: 15.66,
-    transcript: "Giulia: Your sports report tonight was four minutes of you describing one penalty kick. Marco: One perfect penalty kick. Cinema, Giulia. Pure cinema. Marco: And speaking of drama nobody watched — breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
+    revealAtSec: 16.78,
+    transcript: "Giulia: Four minutes on one penalty kick tonight, Marco. Three of them were about your hair. Marco: The hair is part of the sport, Giulia. Cinema. Pure cinema. Marco: You want real cinema? Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
   },
   quiet: {
     // The one moment a brand-new install can actually produce. Narrow ambient
@@ -177,12 +177,12 @@ const scenarios = {
       },
       {
         kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true,
-        lines: [{ who: "giulia", text: "Anyway. Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly." }],
+        lines: [{ who: "giulia", text: "The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly." }],
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 18.87,
-    transcript: "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: Anyway. Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
+    transcript: "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: The sun had the same idea — it left twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
   },
 };
 

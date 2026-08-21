@@ -173,7 +173,15 @@ h1 span { display: block; margin-top: 0.1em; color: var(--cream-dk); }
 /* The one thing the page wants you to do, so at idle it asks out loud. The
    pulse stops the moment the show starts — a playing station does not need
    to sell the button that started it. */
-body[data-phase="idle"] .primary-button { animation: cta-beckon 2.4s ease-in-out infinite; }
+body[data-phase="idle"] .primary-button { animation: cta-beckon 2.4s ease-in-out infinite, cta-breath 2.4s ease-in-out infinite; }
+body[data-phase="idle"] .primary-button::before { animation: cta-shine-idle 3.6s ease-in-out infinite; }
+/* Post-reveal the two calls to action share the gold, and a spotlight
+   passes between them: left breathes up while right rests, then they swap.
+   Hover pauses the sweep so the button under the cursor holds still. */
+body[data-phase="revealed"] .primary-button:not([hidden]) { animation: cta-spotlight 4.8s ease-in-out 600ms infinite; }
+body[data-phase="revealed"] .primary-button:not([hidden]):hover, body[data-phase="revealed"] .install-cta:not([hidden]):hover { animation-play-state: paused; }
+.hero-actions { flex-wrap: wrap; }
+.primary-button span, .install-cta span, .text-button { white-space: nowrap; }
 .primary-button::before { content: ""; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,.5) 48%, transparent 72%); transform: translateX(-120%); }
 .primary-button:hover::before { animation: button-shine 720ms ease; }
 .primary-button:hover { transform: translateY(-2px); background: var(--sun); box-shadow: 0 8px 30px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1); }
@@ -204,7 +212,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--cream); outline
 }
 .experience-card::after { content: ""; position: absolute; z-index: 5; inset: 0; pointer-events: none; opacity: 0; background: linear-gradient(112deg, transparent 25%, rgba(244,208,72,.2) 48%, transparent 70%); transform: translateX(-100%); }
 body[data-phase="onair"] .experience-card { border-color: rgba(var(--scenario-rgb), .6); box-shadow: inset 0 1px 0 rgba(245,237,216,.07), 0 32px 80px rgba(0,0,0,.5), 0 0 80px rgba(var(--scenario-rgb),.15); }
-body[data-phase="revealed"] .experience-card::after { animation: stage-sweep 1000ms var(--ease-out); }
+
 .experience-topline { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 46px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--bg-elevated); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .experience-topline > span { display: inline-flex; align-items: center; gap: 8px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok-text); box-shadow: 0 0 10px rgba(96,165,250,.65); }
@@ -230,15 +238,45 @@ body[data-phase="revealed"] .onair-panel::before { opacity: 1; transform: scale(
 /* The sensors are the answer, and the answer stays face-down until the moment
    has aired. Blurred, not hidden: the panel reads as "something is here",
    which is a promise, without being readable, which would be a spoiler. */
-.sensor-panel .meaning-content, .sensor-panel .sensor-list, .sensor-panel .sensor-footnote { opacity: 0; transform: translateY(24px); filter: blur(7px); transition: opacity 600ms ease, transform 760ms var(--ease-out), filter 600ms ease; pointer-events: none; }
+/* The answer sits face-down the whole time: present as shapes, unreadable as
+   content. An empty panel reads as a bug; a covered one reads as a promise. */
+.sensor-panel { position: relative; }
+.sensor-panel .meaning-content, .sensor-panel .sensor-list, .sensor-panel .sensor-footnote { opacity: .3; transform: translateY(10px); filter: blur(5px) saturate(.6); transition: opacity 700ms var(--ease-out), transform 700ms var(--ease-out), filter 700ms var(--ease-out); pointer-events: none; user-select: none; }
+/* The theater: at idle the shelf is nearly bare. While the show plays, the
+   reveal assembles itself behind the frost — rows slide in one by one, the
+   headline block arrives late — so the frost reads as "the hosts are cooking
+   something", not as a stuck screen. Every animation ends exactly on the
+   base ghost values, so dropping the animations at the reveal hands over to
+   the sharpen transition without a jump. */
+body[data-phase="idle"] .sensor-panel .meaning-content, body[data-phase="idle"] .sensor-panel .sensor-list, body[data-phase="idle"] .sensor-panel .sensor-footnote { opacity: .08; transform: translateY(26px); }
+body[data-phase="onair"] .sensor-panel .sensor-row { opacity: 0; animation: assemble-row 900ms var(--ease-out) both; }
+body[data-phase="onair"] .sensor-panel .sensor-row:nth-child(1) { animation-delay: 1.8s; }
+body[data-phase="onair"] .sensor-panel .sensor-row:nth-child(2) { animation-delay: 4.2s; }
+body[data-phase="onair"] .sensor-panel .sensor-row:nth-child(3) { animation-delay: 6.6s; }
+body[data-phase="onair"] .sensor-panel .sensor-row:nth-child(4) { animation-delay: 9s; }
+body[data-phase="onair"] .sensor-panel .sensor-row:nth-child(5) { animation-delay: 11.4s; }
+body[data-phase="onair"] .sensor-panel .meaning-content { animation: assemble-block 1100ms var(--ease-out) 12.6s both; }
+body[data-phase="onair"] .sensor-panel .sensor-footnote { animation: assemble-block 900ms var(--ease-out) 14.3s both; }
+body[data-phase="revealed"] .sensor-panel .sensor-row, body[data-phase="revealed"] .sensor-panel .meaning-content, body[data-phase="revealed"] .sensor-panel .sensor-footnote { animation: none; }
+.reveal-waiting { position: absolute; z-index: 3; inset: 96px 22px 20px; display: grid; place-items: center; align-content: center; gap: 6px; text-align: center; opacity: 1; transition: opacity 450ms ease, visibility 0s linear; }
+.reveal-waiting i { width: 7px; height: 7px; margin-bottom: 6px; border-radius: 50%; background: var(--scenario); box-shadow: 0 0 12px rgba(var(--scenario-rgb),.7); animation: live-pulse 1.8s ease-in-out infinite; }
+.reveal-waiting p { margin: 0; color: var(--cream-dk); font-family: var(--font-display); font-size: 19px; font-style: italic; font-weight: 600; transition: opacity 260ms ease; }
+.reveal-waiting span { color: var(--muted); font-size: 11px; }
+body[data-phase="revealed"] .reveal-waiting { visibility: hidden; opacity: 0; }
+.sensor-panel .sensor-list { transition-delay: 140ms; }
+.sensor-panel .sensor-footnote { transition-delay: 280ms; }
 body[data-phase="revealed"] .sensor-panel .meaning-content, body[data-phase="revealed"] .sensor-panel .sensor-list, body[data-phase="revealed"] .sensor-panel .sensor-footnote { opacity: 1; transform: translateY(0); filter: blur(0); pointer-events: auto; }
-body[data-phase="revealed"] .sensor-row { animation: sensor-lock 780ms var(--ease-out) both; border-color: rgba(var(--scenario-rgb),.48); background: var(--surface-hover); }
-body[data-phase="revealed"] .sensor-row:nth-child(2) { animation-delay: 110ms; }
-body[data-phase="revealed"] .sensor-row:nth-child(3) { animation-delay: 220ms; }
-body[data-phase="revealed"] .sensor-row:nth-child(4) { animation-delay: 330ms; }
-body[data-phase="revealed"] .sensor-row:nth-child(5) { animation-delay: 440ms; }
-body[data-phase="revealed"] .sensor-icon { color: var(--scenario); background: rgba(var(--scenario-rgb), .14); transform: scale(1.12); }
+body[data-phase="revealed"] .sensor-row { border-color: rgba(var(--scenario-rgb),.48); background: var(--surface-hover); }
+body[data-phase="revealed"] .sensor-icon { color: var(--scenario); background: rgba(var(--scenario-rgb), .14); }
 .sensor-footnote { margin: 16px 2px 0; color: var(--muted); font-family: var(--font-display); font-size: 13px; font-style: italic; }
+/* Present in layout from the start (visibility, not display) so its arrival
+   never reflows the row — the reveal fades it in where it always was. */
+.install-cta { position: relative; z-index: 2; display: inline-flex; visibility: hidden; align-items: center; justify-content: center; gap: 14px; min-height: 60px; padding: 0 27px; overflow: hidden; border-radius: 10px; background: var(--sun2); color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: .01em; text-decoration: none; box-shadow: 0 6px 26px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1); opacity: 0; transform: translateY(10px); transition: opacity 500ms ease, transform 600ms var(--ease-out), background 180ms ease, box-shadow 300ms ease, visibility 0s linear 500ms; }
+.install-cta[hidden] { display: none; }
+.install-cta b { font-size: 18px; }
+.install-cta:hover { background: var(--sun); transform: translateY(-2px); box-shadow: 0 8px 32px rgba(236, 204, 48, 0.55), 0 0 0 7px rgba(236, 204, 48, 0.14); }
+body[data-phase="revealed"] .install-cta:not([hidden]) { visibility: visible; opacity: 1; transform: translateY(0); transition-delay: 0s; animation: cta-spotlight 4.8s ease-in-out 3s infinite; }
+body[data-audio="failed"] .install-cta { animation: none; }
 
 /* The gate used to sweep signal lines left to right from the sensors into
    the meaning panel — a machine diagram of the framing this page no longer
@@ -382,11 +420,19 @@ footer strong { color: var(--text-secondary); font-family: var(--font-display); 
 @keyframes wake-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes button-shine { from { transform: translateX(-120%); } to { transform: translateX(120%); } }
 @keyframes cta-beckon { 0%, 100% { box-shadow: 0 6px 26px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1); } 50% { box-shadow: 0 8px 34px rgba(236, 204, 48, 0.6), 0 0 0 11px rgba(236, 204, 48, 0.16); } }
-@keyframes stage-sweep { 0% { opacity: 0; transform: translateX(-100%); } 28% { opacity: 1; } 100% { opacity: 0; transform: translateX(100%); } }
-@keyframes sensor-lock { 0% { transform: translateX(-12px); } 42% { transform: translateX(8px) scale(1.015); box-shadow: 0 0 22px rgba(var(--scenario-rgb),.15); } 100% { transform: translateX(4px); } }
+@keyframes cta-breath { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.02); } }
+/* Rest frames match the buttons' base shadow exactly, so the animation
+   starting (or stopping) is invisible — only the peak is ever seen moving. */
+@keyframes cta-spotlight {
+  0%, 50%, 100% { background: var(--sun2); transform: translateY(0) scale(1); box-shadow: 0 6px 26px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1); }
+  25% { background: var(--sun); transform: translateY(-3px) scale(1.02); box-shadow: 0 10px 40px rgba(236, 204, 48, 0.65), 0 0 0 12px rgba(236, 204, 48, 0.18); }
+}
+@keyframes cta-shine-idle { 0%, 55%, 100% { transform: translateX(-120%); } 75% { transform: translateX(120%); } }
 @keyframes orbit-pulse { from { transform: scale(.82); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
 @keyframes radio-breathe { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2px) scale(1.035); } }
 @keyframes transport-wait { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes assemble-row { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes assemble-block { from { opacity: 0; transform: translateY(24px); } to { opacity: .3; transform: translateY(10px); } }
 @keyframes radio-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.13); filter: drop-shadow(0 0 16px rgba(var(--scenario-rgb),.7)); } }
 @keyframes waveform-pulse { from { height: 5px; opacity: .34; } to { height: var(--h, 28px); opacity: .96; } }
 @keyframes teaser-cycle { 0% { opacity: 0; transform: translateY(18px); } 8%, 27% { opacity: 1; transform: translateY(0); } 33%, 100% { opacity: 0; transform: translateY(-18px); } }

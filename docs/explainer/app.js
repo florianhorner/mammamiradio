@@ -19,10 +19,15 @@ const hostQuote = document.querySelector("#host-quote");
 const audioTrouble = document.querySelector("#audio-trouble");
 const troubleLine = document.querySelector("#trouble-line");
 const troubleTranscript = document.querySelector("#trouble-transcript");
+const revealWaitingLine = document.querySelector(".reveal-waiting p");
 const sensorRows = [...document.querySelectorAll(".sensor-row")];
 const scenarioButtons = [...document.querySelectorAll(".scenario-button")];
 const journeySteps = [...document.querySelectorAll(".journey li")];
 const scenarioIds = Object.keys(scenarios);
+// Which moments this visitor has actually heard. When all of them have
+// played, "Hear another one" would be a lie — there is no other one — so the
+// button retires and the install CTA becomes the page's only ask.
+const playedScenarios = new Set();
 let activeScenario = "arrival";
 let deadlineTimer = null;
 let isSpeaking = false;
@@ -31,6 +36,18 @@ let isSpeaking = false;
 const AUDIO_DEADLINE_MS = 30000;
 const waveformShape = [0.34, 0.62, 0.82, 0.48, 0.95, 0.68, 0.42, 0.88, 0.58, 1, 0.73, 0.38];
 
+function wireInstallCta() {
+  // The second of the page's two calls to action: one click into the Home
+  // Assistant install path. Sourced from the same siteLinks block as the
+  // footer so the URL lives exactly once; without an addon link the button
+  // stays hidden rather than pointing nowhere.
+  const cta = document.querySelector("#install-cta");
+  if (!cta) return;
+  const addon = siteLinks.addon;
+  if (!addon?.href) return;
+  cta.href = addon.href;
+  cta.hidden = false;
+}
 function renderSiteLinks() {
   if (!siteLinksNav) return;
   siteLinksNav.replaceChildren();
@@ -105,6 +122,36 @@ const hostAudio = new Audio();
 hostAudio.preload = "none";
 function audioSrcFor(scenarioId) { return `public/audio/${scenarioId}.mp3`; }
 
+// The waiting line is theater and theater moves: as the reveal assembles
+// itself behind the frost, the line escalates with it, paced by playback
+// position against the cue so every clip's build-up lands on its own beat.
+const WAITING_LINES = [
+  "The hosts haven’t noticed yet.",
+  "The house knows something they don’t.",
+  "Any second now…",
+];
+let waitingIndex = 0;
+let waitingSwapTimer = null;
+function setWaitingLine(index, { instant = false } = {}) {
+  if (!revealWaitingLine || index === waitingIndex) return;
+  waitingIndex = index;
+  if (waitingSwapTimer) window.clearTimeout(waitingSwapTimer);
+  if (instant) {
+    revealWaitingLine.textContent = WAITING_LINES[index];
+    revealWaitingLine.style.opacity = "";
+    return;
+  }
+  revealWaitingLine.style.opacity = "0";
+  waitingSwapTimer = window.setTimeout(() => {
+    revealWaitingLine.textContent = WAITING_LINES[waitingIndex];
+    revealWaitingLine.style.opacity = "";
+  }, 260);
+}
+function updateWaitingLine(positionSec, revealAtSec) {
+  if (body.dataset.phase !== "onair" || !revealAtSec) return;
+  const progress = positionSec / revealAtSec;
+  setWaitingLine(progress >= 0.8 ? 2 : progress >= 0.45 ? 1 : 0);
+}
 function applyState({ phase, audio }) {
   const wasRevealed = body.dataset.phase === "revealed";
   body.dataset.phase = phase;
@@ -178,7 +225,11 @@ function onReveal(audio) {
   clearDeadline();
   const scenario = scenarios[activeScenario];
   translateButton.disabled = false;
-  translateLabel.textContent = "Hear another one";
+  if (playedScenarios.size >= scenarioIds.length) {
+    translateButton.hidden = true;
+  } else {
+    translateLabel.textContent = "Hear another one";
+  }
   if (audio !== "failed") {
     gateLabel.textContent = "That was your house";
     hostQuote.hidden = false;
@@ -201,6 +252,7 @@ hostAudio.addEventListener("timeupdate", () => {
     transportProgress.style.setProperty("--progress", `${Math.min(100, (hostAudio.currentTime / duration) * 100)}%`);
   }
   if (hostAudio.currentTime > 0) armDeadline();
+  updateWaitingLine(hostAudio.currentTime, scenario.revealAtSec);
   applyState(nextPhase({ phase: body.dataset.phase, positionSec: hostAudio.currentTime, revealAtSec: scenario.revealAtSec }));
 });
 hostAudio.addEventListener("waiting", () => {
@@ -229,6 +281,8 @@ function revealResult() {
 // not a later one.
 function tuneIn() {
   stopSpeech();
+  setWaitingLine(0, { instant: true });
+  playedScenarios.add(activeScenario);
   hostQuote.hidden = true;
   audioTrouble.hidden = true;
   primeAudio(activeScenario);
@@ -245,8 +299,11 @@ function tuneIn() {
 }
 function resetExperience() {
   clearDeadline(); stopSpeech();
+  setWaitingLine(0, { instant: true });
+  playedScenarios.clear();
   body.dataset.phase = "idle"; body.dataset.audio = "";
   hostQuote.hidden = true; audioTrouble.hidden = true;
+  translateButton.hidden = false;
   translateButton.disabled = false;
   translateLabel.textContent = "Tune in"; gateLabel.textContent = "Ready";
   translationAnnouncement.textContent = ""; resetButton.hidden = true;
@@ -277,4 +334,5 @@ speakButton.addEventListener("click", () => {
 });
 initWaveforms();
 paintScenario(activeScenario);
+wireInstallCta();
 renderSiteLinks();
