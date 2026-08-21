@@ -1,0 +1,27 @@
+Runtime evidence — explainer link previews
+Captured 2026-08-21T22:55:58Z from the deployed site, before this branch merged.
+Commit under test: 0ea4c2bf54a32e8e3d39a52264a7f4c6e1a1f468
+
+The URL og:image names must already answer 200, or the card previews as a broken image.
+
+  HTTP 200  /                                              11925 bytes  text/html;
+  HTTP 200  /public/share-card.png                         223856 bytes  image/png
+  HTTP 200  /app.js                                        18033 bytes  application/javascript;
+  HTTP 200  /styles.css                                    40374 bytes  text/css;
+  HTTP 200  /public/logo.svg                               2532 bytes  image/svg+xml
+  HTTP 200  /public/favicon.svg                            2532 bytes  image/svg+xml
+  HTTP 200  /public/icon-192.svg                           495 bytes  image/svg+xml
+  HTTP 200  /public/fonts/playfair-display.woff2           38460 bytes  font/woff2
+  HTTP 200  /public/fonts/playfair-display-italic.woff2    38888 bytes  font/woff2
+  HTTP 200  /public/fonts/outfit.woff2                     32228 bytes  font/woff2
+  HTTP 200  /public/fonts/jetbrains-mono.woff2             40480 bytes  font/woff2
+  HTTP 200  /public/audio/arrival.mp3                      375333 bytes  audio/mp3
+  HTTP 200  /public/audio/coffee.mp3                       457461 bytes  audio/mp3
+  HTTP 200  /public/audio/laundry.mp3                      397101 bytes  audio/mp3
+  HTTP 200  /public/audio/quiet.mp3                        445485 bytes  audio/mp3
+
+Deploy run that published this state:
+  https://github.com/florianhorner/mammamiradio/actions/runs/32533463490 (build: success, deploy: success)
+
+Rendered page: title + zero console errors/warnings, checked in a real browser.
+<title>Mamma Mi Radio for Home Assistant | Interactive demo</title>

@@ -1,0 +1,46 @@
+Test, lint and build evidence — explainer link previews + publish guards
+Captured 2026-08-21T23:04:34Z
+Commit under test: 0ea4c2bf54a32e8e3d39a52264a7f4c6e1a1f468   base: 7e2bec291fe5884bc113bb1515653a9ecb4a0251
+
+== tests: full Python suite ==
+FAILED tests/core/test_spoken_assets.py::test_symlink_loop_fails_closed_instead_of_raising
+FAILED tests/web/test_streamer_routes.py::test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next
+2 failed, 7450 passed, 3 skipped, 47 deselected, 1 warning in 631.93s (0:10:31)
+   The two failures reproduce on pristine origin/main (7e2bec29) in a clean
+   worktree with none of this branch applied. This branch changes no Python
+   outside tests/repo/.
+
+== tests: repo guards (includes the new workflow guard) ==
+313 passed in 66.53s (0:01:06)
+
+== tests: new workflow guard, itemised ==
+tests/repo/test_explainer_pages_workflow.py::test_changing_the_publish_workflow_runs_the_explainer_suite PASSED [ 20%]
+tests/repo/test_explainer_pages_workflow.py::test_only_the_deploy_job_is_scoped_to_main PASSED [ 40%]
+tests/repo/test_explainer_pages_workflow.py::test_publish_permissions_stay_on_the_deploy_job PASSED [ 60%]
+tests/repo/test_explainer_pages_workflow.py::test_operations_doc_states_the_gate_the_workflow_carries PASSED [ 80%]
+tests/repo/test_explainer_pages_workflow.py::test_the_publish_workflow_triggers_on_its_own_path PASSED [100%]
+
+== tests: explainer suite ==
+ℹ tests 31
+ℹ pass 31
+ℹ fail 0
+
+== tests: mutation checks (each guard fails when its subject breaks) ==
+   twitter:title edited away from og:title ............ 30 pass / 1 fail
+   runtime asset pinned to the deployed origin ........ 29 pass / 2 fail
+   twitter:image:alt deleted .......................... 30 pass / 1 fail
+   og:image:type set to image/jpeg .................... 30 pass / 1 fail
+   deploy job `if:` guard stripped .................... 3 pass / 2 fail (pytest)
+   workflow removed from its own path filter .......... 4 pass / 1 fail (pytest)
+   restored ........................................... all green
+
+== build ==
+Built local static site in dist/ (2 browser module(s) verified)
+
+== lint ==
+All checks passed!
+1 file already formatted
+Success: no issues found in 1 source file
+actionlint: clean
+Documentation safety lint clean.
+Docs-safety lint self-test passed.
