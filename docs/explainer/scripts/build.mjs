@@ -77,6 +77,7 @@ await Promise.all([
   copyFile("scenarios.mjs", "dist/scenarios.mjs"),
   copyFile(".nojekyll", "dist/.nojekyll"),
   copyFile("public/logo.svg", "dist/public/logo.svg"),
+  copyFile("public/share-card.png", "dist/public/share-card.png"),
   copyFile("public/favicon.svg", "dist/public/favicon.svg"),
   copyFile("public/icon-192.svg", "dist/public/icon-192.svg"),
   copyFile("public/fonts/playfair-display.ttf", "dist/public/fonts/playfair-display.ttf"),
