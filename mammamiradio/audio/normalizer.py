@@ -12,12 +12,15 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from mammamiradio.audio.admission import ffmpeg_slot
 
 logger = logging.getLogger(__name__)
 _NORM_CACHE_BITRATE_RE = re.compile(r"_(?P<bitrate>[1-9]\d*)k\.mp3$")
+DEFAULT_CONCAT_SILENCE_MS = 300
+_CACHE_SOURCE_KINDS = frozenset({"classic", "demo", "jamendo", "local", "starter", "youtube"})
 
 
 class ConcatDurationError(RuntimeError):
@@ -58,7 +61,14 @@ def _positive_finite_number(value: object) -> float | None:
     return None
 
 
-def save_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms: int | None = None) -> None:
+def save_track_metadata(
+    norm_path: Path,
+    title: str,
+    artist: str,
+    *,
+    duration_ms: int | None = None,
+    source_kind: str | None = None,
+) -> None:
     """Persist norm-cache metadata so rescue paths can surface current-track facts.
 
     Called only when a cache file is freshly (re)normalized. Any `reconciled_lufs`
@@ -72,17 +82,27 @@ def save_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms
     data.pop("duration_ms", None)
     data.pop("duration_sec", None)
     data.pop("duration_s", None)
+    data.pop("source_kind", None)
     data.update({"title": title, "artist": artist})
     duration = _positive_finite_number(duration_ms)
     if duration is not None:
         data["duration_ms"] = round(duration)
+    if source_kind in _CACHE_SOURCE_KINDS:
+        data["source_kind"] = source_kind
     try:
         sidecar.write_text(json.dumps(data))
     except OSError as exc:
         logger.debug("Could not write norm metadata sidecar %s: %s", sidecar.name, exc)
 
 
-def refresh_track_metadata(norm_path: Path, title: str, artist: str, *, duration_ms: int | None = None) -> None:
+def refresh_track_metadata(
+    norm_path: Path,
+    title: str,
+    artist: str,
+    *,
+    duration_ms: int | None = None,
+    source_kind: str | None = None,
+) -> None:
     """Refresh mutable norm-cache metadata without clearing content markers."""
     sidecar = _norm_sidecar_path(norm_path)
     data = _load_sidecar(sidecar)
@@ -92,6 +112,8 @@ def refresh_track_metadata(norm_path: Path, title: str, artist: str, *, duration
         data.pop("duration_sec", None)
         data.pop("duration_s", None)
         data["duration_ms"] = round(duration)
+    if source_kind in _CACHE_SOURCE_KINDS:
+        data["source_kind"] = source_kind
     try:
         sidecar.write_text(json.dumps(data))
     except OSError as exc:
@@ -112,6 +134,17 @@ def load_track_metadata(norm_path: Path) -> dict[str, str | int] | None:
             metadata["duration_ms"] = round(duration_ms)
         return metadata
     return None
+
+
+def load_track_cache_source(norm_path: Path) -> str:
+    """Return the persisted source class for a normalized cache artifact.
+
+    Legacy sidecars predate this field. They deliberately return an empty
+    string so strict rescue callers can leave the bytes on disk while refusing
+    to air media whose acquisition class is unknown.
+    """
+    value = _load_sidecar(_norm_sidecar_path(norm_path)).get("source_kind")
+    return value if isinstance(value, str) and value in _CACHE_SOURCE_KINDS else ""
 
 
 def _norm_cache_filename_bitrate_kbps(norm_path: Path) -> float | None:
@@ -384,7 +417,11 @@ def _reconcile_lufs(path: Path, *, ad: bool = False, background: bool = False) -
         "-i",
         str(path),
         "-af",
-        f"volume={_fmt_num(gain_db)}dB",
+        # Keep a codec-safety margin after any positive loudness correction.
+        # MP3 can overshoot the pre-encode sample peak substantially on bright,
+        # compressed speech; -2.5 dBFS here preserves the station's decoded
+        # <= -1.0 dBTP contract after the corrective re-encode.
+        f"volume={_fmt_num(gain_db)}dB,alimiter=limit=0.75:level=false:latency=true",
         *_reconcile_output_args,
         str(tmp),
     ]
@@ -688,7 +725,7 @@ def probe_duration_sec(path: Path, *, rescue: bool = False) -> float | None:
 def concat_files(
     paths: list[Path],
     output_path: Path,
-    silence_ms: int = 300,
+    silence_ms: int = DEFAULT_CONCAT_SILENCE_MS,
     loudnorm: bool = True,
     *,
     strict_duration: bool = False,
@@ -937,28 +974,19 @@ def _generate_whoosh(output_path: Path, duration_sec: float = 0.6) -> Path:
 
 
 def _generate_mandolin_sting(output_path: Path, duration_sec: float = 0.5) -> Path:
-    """Plucked-string sting: fast attack, exponential decay with harmonics.
+    """Render the electronic relay sting behind the legacy compatibility name.
 
-    All 3 arpeggio notes (E4, A4, C#5) with octave harmonics combined into
-    a single aevalsrc. Staggered onsets via time-shifted decay envelopes.
-    6 inputs → 1.
+    ``mandolin_sting`` is an operator-facing key that cannot disappear from
+    older campaign data.  Its sound is deliberately no longer a novelty
+    mandolin: one compact midrange relay pulse and a restrained glass answer
+    keep incomplete/custom packs inside the Modern Night Drive palette.
     """
     d = duration_sec
-    # Each note: fundamental + octave harmonic, plucked envelope (exp decay),
-    # staggered onset at 0ms, 80ms, 160ms
-    # Note 1: E4(330) + E5(660), onset=0
-    # Note 2: A4(440) + A5(880), onset=0.08
-    # Note 3: C#5(554) + C#6(1108), onset=0.16
     expr = (
-        # Note 1 (E4+E5) — immediate onset
-        "1.0*sin(2*PI*330*t)*exp(-12*t)"
-        "+0.5*sin(2*PI*660*t)*exp(-12*t)"
-        # Note 2 (A4+A5) — onset at 0.08s
-        f"+1.0*sin(2*PI*440*t)*exp(-12*(t-0.08))*{_gate_after(0.08)}"
-        f"+0.5*sin(2*PI*880*t)*exp(-12*(t-0.08))*{_gate_after(0.08)}"
-        # Note 3 (C#5+C#6) — onset at 0.16s
-        f"+1.0*sin(2*PI*554*t)*exp(-15*(t-0.16))*{_gate_after(0.16)}"
-        f"+0.5*sin(2*PI*1108*t)*exp(-15*(t-0.16))*{_gate_after(0.16)}"
+        "0.62*sin(2*PI*510*t)*exp(-26*t)"
+        "+0.24*sin(2*PI*765*t)*exp(-31*t)"
+        f"+0.30*sin(2*PI*1040*(t-0.18))*exp(-11*(t-0.18))*{_gate_after(0.18)}"
+        f"+0.12*sin(2*PI*1560*(t-0.18))*exp(-15*(t-0.18))*{_gate_after(0.18)}"
     )
     cmd = [
         "ffmpeg",
@@ -968,13 +996,13 @@ def _generate_mandolin_sting(output_path: Path, duration_sec: float = 0.5) -> Pa
         "-i",
         f"aevalsrc={expr}|{expr}:d={d}:s=48000:c=stereo",
         "-af",
-        "aecho=0.6:0.4:20:0.15,volume=2.5",
+        "highpass=f=180,lowpass=f=6200,aecho=0.7:0.35:24:0.10,volume=1.8",
         *_MP3_OUTPUT_ARGS,
         "-t",
         str(d),
         str(output_path),
     ]
-    _run_ffmpeg(cmd, "mandolin sting SFX")
+    _run_ffmpeg(cmd, "legacy relay sting SFX")
     return output_path
 
 
@@ -1471,6 +1499,150 @@ def mix_with_bed(voice_path: Path, bed_path: Path, output_path: Path, volume_sca
     return output_path
 
 
+def mix_oneshot_layers(
+    base_path: Path,
+    layers: Sequence[tuple[Path, float, float, float]],
+    output_path: Path,
+) -> Path:
+    """Overlay at most two dry cues onto a base render in one FFmpeg pass.
+
+    Each layer is ``(path, offset_sec, gain_db, max_duration_sec)``.  The base
+    remains the first amix input, so it defines the output duration.  This
+    deliberately does not run ``loudnorm``: callers can place the recipe mix
+    before their one final mastering/reconciliation stage instead of remastering
+    once for every small foreground accent.
+    """
+    if len(layers) > 2:
+        raise ValueError("at most two one-shot layers may be mixed with one base")
+    if base_path == output_path and layers:
+        raise ValueError("mix_oneshot_layers requires a distinct output path")
+    validated_layers: list[tuple[Path, float, float, float]] = []
+    for cue_path, raw_offset_sec, raw_gain_db, raw_max_duration_sec in layers:
+        try:
+            offset_sec = float(raw_offset_sec)
+            gain_db = float(raw_gain_db)
+            max_duration_sec = float(raw_max_duration_sec)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("one-shot layer values must be numeric") from exc
+        if not all(math.isfinite(value) for value in (offset_sec, gain_db, max_duration_sec)):
+            raise ValueError("one-shot layer values must be finite")
+        if offset_sec < 0 or max_duration_sec <= 0:
+            raise ValueError("one-shot offsets must be non-negative and durations positive")
+        validated_layers.append((cue_path, offset_sec, gain_db, max_duration_sec))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not layers:
+        if base_path != output_path:
+            shutil.copy2(base_path, output_path)
+        return output_path
+
+    command = ["ffmpeg", "-y", "-i", str(base_path)]
+    filter_parts = ["[0:a]asetpts=PTS-STARTPTS[base]"]
+    mix_inputs = ["[base]"]
+    for input_index, (cue_path, offset_sec, gain_db, max_duration_sec) in enumerate(validated_layers, start=1):
+        command.extend(["-i", str(cue_path)])
+        cue_label = f"cue{input_index}"
+        delay_ms = round(offset_sec * 1000)
+        filter_parts.append(
+            f"[{input_index}:a]atrim=0:{_fmt_num(max_duration_sec)},asetpts=PTS-STARTPTS,"
+            f"volume={_fmt_num(gain_db)}dB,adelay={delay_ms}:all=1[{cue_label}]"
+        )
+        mix_inputs.append(f"[{cue_label}]")
+    # Keep the rendered voice/bed base at unity throughout. FFmpeg's default
+    # amix normalization re-scales it as delayed cue streams begin/end, which
+    # creates an audible level jump that final mastering cannot undo.
+    filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:normalize=0[out]")
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[out]",
+            *_MP3_OUTPUT_ARGS,
+            str(output_path),
+        ]
+    )
+    _run_ffmpeg(command, "mix imaging one-shot layers")
+    logger.info("Mixed base + %d one-shot imaging layers -> %s", len(layers), output_path.name)
+    return output_path
+
+
+def loop_audio_bed(
+    input_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    *,
+    target_lufs: float = -18.0,
+    fade_out_sec: float = 0.0,
+) -> Path:
+    """Loop a pre-rendered bed to an exact duration at a predictable level.
+
+    This is deliberately a small, reusable primitive: station imaging and ad
+    production can use authored packaged beds without having to regenerate an
+    oscillator texture at runtime.  Callers still own their final voice mix and
+    its loudness reconciliation.
+    """
+    duration = max(float(duration_sec), 0.5)
+    fade = min(max(float(fade_out_sec), 0.0), duration / 2)
+    fade_filter = f",afade=t=out:st={_fmt_num(duration - fade)}:d={_fmt_num(fade)}" if fade > 0 else ""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        (
+            f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB{fade_filter},"
+            f"loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"
+        ),
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        _fmt_num(duration),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "loop packaged audio bed")
+    return output_path
+
+
+def fit_audio_oneshot(
+    input_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    *,
+    target_lufs: float = -16.0,
+    fade_out_sec: float = 0.0,
+) -> Path:
+    """Trim or silence-pad a one-shot to a fixed duration without repeating it."""
+    duration = max(float(duration_sec), 0.5)
+    fade = min(max(float(fade_out_sec), 0.0), duration / 2)
+    # Reverse-fade-reverse targets the actual end of the trimmed source.  A
+    # timestamp relative to ``duration`` can fall after EOF for short one-shots,
+    # and applying the fade after ``apad`` would only fade appended silence.
+    fade_filter = f",areverse,afade=t=in:st=0:d={_fmt_num(fade)},areverse" if fade > 0 else ""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-af",
+        (
+            f"atrim=0:{_fmt_num(duration)},asetpts=N/SR/TB{fade_filter},"
+            f"apad=whole_dur={_fmt_num(duration)},atrim=0:{_fmt_num(duration)},"
+            f"loudnorm=I={_fmt_num(target_lufs)}:LRA=11:TP=-1.5"
+        ),
+        *_MP3_OUTPUT_ARGS,
+        "-t",
+        _fmt_num(duration),
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "fit packaged audio one-shot")
+    return output_path
+
+
 def generate_transition_sting(
     from_type_name: str,
     to_type_name: str,
@@ -1684,6 +1856,65 @@ def generate_brand_motif(output_path: Path, sonic_signature: str, sfx_dir: Path 
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def crossfade_voice_over_tail(
+    music_tail_path: Path,
+    voice_path: Path,
+    output_path: Path,
+    *,
+    tail_duration_sec: float | None = None,
+    decoder_preroll_samples: int = 0,
+    tail_sample_count: int | None = None,
+    voice_volume: float = 1.0,
+    music_fade_volume: float = 0.5,
+    voice_delay_ms: int = 150,
+) -> Path:
+    """Overlay voice on a reserved, optionally decoder-prefixed music tail.
+
+    This renderer never seeks back into a full, already-aired music file.
+    ``decoder_preroll_samples`` may describe bounded MPEG Layer III decoder
+    context prepended by the frame splitter; those samples are discarded exactly
+    before the audible tail is faded and mixed. When no explicit frame metadata
+    is supplied, the path remains compatible with an ordinary standalone tail.
+    """
+    duration = tail_duration_sec if tail_duration_sec is not None else probe_duration_sec(music_tail_path)
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        raise ValueError("crossfade_voice_over_tail requires a positive tail duration")
+    if not isinstance(decoder_preroll_samples, int) or decoder_preroll_samples < 0:
+        raise ValueError("crossfade_voice_over_tail requires non-negative decoder preroll samples")
+    if tail_sample_count is None:
+        if decoder_preroll_samples:
+            raise ValueError("crossfade_voice_over_tail requires a tail sample count with decoder preroll")
+        trim_expr = f"duration={_fmt_num(duration)}"
+    else:
+        if not isinstance(tail_sample_count, int) or tail_sample_count <= 0:
+            raise ValueError("crossfade_voice_over_tail requires a positive tail sample count")
+        trim_expr = f"start_sample={decoder_preroll_samples}:end_sample={decoder_preroll_samples + tail_sample_count}"
+
+    duration_expr = _fmt_num(duration)
+    delay_ms = max(0, int(voice_delay_ms))
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(music_tail_path),
+        "-i",
+        str(voice_path),
+        "-filter_complex",
+        f"[0:a]atrim={trim_expr},asetpts=PTS-STARTPTS,"
+        f"afade=t=out:st=0:d={duration_expr},volume={_fmt_num(music_fade_volume)}[music];"
+        f"[1:a]volume={_fmt_num(voice_volume)},adelay={delay_ms}|{delay_ms}[voice];"
+        f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
+        f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
+        "-map",
+        "[out]",
+        *_MP3_OUTPUT_ARGS,
+        str(output_path),
+    ]
+    _run_ffmpeg(cmd, "crossfade voice over music")
+    logger.info("Crossfade voice over reserved tail -> %s", output_path.name)
+    return output_path
+
+
 def crossfade_voice_over_music(
     music_path: Path,
     voice_path: Path,
@@ -1693,24 +1924,26 @@ def crossfade_voice_over_music(
     music_fade_volume: float = 0.5,
     voice_delay_ms: int = 150,
 ) -> Path:
-    """Overlay voice on the tail of a music track, fading music down underneath.
+    """Overlay voice on the final ``tail_seconds`` of a complete music track.
 
-    Takes the last `tail_seconds` of the music, fades it to `music_fade_volume`,
-    and mixes the voice on top. The result is a "DJ talking over the outro" effect.
+    This preserves the historic keyword and full-track behavior for callers of
+    the legacy helper. Production handoffs use :func:`crossfade_voice_over_tail`
+    so already-aired music is never re-extracted there.
     """
+    tail_expr = _fmt_num(tail_seconds)
     delay_ms = max(0, int(voice_delay_ms))
     cmd = [
         "ffmpeg",
         "-y",
         "-sseof",
-        f"-{tail_seconds}",
+        f"-{tail_expr}",
         "-i",
         str(music_path),
         "-i",
         str(voice_path),
         "-filter_complex",
-        f"[0:a]afade=t=out:st=0:d={tail_seconds},volume={music_fade_volume}[music];"
-        f"[1:a]volume={voice_volume},adelay={delay_ms}|{delay_ms}[voice];"
+        f"[0:a]afade=t=out:st=0:d={tail_expr},volume={_fmt_num(music_fade_volume)}[music];"
+        f"[1:a]volume={_fmt_num(voice_volume)},adelay={delay_ms}|{delay_ms}[voice];"
         f"[music][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
         f"loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",
@@ -1784,6 +2017,13 @@ def mix_voice_with_sting(
     cmd = [
         "ffmpeg",
         "-y",
+        # ``loudnorm`` inside a multi-threaded complex graph is not bit-stable:
+        # identical short ID renders can differ at decoded-sample level, which
+        # invalidates digest-bound listening receipts. This mix is only a few
+        # seconds long, so one filter thread is effectively free and keeps both
+        # runtime and offline approval renders deterministic.
+        "-filter_complex_threads",
+        "1",
         "-i",
         str(sting_path),
         "-i",
@@ -1791,7 +2031,12 @@ def mix_voice_with_sting(
         "-filter_complex",
         "[0:a]volume=0.15[bed];"
         "[1:a]adelay=400|400,volume=1.2[voice];"
-        "[bed][voice]amix=inputs=2:duration=longest:dropout_transition=1,"
+        # Preserve the authored 0.15/1.2 gain relationship instead of letting
+        # amix renormalize the voice when the shorter bed reaches EOF.  Apart
+        # from the audible level jump, dropout renormalization can land on one
+        # of two adjacent decoded samples and makes otherwise identical renders
+        # nondeterministic.
+        "[bed][voice]amix=inputs=2:duration=longest:normalize=0,"
         "loudnorm=I=-16:LRA=11:TP=-1.5[out]",
         "-map",
         "[out]",
@@ -1810,8 +2055,8 @@ def normalize_ad(input_path: Path, output_path: Path) -> Path:
     Chain: heavy compressor (fast attack squashes transients, low threshold
     catches everything) → presence boost at 3kHz for clarity → air boost at
     8kHz for sparkle → bass shelf cut to avoid muddiness under compression →
-    aggressive loudnorm (I=-14, LRA=7 for minimal dynamic range, TP=-1.0 for
-    maximum loudness before clipping).
+    aggressive loudnorm (I=-14, LRA=7 for minimal dynamic range, TP=-2.0 as
+    codec headroom for the decoded -1.0 dBTP ceiling).
 
     The I=-14 stage gives ads their punch; a final loudness-reconciliation pass
     (``_reconcile_lufs(ad=True)``) then settles the aired level to ad_lufs_target
@@ -1834,7 +2079,7 @@ def normalize_ad(input_path: Path, output_path: Path) -> Path:
         # Cut mud below 120Hz (ads don't need sub-bass)
         "highpass=f=120:t=q:w=0.7,"
         # EBU R128 loudness — louder and tighter than music
-        "loudnorm=I=-14:LRA=7:TP=-1.0",
+        "loudnorm=I=-14:LRA=7:TP=-2.0",
         *_MP3_OUTPUT_ARGS,
         str(output_path),
     ]

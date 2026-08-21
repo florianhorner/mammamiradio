@@ -224,8 +224,8 @@ def test_run_playback_loop_records_session_stop_discard_before_airing():
     the hardened best-effort helper — never a raw ``segment.path.unlink()`` that could
     throw into the playback coroutine and drop the stream.
 
-    Inspects the call node inside the ``if state.session_stopped:`` branch directly
-    (not a whole-function substring grep, which false-passes on unrelated matches).
+    The stop branch records the domain outcome while the outer selected-segment
+    finalizer owns cleanup for stop, callback failure, and normal send alike.
     """
     import ast
 
@@ -261,14 +261,21 @@ def test_run_playback_loop_records_session_stop_discard_before_airing():
     assert kwargs.get("reason") == "GenerationWasteReason.SESSION_STOPPED"
     assert kwargs.get("already_counted_in_produced") == "pulled_from_queue"
 
-    # Temp cleanup must go through the hardened helper (never raises), not a raw
-    # unlink that could escape into the playback coroutine and drop the stream.
+    finalizer = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_finalize_selected_playback"),
+        None,
+    )
+    assert finalizer is not None, "selected-segment finalizer not found"
+
+    # Temp cleanup must go through the hardened helper in that mandatory outer
+    # finalizer, not a raw unlink in either the branch or finalizer.
     assert any(
         isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "_unlink_ephemeral_best_effort"
-        for c in ast.walk(stop_branch)
-    ), "stop-race branch must clean up via _unlink_ephemeral_best_effort"
-    assert "segment.path.unlink(" not in (ast.get_source_segment(src, stop_branch) or ""), (
-        "no raw unlink in the stop-race branch — it must use the hardened helper"
+        for c in ast.walk(finalizer)
+    ), "selected-segment finalizer must clean up via _unlink_ephemeral_best_effort"
+    finalizer_source = ast.get_source_segment(src, finalizer) or ""
+    assert "segment.path.unlink(" not in finalizer_source, (
+        "no raw unlink in the selected-segment finalizer — it must use the hardened helper"
     )
 
 

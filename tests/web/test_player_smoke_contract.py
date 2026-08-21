@@ -216,6 +216,31 @@ def test_player_smoke_wires_listener_song_receipt_scenarios() -> None:
         assert retryable_outcome in code
 
 
+def test_player_smoke_executes_ad_receipt_contract() -> None:
+    """Exercise receipt rendering and Media Session updates in the listener."""
+    code = RUN_CODE.read_text(encoding="utf-8")
+    for needle in (
+        "adExperimentScenario = 'one'",
+        "adExperimentScenario = 'many'",
+        "adExperimentScenario = 'empty'",
+        "first completed ad receipt did not reveal with singular copy",
+        "first completed ad receipt was not announced",
+        "unchanged status refresh collapsed or rewrote the expanded ad receipt",
+        "status refresh collapsed the expanded ad receipt",
+        "updated ad receipt was not announced with plural copy",
+        "wire brand text executed as markup",
+        "live ad roster did not replace generic sponsored copy",
+        "Media Session ad roster did not match the visible roster",
+        "brandless ad did not retain generic sponsored copy",
+        "runtime reset did not hide, collapse, and clear the stale ad receipt",
+        "runtime reset did not clear the ad receipt announcement",
+        "stale status poll restored a cleared ad receipt",
+        "stale status race never held poll N after JSON parsing",
+        "window.__playerSmokeOldStatusPoll = window.__playerSmokeFetchStatus()",
+    ):
+        assert needle in code, f"player smoke missing ad-receipt browser guard: {needle}"
+
+
 def test_default_listener_identity_fixture_is_canonical() -> None:
     config = tomllib.loads(RADIO_CONFIG.read_text(encoding="utf-8"))
     assert DEFAULT_STATION_NAME == "Mamma Mi Radio"

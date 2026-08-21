@@ -10,13 +10,14 @@
 #
 # Why "newest BUILT commit" and not blind origin/main HEAD: `Build HA Addon` only
 # builds an image when a commit touches the IMAGE_PATHS below: add-on or application
-# source, the canonical project/model config, image validation/smoke scripts, or the
-# build workflow itself. When the tip commits are outside that trigger set, no :<sha>
-# image exists for them, so pinning HEAD would make the Supervisor pull a missing tag.
-# This script picks the newest main commit with a successful build run (that success is
-# the proof both per-arch images were pushed and smoked) and HARD-FAILS rather than
-# advertise an unverified tag. It also refuses if any trigger path changed between that
-# built commit and HEAD — the pinned image would not implement the newer edge metadata.
+# source, canonical project/model config, media-proof inputs, image validation/smoke
+# scripts, or the build workflow itself. When the tip commits are outside that trigger
+# set, no :<sha> image exists for them, so pinning HEAD would make the Supervisor pull
+# a missing tag. This script picks the newest main commit with a successful build run
+# (that success is the proof both per-arch images were pushed, proven, and smoked) and
+# HARD-FAILS rather than advertise an unverified tag. It also refuses if any trigger
+# path changed between that built commit and HEAD — the pinned image would not implement
+# the newer edge metadata.
 #
 # Selection uses `gh run list` (needs only actions:read). The old GHCR packages-API
 # check is gone: it needed the read:packages scope the maintainer token lacks and
@@ -31,6 +32,14 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 EDGE_CONFIG="ha-addon/mammamiradio-edge/config.yaml"
+MEDIA_PYTHON="python3"
+if ! "$MEDIA_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+  if [ -x .venv/bin/python ]; then
+    MEDIA_PYTHON=".venv/bin/python"
+  else
+    MEDIA_PYTHON="python3.11"
+  fi
+fi
 
 # --target-sha <sha> pins edge to one EXACT commit instead of "newest built".
 #
@@ -63,7 +72,7 @@ while [ $# -gt 0 ]; do
 done
 
 # Paths that trigger Build HA Addon — must mirror addon-build.yml `on.push.paths`.
-IMAGE_PATHS="ha-addon mammamiradio pyproject.toml radio.toml model_registry.toml scripts/validate-addon.sh scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py .github/workflows/addon-build.yml"
+IMAGE_PATHS="ha-addon mammamiradio proof/media pyproject.toml requirements.txt requirements-dev.txt radio.toml model_registry.toml scripts/media-proof.py scripts/starter-catalog.py scripts/validate-addon.sh scripts/validate-starter-media.py scripts/ha-green-launch-smoke.py scripts/ha-green-perf-smoke.py tests/media tests/playlist/test_jamendo_transient.py tests/playlist/test_legacy_media.py tests/scheduling/test_queue_mutations.py tests/web/test_streamer_routes_extended.py .github/workflows/addon-build.yml"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: working tree not clean — commit or stash first, then cut the edge release." >&2
@@ -219,6 +228,16 @@ fi
 # version: line points at the (possibly-behind) built SHA — do NOT cut from
 # $TARGET_FULL, that would drop newer edge metadata from the PR. Errors NOT swallowed.
 git checkout -B "$BRANCH" origin/main
+# Report-only while the twelve starter tracks are absent by design: run the
+# proof and print its verdict, but do not block the edge cut on the missing
+# content. The hard gate stays in scripts/pre-release-check.sh (section 10),
+# so stable-release paths remain blocked.
+if "$MEDIA_PYTHON" scripts/media-proof.py --quick; then
+  echo "media-proof: PASS"
+else
+  echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence) have not landed yet."
+  echo "NOTICE: the edge cut proceeds report-only; scripts/pre-release-check.sh still fails hard on this proof on the release path."
+fi
 python3 scripts/validate-release-beat.py --channel edge --target-sha "$SHA"
 sed -i.bak "s/^version: .*/version: $SHA/" "$EDGE_CONFIG"
 rm -f "$EDGE_CONFIG.bak"

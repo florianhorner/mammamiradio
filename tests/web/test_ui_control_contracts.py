@@ -1203,7 +1203,7 @@ class TestCapabilitiesEndpoint:
 
 class TestSourceControlVisibilityContract:
     @pytest.mark.asyncio
-    async def test_capabilities_expose_admin_source_control_flags(self):
+    async def test_capabilities_expose_admin_source_control_flags(self, external_media_installed):
         app = _make_app()
         app.state.config.playlist.jamendo_client_id = "jamendo-client"
         app.state.config.allow_ytdlp = False
@@ -1224,23 +1224,34 @@ class TestSourceControlVisibilityContract:
         assert data["charts_reload"] is True
 
     @pytest.mark.asyncio
-    async def test_admin_html_binds_source_buttons_to_capability_flags_only(self):
+    async def test_capabilities_keep_charts_hidden_when_external_media_missing(self, external_media_missing):
+        """Without the optional external-media module, opt-in never surfaces chart controls."""
+        app = _make_app()
+        app.state.config.allow_ytdlp = True
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/capabilities", headers=AUTH)
+
+        assert resp.json()["capabilities"]["charts_reload"] is False
+
+    @pytest.mark.asyncio
+    async def test_admin_html_keeps_jamendo_out_of_quick_add_and_charts_capability_gated(self):
         app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get("/admin", headers=AUTH)
 
         html = resp.text
-        assert re.search(r'id="sourceJamendoBtn"[^>]*\bdata-capability="jamendo"', html)
+        assert 'id="sourceJamendoBtn"' not in html
+        assert 'id="jamendoSourceRow"' in html
+        assert 'id="jamendoSettings"' in html
         assert re.search(r'id="sourceChartsBtn"[^>]*\bdata-capability="charts_reload"', html)
         assert "function sourceControlVisibility(caps)" in html
-        assert "Boolean(capabilities.jamendo)" in html
         assert "Boolean(capabilities.charts_reload)" in html
         assert 'id="libraryTools"' in html
         tools = html[html.index('id="libraryTools"') : html.index("<!-- Diretta zone -->")]
-        assert 'id="sourceJamendoBtn"' in tools
         assert 'id="sourceChartsBtn"' in tools
-        assert "sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload" in html
+        assert "sourceGroup.hidden=!visibility.charts_reload" in html
         assert "jamendoSourceAvailable" not in html
 
     @pytest.mark.asyncio

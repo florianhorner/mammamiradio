@@ -16,6 +16,7 @@ from mammamiradio.core.models import (
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     URGENT_INTERRUPT_PRIORITY_KEY,
     Heading,
+    MediaAttribution,
     PlaylistSource,
     Segment,
     SegmentLogEntry,
@@ -109,6 +110,62 @@ def test_serialize_track_includes_heading_id_for_admin_hunt_rows():
     assert payload["heading_id"] == "hunt-1"
 
 
+def test_serialize_track_includes_validated_music_attribution():
+    track = Track(
+        title="Carefree",
+        artist="Kevin MacLeod",
+        duration_ms=180_000,
+        attribution=MediaAttribution(
+            provider="incompetech",
+            license_id="CC-BY-4.0",
+            license_url="https://creativecommons.org/licenses/by/4.0/",
+            source_url="https://incompetech.com/music/royalty-free/music.html",
+            credit="Carefree by Kevin MacLeod, CC BY 4.0",
+            modified=True,
+            basis="bundled_manifest",
+        ),
+    )
+
+    payload = status_payload._serialize_track(track)
+
+    assert payload["music_attribution"]["provider"] == "incompetech"
+
+
+def test_paginated_tracks_omits_revision_when_not_supplied():
+    payload = status_payload._paginated_tracks([Track(title="Song", artist="Artist", duration_ms=180_000)], 0, 1)
+
+    assert "revision" not in payload
+
+
+def test_public_starter_catalog_serializes_only_listener_credit_facts(monkeypatch):
+    entry = SimpleNamespace(
+        title="Carefree",
+        artist="Kevin MacLeod",
+        isrc="USUAN1400037",
+        license_id="CC-BY-4.0",
+        license_url="https://creativecommons.org/licenses/by/4.0/",
+        official_piece_url="https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+        modification_notice="Pre-normalized for direct playback.",
+        private_receipt="must not serialize",
+    )
+    monkeypatch.setattr(
+        "mammamiradio.media.starter.load_starter_catalog",
+        lambda *, require_complete: SimpleNamespace(entries=(entry,)) if require_complete else None,
+    )
+
+    assert status_payload._public_starter_catalog() == [
+        {
+            "title": "Carefree",
+            "artist": "Kevin MacLeod",
+            "isrc": "USUAN1400037",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "official_piece_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+            "modification_notice": "Pre-normalized for direct playback.",
+        }
+    ]
+
+
 def test_admin_track_id_prefers_trimmed_spotify_id_and_falls_back_to_cache_key():
     spotify_track = Track(title="Song", artist="Artist", duration_ms=180_000, spotify_id="  id-1  ")
     numeric_track = Track(title="Numeric", artist="Artist", duration_ms=180_000, spotify_id=123)  # type: ignore[arg-type]
@@ -140,6 +197,62 @@ def test_status_now_playback_redacts_internal_metadata_and_reports_progress():
         "public": {"nested": ["ok"]},
     }
     assert payload["now_streaming"]["metadata"] is not now_streaming["metadata"]
+
+
+def test_status_now_playback_exposes_only_safe_provider_attribution():
+    attribution = {
+        "provider": "jamendo",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://www.jamendo.com/track/12345/example",
+        "credit": "Artist - Track, provided by Jamendo, CC-BY-4.0",
+        "modified": True,
+        "basis": "provider_reported",
+    }
+    now_streaming = {
+        "type": "music",
+        "metadata": {
+            "title": "Track",
+            "source_kind": "jamendo",
+            "provider_track_id": "12345",
+            "lease_id": "private-lease",
+            "operation_id": "private-operation",
+            "artifact_path": "/tmp/jamendo/private/normalized.mp3",
+            "music_attribution": attribution,
+        },
+    }
+
+    payload = status_payload._status_now_playback(now_streaming, 25.3)
+    metadata = payload["now_streaming"]["metadata"]
+
+    assert metadata == {
+        "title": "Track",
+        "source_kind": "jamendo",
+        "music_attribution": attribution,
+    }
+
+
+def test_public_segment_metadata_drops_malformed_attribution_and_copies_tuples():
+    metadata = {
+        "music_attribution": {
+            "provider": "jamendo",
+            "license_id": "CC-BY-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "source_url": "https://storage.jamendo.com/download.mp3?token=private",
+            "credit": "Private stream URL must not render",
+            "modified": True,
+            "basis": "provider_reported",
+        },
+        "public_tuple": ({"operation_id": "private", "label": "safe"},),
+    }
+
+    payload = status_payload._public_segment_metadata(metadata)
+
+    assert payload == {"public_tuple": ({"label": "safe"},)}
+
+
+def test_public_segment_metadata_rejects_non_mapping_input():
+    assert status_payload._public_segment_metadata("not metadata") == {}
 
 
 def test_serialize_stream_log_entry_uses_metadata_duration_fallback():
@@ -277,7 +390,7 @@ def test_serialize_heading_reports_resolving_until_track_tagged():
     assert payload["resolving"] is False
 
 
-def test_golden_path_status_uses_new_module_globals(monkeypatch):
+def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeypatch):
     class Config:
         anthropic_api_key = ""
         openai_api_key = ""
@@ -289,6 +402,7 @@ def test_golden_path_status_uses_new_module_globals(monkeypatch):
     payload = status_payload._golden_path_status(Config(), StationState())
 
     assert payload["stage"] == "needs_music_source"
+    assert "yt-dlp downloads" not in payload["fallback_sources"]
     assert payload["source_readiness"]["sources"]["charts"]["configured"] is True
     assert payload["source_readiness"]["sources"]["charts"]["status"] == "configured_unchecked"
 
@@ -356,6 +470,7 @@ def test_source_readiness_reports_only_terminal_candidate_exhaustion_as_unavaila
     assert charts["detail"] == "No found track could be prepared as playable audio."
     assert exhausted["sources"]["recovery"]["status"] == "on_air"
     assert exhausted["programming_ready"] is False
+    assert exhausted["continuity_available"] is True
     assert exhausted["transport_only"] is True
 
     monkeypatch.setattr(status_payload, "_golden_path_cache", None)
@@ -363,6 +478,7 @@ def test_source_readiness_reports_only_terminal_candidate_exhaustion_as_unavaila
     monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
     golden_path = status_payload._golden_path_status(_source_config(allow_ytdlp=True), state)
     assert golden_path["stage"] == "needs_music_source"
+    assert "Backup audio is ready" in golden_path["detail"]
 
 
 def test_recovery_on_air_proves_transport_but_not_source_health():
@@ -382,6 +498,35 @@ def test_recovery_on_air_proves_transport_but_not_source_health():
     assert payload["sources"]["recovery"]["status"] == "on_air"
     assert payload["programming_ready"] is False
     assert payload["transport_only"] is True
+
+
+def test_recovery_cover_only_without_on_air_still_reports_backup_audio_ready(monkeypatch):
+    """Regression: golden-path detail must widen to recovery_cover_available.
+
+    Before this fix, the "Backup audio is ready" detail only fired when
+    recovery was proven on_air. A bundled/configured recovery cover that has
+    never actually aired (cover_only, not on_air) must still report
+    continuity — otherwise First Listen stays stuck even though a usable
+    fallback exists.
+    """
+    evidence = SourceReadinessEvidence()
+    evidence.configure("recovery", True, bundled=True)
+    state = StationState(source_readiness=evidence)
+
+    readiness = status_payload._source_readiness_status(_source_config(), state)
+    assert readiness["sources"]["recovery"]["status"] == "cover_only"
+    assert readiness["recovery_on_air"] is False
+    assert readiness["recovery_cover_available"] is True
+    assert readiness["continuity_available"] is True
+    assert readiness["programming_ready"] is False
+
+    monkeypatch.setattr(status_payload, "_golden_path_cache", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_key", None)
+    monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
+    golden_path = status_payload._golden_path_status(_source_config(), state)
+
+    assert golden_path["stage"] == "needs_music_source"
+    assert "Backup audio is ready" in golden_path["detail"]
 
 
 def test_configured_source_not_reached_does_not_claim_it_was_checked():

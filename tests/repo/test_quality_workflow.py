@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "quality.yml"
 
@@ -28,6 +30,21 @@ def test_quality_workflow_pr_job_is_read_only() -> None:
     assert "contents: read" in quality_block
     assert "contents: write" not in quality_block
     assert "python scripts/coverage-ratchet.py check" in quality_block
+
+
+def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
+    def checkout_fetch_depth(document: dict[str, object]) -> object:
+        steps = document["jobs"]["quality"]["steps"]  # type: ignore[index]
+        checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+        return checkout.get("with", {}).get("fetch-depth")
+
+    document = yaml.safe_load(_workflow_text())
+    assert checkout_fetch_depth(document) == 0
+    checkout = next(
+        step for step in document["jobs"]["quality"]["steps"] if step.get("uses", "").startswith("actions/checkout@")
+    )
+    checkout["with"].pop("fetch-depth")
+    assert checkout_fetch_depth(document) is None
 
 
 def test_quality_workflow_scopes_write_to_main_ratchet_job() -> None:
@@ -65,3 +82,14 @@ def test_quality_workflow_runs_shellcheck_on_scripts() -> None:
     assert "koalaman/shellcheck@sha256:" in quality_block
     assert "v0.11.0" in quality_block
     assert "scripts/*.sh" in quality_block
+
+
+def test_quality_workflow_emits_strict_media_proof_on_prs_and_main() -> None:
+    quality_block = _job_block(_workflow_text(), "quality")
+
+    assert "python scripts/media-proof.py --quick --output media-proof.json" in quality_block
+    assert "name: Upload strict media proof" in quality_block
+    assert "if: always()" in quality_block
+    assert "name: media-proof-quality-${{ github.sha }}" in quality_block
+    assert "path: media-proof.json" in quality_block
+    assert "if-no-files-found: error" in quality_block

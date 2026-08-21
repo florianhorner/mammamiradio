@@ -4,7 +4,7 @@ profile mammamiradio flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
   #include <abstractions/nameservice>
 
-  # Python/FastAPI runtime with FFmpeg, edge-tts, yt-dlp, and Supervisor/Core API calls.
+  # Python/FastAPI runtime with FFmpeg, edge-tts, and Supervisor/Core API calls.
   file,
   network,
   signal,

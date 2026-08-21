@@ -8,6 +8,7 @@ Covers: LiveStreamHub, golden path, ingress prefix sanitization, utility
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +22,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
 from mammamiradio.web import status_payload as status_payload_mod
 from mammamiradio.web.streamer import (
     LiveStreamHub,
@@ -311,6 +313,7 @@ async def test_purge_segment_queue_ephemeral_unlinks(tmp_path):
 
 @pytest.mark.asyncio
 async def test_purge_segment_queue_keeps_packaged_asset_even_if_ephemeral(tmp_path, monkeypatch):
+    from mammamiradio.scheduling import queue_mutations
     from mammamiradio.web import streamer
 
     demo_root = tmp_path / "assets" / "demo"
@@ -320,7 +323,11 @@ async def test_purge_segment_queue_keeps_packaged_asset_even_if_ephemeral(tmp_pa
     tmp_render = tmp_path / "tmp" / "render.mp3"
     tmp_render.parent.mkdir()
     tmp_render.write_bytes(b"\x00" * 2048)
+    # A fake demo root has to be pinned in every module that resolves it: the
+    # purge now unlinks through the shared queue-mutation helper, so pinning
+    # only ``streamer`` would leave the real guard reading the real asset tree.
     monkeypatch.setattr(streamer, "_DEMO_ASSETS_DIR", demo_root)
+    monkeypatch.setattr(queue_mutations, "_DEMO_ASSETS_DIR", demo_root)
 
     q = asyncio.Queue()
     q.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
@@ -329,6 +336,40 @@ async def test_purge_segment_queue_keeps_packaged_asset_even_if_ephemeral(tmp_pa
     assert _purge_segment_queue(q) == 2
     assert packaged.exists()
     assert not tmp_render.exists()
+
+
+@pytest.mark.asyncio
+async def test_purge_segment_queue_protects_real_packaged_recovery_clip(tmp_path):
+    """The purge guard holds on the real packaged tree, with nothing pinned.
+
+    The test above pins a fake demo root, so it only proves the guard for
+    whichever module the pin happens to name -- and it went blind the moment the
+    unlink moved out of ``streamer`` into ``scheduling.queue_mutations``. This
+    one names no module: it queues the shipped ``continuity_1.mp3`` and asserts
+    the production resolution never reaches ``unlink``, so a future relocation
+    of the guard fails here instead of deleting the dead-air rescue clip.
+    ``Path.unlink`` is stubbed, so a broken guard can only fail the test.
+    """
+    packaged = DEMO_ASSETS_DIR / "recovery" / "continuity_1.mp3"
+    assert packaged.is_file(), "packaged recovery clip is missing from the repo"
+    tmp_render = tmp_path / "render.mp3"
+    tmp_render.write_bytes(b"\x00" * 2048)
+
+    unlinked: list[Path] = []
+
+    def _record_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        unlinked.append(self)
+
+    q = asyncio.Queue()
+    q.put_nowait(Segment(type=SegmentType.BANTER, path=packaged, metadata={}, ephemeral=True))
+    q.put_nowait(Segment(type=SegmentType.BANTER, path=tmp_render, metadata={}, ephemeral=True))
+
+    with patch.object(Path, "unlink", _record_unlink):
+        assert _purge_segment_queue(q) == 2
+
+    assert packaged not in unlinked, "packaged recovery clip reached unlink()"
+    assert tmp_render in unlinked, "purge never reached the unlink step"
+    assert packaged.is_file()
 
 
 def test_unlink_ephemeral_best_effort_keeps_packaged_asset(tmp_path, monkeypatch):

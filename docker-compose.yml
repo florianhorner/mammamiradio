@@ -14,9 +14,9 @@ services:
       # /data/admin_token (readable via `docker compose exec mammamiradio cat /data/admin_token`).
       # Override here only if you want to pin a known value.
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
-      # Enable yt-dlp chart music by default so `docker compose up` has something to play.
-      # Set MAMMAMIRADIO_ALLOW_YTDLP=false in .env to restrict to local MP3s.
-      - MAMMAMIRADIO_ALLOW_YTDLP=${MAMMAMIRADIO_ALLOW_YTDLP:-true}
+      # Broad external-media extraction is explicit opt-in and is not installed
+      # in the default image. Local and bundled music remain available.
+      - MAMMAMIRADIO_ALLOW_YTDLP=${MAMMAMIRADIO_ALLOW_YTDLP:-false}
       # Optional: Anthropic API key for AI-generated banter/ads
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Optional: OpenAI API key (TTS voices + script generation fallback)

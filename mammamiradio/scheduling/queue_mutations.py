@@ -32,6 +32,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
+from mammamiradio.scheduling.handoff import reconcile_handoff_queue_items
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ def drop_segment_moment_receipts(state: StationState, segment: Segment, reason: 
 
 def unlink_ephemeral_best_effort(segment: Segment) -> None:
     """Remove a discarded temporary render while preserving package data."""
+    segment.release()
     if not segment.ephemeral or is_packaged_asset(segment.path, _DEMO_ASSETS_DIR):
         return
     try:
@@ -140,7 +142,13 @@ def discard_queued_segment(
     """
     if revoke_listener_handoff:
         state.revoke_listener_request_handoff_for_discarded_dedication(segment)
-    state.record_discard(segment, reason=reason, already_counted_in_produced=True)
+    try:
+        state.record_discard(segment, reason=reason, already_counted_in_produced=True)
+    except Exception:
+        # Discard accounting is telemetry. One broken item must not strand its
+        # own cleanup, its siblings' cleanup, or abort a control action
+        # mid-rewrite.
+        logger.warning("Queue-drop accounting failed for %s; continuing", segment.path, exc_info=True)
     drop_segment_moment_receipts(state, segment, reason)
     unlink_ephemeral_best_effort(segment)
 
@@ -184,6 +192,11 @@ def drop_matching_segments(
             queue.task_done()
         except asyncio.QueueEmpty:
             break
+        except Exception:
+            # A broken queue read must not abort the rewrite mid-flight: keep
+            # what was drained, let the caller reconcile any residual items.
+            logger.error("Queue drain stopped before the queue was empty", exc_info=True)
+            break
 
     dropped: list[Segment] = []
     survivors: list[Segment] = []
@@ -198,6 +211,16 @@ def drop_matching_segments(
         raise
 
     dropped, survivors = settle_listener_request_queue_dependencies(dropped, survivors, state=state)
+
+    # A drop can remove either half of a private music/speech handoff pair.
+    # Reconciling against the *final* survivor topology — after listener-request
+    # dependents have followed their dedication out — restores a complete
+    # unstarted song when its tail successor was removed, and folds a
+    # now-untruthful successor into the same discard accounting as the
+    # predicate's own drops.
+    for segment in reconcile_handoff_queue_items(state, survivors):
+        if not any(existing is segment for existing in dropped):
+            dropped.append(segment)
 
     for segment in survivors:
         queue.put_nowait(segment)

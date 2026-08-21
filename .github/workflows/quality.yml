@@ -19,10 +19,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # The workflow self-tests resolve HEAD~1 (ancestor cases in the
-          # squad-gate and landing-wrapper suites); a depth-1 clone has no
-          # parent commit and they die with "Needed a single revision".
-          fetch-depth: 2
+          # The audio-pack validator reads generator inputs at the exact Git
+          # revision pinned in the provenance manifest. That revision can be
+          # older than HEAD~1, so a shallow checkout cannot prove the hashes.
+          fetch-depth: 0
 
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
@@ -36,6 +36,27 @@ jobs:
         run: |
           pip install -e .
           pip install -r requirements-dev.txt
+
+      # Report-only while the twelve starter tracks are absent by design: the
+      # proof still runs and uploads its report, but this lane does not fail on
+      # the missing content. The hard gate stays in scripts/pre-release-check.sh
+      # (section 10), so release remains blocked until the content lands.
+      - name: Media-rights report (report-only)
+        run: |
+          if python scripts/media-proof.py --quick --output media-proof.json; then
+            echo "media-proof: PASS"
+          else
+            echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence under mammamiradio/assets/starter/) have not landed yet."
+            echo "NOTICE: this lane is report-only; scripts/pre-release-check.sh still fails hard on this proof on the release path."
+          fi
+
+      - name: Upload strict media proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: media-proof-quality-${{ github.sha }}
+          path: media-proof.json
+          if-no-files-found: error
 
       - name: Set up Node.js for browser smoke
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -174,6 +195,12 @@ jobs:
       - name: Release invariants
         if: github.event_name == 'pull_request'
         run: bash scripts/check-release-invariants.sh
+
+      # `addopts = -m 'not requires_ffmpeg'` deselects these by default, so the
+      # coverage gate below never runs them. They are the only proof that a
+      # manifest-approved payload which is not really audio still fails ffprobe.
+      - name: Browser narration ffmpeg guards
+        run: python -m pytest tests/web/test_first_listen_narration_assets.py -m requires_ffmpeg -q
 
       # On PRs that touch version files: full version-sync check
       # (pyproject.toml ↔ config.yaml ↔ custom_components/mammamiradio/manifest.json ↔ CHANGELOG)

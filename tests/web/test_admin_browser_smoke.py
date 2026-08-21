@@ -75,6 +75,13 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "later capability failure discarded the last known recovery action",
         "empty-pool Library tools recovery was inert while stopped",
         "empty-pool setup recovery was inert while stopped",
+        # While First Listen entry is required, the setup tab is one opaque
+        # journey surface: the producer deck steps aside and the Station
+        # controls escape is the operator's only way back. The smoke must
+        # assert the escape exists and that using it restores the tab bar —
+        # otherwise a broken escape traps a fresh-install operator.
+        "required First Listen journey lost its Station controls escape",
+        "the Station controls escape did not restore the producer desk tab bar",
         "for (const width of [320, 375, 414, 600, 768])",
         "catalogue row acquired internal horizontal overflow",
         "catalogue control escaped its row",

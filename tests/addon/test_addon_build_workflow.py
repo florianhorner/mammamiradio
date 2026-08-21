@@ -22,7 +22,7 @@ These tests lock down the structural invariants:
   3. The build job cannot run if validate fails (`needs: validate`).
   4. Both target architectures are in the build matrix.
   5. The workflow triggers cover every file touched by a version-bump commit.
-  6. The workflow publishes the versioned per-arch image tags that HA installs.
+  6. Both per-arch images are proven before the workflow publishes either one.
 """
 
 from __future__ import annotations
@@ -144,9 +144,17 @@ def test_ci_trigger_paths_cover_version_bump_files():
     trigger_block = trigger_section_match.group(0)
 
     required_trigger_patterns = [
+        ".github/workflows/addon-build.yml",
         "ha-addon/**",
         "mammamiradio/**",
+        "proof/media/**",
+        "scripts/media-proof.py",
+        "scripts/validate-addon.sh",
+        "scripts/validate-starter-media.py",
+        "tests/media/**",
         "pyproject.toml",
+        "requirements.txt",
+        "requirements-dev.txt",
         "radio.toml",
         "model_registry.toml",
         "scripts/validate-addon.sh",
@@ -294,7 +302,7 @@ def test_ci_publishes_short_sha_edge_tag():
     """
     workflow_text = _workflow_text()
 
-    stable_block = _extract_step_block(workflow_text, "Build and push stable add-on image")
+    stable_block = _extract_step_block(workflow_text, "Build add-on image without publishing")
     assert ":${{ needs.validate.outputs.short_sha }}" in stable_block, (
         "the add-on build must push :<short-sha> so a manual edge release can point at it"
     )
@@ -314,10 +322,68 @@ def test_ci_sha_artifact_uses_stable_addon_version_label():
     label is wired to the stable config.yaml version and not to something else.
     """
     workflow_text = _workflow_text()
-    stable_block = _extract_step_block(workflow_text, "Build and push stable add-on image")
+    stable_block = _extract_step_block(workflow_text, "Build add-on image without publishing")
 
     assert "BUILD_VERSION=${{ needs.validate.outputs.addon_version }}" in stable_block, (
         "the :sha artifact promoted by addon-release.yml must carry config.yaml's stable version "
         "in io.hass.version, not the commit SHA."
     )
     assert ":${{ github.sha }}" in stable_block, "stable source artifact must still be pushed as :github.sha"
+
+
+def _extract_job_block(workflow_text: str, job_name: str) -> str:
+    workflow_text = workflow_text.split("\njobs:", 1)[1]
+    pattern = rf"\n  {re.escape(job_name)}:\n((?:    .+\n|\n)*)"
+    match = re.search(pattern, workflow_text)
+    assert match, f"Job '{job_name}' not found in addon-build.yml"
+    return match.group(1)
+
+
+def test_ci_emits_strict_quick_media_proof_before_build() -> None:
+    validate_block = _extract_job_block(_workflow_text(), "validate")
+
+    assert "python scripts/media-proof.py --quick --output media-proof.json" in validate_block
+    assert "if: always()" in validate_block
+    assert "name: media-proof-quick-${{ github.sha }}" in validate_block
+    assert "if-no-files-found: error" in validate_block
+
+
+def test_ci_proves_both_unpushed_images_before_any_publish() -> None:
+    """The full both-image proof runs and uploads its report before any push.
+
+    While the twelve starter-catalog tracks are absent by design the job is
+    report-only (missing content prints a NOTICE instead of failing, so image
+    publish and the edge channel keep flowing); the stable promotion media-proof
+    job in addon-release.yml and scripts/pre-release-check.sh section 10 keep
+    the hard gate on the release path.
+    """
+    text = _workflow_text()
+    build_block = _extract_job_block(text, "build")
+    proof_block = _extract_job_block(text, "media-proof")
+    push_block = _extract_job_block(text, "push")
+
+    assert "push: false" in build_block
+    assert "load: true" in build_block
+    assert "docker save --output" in build_block
+    assert "packages: write" not in build_block
+    assert "needs: [validate, build]" in proof_block
+    assert "docker/setup-qemu-action@" in proof_block
+    assert "addon-image-amd64-${{ github.sha }}" in proof_block
+    assert "addon-image-aarch64-${{ github.sha }}" in proof_block
+    assert "--amd64-image" in proof_block
+    assert "--aarch64-image" in proof_block
+    assert "--output media-proof.json" in proof_block
+    assert "NOTICE: media-proof reported missing content" in proof_block
+    assert "name: media-proof-full-${{ github.sha }}" in proof_block
+    assert "needs: [validate, media-proof]" in push_block
+    assert "packages: write" in push_block
+    assert 'docker push "$SHA_REF"' in push_block
+    assert 'docker push "$SHORT_REF"' in push_block
+    assert "push: true" not in text
+    assert text.count("docker push ") == 2
+
+
+def test_ci_smoke_waits_for_proven_image_publication() -> None:
+    smoke_block = _extract_job_block(_workflow_text(), "smoke")
+
+    assert "needs: push" in smoke_block

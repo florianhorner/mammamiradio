@@ -356,7 +356,7 @@ async def test_banter_final_concat_cancellation_waits_before_cleanup(tmp_path: P
         ),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, side_effect=_dialogue),
-        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_slow_concat),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", return_value=None),
@@ -488,7 +488,7 @@ async def test_ad_final_concat_cancellation_waits_before_cleanup(tmp_path: Path)
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_ad_voice),
-        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_layer),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_slow_concat),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
@@ -542,7 +542,7 @@ async def test_optional_promo_tts_failure_does_not_drop_complete_ad(tmp_path: Pa
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_ad_voice),
-        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_layer),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=4.0),
@@ -587,7 +587,7 @@ async def test_required_ad_voice_failure_uses_recovery_and_resets_due_counter(tm
             new_callable=AsyncMock,
             side_effect=TTSUnavailableError("required ad voice unavailable"),
         ),
-        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_layer),
         patch(
             f"{PRODUCER_MODULE}._producer_error_recovery_segment",
@@ -646,7 +646,7 @@ async def test_multi_spot_ad_partial_success_then_failure_cleans_up_first_spot(t
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_voice),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_ad_voice),
-        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_write_layer),
         patch(
             f"{PRODUCER_MODULE}._producer_error_recovery_segment",
@@ -735,6 +735,12 @@ async def test_impossible_tts_unavailable_uses_canned_or_propagates_to_recovery(
         assert queued.type is SegmentType.BANTER
         assert queued.path == canned
         assert state.last_banter_script == [{"host": "Radio", "text": "(pre-recorded banter)"}]
+        # The synthetic "Radio" host above is a placeholder, not a speaker. It must
+        # not reach the v1 contract's now_playing.host, so a canned clip claims
+        # nobody and the consumer falls back on its own. Indexed, not .get() with a
+        # default: a default of "" also passes when the key is dropped entirely,
+        # which is the regression this is here to catch.
+        assert queued.metadata["host"] == ""
         recovery_builder.assert_not_awaited()
     else:
         assert queued is recovery
@@ -842,7 +848,7 @@ async def _run_ad_wrapper_failure(
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=script),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=voice_side_effect),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, side_effect=_ad_voice),
-        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a: path),
+        patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, side_effect=lambda path, *_a, **_k: path),
         patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=bumper_side_effect),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
         patch(
@@ -982,7 +988,7 @@ async def test_tts_failure_norm_cache_music_recovery_schedules_restart_handoff(t
         patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=norm_path),
         patch(
             f"{PRODUCER_MODULE}.load_track_metadata",
-            return_value={"title": "Song", "artist": "Artist"},
+            return_value={"title": "Song", "artist": "Artist", "source_kind": "local"},
         ),
         patch(f"{PRODUCER_MODULE}.norm_cache_duration_sec", return_value=120.0),
         patch(f"{PRODUCER_MODULE}._apply_egress", new_callable=AsyncMock, side_effect=_identity_egress),
@@ -1011,6 +1017,9 @@ async def test_tts_failure_norm_cache_music_recovery_schedules_restart_handoff(t
     assert cache_dir == config.cache_dir
     assert len(candidates) == 1
     assert candidates[0].path == norm_path
+    # The vetted origin must ride into the spool entry, or the boot-time
+    # admission gate would reject the candidate as unknown_source.
+    assert candidates[0].metadata.get("source_kind") == "local"
 
 
 @pytest.mark.asyncio

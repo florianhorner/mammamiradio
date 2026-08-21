@@ -43,18 +43,18 @@ curl http://127.0.0.1:8000/readyz
 
 ## The page loads but the stream itself never plays
 
-If the listener page renders normally, the dashboard looks healthy, `/healthz` returns `200`, and yet every attempt to play returns an error, check what the station is called. `/stream` announces the station to players through its `icy-name` and `icy-genre` response headers, and HTTP headers can only carry latin-1 characters. Two things put a non-latin-1 character into a station name without you noticing:
+If the listener page, dashboard, and `/healthz` all work but the stream fails, check the public station name. `/stream` sends it in the `icy-name` response header, which is limited to latin-1. Common sources of non-latin-1 text include:
 
 - **Smart quotes.** Typing a name on a Mac or iPhone silently substitutes a typographic apostrophe (U+2019) for the straight one.
 - **Decomposed accents.** macOS often stores `à` as a plain `a` followed by a separate combining accent (U+0300). The combining mark is not latin-1 either, so a perfectly ordinary `Radio Città` could fail while the same name typed elsewhere worked.
 
-Older builds passed both straight through, so building the response failed before a single audio byte was sent and every listener got a `500` while the rest of the app kept behaving normally. Grep the add-on log for the exact text Python emits, which uses the escaped form rather than the character itself:
+Older builds passed unencodable header text through unchanged. Response construction then failed before audio was sent, returning `500` to listeners while the rest of the app stayed healthy. The add-on log shows Python's escaped form:
 
 ```text
 UnicodeEncodeError: 'latin-1' codec can't encode character '\u2019' in position 3: ordinal not in range(256)
 ```
 
-Emoji and CJK characters in a station name or theme did the same thing.
+Emoji and CJK characters in the station name or theme caused the same failure. Those builds sent `[station] theme` as `icy-genre`; current builds send the public `[brand] tagline` there instead, so the theme can no longer take the stream down.
 
 A third trigger has nothing to do with punctuation: **any letter outside latin-1**. `Radio Łódź`, `Radio Čačak`, `Rádió Ő` and `Radyo İstanbul` all returned `500` on older builds for the same reason.
 
@@ -64,35 +64,86 @@ Current builds compose the value to NFC and then fold it at the header boundary:
 - Curly quotes, dashes and ellipses become plain ASCII.
 - Letters outside latin-1 degrade to their base letter rather than disappearing. Most reduce by decomposition (`Škoda` becomes `Skoda`). Letters built from a stroke, bar or hook decompose to nothing, so the base letter is read out of the Unicode character name instead: `Radio Łódź` becomes `Radio Lódz` and `Radyo Kırmızı` becomes `Radyo Kirmizi`. Without that step the latin-1 pass deletes the letter outright and the name reads as a typo (`Radio ódz`, `Radyo Krmz`). This is deliberately not a hand-written list of letters. 314 Latin letters fall outside latin-1, and enumerating them is exactly how the first ones got missed. Only the few whose Unicode name contains no base letter at all (`Ŋ ŋ Ə ə Œ œ ẞ ĸ`) are mapped by hand.
 - Emoji and CJK, which have no Latin equivalent at all, are dropped.
-- Control characters are removed. CR and LF are the header-injection vector; the rest of the C0 range and DEL are illegal field content that a strict server rejects outright. This matters most for `station.theme` / `STATION_THEME`, which (unlike the station name) never passes through the load-time sanitizer.
+- Control characters are removed. CR and LF are the header-injection vector; the rest of the C0 range and DEL are illegal field content that a strict server rejects outright. A public `[brand] tagline` needs the same treatment because it bypasses the station-name sanitizer.
 - The result is stripped at both ends. Folding an emoji off the edge of a name leaves its space behind, and a header value with leading or trailing whitespace is illegal. Some HTTP implementations (h11) refuse the entire response for it, which would reproduce the original outage by a different route.
 
-A name that folds away to nothing falls back to the default station name instead of sending a blank `icy-name`. `icy-genre` is folded first and truncated to 64 characters afterwards, so the cap always applies to the text that actually ships. Non-string values are coerced, so a `theme = 42` typo in `radio.toml` no longer takes the stream down either.
+If folding leaves no station name, `/stream` uses the default rather than an empty `icy-name`. It omits `icy-genre` when no usable `[brand] tagline` is configured. A tagline is folded before the 64-character limit is applied. Non-string taglines are coerced, so `tagline = 42` in `radio.toml` cannot take the stream down. `[station] theme` remains a scriptwriter prompt and never appears in stream headers.
 
 Nothing about this reaches the listener UI: `/public-status` and the page still carry the full original name, emoji and all. Only the header is folded. If you are on an older add-on and see that error in the log, retype the apostrophe as a straight `'` in the add-on configuration as an immediate workaround; the stream recovers on the next listener connect with no restart.
 
 ## The app starts but there is no real music
 
-The station walks a source chain at boot: charts (when `MAMMAMIRADIO_ALLOW_YTDLP=true`) → Jamendo (when `jamendo_client_id` is set) → packaged demo music when present → built-in demo-track metadata. A source checkout also checks its repo-local `music/` directory before the demo tiers; the stock Docker Compose and Home Assistant packages do not mount that development path. The current package contains recovery audio but no bundled song library, and built-in demo-track metadata still needs a working download path. The first tier that yields playable tracks wins. If you hear only recovery audio or placeholder tones:
+The attributed twelve-track starter collection is the boot source and needs no
+network or provider account. If only continuity or recovery audio airs:
 
-- Check that `ffmpeg` is installed
-- Check that `MAMMAMIRADIO_ALLOW_YTDLP=true` is set (it is by default in HA addon and Conductor)
-- For the supplied Docker image or Home Assistant app, local MP3s belong in the
+- Open **Music credits**. A valid starter package lists all twelve bundled
+  entries even when Jamendo is off.
+- Check the app log for a starter manifest, hash, package, or FFprobe error.
+- Run `make media-check` in a source checkout. Do not copy around the manifest
+  gate or fabricate a receipt; replace the app with a package that passed the
+  media proof.
+- Confirm `ffmpeg` is available. Runtime excludes a corrupt starter asset and
+  advances, while release proof fails the package.
+
+Jamendo cannot repair a broken starter package: it is optional, default-off,
+asynchronous enrichment. A Jamendo failure must leave starter/local playback
+unchanged. See [Music sources and rights boundaries](music-sources.md).
+
+For the supplied Docker image or Home Assistant app, local MP3s belong in the
   deployment's persistent `/data/music` directory. Populate that data area
   through the deployment's supported storage tooling; do not patch files into
   a running Home Assistant app container. A source checkout instead reads
   repo-local `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
-- A quality gate circuit breaker lets tracks through after 3 consecutive rejections to prevent stream starvation
 
-When listeners are connected, `/readyz` now also flips back to `503 starting` if playback has been truly silent for more than 30 seconds — silent means no listener queue accepted audio, not merely that a file was selected. A station bridging an empty queue on `continuity_1.mp3` is audibly on air and does not count as silent, so the add-on watchdog is not handed a reason to restart a fresh install mid-first-render. The playback loop first tries one canned clip for the empty-queue gap, then a recent-aware random `cache/norm_*.mp3` pick that prefers a song the listener has not just heard, and only re-serves a recent one when the cache holds nothing else (a song from twenty minutes ago beats the station ident on a loop), then, if `mammamiradio/assets/demo/music/` has any bundled MP3s, a random pick from that directory (the **built-in demo track rescue** — prevents dead air on fresh installs and empty-cache container starts, a no-op when the directory is empty). If there is no cached or demo music, the packaged clip may repeat; the neutral two-second `emergency_tone.mp3` remains the final packaged rung when ordinary recovery cannot supply audio. After 60 seconds without any bridge asset the station requests forced banter so the queue can recover without a restart. If the station has been explicitly stopped (Stop button on the admin panel), `/readyz` returns `503 stopped` regardless of queue depth. Connecting or reconnecting to `/stream` does not clear the persisted stop; press **Resume** explicitly.
+When listeners are connected, `/readyz` flips back to `503 starting` if playback
+has been truly silent for more than 30 seconds — silent means no listener queue
+accepted audio, not merely that a file was selected. A station bridging an empty
+queue on `continuity_1.mp3` is audibly on air and does not count as silent, so the
+add-on watchdog is not handed a reason to restart it mid-recovery. The playback
+loop first tries one canned clip for the gap, then a recent-aware random
+`cache/norm_*.mp3` pick that prefers a song the listener has not just heard,
+then eligible bundled starter assets. If there is no cached or starter music,
+the packaged clip may repeat; the neutral two-second `emergency_tone.mp3`
+remains the final packaged rung. After 60 seconds without any bridge asset the
+station requests forced banter so the queue can recover without a restart. If
+the station has been explicitly stopped, `/readyz` returns `503 stopped`
+regardless of queue depth. Connecting or reconnecting to `/stream` does not
+clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
 This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. The packaged clip appears only when the cache has nothing eligible, and when it does queue with runway still expected but no cache music behind it, the miss reads `no cache music queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
-If the clip still repeats, check whether `cache/` has any `norm_*.mp3` files, and whether the ones that exist are eligible to air: files rejected by the audio quality gate and songs on the operator ban list are skipped by the rescue picker even though they sit on disk (a missing or corrupt metadata sidecar does NOT disqualify a file — it airs with a cleaned-up filename as the title). A fresh install with no cache and no bundled demo music may legitimately repeat the packaged clip because repeated station audio is still better than dead air.
+If the clip still repeats, look for a starter manifest/admission failure first.
+Eligible standalone/local normalized cache may still help the rescue picker,
+but Jamendo artifacts are deliberately excluded and cannot survive for rescue.
 
-The app persists the last selected source to `cache/playlist_source.json` and restores it on restart. If a persisted source fails to load, startup walks the standard fallback chain. Source-checkout developers with MP3s in the repo-local `music/` directory can use them even when yt-dlp is off and Jamendo isn't configured — yt-dlp is only required to download charts, not to play files already on disk.
+Source-checkout developers with MP3s in the repo-local `music/` directory can
+use them with external extraction off and Jamendo off. Those files remain the
+operator's responsibility.
+
+## Jamendo stays off or temporarily unavailable
+
+Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
+
+- **Finish Jamendo setup** means the client ID or current non-commercial
+  acknowledgement is missing. A migrated ID remains disabled until reviewed.
+- **Preparing one Jamendo track** is normal. Starter/local music continues and
+  a Jamendo miss never delays the next music slot.
+- **Jamendo temporarily unavailable** is a transient provider/network/audio
+  failure. Use **Check again** once; concurrent retries are coalesced.
+- **Jamendo track could not be used** is a provider-wide configuration or
+  contract rejection. Check the saved configuration or turn Jamendo off.
+
+Keep the running app and live cache intact; there is no downloaded Jamendo file
+to recover. The integration writes at most one single-use artifact under its boot
+temporary directory and deletes it after play or cancellation. No Jamendo
+audio or lease record belongs in cache, SQLite, restart handoff, or rescue.
+
+The admin row intentionally says provider confirmation is pending. `ready`
+means one technical playback artifact is prepared; it does not mean cleared or
+licensed for every station model. For error codes and retain/replace/clear
+semantics, see [Music sources and rights boundaries](music-sources.md#configuration-api).
 
 ## Air Next or Next track says the station is paused
 
@@ -138,9 +189,13 @@ and yielded bytes; it is not listener proof. `Listener-audible segment committed
 chunk. Provider, rescue-rotation, and continuity-air receipts update only at the
 second boundary.
 
-## A chart entry sounded like a podcast or audiobook
+## A standalone external-media result sounded like a podcast or audiobook
 
-Apple Music's Italian chart occasionally surfaces non-music entries (BBC comedy, news briefings, audiobooks). The source filter rejects them before they enter the candidate pool.
+This section applies only to a standalone installation that deliberately
+installed and enabled the `external-media` extra. Both Home Assistant add-ons
+omit yt-dlp, so they cannot take this path. Chart metadata can occasionally
+surface non-music entries; the source filter rejects obvious podcasts, news
+briefings, and audiobooks before they enter the candidate pool.
 
 Expected log signature on chart load:
 
@@ -280,6 +335,44 @@ Voice validation now runs at config load, not at synthesis time:
 - The admin runtime card uses those route records: `tts_provider.current_provider` becomes `edge` and `fallback_active` becomes `true` after a live cloud-to-Edge fallback, even when all provider keys are configured. This is runtime evidence, while `Mixed TTS` by itself remains a configuration summary. That runtime state is tracked per provider engine, not per voice: on a station with several voices on the same cloud engine, one voice's successful render clears the degraded state for that engine even if a different voice on the same engine is still falling back to Edge every segment. Grep logs for the specific character name in `Synthesized (Edge fallback)` lines to see which voice is actually degraded.
 - When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
+
+## First Listen cannot find any speakers
+
+Speaker discovery asks Home Assistant for its `media_player` entities, so it
+finds nothing when the station has no Home Assistant connection. Check
+`/api/capabilities`: `ha: false` and `homeassistant_access: false` mean there is
+nothing to search.
+
+On a standalone station (anything not run as the Home Assistant add-on), set
+`HA_URL` and `HA_TOKEN` in `.env` and restart. `HA_TOKEN` is a long-lived access
+token from your Home Assistant profile page. The add-on receives both from the
+Supervisor and needs neither set by hand.
+
+This step is optional. The station is a working radio without a home connection;
+skipping it leaves you on the Full AI Radio tier rather than Connected Home.
+
+For branch work, `scripts/first-listen-lab.sh start` brings up a disposable local
+Home Assistant with a real speaker, so First Listen can be exercised end to end
+without touching a live home. See
+[docs/runbooks/first-listen-local-ha.md](runbooks/first-listen-local-ha.md).
+
+## The station sounds soft or flat through Music Assistant
+
+The station levels every finished segment itself, so music, hosts, beds, and ads
+all reach you at one volume (`audio.lufs_target`, default `-16.0` LUFS, with ads
+1 LU hotter). Music Assistant can then level the same audio a second time on its
+way to a speaker.
+
+Open the playing speaker in Music Assistant and look at the audio path. If
+**Volume normalization** reads **Dynamic**, two levellers are stacked. Set it to
+**fixed gain** or **disabled** for that player and play the same song again.
+Dynamic levelling evens out loud and quiet moments as it goes, so drums and
+plucked notes lose some of their snap and steady bass sits further forward. On
+audio that arrives already levelled, there is nothing left for it to fix.
+
+This is a Music Assistant player setting; nothing changes on the station side.
+The station's own **On-Air Sound** dial is a separate FM colouring, off by
+default, so it is not what you are hearing.
 
 ## Home Assistant references never show up
 

@@ -202,8 +202,35 @@ Assistant restarts), that one speaker can go quiet. Start it again from the
 media browser or your automation and it picks up a fresh URL. The web player and
 the `media_player.mammamiradio` card are never affected.
 
+## Play it through Music Assistant
+
+Music Assistant merged a Mamma Mi Radio provider on 11 August 2026, so you can
+add the station there directly instead of going through Media Source, once
+you're running a Music Assistant 2.10.0 pre-release build. Add it under
+**Providers**, give it the add-on's base URL, and the station appears as a
+single entry under **Radio**. Live titles, hosts, and cover art follow the
+same versioned contract described in [now-playing.md](now-playing.md).
+
+**Availability:** the provider is in Music Assistant's 2.10.0 pre-release
+track (beta and release-candidate builds) and has not reached a stable
+release. On current stable (2.9.x) it is missing from the provider list,
+which is expected rather than a fault at your end. Wait for a stable Music
+Assistant that includes it, or use the Media Source route above, which works
+on every version.
+
+Two things to expect:
+
+- **Transport buttons do not behave like a playlist.** This is one shared live
+  timeline, so there is nothing to seek within: skip-forward has nothing queued
+  after it, and skip-back reconnects you to the live point rather than rewinding.
+  The provider already tells Music Assistant the stream cannot seek.
+- **Turn off double levelling.** The station levels every segment before it
+  leaves. If the playing speaker's **Volume normalization** is set to
+  **Dynamic**, the audio is levelled twice and can lose some snap. Set it to
+  fixed gain or disabled. See
+  [troubleshooting.md](../troubleshooting.md#the-station-sounds-soft-or-flat-through-music-assistant).
+
 ## Deferred to a later version
 
 - A branded Lovelace card (`getEntitySuggestion`) — the built-in media-control
   card the picker already auto-suggests covers the common case.
-- A Music Assistant provider (a separate PR into `music-assistant/server`).

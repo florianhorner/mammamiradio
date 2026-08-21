@@ -250,10 +250,10 @@ assets_dir = ""
 name = "Prezzoforte"
 tagline = "Prezzoforte. Conveniente. Sempre. Forse."
 category = "supermarket"
+sonic_recipe = "supermarket_dash"
 recurring = true
 [ads.brands.campaign]
 premise = "Prezzoforte's legendary weekly offers: discounts so aggressive the staff look personally offended by them"
-sonic_signature = "chime+register_hit"
 format_pool = ["classic_pitch", "testimonial", "live_remote"]
 spokesperson = "hammer"
 escalation_rule = "Each ad reveals a more outrageous discount, building to prices that are clearly a mistake"
@@ -262,12 +262,14 @@ escalation_rule = "Each ad reveals a more outrageous discount, building to price
 name = "Sacchettino"
 tagline = "Sacchettino. Il risparmio che non ti aspetti."
 category = "supermarket"
+sonic_recipe = "supermarket_dash"
 recurring = false
 
 [[ads.brands]]
 name = "Borsello & Figli"
 tagline = "Borsello & Figli. Da tre generazioni, non miglioriamo."
 category = "supermarket"
+sonic_recipe = "supermarket_dash"
 recurring = false
 
 # ── Cars ──
@@ -275,10 +277,10 @@ recurring = false
 name = "Velocino"
 tagline = "Velocino. L'auto elettrica che ti fa sentire italiano anche quando non lo sei."
 category = "cars"
+sonic_recipe = "motorway_pass"
 recurring = true
 [ads.brands.campaign]
 premise = "The new Velocino Fulmine: an Italian electric car so passionate it occasionally refuses to charge out of spite"
-sonic_signature = "whoosh+sweep"
 format_pool = ["classic_pitch", "duo_scene", "live_remote"]
 spokesperson = "hammer"
 escalation_rule = "Each ad reveals a more implausibly Italian feature — the horn plays O Sole Mio, the sat-nav argues back"
@@ -287,12 +289,14 @@ escalation_rule = "Each ad reveals a more implausibly Italian feature — the ho
 name = "Stradabella"
 tagline = "Stradabella. Ogni curva, un capolavoro."
 category = "cars"
+sonic_recipe = "motorway_pass"
 recurring = false
 
 [[ads.brands]]
 name = "Motoretto"
 tagline = "Motoretto. Piccolo. Feroce. Parcheggiabile."
 category = "cars"
+sonic_recipe = "motorway_pass"
 recurring = false
 
 # ── Telecom ──
@@ -300,10 +304,10 @@ recurring = false
 name = "TeleCuore"
 tagline = "TeleCuore. Il segnale che ti ama."
 category = "telecom"
+sonic_recipe = "late_night_hotline"
 recurring = true
 [ads.brands.campaign]
 premise = "TeleCuore's new piano illimitato: so unlimited they haven't actually checked what the limit is"
-sonic_signature = "hotline_beep+chime"
 format_pool = ["classic_pitch", "institutional_psa", "testimonial"]
 spokesperson = "hammer"
 escalation_rule = "Each ad makes the unlimited plan sound more philosophically infinite and legally dubious"
@@ -312,12 +316,14 @@ escalation_rule = "Each ad makes the unlimited plan sound more philosophically i
 name = "Fibra Magica"
 tagline = "Fibra Magica. Connessi. Quasi sempre."
 category = "telecom"
+sonic_recipe = "late_night_hotline"
 recurring = false
 
 [[ads.brands]]
 name = "Prontissimo Mobile"
 tagline = "Prontissimo Mobile. Arriviamo. Prima o poi."
 category = "telecom"
+sonic_recipe = "late_night_hotline"
 recurring = false
 
 # ── Banking ──
@@ -325,10 +331,10 @@ recurring = false
 name = "Bancone SpA"
 tagline = "Bancone SpA. I tuoi soldi, al sicuro da te."
 category = "banking"
+sonic_recipe = "bureaucracy_stamp"
 recurring = true
 [ads.brands.campaign]
 premise = "Bancone SpA: the bank so bureaucratic it takes three forms to open a form to open an account"
-sonic_signature = "ding+startup_synth"
 format_pool = ["institutional_psa", "testimonial", "classic_pitch"]
 spokesperson = "bureaucrat"
 escalation_rule = "Each ad features a more Kafkaesque banking procedure presented as a feature, not a bug"
@@ -337,6 +343,7 @@ escalation_rule = "Each ad features a more Kafkaesque banking procedure presente
 name = "Risparmiana"
 tagline = "Risparmiana. Metti da parte qualcosa, anche se non sai cosa."
 category = "banking"
+sonic_recipe = "bureaucracy_stamp"
 recurring = false
 
 # ── Food & Beverage ──
@@ -344,10 +351,10 @@ recurring = false
 name = "Pastaforte"
 tagline = "Pastaforte. La pasta che ti vuole bene."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = true
 [ads.brands.campaign]
 premise = "Pastaforte's limited edition Forme d'Italia: pasta shaped like Italian landmarks, each one triggers a different regional argument"
-sonic_signature = "mandolin_sting"
 format_pool = ["classic_pitch", "late_night_whisper", "testimonial"]
 spokesperson = "witness"
 escalation_rule = "Each ad introduces a more emotionally devastating pasta shape — the Colosseo makes nonni weep, the Vesuvio causes scenes at dinner"
@@ -356,12 +363,14 @@ escalation_rule = "Each ad introduces a more emotionally devastating pasta shape
 name = "Cioccolozzo"
 tagline = "Cioccolozzo. Perché no."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = false
 
 [[ads.brands]]
 name = "Caffè Turbino"
 tagline = "Caffè Turbino. Il caffè che ti rimette in piedi. Violentemente."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = false
 
 # ── Fashion ──
@@ -369,6 +378,7 @@ recurring = false
 name = "ModaBloc"
 tagline = "ModaBloc. Vestiti bene. O almeno meglio di ieri."
 category = "fashion"
+sonic_recipe = "showroom_reveal"
 recurring = false
 
 # ── Health / Pharma ──
@@ -376,10 +386,10 @@ recurring = false
 name = "Dolorfin"
 tagline = "Dolorfin. Agisce. Prima che tu voglia smettere."
 category = "pharma"
+sonic_recipe = "pharmacy_whisper"
 recurring = true
 [ads.brands.campaign]
 premise = "Dolorfin pain relief: clinically tested on every Italian social obligation — family lunch, commute, bureaucratic queue"
-sonic_signature = "chime"
 format_pool = ["classic_pitch", "institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Each ad targets a more specifically Italian source of suffering: the autogrill queue, the condominium meeting, the tax return"
@@ -391,22 +401,24 @@ escalation_rule = "Each ad targets a more specifically Italian source of sufferi
 name = "Capellissimo"
 tagline = "Capellissimo. I capelli che hai sempre sognato. Circa."
 category = "pharma"
+sonic_recipe = "pharmacy_whisper"
 recurring = false
 
 [[ads.brands]]
 name = "Intestix"
 tagline = "Intestix. Perché la salute inizia dove non si parla a cena."
 category = "pharma"
+sonic_recipe = "pharmacy_whisper"
 recurring = false
 
 [[ads.brands]]
 name = "Negroni as a Service"
 tagline = "NaaS. Sempre in cloud, mai nel bicchiere."
 category = "tech"
+sonic_recipe = "late_night_hotline"
 recurring = true
 [ads.brands.campaign]
 premise = "A startup delivering negroni cocktails via cloud infrastructure, but the drinks never actually arrive"
-sonic_signature = "ice_clink+startup_synth"
 format_pool = ["classic_pitch", "institutional_psa", "live_remote"]
 spokesperson = "hammer"
 escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cloud-computing metaphor"
@@ -415,10 +427,10 @@ escalation_rule = "Each ad reveals a worse subscription tier or a more absurd cl
 name = "Mausoleo del Presidentissimo"
 tagline = "Le donne in gonna entrano gratis. I bambini pagano doppio."
 category = "tourism"
+sonic_recipe = "bureaucracy_stamp"
 recurring = true
 [ads.brands.campaign]
 premise = "A solemn elder statesman narrates visits to the Mausoleo del Presidentissimo as if it were a sacred national pilgrimage, reading the most absurd attractions with total deadpan gravitas"
-sonic_signature = "sweep"
 format_pool = ["institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Each ad reveals a more outrageous mausoleum amenity announced with deeper, more dignified sincerity"
@@ -427,52 +439,59 @@ escalation_rule = "Each ad reveals a more outrageous mausoleum amenity announced
 name = "Spaghetti Carbonara su Stecco"
 tagline = "La tradizione... portatile."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = true
 
 [[ads.brands]]
 name = "Caffè Misterioso"
 tagline = "Il gusto che non capirai mai."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = true
 
 [[ads.brands]]
 name = "Autolavaggio Supremo"
 tagline = "La tua macchina esce più pulita di te."
 category = "services"
+sonic_recipe = "showroom_reveal"
 recurring = true
 
 [[ads.brands]]
 name = "Profumo di Nonna"
 tagline = "Ragù, naftalina, e un tocco di mistero."
 category = "beauty"
+sonic_recipe = "home_reveal"
 recurring = true
 
 [[ads.brands]]
 name = "Scarpe Volanti"
 tagline = "Non corri. Voli. Poi cadi."
 category = "fashion"
+sonic_recipe = "stadium_win"
 recurring = true
 
 [[ads.brands]]
 name = "Gelato Infinito"
 tagline = "Non finisce mai. Letteralmente. Abbiamo un problema."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = true
 
 [[ads.brands]]
 name = "Pizzeria del Futuro"
 tagline = "Pizza stampata in 3D. Il sapore è opzionale."
 category = "food"
+sonic_recipe = "showroom_reveal"
 recurring = true
 
 [[ads.brands]]
 name = "Assicurazione Fantasma"
 tagline = "Ti copriamo. Forse. Dipende dall'umore."
 category = "finance"
+sonic_recipe = "late_night_hotline"
 recurring = true
 [ads.brands.campaign]
 premise = "A smooth, intimate voice sells phantom insurance policies that may or may not exist, making coverage sound like a personal favour you can't refuse"
-sonic_signature = "hotline_beep"
 format_pool = ["late_night_whisper"]
 spokesperson = "seductress"
 escalation_rule = "Each ad makes the policy's terms vaguer and the implied consequences of declining more unsettling"
@@ -481,40 +500,45 @@ escalation_rule = "Each ad makes the policy's terms vaguer and the implied conse
 name = "Palestra Domani"
 tagline = "Iscriviti oggi. Inizia domani. O dopodomani."
 category = "fitness"
+sonic_recipe = "stadium_win"
 recurring = false
 
 [[ads.brands]]
 name = "Cravatte Titaniche"
 tagline = "Affonda con stile."
 category = "fashion"
+sonic_recipe = "showroom_reveal"
 recurring = false
 
 [[ads.brands]]
 name = "Clinica Dentale Sorriso Forzato"
 tagline = "Non sorridi? Ti aiutiamo noi. Anche contro la tua volontà."
 category = "health"
+sonic_recipe = "pharmacy_whisper"
 recurring = true
 
 [[ads.brands]]
 name = "Vino Quantistico"
 tagline = "Rosso e bianco allo stesso tempo, finché non lo assaggi."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = false
 
 [[ads.brands]]
 name = "Taxi Poetico"
 tagline = "Ti portiamo dove vuoi. Ti recitiamo Dante lungo il tragitto."
 category = "services"
+sonic_recipe = "motorway_pass"
 recurring = false
 
 [[ads.brands]]
 name = "Notaio Espresso"
 tagline = "Contratti caldi in trenta secondi."
 category = "services"
+sonic_recipe = "bureaucracy_stamp"
 recurring = true
 [ads.brands.campaign]
 premise = "Un chiosco-notaio che timbra documenti con la schiuma dell'espresso e una velocità terrificante, trasformando la burocrazia in una gag sonora senza vere pretese legali."
-sonic_signature = "register_hit+ding"
 format_pool = ["institutional_psa", "classic_pitch", "duo_scene"]
 spokesperson = "bureaucrat"
 escalation_rule = "Ad ogni spot un atto legale più serio viene compresso in una tazzina più piccola."
@@ -523,10 +547,10 @@ escalation_rule = "Ad ogni spot un atto legale più serio viene compresso in una
 name = "Sveglia Vendicativa"
 tagline = "Non ti sveglia. Ti raggiunge."
 category = "tech"
+sonic_recipe = "showroom_reveal"
 recurring = true
 [ads.brands.campaign]
 premise = "Una sveglia che non si limita a suonare: passa dalla suoneria alla vendetta personale, con metodi di risveglio sempre più mirati."
-sonic_signature = "hotline_beep+startup_synth"
 format_pool = ["classic_pitch", "duo_scene", "institutional_psa"]
 spokesperson = "maniac"
 escalation_rule = "Ad ogni spot aggiunge un metodo di risveglio più personale e implacabile."
@@ -535,10 +559,10 @@ escalation_rule = "Ad ogni spot aggiunge un metodo di risveglio più personale e
 name = "Ascensore Sentimentale"
 tagline = "Sale, scende, ti giudica."
 category = "home"
+sonic_recipe = "home_reveal"
 recurring = true
 [ads.brands.campaign]
 premise = "Un ascensore condominiale che fa il terapeuta, il cronista di gossip e il testimone municipale, con la memoria di ogni silenzio imbarazzante."
-sonic_signature = "ding+ice_clink"
 format_pool = ["duo_scene", "testimonial", "institutional_psa"]
 spokesperson = "bureaucrat"
 escalation_rule = "Ad ogni spot rivela un altro piano dove l'ascensore ha preso le parti di qualcuno."
@@ -547,10 +571,10 @@ escalation_rule = "Ad ogni spot rivela un altro piano dove l'ascensore ha preso 
 name = "Tappeto Testimone"
 tagline = "Ha visto tutto. Non parla gratis."
 category = "home"
+sonic_recipe = "home_reveal"
 recurring = true
 [ads.brands.campaign]
 premise = "Un tappeto del soggiorno che ricorda feste, macchie e bugie, e vende il proprio silenzio con il tono di un testimone in tribunale."
-sonic_signature = "register_hit+mandolin_sting"
 format_pool = ["testimonial", "duo_scene", "late_night_whisper"]
 spokesperson = "witness"
 escalation_rule = "Ad ogni spot il tappeto sa qualcosa in più e chiede di più per tacere."
@@ -559,10 +583,10 @@ escalation_rule = "Ad ogni spot il tappeto sa qualcosa in più e chiede di più 
 name = "Gelateria Meteo"
 tagline = "Il gusto cambia con la pressione."
 category = "food"
+sonic_recipe = "cafe_testimonial"
 recurring = true
 [ads.brands.campaign]
 premise = "Una gelateria che sceglie i gusti in base alla pressione barometrica e al pettegolezzo locale, trattando la meteorologia come scienza del gelato."
-sonic_signature = "ice_clink+mandolin_sting"
 format_pool = ["live_remote", "testimonial", "classic_pitch"]
 spokesperson = "hammer"
 escalation_rule = "Ad ogni spot inventa un gusto-meteo più specifico e una previsione meno convincente."
@@ -571,10 +595,10 @@ escalation_rule = "Ad ogni spot inventa un gusto-meteo più specifico e una prev
 name = "Frigo Severo"
 tagline = "Conserva il cibo, distrugge le illusioni."
 category = "home"
+sonic_recipe = "home_reveal"
 recurring = true
 [ads.brands.campaign]
 premise = "Il frigorifero smart di Tuttoegal AG che dice la verità brutale su avanzi, spuntini e scelte notturne. Stesso hardware del Frigo Generoso, stessa catena di montaggio: solo un firmware più severo."
-sonic_signature = "startup_synth+ice_clink"
 format_pool = ["late_night_whisper"]
 spokesperson = "seductress"
 escalation_rule = "Ad ogni spot il frigo ha un'opinione più invasiva sulla tua vita di famiglia."
@@ -583,10 +607,10 @@ escalation_rule = "Ad ogni spot il frigo ha un'opinione più invasiva sulla tua 
 name = "Frigo Generoso"
 tagline = "Te lo meriti. Anche il secondo."
 category = "home"
+sonic_recipe = "home_reveal"
 recurring = true
 [ads.brands.campaign]
 premise = "Lo stesso frigorifero del Frigo Severo, sempre Tuttoegal AG, stesso hardware: un solo firmware ribaltato. Invece di giudicarti, ti incoraggia. 'Prenditi pure l'altro pezzo di salame... mhhh.'"
-sonic_signature = "startup_synth+mandolin_sting"
 format_pool = ["duo_scene"]
 spokesperson = "maniac"
 escalation_rule = "Ad ogni spot il frigo inventa una scusa più assurda per mangiare ancora."
@@ -685,3 +709,51 @@ edge_fallback_voice = "it-IT-ElsaNeural"
 style = "fake customer testimonial voice, suspiciously specific enthusiasm, clearly reading a script"
 role = "witness"
 airtime_approved = true
+
+# Campaign candidates stay out of airtime until the provider render and the
+# human listening gate are complete. Do not add campaign pins or set these to
+# true without the redacted selection receipt.
+[[ads.voices]]
+name = "Dottoressa Tiziana"
+voice = "RXoaSpLaWTEckJgPUBG3"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "smart, balanced, and credible Italian adult authority; grounded, clear, and natural rather than theatrical"
+role = "bureaucrat"
+airtime_approved = false
+
+[[ads.voices]]
+name = "La Cronista"
+voice = "3DPhHWXDY263XJ1d2EPN"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "prickly, cheerful, full-bodied Italian field reporter with a bright lead presence and quick professional recovery"
+role = "hammer"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Carlotta"
+voice = "Z9LM7NBnQ8aOZKIXkd5S"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "young, fresh, and fun fairy-princess energy; playful and bright for joyful food copy, never sensual or severe"
+role = "maniac"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Francesca"
+voice = "S3RXi1qdUT4is6DxRHdi"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-IsabellaNeural"
+style = "passionate and spirited contemporary Italian woman; athletic, energetic, direct, and sincere"
+role = "hammer"
+airtime_approved = false
+
+[[ads.voices]]
+name = "Il Razzo"
+voice = "t3hJ92dgZhDVtsff084B"
+engine = "elevenlabs"
+edge_fallback_voice = "it-IT-DiegoNeural"
+style = "high-energy expressive Italian male; over-the-top, bright, fast, and the opposite of monotone"
+role = "disclaimer_goblin"
+airtime_approved = false

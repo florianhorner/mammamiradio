@@ -42,7 +42,9 @@ def test_reconcile_applies_corrective_gain_toward_target():
     ):
         assert _reconcile_lufs(Path("/tmp/seg.mp3")) is True
     cmd = m_run.call_args[0][0]
-    assert "volume=6dB" in cmd  # -16 - (-22) = +6
+    audio_filter = cmd[cmd.index("-af") + 1]
+    assert audio_filter.startswith("volume=6dB,")  # -16 - (-22) = +6
+    assert "alimiter=limit=0.75:level=false:latency=true" in audio_filter
     for arg in _MP3_OUTPUT_ARGS:
         assert arg in cmd  # reconciled segment must stay in station format
     m_replace.assert_called_once()
@@ -58,7 +60,7 @@ def test_reconcile_ad_uses_the_hotter_ad_target():
     ):
         _reconcile_lufs(Path("/tmp/ad.mp3"), ad=True)
     cmd = m_run.call_args[0][0]
-    assert "volume=5dB" in cmd  # -15 - (-20) = +5
+    assert cmd[cmd.index("-af") + 1].startswith("volume=5dB,")  # -15 - (-20) = +5
 
 
 def test_reconcile_skips_tiny_correction_idempotent():
@@ -83,7 +85,7 @@ def test_reconcile_clamps_huge_gain():
     ):
         _reconcile_lufs(Path("/tmp/quiet.mp3"))
     cmd = m_run.call_args[0][0]
-    assert "volume=12dB" in cmd  # clamped from +44
+    assert cmd[cmd.index("-af") + 1].startswith("volume=12dB,")  # clamped from +44
 
 
 def test_reconcile_measure_failure_is_noop():

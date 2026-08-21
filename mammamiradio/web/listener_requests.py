@@ -9,6 +9,11 @@ pending. Hosts and admin actions archive requests in
 the listener's public-token receipt. Requests rejected by validation,
 moderation, or rate limiting are never stored.
 
+Resolving a typed song wish into playable audio is a standalone-only
+capability behind the explicit external-media gate. Every add-on and default
+install still recognises the song intent and says so honestly, then settles
+the request as a shout-out rather than pretending to search.
+
 ``request_id`` is the canonical admin mutation handle; legacy callers may use
 the timestamp id. ``public_token`` is the listener-facing receipt handle and is
 not accepted by admin mutation routes.
@@ -60,9 +65,9 @@ _TRUSTED_PROXY_NETWORKS = [
     _HASSIO_NETWORK,
 ]
 
-# Bounded executor for listener song searches. Caps concurrency at 2 so
-# listener yt-dlp tasks cannot exhaust the default ThreadPoolExecutor and
-# starve the producer's audio prefetch work on Pi-class hardware.
+# Bounded executor for optional standalone external-media song searches. Caps
+# concurrency at 2 so an explicitly enabled resolver cannot exhaust the
+# default ThreadPoolExecutor and starve audio prefetch work.
 _listener_dl_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="listener-dl")
 atexit.register(_listener_dl_executor.shutdown, wait=False, cancel_futures=True)
 
@@ -432,13 +437,16 @@ async def listener_request(request: Request):
     state._listener_request_rl[submitter_ip_hash] = now
 
     # Parse song intent independently from external-download availability. A
-    # request must not silently turn into a shoutout merely because yt-dlp is
-    # disabled, and whole-command parsing avoids substring hits such as
-    # "playlist".
+    # request must not silently turn into a shoutout merely because external
+    # media resolution is off, and whole-command parsing avoids substring hits
+    # such as "playlist". The capability is the *effective* gate: an operator
+    # opt-in still needs the standalone-only extractor to be installed, so an
+    # add-on request lands on the honest "downloads_disabled" path below.
+    from mammamiradio.playlist.downloader import external_media_enabled
     from mammamiradio.playlist.request_matching import parse_song_request
 
     song_intent = parse_song_request(message)
-    allow_ytdlp = getattr(config, "allow_ytdlp", False)
+    allow_ytdlp = external_media_enabled(getattr(config, "allow_ytdlp", False))
     is_song_request = song_intent is not None
     req: dict = {
         "name": name,

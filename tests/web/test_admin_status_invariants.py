@@ -296,8 +296,8 @@ def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> Non
     block = _function_block(_read_admin_html(), "renderSetup")
 
     html = _read_admin_html()
-    assert "Voice providers configured" in html
-    assert "AI host key configured" in html
+    assert "AI service connected" in html
+    assert "Voice service connected" in html
     assert "Provider keys configured" not in html
     assert "e.key==='llm_keys'||e.key==='tts_keys'" in block
     assert "configuredKeys=[...new Set(keyEssentials.flatMap(e=>e.configured_keys||[]))]" in block
@@ -305,8 +305,11 @@ def test_setup_keys_banner_distinguishes_voice_from_ai_host_credentials() -> Non
     assert "aiKeysConfigured=configuredLlmKeys.length>0" in block
     assert "providerReadiness=setupProviderReadiness(configuredKeys)" in block
     assert "providerSetupIncomplete=providerKeysConfigured&&" in block
-    assert "providerSetupIncomplete?'△ Provider setup needs attention'" in block
+    # The glyphs are load-bearing, not decoration: this banner is read by a
+    # red-green colorblind operator, so every state pairs its colour with a shape.
+    assert "providerSetupIncomplete?'△ AI setup needs attention'" in block
     assert "keysBanner.dataset.state=providerSetupIncomplete?'incomplete':'ready'" in block
+    assert "aiKeysConfigured?'✓ AI service connected':'✓ Voice service connected'" in block
     assert "setupProviderLabels(configuredKeys).join(' · ')" in block
     labels = _function_block(html, "setupProviderLabels")
     for capability in (

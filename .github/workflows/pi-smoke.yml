@@ -15,25 +15,52 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install static ffmpeg (arm64) matching HA addon runtime
-        # apt on ubuntu-24.04-arm ships ffmpeg 6.x, but the HA addon's Alpine base
-        # runs ffmpeg 7.x and the Pi runs the same. John Van Sickle's static
-        # release build mirrors the production runtime; accept 7.x or 8.x so the
-        # check keeps passing when the release track bumps. BtbN's release build
-        # is a fallback because JVS is intermittently unreachable from CI runners
-        # (curl 28 connect timeout) — a single-host outage must not fail the gate.
+      - name: Install static ffmpeg compatibility build (arm64)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # This is an arm64 compatibility canary, not an exact add-on package
+        # mirror. It accepts 7.x/8.x to exercise the known FFmpeg 8.x ARM crash
+        # surface. JVS is primary; BtbN's floating tag is a digest-verified
+        # fallback so one host outage or release rotation cannot fail the gate.
         run: |
           set -euo pipefail
           cd /tmp
           download_jvs() {
-            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused \
+            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused --retry-all-errors \
               https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz \
               -o ffmpeg.tar.xz
           }
           download_btbn() {
-            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused \
-              https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linuxarm64-gpl-7.1.tar.xz \
+            local asset_metadata asset_url asset_digest expected_sha
+            asset_metadata="$(
+              curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused --retry-all-errors \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest |
+                jq -er '(
+                  [
+                    .assets[]
+                    | select(.name | test("^ffmpeg-n(7\\.[0-9]+-latest-linuxarm64-gpl-7\\.[0-9]+|8\\.[0-9]+-latest-linuxarm64-gpl-8\\.[0-9]+)\\.tar\\.xz$"))
+                  ]
+                  | sort_by(.name)
+                  | last // empty
+                ) | [.browser_download_url, .digest] | @tsv'
+            )" || {
+              echo "::error::BtbN latest tag has no supported FFmpeg 7.x/8.x Linux arm64 GPL build"
+              return 1
+            }
+            IFS=$'\t' read -r asset_url asset_digest <<< "$asset_metadata"
+            if [[ ! "$asset_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::BtbN did not publish a SHA-256 digest for the selected asset"
+              return 1
+            fi
+            expected_sha="${asset_digest#sha256:}"
+            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused --retry-all-errors \
+              "$asset_url" \
               -o ffmpeg.tar.xz
+            printf '%s  ffmpeg.tar.xz\n' "$expected_sha" |
+              sha256sum --check --strict -
           }
           download_jvs || { echo "::warning::John Van Sickle ffmpeg unreachable — falling back to BtbN"; download_btbn; }
           rm -rf ffmpeg-static && mkdir -p ffmpeg-static

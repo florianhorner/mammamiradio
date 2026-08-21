@@ -1747,7 +1747,11 @@ async def test_write_ad_normal_mode_fallback_after_all_italian_repair_is_english
     ):
         result = await write_ad(brand, voices, state, config)
 
-    assert result.parts[0].text == "FallbackBrand. Because you deserve it, amici."
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
     assert result.summary == "Fallback ad for FallbackBrand"
 
 
@@ -5832,12 +5836,15 @@ async def test_write_ad_falls_back_on_api_exception(config, state):
     assert result.brand == "FallbackBrand"
     assert "Fallback" in result.summary
     assert len(result.parts) >= 1
-    assert result.parts[0].type == "voice"
-    assert result.parts[0].text == "FallbackBrand. Because you deserve it, amici."
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
 
 
 @pytest.mark.asyncio
-async def test_write_ad_no_llm_returns_minimal_script(config, state):
+async def test_write_ad_no_llm_restores_legacy_attention_script(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     brand = AdBrand(name="FallbackBrand", tagline="Sempre il top", category="tech")
@@ -5847,7 +5854,11 @@ async def test_write_ad_no_llm_returns_minimal_script(config, state):
 
     assert result.brand == "FallbackBrand"
     assert result.summary == "Sempre il top"
-    assert result.parts[0].text == "FallbackBrand. Because you deserve it, amici."
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
 
 
 @pytest.mark.asyncio
@@ -5862,7 +5873,9 @@ async def test_write_ad_no_llm_super_italian_uses_italian_tagline(config, state)
 
     assert result.brand == "FallbackBrand"
     assert result.summary == "Sempre il top"
-    assert result.parts[0].text == "FallbackBrand. Sempre il top"
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == ["FallbackBrand. Sempre il top"]
 
 
 @pytest.mark.asyncio
@@ -7299,6 +7312,67 @@ async def test_banter_security_boundary_preserved(config, state):
 
 
 @pytest.mark.asyncio
+async def test_banter_raw_home_context_forbids_counting_people(config, state):
+    """Raw per-resident home/away lines must not become "two people in the room".
+
+    Presence says neither how many people are in the house nor which room they are
+    in, so without this constraint the hosts air a guess about the listener's home
+    as fact.
+    """
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
+    state.ha_context = "Florian: a casa\nSabrina: a casa"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {"lines": [{"host": config.hosts[0].name, "text": "Ciao."}], "new_joke": None}
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_banter(state, config)
+
+    prompt = captured["prompt"]
+    assert "Never name or count the people in the home" in prompt
+    assert "never say which room anyone" in prompt
+    # The constraint is an instruction, so it must sit outside the data fence, which
+    # forbids following anything found inside it. Match on the opening tag's trailing
+    # newline: the bare tag name also appears in the instruction prose above.
+    fenced = prompt[prompt.index("<home_state_data>\n") : prompt.index("</home_state_data>")]
+    assert "Never name or count the people in the home" not in fenced
+
+
+@pytest.mark.asyncio
+async def test_ad_raw_home_context_forbids_counting_people(config, state):
+    """write_ad injects raw ha_context with no director in front of it."""
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    state.ha_context = "Florian: a casa\nSabrina: a casa"
+
+    captured = {}
+
+    async def _fake(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "parts": [{"type": "voice", "text": "Gelato Infinito!", "role": "hammer"}],
+            "mood": "upbeat",
+            "summary": "Gelato ad",
+        }
+
+    brand = AdBrand(name="Gelato Infinito", tagline="Non finisce mai", category="food")
+    voices = {"hammer": AdVoice(name="Voce Uno", voice="it-IT-IsabellaNeural", style="enthusiastic")}
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake):
+        await write_ad(brand, voices, state, config)
+
+    prompt = captured["prompt"]
+    assert "Never name or count the people in the home" in prompt
+    fenced = prompt[prompt.index("<home_state_data>\n") : prompt.index("</home_state_data>")]
+    assert "Never name or count the people in the home" not in fenced
+
+
+@pytest.mark.asyncio
 async def test_write_banter_memory_commit_uses_empty_youtube_id_when_no_track_id(config, state, tmp_path):
     """When a track has no youtube_id, the deferred memory commit cannot file song cues."""
     config.super_italian_mode = True
@@ -7528,7 +7602,11 @@ async def test_write_ad_degrades_to_stock_copy_when_registry_unavailable(config,
         result = await write_ad(brand, voices, state, config)
 
     assert result.brand == "FallbackBrand"
-    assert result.parts[0].text == "FallbackBrand. Because you deserve it, amici."
+    assert result.parts[0].type == "sfx"
+    assert result.parts[0].sfx == "chime"
+    assert [part.text for part in result.parts if part.type == "voice"] == [
+        "FallbackBrand. Because you deserve it, amici."
+    ]
 
 
 @pytest.mark.asyncio

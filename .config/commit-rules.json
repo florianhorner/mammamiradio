@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "schema_version": "1.1.0",
+  "schema_version": "1.2.0",
   "spec_url": "https://github.com/florianhorner/engineering-standards/blob/main/specs/commit-message-spec.md",
   "format": "[vMAJOR.MINOR.PATCH.MICRO ]type(scope): subject",
   "subject": {
@@ -42,7 +42,8 @@
       "app/github-actions"
     ],
     "trusted_bot_skips": [
-      "WHY_REQUIRED"
+      "WHY_REQUIRED",
+      "SUBJECT_TOO_LONG"
     ]
   },
   "body": {
