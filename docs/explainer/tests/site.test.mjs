@@ -123,6 +123,11 @@ test("the day-one boundary is said in plain words", () => {
   assert.match(html, /On day one the station knows the sky\./);
   assert.match(html, /day-one-chip/);
   assert.match(html, /class="aired-truth"/);
+  // The demos are the fully-wired dreamstate (premium voices). The page may
+  // lead with the top trim, but it must say the trim exists: a fresh install
+  // starts simpler. This clause is the honesty; do not lose it in a rewrite.
+  assert.match(html, /fully wired/);
+  assert.match(html, /starts simpler/);
 });
 
 test("exactly two calls to action carry the gold", () => {
