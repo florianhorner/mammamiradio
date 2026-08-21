@@ -123,9 +123,9 @@ configuration:
 In `ha-addon/mammamiradio/rootfs/run.sh`, add after the festival block:
 
 ```python
-hitster = opts.get('hitster_mode', False)
-hitster_val = 'true' if hitster else 'false'
-print('export MAMMAMIRADIO_HITSTER_MODE=' + hitster_val)
+hitster = opts.get("hitster_mode", False)
+hitster_val = "true" if hitster else "false"
+print("export MAMMAMIRADIO_HITSTER_MODE=" + hitster_val)
 ```
 
 ### 6. Add env var loading in config.py

@@ -232,6 +232,7 @@ curl -s http://host:8000/api/integrations/v1/now-playing | jq '.now_playing | {t
 
 ```python
 import requests
+
 r = requests.get("http://host:8000/api/integrations/v1/now-playing", timeout=5)
 r.raise_for_status()
 data = r.json()
