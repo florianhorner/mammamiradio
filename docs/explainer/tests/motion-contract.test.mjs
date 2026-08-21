@@ -108,7 +108,10 @@ test("the stage leads with the show and hides the answer until it airs", () => {
   assert.match(css, /\.sensor-panel \.sensor-list[^{]*\{[^}]*opacity: \.3/ms);
   assert.match(css, /filter: blur\(5px\)/);
   assert.match(html, /class="reveal-waiting"/);
-  assert.match(html, /The hosts haven’t noticed yet\./);
+  // Idle carries its own invitation; the story lines take over on tune-in.
+  assert.match(html, /Tune in to hear what they notice\./);
+  assert.match(js, /IDLE_WAITING_LINE/);
+  assert.match(js, /let waitingIndex = -1/);
   // The waiting line escalates with the assembly, paced by playback
   // position against the cue — theater moves, it does not sit still.
   assert.match(js, /WAITING_LINES = \[/);

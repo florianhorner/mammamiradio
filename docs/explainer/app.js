@@ -125,12 +125,15 @@ function audioSrcFor(scenarioId) { return `public/audio/${scenarioId}.mp3`; }
 // The waiting line is theater and theater moves: as the reveal assembles
 // itself behind the frost, the line escalates with it, paced by playback
 // position against the cue so every clip's build-up lands on its own beat.
+const IDLE_WAITING_LINE = "Tune in to hear what they notice.";
 const WAITING_LINES = [
   "The hosts haven’t noticed yet.",
   "The house knows something they don’t.",
   "Any second now…",
 ];
-let waitingIndex = 0;
+// -1 = the idle line (set in HTML and on reset), so the first tune-in always
+// swaps to the story lines instead of matching index 0 and doing nothing.
+let waitingIndex = -1;
 let waitingSwapTimer = null;
 function setWaitingLine(index, { instant = false } = {}) {
   if (!revealWaitingLine || index === waitingIndex) return;
@@ -299,7 +302,8 @@ function tuneIn() {
 }
 function resetExperience() {
   clearDeadline(); stopSpeech();
-  setWaitingLine(0, { instant: true });
+  if (revealWaitingLine) { revealWaitingLine.textContent = IDLE_WAITING_LINE; revealWaitingLine.style.opacity = ""; }
+  waitingIndex = -1;
   playedScenarios.clear();
   body.dataset.phase = "idle"; body.dataset.audio = "";
   hostQuote.hidden = true; audioTrouble.hidden = true;
