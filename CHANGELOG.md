@@ -6,6 +6,7 @@ The current version source of truth is `pyproject.toml`.
 
 ## [Unreleased]
 
+- **The setup screen spells the station's name right.** When Home Assistant could not find the Live source, the next step it offered misspelled Mamma Mi Radio.
 - **An empty music crate no longer loops the station ident every second.** With no starter tracks, no local MP3s, and Jamendo waiting for two songs that cannot exist, Home Assistant Green kept rebuilding its four-second send-ahead cushion by bursting `continuity_1.mp3` from the first syllable. The recovery clip now follows the same send timeline as any other segment, operator files in the music folder are picked up while the crate is empty, and Jamendo can start when there is no base rotation to wait for.
 
 - **A steered stretch stops replaying the same few songs.** Point the station somewhere with Record Hunt and it favours what it found, for as long as you leave the course set. When the hunt only resolved a handful of tracks, that favouring kept landing on the same ones, and a song could come back within half an hour. A found track now waits for the rest of its set before it can play again. The course still gets the same share of the show; it works through the crate instead of reaching for the same record.
