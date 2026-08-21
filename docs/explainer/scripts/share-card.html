@@ -1,0 +1,63 @@
+<!doctype html>
+<!--
+  Source template for public/share-card.png (1280x640 og:image).
+
+  Regenerate: serve docs/explainer (node server.mjs), open
+  http://127.0.0.1:4187/scripts/share-card.html at a 1280x640 viewport,
+  screenshot the full viewport, save as public/share-card.png.
+
+  Station-first on purpose: the old docs/social-card.png carries the
+  "La Casa Ti Ascolta" house-first overlay, which is the framing the
+  explainer inverted away from. This card sells the station.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @font-face { font-family: "Playfair Display"; src: url("../public/fonts/playfair-display.woff2") format("woff2"); font-weight: 400 900; }
+      @font-face { font-family: "Playfair Display"; src: url("../public/fonts/playfair-display-italic.woff2") format("woff2"); font-style: italic; font-weight: 400 900; }
+      @font-face { font-family: Outfit; src: url("../public/fonts/outfit.woff2") format("woff2"); font-weight: 100 900; }
+      * { margin: 0; box-sizing: border-box; }
+      body {
+        width: 1280px; height: 640px; overflow: hidden; position: relative;
+        background:
+          radial-gradient(560px 560px at 86% 10%, rgba(244, 208, 72, 0.14), transparent 70%),
+          linear-gradient(180deg, #1e1610 0%, #14110f 22%, #0e0c0a 100%);
+        color: #f5edd8; font-family: Outfit, sans-serif;
+      }
+      .flag { position: absolute; top: 0; left: 0; right: 0; height: 6px; display: flex; }
+      .flag i { flex: 1; }
+      .flag i:nth-child(1) { background: #009246; }
+      .flag i:nth-child(2) { background: #f5efe6; }
+      .flag i:nth-child(3) { background: #ce2b37; }
+      .card { position: relative; z-index: 2; padding: 84px 96px; height: 100%; display: flex; flex-direction: column; justify-content: space-between; }
+      .brand { display: flex; align-items: center; gap: 18px; }
+      .brand img { width: 64px; height: 64px; }
+      .brand span { font-family: "Playfair Display", serif; font-style: italic; font-weight: 700; font-size: 34px; letter-spacing: -0.01em; }
+      .brand em { color: #f4d048; font-style: italic; }
+      h1 { font-family: "Playfair Display", serif; font-style: italic; font-weight: 700; font-size: 88px; line-height: 1.0; letter-spacing: -0.025em; max-width: 980px; }
+      h1 span { display: block; color: #eaddc4; }
+      .bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 40px; }
+      .tag { color: #cbb9a6; font-size: 26px; line-height: 1.45; max-width: 660px; }
+      .tag b { color: #f5edd8; font-weight: 600; }
+      .wave { display: flex; align-items: flex-end; gap: 7px; height: 96px; }
+      .wave i { width: 9px; border-radius: 999px; background: #f4d048; opacity: .9; }
+      .onair { position: absolute; top: 84px; right: 96px; display: inline-flex; align-items: center; gap: 10px; color: #f5edd8; font-size: 20px; font-weight: 700; letter-spacing: .18em; }
+      .onair i { width: 12px; height: 12px; border-radius: 50%; background: #b82c20; box-shadow: 0 0 16px rgba(184,44,32,.9); }
+    </style>
+  </head>
+  <body>
+    <div class="flag" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="card">
+      <div class="brand"><img src="../public/logo.svg" alt="" /><span>Mamma <em>Mi</em> Radio</span></div>
+      <h1>Your own radio station.<span>It listens to the house.</span></h1>
+      <div class="bottom">
+        <p class="tag">Two Italian hosts, music, and ads for companies that do not exist. <b>Every so often, something only your house could have told them.</b></p>
+        <div class="wave" aria-hidden="true">
+          <i style="height:34%"></i><i style="height:62%"></i><i style="height:82%"></i><i style="height:48%"></i><i style="height:95%"></i><i style="height:68%"></i><i style="height:42%"></i><i style="height:88%"></i><i style="height:58%"></i><i style="height:100%"></i><i style="height:73%"></i><i style="height:38%"></i>
+        </div>
+      </div>
+      <span class="onair"><i></i> ON AIR</span>
+    </div>
+  </body>
+</html>
