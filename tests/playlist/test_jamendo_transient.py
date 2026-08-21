@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import subprocess
 import threading
@@ -1291,6 +1292,32 @@ def test_validated_api_results_rejects_transport_and_shape_failures(status, body
 )
 def test_provider_code_logging_accepts_only_bounded_numeric_values(value, expected):
     assert jt._coarse_provider_code(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("provider_code", "failure_code"),
+    [
+        (2, "api_failed"),
+        (3, "api_failed"),
+        (4, "api_failed"),
+        (7, "api_failed"),
+        (8, "api_failed"),
+        (9, "api_failed"),
+        (10, "api_failed"),
+        (12, "api_failed"),
+        (13, "api_failed"),
+        (5, "api_auth_failed"),
+        (11, "api_auth_failed"),
+    ],
+)
+def test_all_deterministic_provider_codes_are_blocked(provider_code, failure_code):
+    body = json.dumps({"headers": {"status": "failed", "code": provider_code}, "results": []}).encode()
+
+    with pytest.raises(jt._BlockedError) as caught:
+        jt._validated_api_results(200, body)
+
+    assert caught.value.code == failure_code
+    assert caught.value.provider_code == provider_code
 
 
 @pytest.mark.parametrize(
