@@ -143,11 +143,29 @@ the package directly, or use the workflow for an arbitrary URL. The tooling
 reports source and audio facts; a human still owns the full audition and rights
 review.
 
-Acquire only one exact predeclared Incompetech row:
+Acquire only one exact predeclared catalog row:
 
 ```bash
-python scripts/starter-catalog.py acquire --isrc USUAN1900056
+python scripts/starter-catalog.py acquire --isrc USUAN1900042
 ```
+
+Two providers are supported, selected by the row's `provider` field. Absent
+means Incompetech, which needs no credential. A `provider: jamendo` row needs a
+free client id, because Jamendo's public track page publishes no licence at all
+and the API is the only authority:
+
+```bash
+JAMENDO_CLIENT_ID=... python scripts/starter-catalog.py acquire --isrc JAMENDO-1093607
+```
+
+Only `acquire` needs the key — the licence response is hashed into the receipt,
+so `check` stays entirely offline.
+
+Bundled music is **attribution-only**, and this is not a preference. A track
+carrying NonCommercial, NoDerivatives or ShareAlike cannot ship no matter how
+good it sounds. NoDerivatives is the one that catches people out: every bundled
+track is normalized to a fixed loudness and re-encoded, which is a derivative,
+and ND forbids distributing one.
 
 The command prints a candidate ID and writes source evidence under ignored
 `tmp/starter-media/`. Stage that exact candidate into the deterministic station
@@ -163,7 +181,7 @@ repository (for example `/tmp/starter-decision.json`) with this exact shape:
 ```json
 {
   "schema_version": "1",
-  "isrc": "USUAN1900056",
+  "isrc": "USUAN1900042",
   "reviewed_at": "2026-07-16T12:00:00Z",
   "reviewer_role": "release maintainer",
   "listened_from_start_to_finish": true,
@@ -180,7 +198,7 @@ the derivative, redacted receipt, and manifest row as one bounded operation:
 ```bash
 python scripts/starter-catalog.py approve \
   --candidate <candidate-id> \
-  --replace USUAN1900056 \
+  --replace USUAN1900042 \
   --decisions /tmp/starter-decision.json
 ```
 
@@ -424,12 +442,21 @@ For all other commits the body is optional. Acceptable terse `Why:` templates:
 
 ### Bot allowlist
 
-Commits authored by these identities skip the `WHY_REQUIRED` rule (subject banned-patterns still apply):
+Commits authored by these identities skip the rules listed in
+`exemptions.trusted_bot_skips` in `.config/commit-rules.json` — currently
+`WHY_REQUIRED` and `SUBJECT_TOO_LONG`. Every other rule still applies, and a bot
+tripping even one rule outside that list still fails, so this is not a general
+bypass. The allowlist covers the PR title as well as each commit in range.
 
 - `renovate[bot]`
 - `dependabot[bot]` (this repo's `.github/dependabot.yml` sets `commit-message.prefix: "chore"` so the format check passes)
 - `pre-commit-ci[bot]`
 - `app/github-actions`
+
+`SUBJECT_TOO_LONG` is on the list because Dependabot's grouped-update titles
+carry `in the <group> group across 1 directory` and exceed the 72-character
+subject limit by construction. No Dependabot setting shortens them, and dropping
+the groups would break the lockfile pins that must move together.
 
 ### Bypass policy
 

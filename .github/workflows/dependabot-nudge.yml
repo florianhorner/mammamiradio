@@ -5,6 +5,22 @@ name: Dependabot Nudge
 # deadlock with their armed auto-merge (see scripts/nudge-dependabot-rebase.sh
 # for the full story). After each push to main, ask Dependabot to rebase its
 # behind PRs; its own push retriggers CI normally.
+#
+# The step does two things, so do not be surprised by either:
+#
+# 1. It can sit for up to ~50s before doing anything. GitHub computes
+#    mergeStateStatus lazily and answers UNKNOWN for a while after a push to
+#    main — which is exactly when this runs. The script re-asks until GitHub
+#    commits to an answer rather than reading UNKNOWN as "nothing to do".
+#    That silence is the bug it was built to fix, so the wait is the fix.
+#
+# 2. It also names HUMAN-authored PRs. Any PR with auto-merge armed and a
+#    behind branch is in the same deadlock, but a GITHUB_TOKEN update-branch
+#    would move the head without retriggering CI, leaving it waiting on checks
+#    that never report. Those cannot be fixed from here, so the script raises a
+#    "PRs stuck behind main" warning and an "Armed but behind" step summary
+#    pointing at scripts/land-pr.sh. A human PR named by a run titled
+#    "Dependabot Nudge" is expected, not a misfire.
 
 on:
   push:

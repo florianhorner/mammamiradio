@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import shutil
 import tempfile
 from pathlib import Path
@@ -283,6 +284,56 @@ def test_recipe_driven_ad_strips_llm_sfx_before_audio_rendering():
         AdPart(type="sfx", sfx="whoosh"),
         AdPart(type="voice", text="Una vittoria."),
         AdPart(type="sfx", sfx="chime"),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    assert _ensure_attention_grabbing_ad_parts(parts, sonic) == [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+
+def test_recipe_driven_ad_strips_environment_parts_legacy_keeps_them():
+    """The recipe filter matches the prompt: no sfx or environment parts."""
+    recipe_sonic = SonicWorld(recipe_id="stadium_win")
+    recipe_parts = [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="environment", environment="cafe"),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    assert _ensure_attention_grabbing_ad_parts(recipe_parts, recipe_sonic) == [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="pause", duration=0.4),
+    ]
+
+    # Opener plus mid-ad SFX already present, so the legacy path must not mutate.
+    legacy_sonic = SonicWorld()
+    legacy_parts = [
+        AdPart(type="sfx", sfx="chime"),
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="environment", environment="cafe"),
+        AdPart(type="sfx", sfx="whoosh"),
+        AdPart(type="pause", duration=0.4),
+    ]
+    # Snapshot first: the legacy branch shallow-copies the list and writes fields
+    # on the caller's own AdPart objects, so comparing the result against
+    # ``legacy_parts`` itself would read as equal even after an in-place edit.
+    expected_legacy = copy.deepcopy(legacy_parts)
+    assert _ensure_attention_grabbing_ad_parts(legacy_parts, legacy_sonic) == expected_legacy
+
+
+def test_recipe_driven_ad_keeps_only_voice_and_pause_parts():
+    """An invented part type cannot leak: the recipe branch is an allowlist.
+
+    ``AdPart.type`` is copied verbatim from model JSON, so a denylist would pass
+    anything nobody had thought to name yet.
+    """
+    sonic = SonicWorld(recipe_id="stadium_win")
+    parts = [
+        AdPart(type="voice", text="Una vittoria."),
+        AdPart(type="ambience", environment="cafe"),
+        AdPart(type="music", sfx="tarantella"),
         AdPart(type="pause", duration=0.4),
     ]
 

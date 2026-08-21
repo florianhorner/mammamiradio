@@ -246,7 +246,7 @@ always remains best-effort and never blocks or delays audio.
   - selects one of 6 ad formats: classic pitch, testimonial, duo scene, live remote, late-night whisper, or institutional PSA
   - resolves a sonic world and a named scene recipe for every shipped brand
   - casts speakers by role — duo scenes and testimonials use two distinct voices with role-based resolution
-  - uses one quiet bed and at most two timed dry cues for a resolved recipe, suppressing generic SFX and legacy motifs from the LLM output
+  - uses one quiet bed and at most two timed dry cues for a resolved recipe, keeping only speech and pauses from the LLM output so generic SFX and legacy motifs cannot layer on top
   - preserves generated brand motifs for legacy/custom campaigns with no recipe and for configured recipes that cannot resolve
   - builds a break from host intro, imaging-pack bumpers/SFX/beds when available, one or more ad spots, and host outro
   - records per-spot campaign history (format, sonic signature, summary) for format rotation and campaign arc continuity
@@ -825,7 +825,8 @@ durable base; Jamendo is deliberately outside this function:
    They receive no project license claim; the operator owns their provenance and
    permitted use.
 3. **Bundled starter catalog.** With no local base, runtime loads the twelve
-   hash-pinned Kevin MacLeod/Incompetech derivatives from the canonical manifest.
+   hash-pinned attribution-only derivatives from the canonical manifest
+   (Incompetech under CC BY 4.0, Jamendo under CC BY 3.0).
    They play directly without normalization and complete one full cycle before a
    starter repeat. A release fails unless the exact 12 tracks, at least 45 minutes,
    complete human audition evidence, and no more than 75 MiB pass media proof.

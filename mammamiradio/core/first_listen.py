@@ -118,7 +118,7 @@ def first_listen_receipt_path(cache_dir: Path) -> Path:
     return Path(cache_dir) / "state" / FIRST_LISTEN_RECEIPT_FILENAME
 
 
-def _timestamp_or_none(value: object, *, now: float) -> float | None | object:
+def _timestamp_or_none(value: object, *, now: float) -> float | object | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
