@@ -1,0 +1,26 @@
+# Pre-merge evidence — brand-spelling guard
+# branch: florianhorner/chore/execute-pasted-plan
+# commit: 4bee28a314038ab9f6dd36f6299543c44a959629
+# date:   2026-08-21T17:25:21Z
+# python: Python 3.14.3  (CI pins 3.11)
+
+$ pytest tests/web/test_ui_copy.py tests/web/test_admin_first_listen.py tests/scripts/test_validate_audio_asset_pack.py -q
+........................................................................ [ 45%]
+........................................................................ [ 90%]
+................                                                         [100%]
+160 passed, 6 deselected in 35.86s
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+390 files already formatted
+
+$ mypy mammamiradio/ tests/
+Success: no issues found in 347 source files
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ bash scripts/check-release-invariants.sh
+All invariants passed.
