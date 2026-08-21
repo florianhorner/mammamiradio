@@ -391,6 +391,8 @@ If the behavior changed and the docs didn't, the docs are wrong. Fix them in the
 
 To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
 
+**Patterns are POSIX ERE and must behave identically under BSD grep and GNU grep.** The local pre-publish hook resolves BSD grep on macOS; CI runs GNU grep on ubuntu-latest. No lookahead, no non-capturing groups, no `\d`, no PCRE classes. A `(?:...)` construct sat in this array for four months: BSD grep accepted it silently, GNU grep wrote a diagnostic and matched nothing, and because the lint checks grep's exit code but not its stderr, CI read the dead pattern as a clean pass. When adding a pattern, confirm it produces **empty stderr**, not merely a tolerant exit code.
+
 ## Scope discipline
 
 Two rules, both narrow, both targeted at patterns observed in the audit of the
