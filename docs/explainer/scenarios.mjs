@@ -53,8 +53,17 @@ const scenarios = {
     beats: [
       { kind: "tail", note: "starter-catalog song winding down, ~3s" },
       { kind: "imaging", id: "identity.sweeper" },
-      { kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house" },
-      { kind: "voice", who: "marco", note: "the home moment — the quote", moment: true },
+      {
+        kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house",
+        lines: [
+          { who: "marco", text: "No, no, no. You cannot put cream in carbonara. This is not an opinion, Giulia, it is the law." },
+          { who: "giulia", text: "You read one cookbook, Marco. Half of it. The half with pictures." },
+        ],
+      },
+      {
+        kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
+        lines: [{ who: "marco", text: "Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: null,
@@ -81,8 +90,17 @@ const scenarios = {
     beats: [
       { kind: "tail", note: "starter-catalog song winding down, ~3s" },
       { kind: "imaging", id: "identity.station-id" },
-      { kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house" },
-      { kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true },
+      {
+        kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house",
+        lines: [
+          { who: "marco", text: "The two o’clock slot is the most important slot in radio. Ask anyone. Ask me." },
+          { who: "giulia", text: "I asked the schedule. It says nobody is listening, Marco." },
+        ],
+      },
+      {
+        kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true,
+        lines: [{ who: "giulia", text: "The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: null,
@@ -109,8 +127,17 @@ const scenarios = {
     beats: [
       { kind: "tail", note: "starter-catalog song winding down, ~3s" },
       { kind: "imaging", id: "identity.sweeper" },
-      { kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house" },
-      { kind: "voice", who: "marco", note: "the home moment — the quote", moment: true },
+      {
+        kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house",
+        lines: [
+          { who: "giulia", text: "Your sports report tonight was four minutes of you describing one penalty kick." },
+          { who: "marco", text: "One perfect penalty kick. Cinema, Giulia. Pure cinema." },
+        ],
+      },
+      {
+        kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
+        lines: [{ who: "marco", text: "Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: null,
@@ -141,8 +168,17 @@ const scenarios = {
     beats: [
       { kind: "tail", note: "starter-catalog song winding down, ~3s" },
       { kind: "imaging", id: "identity.station-id" },
-      { kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house" },
-      { kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true },
+      {
+        kind: "voice", who: "marco+giulia", note: "mid-bit, unrelated to the house",
+        lines: [
+          { who: "marco", text: "Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off." },
+          { who: "giulia", text: "It’s a landline, Marco, and you unplug it so your ego can charge." },
+        ],
+      },
+      {
+        kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true,
+        lines: [{ who: "giulia", text: "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly." }],
+      },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: null,
