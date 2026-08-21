@@ -34,7 +34,7 @@
           <img src="public/icon-192.svg" alt="" />
           <span>Mamma <em>Mi</em> Radio</span>
         </a>
-        <span class="concept-label"><i></i> Local demo · no live data</span>
+        <span class="concept-label"><i></i> Interactive demo · no live data</span>
       </div>
     </header>
 
@@ -43,7 +43,7 @@
         <div class="hero-copy">
           <p class="eyebrow" lang="it">La radio che ascolta la tua casa</p>
           <h1>Your own radio station.<span>It listens to the house.</span></h1>
-          <p class="hero-intro">Two Italian hosts, music, and ads for companies that do not exist. Every so often, something only your house could have told them.</p>
+          <p class="hero-intro">Marco and Giulia host the music and argue through ads for companies that do not exist. Somewhere in the show, they notice something from your home.</p>
           <div class="hero-actions">
             <button class="primary-button" id="translate-button" type="button"><span>Tune in</span><b aria-hidden="true">→</b></button>
             <a class="install-cta" id="install-cta" hidden target="_blank" rel="noreferrer noopener"><span>Add it to Home Assistant</span><b aria-hidden="true">→</b></a>
@@ -57,7 +57,7 @@
 
         <div class="experience-card" aria-label="Interactive station demo">
           <div class="experience-topline">
-            <span><i class="status-dot"></i> The station, right now</span>
+            <span><i class="status-dot"></i> A moment from the station</span>
             <time id="moment-time">18:42 · Tuesday</time>
           </div>
           <div class="translation-stage">
@@ -68,14 +68,14 @@
               <p class="sr-only" id="translation-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
               <div class="onair-idle" aria-hidden="true">
                 <div class="idle-preview">
-                  <span class="idle-kicker"><i></i> A show is already running</span>
+                  <span class="idle-kicker"><i></i> The show is already on</span>
                   <div class="waveform hero-wave" data-waveform="hero"></div>
                   <div class="teaser-stack">
-                    <p><span>Marco &amp; Giulia</span><strong>Two hosts with history.</strong></p>
-                    <p><span>the ad break</span><strong>Brands that do not exist.</strong></p>
-                    <p><span>and sometimes</span><strong>Your house, on air.</strong></p>
+                    <p><span>Marco &amp; Giulia</span><strong>Two hosts who know each other too well.</strong></p>
+                    <p><span>the ad break</span><strong>Companies best left imaginary.</strong></p>
+                    <p><span>and sometimes</span><strong>Your home, part of the show.</strong></p>
                   </div>
-                  <p class="idle-prompt">Tune in and listen for the moment the station notices the house.</p>
+                  <p class="idle-prompt">Tune in. Somewhere between the music and the argument, the station notices home.</p>
                 </div>
               </div>
               <div class="on-air-card">
@@ -89,7 +89,7 @@
                   <p class="trouble-line" id="trouble-line">You should have heard this:</p>
                   <p class="trouble-transcript" id="trouble-transcript"></p>
                 </div>
-                <p class="voice-note">The sensor readings are made up. <strong>Marco and Giulia are not.</strong> Those are the station's own hosts, exactly as they sound on air.</p>
+                <p class="voice-note">The home data in this demo is invented. <strong>Marco and Giulia are not.</strong> Those are the station's own hosts, exactly as they sound on air.</p>
               </div>
             </section>
 
@@ -101,9 +101,9 @@
 
             <section class="sensor-panel" aria-labelledby="sensor-title">
               <div class="panel-heading">
-                <div><p>What that moment was made of</p><h2 id="sensor-title">The reveal</h2></div>
+                <div><p>What the hosts noticed</p><h2 id="sensor-title">The reveal</h2></div>
               </div>
-              <div class="reveal-waiting" aria-hidden="true"><i></i><p>Tune in to hear what they notice.</p><span>The reveal builds while the show plays.</span></div>
+              <div class="reveal-waiting" aria-hidden="true"><i></i><p>Tune in to hear what they notice.</p><span>The details appear once the moment reaches the air.</span></div>
               <!-- Hidden from assistive tech until the moment airs: the panel
                    is visually face-down, and a screen reader must not get the
                    answer before the show. Same promise, different sense. The
@@ -126,7 +126,7 @@
             </section>
           </div>
           <div class="scenario-picker">
-            <p>Hear another one</p>
+            <p>Choose another moment</p>
             <div class="scenario-buttons" role="group" aria-label="Choose a home moment">
               <button class="scenario-button is-active" data-scenario-id="arrival" type="button"><span>⌂</span> Someone came home</button>
               <button class="scenario-button" data-scenario-id="coffee" type="button"><span>◌</span> Coffee just started</button>
@@ -138,7 +138,7 @@
       </section>
 
       <section class="thesis" aria-labelledby="thesis-title">
-        <p class="eyebrow">Nobody announces it</p>
+        <p class="eyebrow">Your home, in character</p>
         <h2 id="thesis-title">The show goes on. Now and then it mentions your laundry.</h2>
         <ol class="thesis-flow">
           <li>
@@ -150,8 +150,8 @@
             <p class="flow-sample human-sample">“The laundry finished.<br />Nobody noticed.”</p>
           </li>
           <li>
-            <div class="flow-copy"><h3>It becomes part of the show</h3><p>Not an alert. A line between the songs, in a voice you already know.</p></div>
-            <div class="flow-sample station-sample"><div class="mini-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><p>A home update, delivered like radio.</p></div>
+            <div class="flow-copy"><h3>The hosts put it on air</h3><p>Not an alert. It lands between the songs, in a voice you already know.</p></div>
+            <div class="flow-sample station-sample"><div class="mini-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><p>A home moment, told like radio.</p></div>
           </li>
         </ol>
         <div class="privacy-note"><span aria-hidden="true">◎</span><div><strong>On day one the station knows the sky.</strong><p>A fresh install shares only daylight and the weather. Giulia can call the sunset, nothing more. The other moments on this page happen after you open the door: you choose what the hosts may use, entity by entity, and until you do, they talk about the weather like every other station on earth. This demo reads no Home Assistant data.</p></div></div>
@@ -160,7 +160,7 @@
 
     <footer>
       <div class="flag-line" aria-hidden="true"><i></i><i></i><i></i></div>
-      <p class="aired-truth">In the real product, nothing counts as having aired until a listener actually received the audio: the hosts’ memory, the home-moment receipts, even the health check all wait for that. A radio station that only believes its own broadcast once somebody heard it.</p>
+      <p class="aired-truth">Mamma Mi Radio remembers what listeners heard, not what it tried to play. Host memory and home moments count only after the audio reaches someone.</p>
       <nav id="site-links" class="footer-links" aria-label="Project links"></nav>
       <p class="music-credit">Music tails in the demo clips: Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.</p>
       <p><strong>Mamma <em>Mi</em> Radio</strong> · Local interactive demo · No live data connected</p>

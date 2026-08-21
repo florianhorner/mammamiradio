@@ -34,10 +34,10 @@ test("the idle state previews the station, not a sensor pipeline", () => {
   // The old idle teased sensor->meaning pairs, which taught the visitor the
   // page was a translator before they heard anything. The idle preview now
   // sells the show: hosts, ads, and only then the house.
-  assert.match(html, /A show is already running/);
-  assert.match(html, /Two hosts with history\./);
-  assert.match(html, /Brands that do not exist\./);
-  assert.match(html, /Your house, on air\./);
+  assert.match(html, /The show is already on/);
+  assert.match(html, /Two hosts who know each other too well\./);
+  assert.match(html, /Companies best left imaginary\./);
+  assert.match(html, /Your home, part of the show\./);
   assert.match(css, /@keyframes teaser-cycle/);
   assert.doesNotMatch(html, /A home moment is forming/);
 });

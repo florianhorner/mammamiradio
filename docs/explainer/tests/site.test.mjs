@@ -17,7 +17,7 @@ test("the signature promise is in the first viewport", () => {
   assert.match(html, /listens to the house/i);
   assert.match(html, /Tune in/);
   assert.match(html, /What you hear first/);
-  assert.match(html, /What that moment was made of/);
+  assert.match(html, /What the hosts noticed/);
 });
 
 test("the page leads with the station, not with a pipeline", () => {
@@ -100,7 +100,7 @@ test("the page offers the install and source exits without a dead live link", ()
 test("the explanatory copy stays direct", () => {
   assert.doesNotMatch(html, /—|Accurate\. Useful\. Completely joyless|One home\. Two languages/);
   // The hero says what the thing is before it says how it works.
-  assert.match(html, /class="hero-intro">[^<]*hosts/i);
+  assert.match(html, /class="hero-intro">Marco and Giulia/);
 });
 
 test("the voice plays on the first click, not the second", () => {
