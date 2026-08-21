@@ -394,13 +394,25 @@ If the behavior changed and the docs didn't, the docs are wrong. Fix them in the
 
 **Where this content belongs instead:** runbooks (`docs/runbooks/`), stabilization log (`docs/stabilization-log.md`), strategic planning docs (`docs/YYYY-MM-DD-*.md`); post-mortems and workspace archaeology go to the private durable system (see Scope discipline). **Not** PR bodies and **not** GitHub issues — the same editorial boundary applies to pull-request descriptions and to maintainer-authored issues on the public tracker.
 
-**Enforcement:** the shared pattern list lives in `scripts/lint-patterns.sh` (`LINT_PATTERNS` array). Three lints consume it:
+**Enforcement — two pattern sets, unioned.**
+
+The *baseline* lives in `florianhorner/gh-workflows` and is shared by every repo. It matches the grammatical **shape** of a violation rather than a literal phrase — a review noun near a discovery verb, a review actor mid-action, a telemetry possessive, a numeric process tally, a review-artifact heading — so a paraphrase of a banned class does not walk through. A literal-phrase list cannot do this: the previous one held a pattern for `findings raised` and still passed "Findings from review". An em-dash rule ships alongside it as advisory, not blocking.
+
+The *project* list is `scripts/lint-patterns.sh` here (`LINT_PATTERNS`), passed to the reusable workflow as `extra_patterns`. It holds only what is specific to mammamiradio: sprint labels, cathedral vocabulary, this repo's contributor archaeology. **Overlap with the baseline is deliberate and must not be tidied away.** The three local lints below source this file *alone*, so deleting a pattern because the baseline also covers it silently drops changelog and issue coverage for it.
+
+A repo may only ADD patterns. Suppressing a baseline pattern is a pull request to `gh-workflows`, not a local override.
+
+**What this cannot catch.** Regex reaches lexical tells, not meaning. Metaphor carrying no lexical signal is out of reach, and renaming a review section to a neutral label defeats the heading rule, which matches the label and never the content. A passing lint is a tripwire on habitual violations, never evidence that a body is clean.
+
+Three local lints consume `LINT_PATTERNS`:
 
 - `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
 - `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
 - `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml`).
 
 To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
+
+**Patterns are POSIX ERE and must behave identically under BSD grep and GNU grep.** The local pre-publish hook resolves BSD grep on macOS; CI runs GNU grep on ubuntu-latest. No lookahead, no non-capturing groups, no `\d`, no PCRE classes. A `(?:...)` construct sat in this array for four months: BSD grep accepted it silently, GNU grep wrote a diagnostic and matched nothing, and because the lint checks grep's exit code but not its stderr, CI read the dead pattern as a clean pass. When adding a pattern, confirm it produces **empty stderr**, not merely a tolerant exit code.
 
 ## Scope discipline
 
