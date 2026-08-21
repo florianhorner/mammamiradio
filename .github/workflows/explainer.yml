@@ -41,3 +41,7 @@ jobs:
         run: npm test
       - name: Build static site
         run: npm run build
+      - name: Install Chromium for the funnel test
+        run: npx playwright install chromium --with-deps
+      - name: Funnel end-to-end (real browser, reduced motion)
+        run: npm run test:e2e
