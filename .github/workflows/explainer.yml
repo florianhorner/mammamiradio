@@ -1,0 +1,47 @@
+name: Explainer
+
+# The interactive explainer under docs/explainer/ carries its own test suite,
+# including the framing guards that keep the page station-first. Until this
+# workflow existed those tests ran only when someone remembered to type
+# `npm test` locally — a guard nobody runs is not a guard.
+#
+# Honest scope: string assertions and the build cannot exercise real MP3
+# decoding, timeupdate, autoplay rejection, or stalled playback. This job
+# catches framing regressions and schema drift; playback behavior is covered
+# by the pure-function phase tests plus the manual verification steps in
+# docs/explainer/README.md.
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/explainer/**"]
+  pull_request:
+    branches: [main]
+    paths: ["docs/explainer/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  explainer-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: docs/explainer
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.17.1"
+          check-latest: false
+      - name: Install
+        run: npm ci
+      - name: Test (includes framing guards and build validation)
+        run: npm test
+      - name: Build static site
+        run: npm run build
+      - name: Install Chromium for the funnel test
+        run: npx playwright install chromium --with-deps
+      - name: Funnel end-to-end (real browser, reduced motion)
+        run: npm run test:e2e
