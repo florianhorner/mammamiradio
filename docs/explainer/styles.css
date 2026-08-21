@@ -490,7 +490,10 @@ footer strong { color: var(--text-secondary); font-family: var(--font-display); 
   .radio-controls { align-items: flex-start; flex-direction: column; }
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  /* Delays must collapse too: the assemble-* choreography uses `both` fill
+     with delays up to 14.3s, so leaving animation-delay alone made a
+     reduced-motion visitor watch an empty panel populate in real time. */
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; transition-delay: 0s !important; }
   .teaser-stack p { animation: none !important; opacity: 0; transform: none; }
   .teaser-stack p:first-child { opacity: 1; }
   .waveform-bar { animation: none !important; height: var(--h, 22px); opacity: .72; }
