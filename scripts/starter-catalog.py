@@ -18,12 +18,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,43 @@ OFFICIAL_HOSTS = frozenset({"incompetech.com", "www.incompetech.com"})
 PIECES_URL = "https://incompetech.com/music/royalty-free/pieces.json"
 LICENSE_TEXT = "Licensed under Creative Commons: By Attribution 4.0 License"
 LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
+
+# --- Jamendo -----------------------------------------------------------------
+# A second source exists because Incompetech's library is library music, and the
+# station's own taste data rejected most of it. Jamendo carries the same
+# attribution-only tier, just published under 3.0 rather than 4.0.
+#
+# The licence is NOT verifiable from Jamendo's public track page: it serves no
+# Creative Commons URL, no licence string, not even in markup. The API is the
+# only authority, and it needs a free client id. So acquisition gains a
+# credential where Incompetech needed none. The response is hashed into the
+# receipt exactly as the Incompetech piece page and index already are, which
+# keeps `check` fully offline — only `acquire` ever needs the key.
+JAMENDO_PAGE_HOSTS = frozenset({"jamendo.com", "www.jamendo.com"})
+JAMENDO_API_HOSTS = frozenset({"api.jamendo.com"})
+# Storage hosts serve the audio. These URLs are tokenless and byte-stable, which
+# is what makes hash-pinning possible; the tokenized `from=` form the web player
+# uses expires and must never be pinned in the manifest.
+JAMENDO_AUDIO_HOSTS = frozenset({"prod-1.storage.jamendo.com", "mp3l.jamendo.com", "mp3d.jamendo.com"})
+JAMENDO_API_URL = "https://api.jamendo.com/v3.0/tracks/"
+JAMENDO_CLIENT_ID_ENV = "JAMENDO_CLIENT_ID"
+# Attribution-only, no NC/ND/SA. ND is the one that would silently poison the
+# package: every bundled track is normalized and re-encoded, which is a
+# derivative, and NoDerivatives forbids distributing one.
+JAMENDO_ALLOWED_LICENSES = {
+    "https://creativecommons.org/licenses/by/3.0/": "CC-BY-3.0",
+    "https://creativecommons.org/licenses/by/4.0/": "CC-BY-4.0",
+}
+JAMENDO_ALLOWED_LICENSES_BY_ID = {v: k for k, v in JAMENDO_ALLOWED_LICENSES.items()}
+PROVIDER_INCOMPETECH = "incompetech"
+PROVIDER_JAMENDO = "jamendo"
+# Per provider, because the tiers genuinely differ: Incompetech publishes 4.0
+# only, Jamendo publishes 3.0 only. Gating the whole catalog on the union let an
+# Incompetech row declare 3.0 and ship a licence notice that is simply untrue.
+PROVIDER_ALLOWED_LICENSE_IDS = {
+    PROVIDER_INCOMPETECH: {"CC-BY-4.0"},
+    PROVIDER_JAMENDO: {"CC-BY-3.0", "CC-BY-4.0"},
+}
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MAX_INDEX_BYTES = 8 * 1024 * 1024
 MAX_AUDIO_BYTES = 32 * 1024 * 1024
@@ -117,11 +155,132 @@ def _validate_piece_url(url: str, *, isrc: str) -> None:
         raise ToolError(f"official piece URL does not name exact ISRC {isrc}: {url}")
 
 
-def _fetch(url: str, *, maximum_bytes: int, audio: bool = False) -> tuple[bytes, str, str]:
+def _provider_of(row: dict[str, Any]) -> str:
+    """Which official source this row is acquired from.
+
+    Absent means Incompetech: every row predating the second provider omits the
+    field, and defaulting keeps them byte-identical rather than requiring a
+    migration of rows whose evidence is already recorded.
+    """
+    provider = row.get("provider", PROVIDER_INCOMPETECH)
+    if provider not in {PROVIDER_INCOMPETECH, PROVIDER_JAMENDO}:
+        raise ToolError(f"unknown provider {provider!r}")
+    return str(provider)
+
+
+def _validate_jamendo_url(url: str, *, audio: bool = False) -> None:
+    parsed = urlparse(url)
+    hosts = JAMENDO_AUDIO_HOSTS if audio else (JAMENDO_PAGE_HOSTS | JAMENDO_API_HOSTS)
+    if parsed.scheme != "https" or parsed.hostname not in hosts:
+        raise ToolError(f"URL is not on an approved Jamendo HTTPS host: {_redact(url)}")
+    if parsed.username or parsed.password or parsed.port not in {None, 443} or parsed.fragment:
+        raise ToolError(f"URL contains disallowed authority or fragment data: {_redact(url)}")
+    # Traversal is refused outright rather than normalized: `urlparse` keeps `..`
+    # verbatim, so a path a human follows can differ from the one we reasoned
+    # about. That splits the audit trail from the evidence.
+    if ".." in parsed.path.split("/") or "//" in parsed.path:
+        raise ToolError(f"URL path contains traversal segments: {_redact(url)}")
+    # The Incompetech audio validator is path-locked to its download directory;
+    # without the same constraint a Jamendo storage URL could carry any path at
+    # all while the `trackid` query said something else entirely.
+    if audio and parsed.path not in {"", "/"}:
+        raise ToolError(f"Jamendo audio URL must address the storage root, not a path: {_redact(url)}")
+
+
+def _jamendo_track_id(url: str, *, field: str) -> str:
+    """Pull the numeric track id out of a Jamendo URL, refusing anything else.
+
+    Accepts the page form ``/track/<id>/<slug>`` and the storage form
+    ``?trackid=<id>``. The id is the only identity Jamendo exposes, so it has to
+    be unambiguous — a row whose page and audio URLs name different tracks is the
+    failure this guards against.
+    """
+    parsed = urlparse(url)
+    if ".." in parsed.path.split("/") or "//" in parsed.path:
+        raise ToolError(f"{field} contains traversal segments: {_redact(url)}")
+    # Path first, deliberately. Reading the query first let
+    # `/track/999/x?trackid=1215805` report 1215805 while a browser opened 999 —
+    # so the human ticking "licence evidence reviewed" audited a different track
+    # than the one whose licence was proven.
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 2 and parts[0] == "track":
+        if not parts[1].isdigit():
+            raise ToolError(f"{field} does not name a numeric Jamendo track id: {_redact(url)}")
+        path_id = parts[1]
+        query_ids = parse_qs(parsed.query).get("trackid")
+        if query_ids and query_ids != [path_id]:
+            raise ToolError(f"{field} names different tracks in its path and query: {_redact(url)}")
+        return path_id
+    query = parse_qs(parsed.query)
+    if "trackid" in query:
+        values = query["trackid"]
+        if len(values) != 1 or not values[0].isdigit():
+            raise ToolError(f"{field} does not name exactly one numeric Jamendo track id: {url}")
+        return values[0]
+    raise ToolError(f"{field} is not a recognisable Jamendo track URL: {_redact(url)}")
+
+
+def _required_license_block(row: dict[str, Any], isrc: str) -> tuple[str, str]:
+    """The licence the manifest claims, normalized for comparison with a provider."""
+    block = row.get("license")
+    if not isinstance(block, dict):
+        raise ToolError(f"canonical row {isrc} has no license object")
+    license_id = str(block.get("id") or "").strip()
+    license_url = str(block.get("url") or "").strip().replace("http://", "https://", 1)
+    if not license_id or not license_url:
+        raise ToolError(f"canonical row {isrc} has an incomplete license object")
+    if not license_url.endswith("/"):
+        license_url += "/"
+    return license_id, license_url
+
+
+def _require_jamendo_attribution_license(license_ccurl: str, *, track_id: str) -> str:
+    """Map a Jamendo licence URL to our licence id, refusing NC, ND and SA.
+
+    Fails closed on anything unrecognised: a licence variant we have not
+    explicitly reasoned about must never reach the package by default.
+    """
+    normalized = (license_ccurl or "").strip().replace("http://", "https://", 1)
+    if not normalized.endswith("/"):
+        normalized += "/"
+    license_id = JAMENDO_ALLOWED_LICENSES.get(normalized)
+    if license_id is None:
+        raise ToolError(
+            f"Jamendo track {track_id} is {license_ccurl or 'unlicensed'}, which the bundle cannot carry. "
+            "Only attribution-only CC BY 3.0 or 4.0 may ship: NoDerivatives forbids the loudness "
+            "normalization, NonCommercial forbids redistribution by operators, ShareAlike is viral."
+        )
+    return license_id
+
+
+def _redact(url: str) -> str:
+    """Strip credentials out of a URL before it reaches a human or a log.
+
+    The Jamendo client id travels in the query string, and every `_fetch` error
+    interpolates the URL it was working on. The most likely failure is a 401
+    from a stale credential — exactly the message someone pastes into an issue
+    or a chat. Redact at the point of display rather than trusting each call
+    site to remember.
+    """
+    return re.sub(r"(client_id=)[^&\s]*", r"\1<redacted>", url)
+
+
+def _fetch(
+    url: str,
+    *,
+    maximum_bytes: int,
+    audio: bool = False,
+    validate: Callable[..., None] = _validate_official_url,
+) -> tuple[bytes, str, str]:
+    """Fetch one official URL, re-validating the host on every redirect hop.
+
+    ``validate`` is per-provider so a redirect can never walk a request off the
+    provider it started on; the default keeps the Incompetech behaviour exactly.
+    """
     opener = build_opener(_NoRedirect)
     current = url
     for _ in range(4):
-        _validate_official_url(current, audio=audio)
+        validate(current, audio=audio)
         request = Request(current, headers={"User-Agent": "mammamiradio-starter-proof/1"})
         try:
             response = opener.open(request, timeout=NETWORK_TIMEOUT_SECONDS)
@@ -129,24 +288,24 @@ def _fetch(url: str, *, maximum_bytes: int, audio: bool = False) -> tuple[bytes,
             if exc.code in {301, 302, 303, 307, 308}:
                 location = exc.headers.get("Location")
                 if not location:
-                    raise ToolError(f"redirect from {current} omitted Location") from exc
+                    raise ToolError(f"redirect from {_redact(current)} omitted Location") from exc
                 current = urljoin(current, location)
                 continue
-            raise ToolError(f"official source returned HTTP {exc.code}: {current}") from exc
+            raise ToolError(f"official source returned HTTP {exc.code}: {_redact(current)}") from exc
         except OSError as exc:
-            raise ToolError(f"could not reach official source {current}: {exc}") from exc
+            raise ToolError(f"could not reach official source {_redact(current)}: {exc}") from exc
         with response:
             length = response.headers.get("Content-Length")
             if length and length.isdigit() and int(length) > maximum_bytes:
-                raise ToolError(f"official source exceeds {maximum_bytes} bytes: {current}")
+                raise ToolError(f"official source exceeds {maximum_bytes} bytes: {_redact(current)}")
             body = response.read(maximum_bytes + 1)
             if len(body) > maximum_bytes:
-                raise ToolError(f"official source exceeds {maximum_bytes} bytes: {current}")
+                raise ToolError(f"official source exceeds {maximum_bytes} bytes: {_redact(current)}")
             content_type = response.headers.get_content_type()
             final_url = response.geturl()
-        _validate_official_url(final_url, audio=audio)
+        validate(final_url, audio=audio)
         return body, final_url, content_type
-    raise ToolError(f"too many redirects while fetching {url}")
+    raise ToolError(f"too many redirects while fetching {_redact(url)}")
 
 
 def _catalog_data() -> dict[str, Any]:
@@ -207,7 +366,14 @@ def _duration_from_clock(value: str) -> int:
 
 
 def acquire(isrc: str) -> Path:
+    """Acquire one predeclared official original from its declared provider."""
     row = _catalog_row(isrc)
+    if _provider_of(row) == PROVIDER_JAMENDO:
+        return _acquire_jamendo(row, isrc)
+    return _acquire_incompetech(row, isrc)
+
+
+def _acquire_incompetech(row: dict[str, Any], isrc: str) -> Path:
     source = row.get("source")
     if not isinstance(source, dict):
         raise ToolError(f"canonical row {isrc} has no source object")
@@ -292,6 +458,160 @@ def acquire(isrc: str) -> Path:
             "license_url": LICENSE_URL,
             "official_title": official["title"],
             "official_duration_seconds": row["expected_duration_seconds"],
+        },
+        "original_file": original_path.name,
+        "stage": None,
+    }
+    _write_json_atomic(candidate_dir / "candidate.json", receipt)
+    return candidate_dir
+
+
+JAMENDO_API_TRIES = 6
+JAMENDO_API_RETRY_DELAY_SECONDS = 3.0
+
+
+def _jamendo_track_facts(api_url: str, *, track_id: str) -> tuple[bytes, str, dict[str, Any]]:
+    """Read one track's official facts, retrying an empty result set.
+
+    Measured 2026-08-20: the same track id returned ``results_count=0`` on four
+    of five consecutive calls and the real row on the fifth. An empty reply is
+    therefore *not* evidence that a track is absent, and must never be treated
+    as one — the licence check is the reason this function exists, so answering
+    "no data" and carrying on would be the worst possible failure.
+
+    An explicit API error is different and is not retried: that is the service
+    telling us something definite, usually a bad credential.
+    """
+    last_raw = b""
+    last_url = api_url
+    for attempt in range(1, JAMENDO_API_TRIES + 1):
+        last_raw, last_url, _ = _fetch(api_url, maximum_bytes=MAX_PAGE_BYTES, validate=_validate_jamendo_url)
+        try:
+            payload = json.loads(last_raw)
+        except json.JSONDecodeError as exc:
+            raise ToolError(f"Jamendo API returned invalid JSON for track {track_id}") from exc
+        # A truthy non-dict `headers` used to reach `.get` and raise
+        # AttributeError, which `main()` does not catch — a traceback instead of
+        # an actionable message.
+        headers = payload.get("headers") if isinstance(payload, dict) else None
+        if not isinstance(headers, dict):
+            raise ToolError(f"Jamendo API returned an unreadable envelope for track {track_id}")
+        if headers.get("status") != "success":
+            message = headers.get("error_message") or "unknown error"
+            raise ToolError(f"Jamendo API refused track {track_id}: {message}")
+        results = payload.get("results")
+        if isinstance(results, list) and len(results) == 1 and isinstance(results[0], dict):
+            return last_raw, last_url, results[0]
+        if isinstance(results, list) and len(results) > 1:
+            raise ToolError(f"Jamendo API returned {len(results)} rows for track {track_id}, expected exactly one")
+        if attempt < JAMENDO_API_TRIES:
+            time.sleep(JAMENDO_API_RETRY_DELAY_SECONDS)
+    raise ToolError(
+        f"Jamendo API returned no row for track {track_id} in {JAMENDO_API_TRIES} attempts. "
+        "The licence cannot be proven, so the track is not acquirable — it is never assumed permissive."
+    )
+
+
+def _acquire_jamendo(row: dict[str, Any], isrc: str) -> Path:
+    """Acquire one Jamendo original, verifying its licence against the API.
+
+    Mirrors the Incompetech path fact for fact: prove the licence from an
+    official source, cross-check the declared title/artist/duration against that
+    source, then download and hash the audio. The differences are forced by what
+    Jamendo actually publishes — the licence comes from the API rather than the
+    track page, and identity is a numeric track id rather than an ISRC.
+    """
+    source = row.get("source")
+    if not isinstance(source, dict):
+        raise ToolError(f"canonical row {isrc} has no source object")
+    page_url = row.get("official_piece_url")
+    source_url = source.get("url")
+    filename = source.get("filename")
+    if not all(isinstance(v, str) and v for v in (page_url, source_url, filename)):
+        raise ToolError(f"canonical row {isrc} has incomplete official URLs")
+    assert isinstance(page_url, str) and isinstance(source_url, str) and isinstance(filename, str)
+
+    _validate_jamendo_url(page_url)
+    _validate_jamendo_url(source_url, audio=True)
+    track_id = _jamendo_track_id(page_url, field="official_piece_url")
+    if _jamendo_track_id(source_url, field="source.url") != track_id:
+        raise ToolError(f"row {isrc} names Jamendo track {track_id} on its page URL but a different one for audio")
+
+    client_id = os.environ.get(JAMENDO_CLIENT_ID_ENV, "").strip()
+    if not client_id:
+        raise ToolError(
+            f"{JAMENDO_CLIENT_ID_ENV} is required to acquire a Jamendo row: the public track page "
+            "publishes no licence, so the API is the only authority. A free client id from "
+            "https://devportal.jamendo.com is enough. Verification afterwards stays offline."
+        )
+
+    api_url = f"{JAMENDO_API_URL}?client_id={quote(client_id)}&format=json&id={quote(track_id)}"
+    api_raw, final_api_url, official = _jamendo_track_facts(api_url, track_id=track_id)
+
+    license_id = _require_jamendo_attribution_license(official.get("license_ccurl") or "", track_id=track_id)
+    license_url = JAMENDO_ALLOWED_LICENSES_BY_ID[license_id]
+    declared_license = _required_license_block(row, isrc)
+    if declared_license != (license_id, license_url):
+        raise ToolError(
+            f"row {isrc} declares {declared_license[0]} but Jamendo reports {license_id} for track {track_id}"
+        )
+    if str(official.get("name") or "").strip() != str(row.get("title") or "").strip():
+        raise ToolError(f"official title changed for Jamendo track {track_id}")
+    if str(official.get("artist_name") or "").strip() != str(row.get("artist") or "").strip():
+        raise ToolError(f"official artist changed for Jamendo track {track_id}")
+    if int(official.get("duration") or 0) != row.get("expected_duration_seconds"):
+        raise ToolError(f"official duration changed for Jamendo track {track_id}")
+
+    audio_bytes, final_audio_url, audio_content_type = _fetch(
+        source_url, maximum_bytes=MAX_AUDIO_BYTES, audio=True, validate=_validate_jamendo_url
+    )
+    if _jamendo_track_id(final_audio_url, field="download URL") != track_id:
+        raise ToolError(f"official download redirected to a different Jamendo track for {isrc}")
+    if audio_content_type not in {"application/octet-stream", "audio/mpeg", "audio/mp3"}:
+        raise ToolError(f"official download returned unexpected content type {audio_content_type!r}")
+    if len(audio_bytes) < 1024:
+        raise ToolError("official download is implausibly small")
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    candidate_id = f"{isrc.lower()}-{stamp}"
+    candidate_dir = _work_root() / "candidates" / candidate_id
+    if candidate_dir.exists():
+        raise ToolError(f"candidate already exists: {candidate_id}")
+    candidate_dir.mkdir(parents=True)
+    original_path = candidate_dir / "original.mp3"
+    original_path.write_bytes(audio_bytes)
+    receipt = {
+        "schema_version": "1",
+        "candidate_id": candidate_id,
+        "provider": PROVIDER_JAMENDO,
+        "isrc": isrc,
+        "title": row["title"],
+        "artist": row["artist"],
+        "acquired_at": _utc_now(),
+        "source": {
+            "requested_url": source_url,
+            "final_url": final_audio_url,
+            "filename": filename,
+            "sha256": _sha256_bytes(audio_bytes),
+            "bytes": len(audio_bytes),
+            "content_type": audio_content_type,
+        },
+        "evidence": {
+            "piece_url": page_url,
+            # The API response is the licence proof. Hashing it here is what lets
+            # `check` re-verify offline, exactly as the Incompetech page hash does.
+            # The client id is deliberately absent from the recorded URL: it is a
+            # credential, and the receipt is committed to the repository.
+            "final_piece_url": f"{JAMENDO_API_URL}?format=json&id={track_id}",
+            "piece_content_type": "application/json",
+            "piece_sha256": _sha256_bytes(api_raw),
+            "pieces_url": final_api_url.split("client_id=")[0].rstrip("?&"),
+            "pieces_sha256": _sha256_bytes(api_raw),
+            "license_id": license_id,
+            "license_url": license_url,
+            "official_title": official.get("name"),
+            "official_duration_seconds": row["expected_duration_seconds"],
+            "jamendo_track_id": track_id,
         },
         "original_file": original_path.name,
         "stage": None,
@@ -653,6 +973,17 @@ def approve(candidate: str, *, replace_isrc: str, decisions_path: Path) -> tuple
         "artist": row["artist"],
         "reviewed_at": reviewed_at,
         "reviewer_role": decision["reviewer_role"],
+        # The licence the acquisition actually proved, carried into the committed
+        # receipt. Without it the manifest's licence claim is bound to nothing a
+        # later check can test: `check` compares source hashes and bytes against
+        # this receipt, so the licence belongs in the same place, verified the
+        # same way. The candidate receipt that holds the provider's response
+        # lives under gitignored tmp/ and cannot serve that purpose.
+        "license": {
+            "id": _required_license_block(row, isrc)[0],
+            "url": _required_license_block(row, isrc)[1],
+            "provider": _provider_of(row),
+        },
         "decisions": {field: True for field in REQUIRED_DECISIONS},
         "notes_present": bool(decision.get("notes")),
         "notes_sha256": (
@@ -707,7 +1038,11 @@ def approve(candidate: str, *, replace_isrc: str, decisions_path: Path) -> tuple
     }
     row["modification_notice"] = stage_data["modification_notice"]
     evidence = dict(row["evidence"])
-    evidence["source_receipt"] = approval_relative
+    # Two different claims, two different receipts. `source_receipt` says where
+    # the bytes came from and what they hashed to; `audition_receipt` says a
+    # human listened and what licence was proved. Pointing both at the approval
+    # file collapses them and orphans the acquisition evidence, leaving the
+    # manifest referencing nothing that records the download at all.
     evidence["audition_receipt"] = approval_relative
     row["evidence"] = evidence
     row["approval"] = {"status": "approved", "reviewed_at": reviewed_at}
@@ -801,14 +1136,33 @@ def check(*, allow_incomplete: bool = False) -> dict[str, Any]:
             license_data = row.get("license")
             source = row.get("source")
             evidence = row.get("evidence")
-            if not isinstance(license_data, dict) or license_data.get("id") != "CC-BY-4.0":
-                record("MEDIA-EVIDENCE", f"{isrc}: license is not CC-BY-4.0")
+            try:
+                provider = _provider_of(row)
+            except ToolError as exc:
+                record("MEDIA-EVIDENCE", f"{isrc}: {exc}")
+                provider = PROVIDER_INCOMPETECH
+            allowed_ids = PROVIDER_ALLOWED_LICENSE_IDS[provider]
+            if not isinstance(license_data, dict) or license_data.get("id") not in allowed_ids:
+                record(
+                    "MEDIA-EVIDENCE",
+                    f"{isrc}: license is not attribution-only {' or '.join(sorted(allowed_ids))} for {provider}",
+                )
             if not isinstance(source, dict):
                 record("MEDIA-EVIDENCE", f"{isrc}: source facts are missing")
             else:
                 try:
-                    _validate_official_url(str(source.get("url")), audio=True)
-                    _validate_piece_url(str(source.get("evidence_url")), isrc=str(isrc))
+                    # Each provider validates against its own hosts. Checking a
+                    # Jamendo row with the Incompetech validator would reject a
+                    # perfectly good row, and vice versa.
+                    if provider == PROVIDER_JAMENDO:
+                        _validate_jamendo_url(str(source.get("url")), audio=True)
+                        _validate_jamendo_url(str(source.get("evidence_url")))
+                        page_id = _jamendo_track_id(str(source.get("evidence_url")), field="source.evidence_url")
+                        if _jamendo_track_id(str(source.get("url")), field="source.url") != page_id:
+                            raise ToolError("source URL and evidence URL name different Jamendo tracks")
+                    else:
+                        _validate_official_url(str(source.get("url")), audio=True)
+                        _validate_piece_url(str(source.get("evidence_url")), isrc=str(isrc))
                 except ToolError as exc:
                     record("MEDIA-EVIDENCE", f"{isrc}: {exc}")
                 source_sha = source.get("sha256")
@@ -888,6 +1242,24 @@ def check(*, allow_incomplete: bool = False) -> dict[str, Any]:
                     or receipt_derivative.get("sha256") != derivative.get("sha256")
                 ):
                     raise ToolError("audition receipt facts do not match the manifest")
+                # The licence the acquisition proved, checked against what the
+                # manifest claims. The manifest generates the shipped attribution
+                # notice and is otherwise just committed JSON anyone can edit, so
+                # a licence claim must not be changeable in one file alone. Offline,
+                # no credential.
+                receipt_license = approval_receipt.get("license")
+                if not isinstance(receipt_license, dict):
+                    raise ToolError("audition receipt records no licence — re-run approve to bind it")
+                declared = _required_license_block(row, str(isrc))
+                if (receipt_license.get("id"), receipt_license.get("url")) != declared:
+                    raise ToolError(
+                        f"manifest declares {declared[0]} but the audition receipt proves {receipt_license.get('id')}"
+                    )
+                if receipt_license.get("provider") != _provider_of(row):
+                    raise ToolError(
+                        f"manifest says provider {_provider_of(row)} but the audition receipt says "
+                        f"{receipt_license.get('provider')}"
+                    )
             except ToolError as exc:
                 record("MEDIA-EVIDENCE", f"{isrc}: {exc}")
 
@@ -941,9 +1313,18 @@ def check(*, allow_incomplete: bool = False) -> dict[str, Any]:
     except (OSError, ToolError, TypeError, ValueError) as exc:
         record("MEDIA-EVIDENCE", str(exc))
 
+    # Report the catalog location relative to the repo when it is inside it, and
+    # absolutely when it is not. Formatting a diagnostic must never be the thing
+    # that raises — a validator that crashes while describing its own input is
+    # useless exactly when someone is pointing it at an unusual catalog.
+    try:
+        catalog_label = str(CATALOG_PATH.relative_to(ROOT))
+    except ValueError:
+        catalog_label = str(CATALOG_PATH)
+
     return {
         "schema_version": "1",
-        "catalog": str(CATALOG_PATH.relative_to(ROOT)),
+        "catalog": catalog_label,
         "allow_incomplete": allow_incomplete,
         "groups": groups,
         "ok": all(group["status"] in ({"PASS", "WARN"} if allow_incomplete else {"PASS"}) for group in groups.values()),

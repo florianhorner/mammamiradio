@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "USUAN1900042",
+  "title": "Limit 70",
+  "artist": "Kevin MacLeod",
+  "reviewed_at": "2026-08-20T15:36:25Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "provider": "incompetech"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Limit%2070.mp3",
+    "final_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Limit%2070.mp3",
+    "sha256": "b3d2463a32cd6e87a2e0bdb9056113f3702883acbe617a6b029cc14c85561f33",
+    "bytes": 12201274,
+    "acquired_at": "2026-08-20T12:52:02Z",
+    "piece_sha256": "b86387a2b4de711652cd4eb4fdb4e2418ffe92878e1977f33a9217a3dfbcef37",
+    "pieces_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+  },
+  "derivative": {
+    "sha256": "22a8f0ddd5bb69dce75660bfbbc5a494b45b7c7ed0a522ec7ef77659dddac811",
+    "bytes": 7241517,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 301.662,
+    "integrated_loudness_lufs": -16.2,
+    "staged_at": "2026-08-20T12:56:08Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}

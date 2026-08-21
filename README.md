@@ -58,7 +58,7 @@ No AI key is required for your first listen: without one, the hosts use stock
 copy and fallback voices. The packaged 27-second First Listen mini-show makes
 the original music bed, station identity, and Marco/Giulia opening audible
 immediately, but it is not the song library. Normal rotation starts with the
-offline, attributed twelve-track Incompetech starter collection, so no provider
+offline, attributed twelve-track starter collection, so no provider
 account or network music source is required. Open the listener and use **Music
 credits** to see the exact source, license, and modification notice for what is
 playing. Operator-supplied MP3s can also live in `/data/music` in the add-on;
@@ -190,7 +190,7 @@ Issues and PRs welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). First-tim
 
 The code is [Apache-2.0](LICENSE). Each bundled asset keeps its own license and
 attribution. The [imaging attribution file](mammamiradio/assets/imaging/ATTRIBUTION.md)
-documents station imaging. Starter music uses attributed CC BY 4.0 sources.
+documents station imaging. Starter music uses attribution-only CC BY sources (4.0 from Incompetech, 3.0 from Jamendo).
 Jamendo facts are provider-reported. Operators are responsible for local and
 externally resolved media. See the canonical [music-source
 boundaries](docs/music-sources.md). You are also responsible for what your

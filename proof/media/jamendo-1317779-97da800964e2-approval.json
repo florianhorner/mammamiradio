@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "JAMENDO-1317779",
+  "title": "Stuttgart",
+  "artist": "Portrayal",
+  "reviewed_at": "2026-08-20T20:01:11Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-3.0",
+    "url": "https://creativecommons.org/licenses/by/3.0/",
+    "provider": "jamendo"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://prod-1.storage.jamendo.com/?trackid=1317779&format=mp31",
+    "final_url": "https://prod-1.storage.jamendo.com/?trackid=1317779&format=mp31",
+    "sha256": "48e65fc42321ec7aca94d52a31d256ecb3a7e10c6b8727f9e804b6eb190e730a",
+    "bytes": 2598400,
+    "acquired_at": "2026-08-20T19:52:24Z",
+    "piece_sha256": "7f8c000e065d632b20ebeb19e9ac2d1432b10a69d920189d4322d618ca029952",
+    "pieces_sha256": "7f8c000e065d632b20ebeb19e9ac2d1432b10a69d920189d4322d618ca029952"
+  },
+  "derivative": {
+    "sha256": "97da800964e20dd287aafda4c3fd106f6f0189321339febb1e68c51e80673837",
+    "bytes": 5170221,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 215.376,
+    "integrated_loudness_lufs": -16.2,
+    "staged_at": "2026-08-20T19:55:15Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}

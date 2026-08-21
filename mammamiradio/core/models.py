@@ -254,7 +254,16 @@ def safe_media_attribution_dict(value: MediaAttribution | Mapping | None) -> dic
             or license_id != "CC-BY-4.0"
         ):
             return None
-    elif provider == "jamendo" and basis == "provider_reported":
+    elif provider == "jamendo" and basis in {"provider_reported", "bundled_manifest"}:
+        # `bundled_manifest` is the packaged crate, `provider_reported` the
+        # transient runtime source. Both point at a jamendo.com track page; the
+        # difference is who vouched for it, not what it looks like.
+        #
+        # Bundled Jamendo tracks are CC BY 3.0 — Jamendo publishes no 4.0 at all
+        # — so this branch must not inherit the 4.0-only rule the Incompetech
+        # branch applies. Dropping them here is what silently strips the credit
+        # from half the crate, and CC BY requires that credit to accompany the
+        # work.
         if (
             source_host not in {"jamendo.com", "www.jamendo.com"}
             or not source_path.startswith("/track/")

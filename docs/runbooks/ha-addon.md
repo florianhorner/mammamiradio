@@ -649,11 +649,21 @@ gates" (single source of truth). The short version:
 - Branch protection on `main` has strict status checks (branch must be up to
   date before merging) since 2026-06-12. Dependabot PRs that fall behind get
   an automatic `@dependabot rebase` comment (`dependabot-nudge.yml`) because
-  Dependabot only self-rebases on conflicts. **Live proof pending:** confirm
-  on the first weekly batch that Dependabot honors the nudge comment authored
-  by `github-actions[bot]`; if it ignores it, comment `@dependabot rebase`
-  with your own gh auth (`gh pr comment <PR#> --body "@dependabot rebase"`)
-  and demote the workflow to advisory.
+  Dependabot only self-rebases on conflicts. **Still unproven in the wild:**
+  until 2026-08-20 the nudge had never actually posted a comment — it read
+  GitHub's `mergeStateStatus` seconds after the push, got `UNKNOWN`, and
+  reported "nothing to do" every time (run 32342094107 did this while four
+  PRs were behind). The settle loop fixes the asking; whether Dependabot
+  honors a comment authored by `github-actions[bot]` is still unconfirmed.
+  If it ignores one, comment `@dependabot rebase` with your own gh auth
+  (`gh pr comment <PR#> --body "@dependabot rebase"`) and demote the workflow
+  to advisory.
+- The same workflow also names **human-authored** PRs that have auto-merge
+  armed and a behind branch, as a "PRs stuck behind main" warning and an
+  "Armed but behind" step summary. Those cannot be fixed from CI (a
+  `GITHUB_TOKEN` `update-branch` moves the head without retriggering CI), so
+  land them yourself with `scripts/land-pr.sh <PR#>`, which updates the branch
+  after verifying pre-ship evidence.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
   `allow_auto_merge`, and the required contexts. Run it if landing behaves
