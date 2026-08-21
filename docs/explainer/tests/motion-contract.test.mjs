@@ -118,6 +118,10 @@ test("the stage leads with the show and hides the answer until it airs", () => {
   assert.match(js, /The house knows something they don’t\./);
   assert.match(js, /Any second now…/);
   assert.match(js, /function updateWaitingLine/);
+  // A screen reader must not get the answer before the show: the reveal
+  // content enters the accessibility tree only when the moment airs.
+  assert.match(html, /id="reveal-content" aria-hidden="true"/);
+  assert.match(js, /revealContent\.removeAttribute\("aria-hidden"\)/);
   assert.match(css, /body\[data-phase="revealed"\] \.reveal-waiting \{ visibility: hidden/);
   assert.match(css, /body\[data-phase="revealed"\] \.sensor-panel \.sensor-list/);
   // While the show plays, the reveal assembles itself behind the frost:

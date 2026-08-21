@@ -20,6 +20,7 @@ const audioTrouble = document.querySelector("#audio-trouble");
 const troubleLine = document.querySelector("#trouble-line");
 const troubleTranscript = document.querySelector("#trouble-transcript");
 const revealWaitingLine = document.querySelector(".reveal-waiting p");
+const revealContent = document.querySelector("#reveal-content");
 const sensorRows = [...document.querySelectorAll(".sensor-row")];
 const scenarioButtons = [...document.querySelectorAll(".scenario-button")];
 const journeySteps = [...document.querySelectorAll(".journey li")];
@@ -238,6 +239,9 @@ function onReveal(audio) {
     hostQuote.hidden = false;
     audioTrouble.hidden = true;
   }
+  // The answer joins the accessibility tree only now — a screen reader must
+  // not get the reveal before the show any more than a sighted visitor does.
+  if (revealContent) revealContent.removeAttribute("aria-hidden");
   // The transcript is announced once, at the reveal — not read over the clip.
   translationAnnouncement.textContent = `${scenario.transcript} ${scenario.heading} ${scenario.summary}`;
   updateJourney("reveal");
@@ -304,6 +308,7 @@ function resetExperience() {
   clearDeadline(); stopSpeech();
   if (revealWaitingLine) { revealWaitingLine.textContent = IDLE_WAITING_LINE; revealWaitingLine.style.opacity = ""; }
   waitingIndex = -1;
+  if (revealContent) revealContent.setAttribute("aria-hidden", "true");
   playedScenarios.clear();
   body.dataset.phase = "idle"; body.dataset.audio = "";
   hostQuote.hidden = true; audioTrouble.hidden = true;

@@ -104,6 +104,11 @@
                 <div><p>What that moment was made of</p><h2 id="sensor-title">The reveal</h2></div>
               </div>
               <div class="reveal-waiting" aria-hidden="true"><i></i><p>Tune in to hear what they notice.</p><span>The reveal builds while the show plays.</span></div>
+              <!-- Hidden from assistive tech until the moment airs: the panel
+                   is visually face-down, and a screen reader must not get the
+                   answer before the show. Same promise, different sense. The
+                   aria-live announcement carries the reveal when it happens. -->
+              <div class="reveal-content" id="reveal-content" aria-hidden="true">
               <div class="meaning-content">
                 <span class="moment-tag" id="moment-tag">Welcome home</span>
                 <h3 id="moment-heading">Someone’s home early.</h3>
@@ -117,6 +122,7 @@
                 <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">♪</span><span class="sensor-name">media_player.kitchen</span><strong class="sensor-value">idle</strong></div>
               </div>
               <p class="sensor-footnote">These are the liner notes, not the show.</p>
+              </div>
             </section>
           </div>
           <div class="scenario-picker">
