@@ -1,0 +1,21 @@
+proof: feat(media) acquire bundled music from Jamendo
+commit: bbcd3338aa6acc7cdb3561329466b710210b901d
+base:   origin/main b7b004e4
+date:   2026-08-20T23:06:44Z
+note:   verified against main's EXISTING crate — this PR changes no crate content.
+
+$ .venv/bin/ruff check . && .venv/bin/ruff format --check .
+clean
+
+$ .venv/bin/python -m mypy mammamiradio/
+Success: no issues found in 103 source files
+
+$ .venv/bin/python -m pytest tests/ -q -o addopts=
+7485 passed, 4 skipped in 452s
+
+$ .venv/bin/python scripts/starter-catalog.py check
+MEDIA-EVIDENCE FAIL: USUAN1400037: full-track human audition is pending
+MEDIA-BYTES FAIL: approved derivatives 0/12
+MEDIA-AUDIO FAIL: playable derivatives 0/12
+MEDIA-PACKAGE PASS: all checks passed
+(red on pending auditions is correct here: main's crate is unaudited and this PR does not change it)

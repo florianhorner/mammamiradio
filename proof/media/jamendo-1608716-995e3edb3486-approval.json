@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "JAMENDO-1608716",
+  "title": "Smallest - Stories",
+  "artist": "Smallest",
+  "reviewed_at": "2026-08-20T20:01:11Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-3.0",
+    "url": "https://creativecommons.org/licenses/by/3.0/",
+    "provider": "jamendo"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://prod-1.storage.jamendo.com/?trackid=1608716&format=mp31",
+    "final_url": "https://prod-1.storage.jamendo.com/?trackid=1608716&format=mp31",
+    "sha256": "b61a45f14b2ec62c6b81212c2ce9a4e05334d217a33c33d8dd5a55b05c8d9caf",
+    "bytes": 3007488,
+    "acquired_at": "2026-08-20T19:54:52Z",
+    "piece_sha256": "35c92e835241bc1b0ce8b049bc108f6042d9682b5b486606a1b64c980d002da9",
+    "pieces_sha256": "35c92e835241bc1b0ce8b049bc108f6042d9682b5b486606a1b64c980d002da9"
+  },
+  "derivative": {
+    "sha256": "995e3edb34861eedc0b87b363930d35107c12feb02cc390634b947e4727ede76",
+    "bytes": 5943213,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 247.564,
+    "integrated_loudness_lufs": -16.2,
+    "staged_at": "2026-08-20T19:55:48Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}

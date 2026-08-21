@@ -1,5 +1,16 @@
 name: issue-body-lint
 
+# Editorial boundary for maintainer-authored issue bodies.
+# See CLAUDE.md "Changelog editorial boundary".
+#
+# Shared patterns come from florianhorner/gh-workflows; scripts/lint-patterns.sh
+# carries this repo's own and is unioned in via extra_patterns.
+#
+# Quiet failure by design is preserved: a red X in the Actions tab and the
+# actor's own notification, nothing else. No bot comment and no label —
+# publicly flagging an editorial violation would itself put process narrative
+# on the tracker.
+
 on:
   issues:
     types: [opened, edited]
@@ -8,43 +19,16 @@ concurrency:
   group: issue-body-lint-${{ github.event.issue.number }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-
 jobs:
   lint:
-    name: Lint issue body for editorial violations
-    runs-on: ubuntu-latest
-
     # The editorial boundary binds maintainer/agent-authored copy only.
     # Outside contributors' bug reports are never linted.
     if: github.event.issue.user.login == 'florianhorner'
-
-    steps:
-      # Issues are not branch-scoped; the lint always runs from the default branch.
-      - name: Checkout default branch
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Fetch issue body
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const body = context.payload.issue.body ?? "";
-            const fs = require("fs");
-            fs.writeFileSync("/tmp/issue-body.md", body, "utf8");
-            core.info(`Issue body length: ${body.length} chars`);
-
-      # Quiet failure by design: a red X in the Actions tab and the actor's own
-      # notification, nothing else. No bot comment, no label — publicly flagging
-      # an editorial violation would itself put process narrative on the tracker.
-      #
-      # Fail closed on a missing script: this workflow and the lint script land
-      # in the same commit, so on the default branch the script must always be
-      # present. A missing or renamed script is a broken gate, not a skip.
-      - name: Run issue-body editorial lint
-        run: |
-          if [ ! -f scripts/check-issue-body-lint.sh ]; then
-            echo "ERROR: scripts/check-issue-body-lint.sh missing — editorial gate is broken, failing closed." >&2
-            exit 1
-          fi
-          bash scripts/check-issue-body-lint.sh /tmp/issue-body.md
+    # Required, not optional — see the note in pr-body-lint.yml.
+    permissions:
+      contents: read
+      actions: read
+    uses: florianhorner/gh-workflows/.github/workflows/body-lint.yml@fde64f42deb15511c2c71cb9798c2d6685379e38 # v1.5
+    with:
+      target: issue-body
+      extra_patterns: scripts/lint-patterns.sh

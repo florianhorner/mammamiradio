@@ -271,7 +271,7 @@ def test_first_listen_funnel_documents_speaker_proof_then_privacy_choice() -> No
     assert "**Let future hosts use this**" in readme
     assert "optional HACS speaker" not in readme
     assert "No AI key is required for your first listen" in readme
-    assert "offline, attributed twelve-track Incompetech" in readme
+    assert "offline, attributed twelve-track starter collection" in readme
     assert "no provider account or network music source is required" in rendered_readme
     assert "Host home context** choice is omitted and remains off" in rendered_readme
     assert "send it to an AI provider" in rendered_readme
