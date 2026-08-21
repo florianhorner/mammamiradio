@@ -62,12 +62,12 @@ const scenarios = {
       },
       {
         kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
-        lines: [{ who: "marco", text: "Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa." }],
+        lines: [{ who: "marco", text: "Aspetta, aspetta — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa." }],
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 17.94,
-    transcript: "Marco: No, no, no. You cannot put cream in carbonara. This is not an opinion, Giulia, it is the law. Giulia: You read one cookbook, Marco. Half of it. The half with pictures. Marco: Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
+    transcript: "Marco: No, no, no. You cannot put cream in carbonara. This is not an opinion, Giulia, it is the law. Giulia: You read one cookbook, Marco. Half of it. The half with pictures. Marco: Aspetta, aspetta — someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
   },
   coffee: {
     id: "coffee",
@@ -99,12 +99,12 @@ const scenarios = {
       },
       {
         kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true,
-        lines: [{ who: "giulia", text: "The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday." }],
+        lines: [{ who: "giulia", text: "Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday." }],
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 17.53,
-    transcript: "Marco: The two o’clock slot is the most important slot in radio. Ask anyone. Ask me. Giulia: I asked the schedule. It says nobody is listening, Marco. Giulia: The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.",
+    transcript: "Marco: The two o’clock slot is the most important slot in radio. Ask anyone. Ask me. Giulia: I asked the schedule. It says nobody is listening, Marco. Giulia: Well, somebody is home at least — the coffee machine just started, someone’s in early, and it’s fourteen degrees in here. Classic Tuesday.",
   },
   laundry: {
     id: "laundry",
@@ -136,12 +136,12 @@ const scenarios = {
       },
       {
         kind: "voice", who: "marco", note: "the home moment — the quote", moment: true,
-        lines: [{ who: "marco", text: "Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us." }],
+        lines: [{ who: "marco", text: "And speaking of drama nobody watched — breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us." }],
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 15.66,
-    transcript: "Giulia: Your sports report tonight was four minutes of you describing one penalty kick. Marco: One perfect penalty kick. Cinema, Giulia. Pure cinema. Marco: Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
+    transcript: "Giulia: Your sports report tonight was four minutes of you describing one penalty kick. Marco: One perfect penalty kick. Cinema, Giulia. Pure cinema. Marco: And speaking of drama nobody watched — breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
   },
   quiet: {
     // The one moment a brand-new install can actually produce. Narrow ambient
@@ -177,12 +177,12 @@ const scenarios = {
       },
       {
         kind: "voice", who: "giulia", note: "the home moment — the quote", moment: true,
-        lines: [{ who: "giulia", text: "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly." }],
+        lines: [{ who: "giulia", text: "Anyway. Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly." }],
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
     revealAtSec: 18.87,
-    transcript: "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
+    transcript: "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: Anyway. Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
   },
 };
 

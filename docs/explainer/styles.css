@@ -156,19 +156,24 @@ h1 span { display: block; margin-top: 0.1em; color: var(--cream-dk); }
   align-items: center;
   justify-content: center;
   gap: 16px;
-  min-height: 50px;
-  padding: 0 21px;
+  min-height: 60px;
+  padding: 0 27px;
   overflow: hidden;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--sun2);
   color: var(--ink);
-  box-shadow: 0 4px 20px rgba(236, 204, 48, 0.35), 0 0 0 5px rgba(236, 204, 48, 0.08);
+  box-shadow: 0 6px 26px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
+  letter-spacing: .01em;
   transition: transform 180ms ease, box-shadow 300ms ease, background 180ms ease;
 }
+/* The one thing the page wants you to do, so at idle it asks out loud. The
+   pulse stops the moment the show starts — a playing station does not need
+   to sell the button that started it. */
+body[data-phase="idle"] .primary-button { animation: cta-beckon 2.4s ease-in-out infinite; }
 .primary-button::before { content: ""; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,.5) 48%, transparent 72%); transform: translateX(-120%); }
 .primary-button:hover::before { animation: button-shine 720ms ease; }
 .primary-button:hover { transform: translateY(-2px); background: var(--sun); box-shadow: 0 8px 30px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1); }
@@ -376,6 +381,7 @@ footer strong { color: var(--text-secondary); font-family: var(--font-display); 
 @keyframes wake { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes wake-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes button-shine { from { transform: translateX(-120%); } to { transform: translateX(120%); } }
+@keyframes cta-beckon { 0%, 100% { box-shadow: 0 6px 26px rgba(236, 204, 48, 0.45), 0 0 0 6px rgba(236, 204, 48, 0.1); } 50% { box-shadow: 0 8px 34px rgba(236, 204, 48, 0.6), 0 0 0 11px rgba(236, 204, 48, 0.16); } }
 @keyframes stage-sweep { 0% { opacity: 0; transform: translateX(-100%); } 28% { opacity: 1; } 100% { opacity: 0; transform: translateX(100%); } }
 @keyframes sensor-lock { 0% { transform: translateX(-12px); } 42% { transform: translateX(8px) scale(1.015); box-shadow: 0 0 22px rgba(var(--scenario-rgb),.15); } 100% { transform: translateX(4px); } }
 @keyframes orbit-pulse { from { transform: scale(.82); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
