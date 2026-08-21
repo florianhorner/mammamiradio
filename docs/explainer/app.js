@@ -179,11 +179,13 @@ function stopSpeech() {
   hostAudio.pause();
   isSpeaking = false;
   speakButton.classList.remove("is-speaking");
+  speakButton.setAttribute("aria-pressed", "false");
   speakButton.innerHTML = '<span aria-hidden="true">▶</span> Listen again';
 }
 function startSpeaking() {
   isSpeaking = true;
   speakButton.classList.add("is-speaking");
+  speakButton.setAttribute("aria-pressed", "true");
   speakButton.innerHTML = '<span aria-hidden="true">■</span> Stop';
 }
 function primeAudio(scenarioId) {
@@ -230,7 +232,12 @@ function onReveal(audio) {
   const scenario = scenarios[activeScenario];
   translateButton.disabled = false;
   if (playedScenarios.size >= scenarioIds.length) {
+    // A control must not vanish out from under the keyboard: when the tour
+    // ends, focus moves to the one ask left standing.
+    const hadFocus = document.activeElement === translateButton;
     translateButton.hidden = true;
+    const installCta = document.querySelector("#install-cta");
+    if (hadFocus && installCta && !installCta.hidden) installCta.focus();
   } else {
     translateLabel.textContent = "Hear another one";
   }
@@ -315,7 +322,9 @@ function resetExperience() {
   translateButton.hidden = false;
   translateButton.disabled = false;
   translateLabel.textContent = "Tune in"; gateLabel.textContent = "Ready";
+  const resetHadFocus = document.activeElement === resetButton;
   translationAnnouncement.textContent = ""; resetButton.hidden = true;
+  if (resetHadFocus) translateButton.focus();
   if (transportProgress) transportProgress.style.setProperty("--progress", "0%");
   updateJourney("onair");
 }
