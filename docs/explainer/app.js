@@ -164,12 +164,18 @@ function applyState({ phase, audio }) {
 }
 function clearDeadline() { if (deadlineTimer) { window.clearTimeout(deadlineTimer); deadlineTimer = null; } }
 function armDeadline() {
-  // The one failure the browser never reports: playback that silently never
-  // begins. Any real progress re-arms the timer, so a slow download on a
-  // thin connection reads as loading, never as failure.
+  // The failures the browser never reports: playback that silently never
+  // begins, and playback that stalls mid-clip without an error event. Any
+  // real progress re-arms the timer with a fresh position snapshot, so a
+  // slow download reads as loading — but a position frozen for the whole
+  // deadline window resolves to the honest failed state instead of an
+  // eternal "Tuning…".
   clearDeadline();
+  const armedAtSec = hostAudio.currentTime;
   deadlineTimer = window.setTimeout(() => {
-    if (body.dataset.phase === "onair" && hostAudio.currentTime === 0) {
+    const stalled = hostAudio.currentTime === armedAtSec && !hostAudio.paused && !hostAudio.ended;
+    const neverStarted = hostAudio.currentTime === 0;
+    if (body.dataset.phase === "onair" && (neverStarted || stalled)) {
       applyState(nextPhase({ phase: "onair", deadline: true }));
     }
   }, AUDIO_DEADLINE_MS);
@@ -299,6 +305,10 @@ function tuneIn() {
   playedScenarios.add(activeScenario);
   hostQuote.hidden = true;
   audioTrouble.hidden = true;
+  // The aria state follows the phase on EVERY path into onair, not just the
+  // first: without this, scenario two onward spoiled the reveal to screen
+  // readers while the visual stayed face-down.
+  if (revealContent) revealContent.setAttribute("aria-hidden", "true");
   primeAudio(activeScenario);
   playSegment(activeScenario);
   body.dataset.audio = "";

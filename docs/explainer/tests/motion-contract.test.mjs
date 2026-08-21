@@ -124,9 +124,16 @@ test("the stage leads with the show and hides the answer until it airs", () => {
   assert.match(js, /Any second now…/);
   assert.match(js, /function updateWaitingLine/);
   // A screen reader must not get the answer before the show: the reveal
-  // content enters the accessibility tree only when the moment airs.
+  // content enters the accessibility tree only when the moment airs — and
+  // leaves it again on EVERY path into onair, not just the first (the
+  // re-hide once lived only in reset, so scenario two spoiled the reveal).
   assert.match(html, /id="reveal-content" aria-hidden="true"/);
   assert.match(js, /revealContent\.removeAttribute\("aria-hidden"\)/);
+  const rehides = js.match(/revealContent\.setAttribute\("aria-hidden", "true"\)/g);
+  assert.ok(rehides && rehides.length >= 2, "aria re-hide must exist in both tuneIn and reset");
+  // The deadline covers the stalled-mid-clip case, not only never-started.
+  assert.match(js, /const armedAtSec = hostAudio\.currentTime/);
+  assert.match(js, /neverStarted \|\| stalled/);
   assert.match(css, /body\[data-phase="revealed"\] \.reveal-waiting \{ visibility: hidden/);
   assert.match(css, /body\[data-phase="revealed"\] \.sensor-panel \.sensor-list/);
   // While the show plays, the reveal assembles itself behind the frost:
