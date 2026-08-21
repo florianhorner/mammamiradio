@@ -370,6 +370,7 @@ footer .footer-links a { display: inline-flex; align-items: center; min-height: 
 footer .footer-links a::after { content: "↗"; margin-left: 6px; color: var(--sun); font-size: 12px; }
 footer .footer-links a:hover { color: var(--cream); transform: translateY(-1px); }
 footer p { margin: 0; }
+.music-credit { margin: 0 0 8px !important; color: var(--muted); font-size: 10px; }
 footer strong { color: var(--text-secondary); font-family: var(--font-display); font-size: 13px; font-style: italic; }
 
 @keyframes wake { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }

@@ -24,9 +24,9 @@
 //   the page), "imaging" ids reference assets/imaging/manifest.json (CC0),
 //   "voice" beats are rendered host speech.
 // - revealAtSec: the playback offset where the home moment lands and the
-//   sensor reveal fires. null until the produced clip exists — the producer
-//   measures and writes it, humans do not guess it. The build refuses to
-//   ship a null once a produced manifest is present.
+//   sensor reveal fires. Measured by scripts/produce-segments.mjs --render
+//   and copied from segments.manifest.json — humans do not guess it. The
+//   build fails on a mismatch with the produced manifest.
 // - transcript: what a visitor who cannot hear the clip reads. Until the
 //   segments are produced this carries the host line only; the producer
 //   replaces it with the full segment text.
@@ -66,8 +66,8 @@ const scenarios = {
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
-    revealAtSec: null,
-    transcript: "Marco: Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
+    revealAtSec: 17.94,
+    transcript: "Marco: No, no, no. You cannot put cream in carbonara. This is not an opinion, Giulia, it is the law. Giulia: You read one cookbook, Marco. Half of it. The half with pictures. Marco: Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.",
   },
   coffee: {
     id: "coffee",
@@ -103,8 +103,8 @@ const scenarios = {
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
-    revealAtSec: null,
-    transcript: "Giulia: The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.",
+    revealAtSec: 17.53,
+    transcript: "Marco: The two o’clock slot is the most important slot in radio. Ask anyone. Ask me. Giulia: I asked the schedule. It says nobody is listening, Marco. Giulia: The coffee machine just started, someone’s home early, and it’s fourteen degrees in here. Classic Tuesday.",
   },
   laundry: {
     id: "laundry",
@@ -140,8 +140,8 @@ const scenarios = {
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
-    revealAtSec: null,
-    transcript: "Marco: Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
+    revealAtSec: 15.66,
+    transcript: "Giulia: Your sports report tonight was four minutes of you describing one penalty kick. Marco: One perfect penalty kick. Cinema, Giulia. Pure cinema. Marco: Breaking news from the laundry room: it’s done. It’s been done for two hours. Nobody cares but us.",
   },
   quiet: {
     // The one moment a brand-new install can actually produce. Narrow ambient
@@ -181,8 +181,8 @@ const scenarios = {
       },
       { kind: "imaging", id: "bumper.ad-out" },
     ],
-    revealAtSec: null,
-    transcript: "Giulia: Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
+    revealAtSec: 18.87,
+    transcript: "Marco: Sunday nights the phones go quiet. I respect it. Even my conspiracy hotline takes the evening off. Giulia: It’s a landline, Marco, and you unplug it so your ego can charge. Giulia: Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
   },
 };
 

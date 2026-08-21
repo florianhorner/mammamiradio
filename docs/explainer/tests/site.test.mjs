@@ -117,6 +117,13 @@ test("the day-one boundary is said in plain words", () => {
   assert.match(html, /class="aired-truth"/);
 });
 
+test("the starter-catalog music tail carries its attribution", () => {
+  // The segment openers are cut from the CC BY 4.0 starter catalog; using
+  // the music obliges the credit line. If the tails ever leave the clips,
+  // this guard is the reminder that the line can leave with them.
+  assert.match(html, /Kevin MacLeod \(incompetech\.com\), licensed under CC BY 4\.0\./);
+});
+
 test("responsive and reduced-motion treatments are present", () => {
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /prefers-reduced-motion/);

@@ -1,0 +1,53 @@
+{
+  "generatedForPage": "docs/explainer",
+  "segments": {
+    "arrival": {
+      "sha256": "131ec42badd8ee7df3f4e75fc626296dac22da035de68f8430512b614708783a",
+      "durationSec": 24.63,
+      "revealAtSec": 17.94,
+      "sources": [
+        "tail:0",
+        "identity.sweeper",
+        "voice:2",
+        "voice:3",
+        "bumper.ad-out"
+      ]
+    },
+    "coffee": {
+      "sha256": "b4ac51a9a772665dd5d730076f61d0ee349ba927717abbaf204fdb46145a0963",
+      "durationSec": 26.58,
+      "revealAtSec": 17.53,
+      "sources": [
+        "tail:0",
+        "identity.station-id",
+        "voice:2",
+        "voice:3",
+        "bumper.ad-out"
+      ]
+    },
+    "laundry": {
+      "sha256": "5abf092e27277f65a9559ad3957543c837536de9afeb98637046db0f2aa095ab",
+      "durationSec": 22.02,
+      "revealAtSec": 15.66,
+      "sources": [
+        "tail:0",
+        "identity.sweeper",
+        "voice:2",
+        "voice:3",
+        "bumper.ad-out"
+      ]
+    },
+    "quiet": {
+      "sha256": "f316898de22018df2949e1d574d6a8954cf5fa19eb94cb5950840d9a0656636c",
+      "durationSec": 28.62,
+      "revealAtSec": 18.87,
+      "sources": [
+        "tail:0",
+        "identity.station-id",
+        "voice:2",
+        "voice:3",
+        "bumper.ad-out"
+      ]
+    }
+  }
+}
