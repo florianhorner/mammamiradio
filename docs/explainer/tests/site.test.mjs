@@ -58,6 +58,14 @@ test("the experience has multiple interactive home moments", () => {
   assert.doesNotMatch(js, /binary_sensor\.front_door/, "sensor data must not creep back into app.js");
 });
 
+test("no scenario accent is green", () => {
+  // The scenario accent drives the entire on-air chrome (live dot, waves,
+  // transport, borders). Green is banned twice in docs/design/system.md:
+  // the owner is red-green colorblind. #9cab7e shipped once; never again.
+  assert.doesNotMatch(scenariosSource, /#9cab7e/i);
+  assert.doesNotMatch(css, /--sage/);
+});
+
 test("at least one moment is reachable by a fresh install", () => {
   // Narrow ambient context projects only the sun and the weather
   // (home/authorization.py). A page whose every demo needs a home grant
