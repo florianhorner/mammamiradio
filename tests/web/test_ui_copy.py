@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 from mammamiradio.web.ui_copy import COPY, copy_strings, get_copy
@@ -11,6 +14,127 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ADMIN_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
 _LISTENER_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "listener.html"
 _LISTENER_JS = _REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
+
+_MISSPELLED_BRAND = "Mammami Radio"
+
+# This file names the misspelling, so it excludes itself by PATH. An earlier
+# version split the literal (`"Mammami" + " Radio"`); that is only a lexical
+# dodge, and `ruff format` had already folded the implicit-concatenation form
+# back into one string. A path check cannot be folded by a formatter or
+# undone by enabling a new lint rule.
+_BRAND_GUARD_SELF = Path(__file__).resolve().relative_to(_REPO_ROOT).as_posix()
+
+# Four files still carry the misspelling and are deliberately not fixed here.
+# This is deferred debt, not a blessing:
+#   - assets/imaging/{manifest.json,ATTRIBUTION.md} hold ~1175 committed
+#     `"creator"` rows, hash-pinned by tests/audio/test_sonic_asset_pack.py.
+#     ATTRIBUTION.md is package data (pyproject.toml), so it ships in the wheel.
+#   - scripts/complete_audio_pack_gate.py is the GENERATOR that writes those
+#     rows. It is the source, not a receipt: regenerating the pack without
+#     touching it reproduces the misspelling.
+#   - tests/audio/test_sonic_asset_pack.py is the pin itself.
+# Exclusion is whole-file, so a NEW typo inside these four is invisible to the
+# guard. Correcting them rewrites committed receipts and needs its own change.
+_FROZEN_BRAND_PROVENANCE = frozenset(
+    {
+        "mammamiradio/assets/imaging/manifest.json",
+        "mammamiradio/assets/imaging/ATTRIBUTION.md",
+        "scripts/complete_audio_pack_gate.py",
+        "tests/audio/test_sonic_asset_pack.py",
+    }
+)
+
+# Deny binaries rather than allow text. An allowlist of text suffixes silently
+# dropped the macOS launchers (`Start Radio.command`), both Dockerfiles, the
+# Makefile, NOTICE and every .svg — all of which carry brand text.
+_BRAND_BINARY_SUFFIXES = frozenset(
+    {
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".m4a",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".ico",
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tar",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".pyc",
+    }
+)
+
+# Floor for the real-repo scan (831 files at the time of writing). Without it,
+# an empty candidate list would make the guard pass while inspecting nothing —
+# the same false-green shape as a grep-only assertion.
+_MIN_BRAND_SCAN_FILES = 500
+
+# Surfaces the guard must be able to reach. A refactor that moves _REPO_ROOT or
+# narrows the scan has to fail here rather than go quietly green.
+_REQUIRED_BRAND_SCAN_FILES = (
+    "mammamiradio/web/templates/admin.html",
+    "mammamiradio/web/templates/listener.html",
+    "mammamiradio/web/static/listener.js",
+    "ha-addon/mammamiradio/config.yaml",
+    "CHANGELOG.md",
+    "README.md",
+)
+
+
+def _tracked_files(root: Path) -> list[str]:
+    """Repo-relative paths git tracks under `root`.
+
+    Tracked-only on purpose: it scopes the guard to what the repo ships. The
+    cost is that a brand-new file is invisible until `git add`, so a local run
+    can be green and CI red on the next commit. `git` is required; there is no
+    walk fallback, because a walk scans a measurably different set (it reaches
+    ignored trees and misses tracked ones) and a guard that quietly changes
+    scope is worse than one that fails to run.
+    """
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    listing = subprocess.run(
+        ["git", "-C", str(root), "--no-optional-locks", "ls-files", "-z"],
+        capture_output=True,
+        check=True,
+        timeout=30,
+        env=env,
+    )
+    # fsdecode, not decode("utf-8"): -z emits raw path bytes, and a lossy
+    # replacement char would turn a real file into one that never resolves.
+    return [os.fsdecode(entry) for entry in listing.stdout.split(b"\0") if entry]
+
+
+def _scan_brand(root: Path, relpaths: Iterable[str]) -> tuple[list[str], list[str], list[str]]:
+    """Return (offenders, unreadable, scanned) for `relpaths` under `root`."""
+    offenders: list[str] = []
+    unreadable: list[str] = []
+    scanned: list[str] = []
+    for rel in relpaths:
+        if rel in _FROZEN_BRAND_PROVENANCE or rel == _BRAND_GUARD_SELF:
+            continue
+        path = root / rel
+        if path.suffix.lower() in _BRAND_BINARY_SUFFIXES or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            unreadable.append(f"{rel} ({type(exc).__name__})")
+            continue
+        scanned.append(rel)
+        if _MISSPELLED_BRAND not in text:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if _MISSPELLED_BRAND in line:
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    return offenders, unreadable, scanned
 
 
 def test_key_parity_between_languages():
@@ -244,6 +368,66 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
         "admin.html has a toast() that shows a machine phrase or a raw error "
         "field — use wayOut()/offlineMsg() instead (principle #5):\n  " + "\n  ".join(pattern_hits)
     )
+
+
+def test_station_brand_name_is_never_misspelled():
+    """The station is "Mamma Mi Radio". The squashed spelling reached the First
+    Listen media-source error and shipped, so this guard covers the whole repo
+    instead of one template. It is just as wrong in a doc as in a rendered
+    string.
+
+    Consequence worth knowing: CHANGELOG.md and docs/ are scanned too, so no
+    entry can quote the misspelling to explain a fix. Describe it instead.
+    """
+    offenders, unreadable, scanned = _scan_brand(_REPO_ROOT, _tracked_files(_REPO_ROOT))
+
+    assert not offenders, f'the station is "Mamma Mi Radio", never "{_MISSPELLED_BRAND}":\n  ' + "\n  ".join(offenders)
+    assert not unreadable, (
+        "the brand guard could not read these tracked files, so they were never "
+        "checked — add the suffix to _BRAND_BINARY_SUFFIXES if that is correct:\n  " + "\n  ".join(unreadable)
+    )
+    assert len(scanned) >= _MIN_BRAND_SCAN_FILES, (
+        f"the brand guard only inspected {len(scanned)} files (floor "
+        f"{_MIN_BRAND_SCAN_FILES}) — it is passing without looking at the repo"
+    )
+    missing = [rel for rel in _REQUIRED_BRAND_SCAN_FILES if rel not in set(scanned)]
+    assert not missing, f"the brand guard never reached these surfaces: {missing}"
+
+
+def test_brand_guard_flags_a_synthetic_offender(tmp_path):
+    """Prove the guard can fail. Without this it only ever reports "found
+    nothing", which is indistinguishable from "looked at nothing".
+    """
+    (tmp_path / "page.html").write_text(f"<p>{_MISSPELLED_BRAND} is on air</p>", encoding="utf-8")
+    (tmp_path / "clean.html").write_text("<p>Mamma Mi Radio is on air</p>", encoding="utf-8")
+    (tmp_path / "song.mp3").write_bytes(_MISSPELLED_BRAND.encode("utf-8"))
+    frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
+    frozen.mkdir(parents=True)
+    (frozen / "ATTRIBUTION.md").write_text(_MISSPELLED_BRAND, encoding="utf-8")
+
+    offenders, unreadable, scanned = _scan_brand(
+        tmp_path,
+        ["page.html", "clean.html", "song.mp3", "mammamiradio/assets/imaging/ATTRIBUTION.md"],
+    )
+
+    assert offenders == [f"page.html:1: <p>{_MISSPELLED_BRAND} is on air</p>"]
+    assert not unreadable
+    assert set(scanned) == {"page.html", "clean.html"}
+
+
+def test_frozen_brand_provenance_allowlist_has_no_dead_entries():
+    """Every excluded path must still need the exclusion. When the audio pack is
+    regenerated with the correct spelling, this forces the allowlist to shrink
+    instead of quietly outliving its reason.
+    """
+    stale = []
+    for rel in sorted(_FROZEN_BRAND_PROVENANCE):
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            stale.append(f"{rel} (missing)")
+        elif _MISSPELLED_BRAND not in path.read_text(encoding="utf-8"):
+            stale.append(f"{rel} (already correct)")
+    assert not stale, "drop these from _FROZEN_BRAND_PROVENANCE — they no longer need it:\n  " + "\n  ".join(stale)
 
 
 def test_listener_never_shows_raw_server_error():

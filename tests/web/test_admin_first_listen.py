@@ -620,6 +620,29 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
     assert "response?.error?.message" not in error_block
 
 
+def test_every_first_listen_error_states_a_failure_and_a_way_out() -> None:
+    """Leadership principle #5: an error names the problem AND the next step.
+
+    The parity assert above only compares the KEY set, so an entry could be
+    emptied to `action:''` and stay green. This pins the shape, not the
+    sentences, so the copy can still be reworded.
+    """
+    html = _html()
+    start = html.index("const FIRST_LISTEN_ERRORS={")
+    block = html[start : html.index("\n};", start)]
+
+    entries = re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{(.*)\},$", block, re.MULTILINE)
+    assert len(entries) == len(_ui_first_listen_error_codes())
+
+    for code, body in entries:
+        for field in ("title", "message", "action"):
+            match = re.search(rf"{field}:'([^']*)'", body)
+            assert match and match.group(1).strip(), f"{code} has no {field} — every failure needs a way out"
+
+    media_source = re.search(r"action:'([^']*)'", dict(entries)["media_source_missing"])
+    assert media_source is not None and "Mamma Mi Radio" in media_source.group(1)
+
+
 def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() -> None:
     html = _html()
     for control_id in (

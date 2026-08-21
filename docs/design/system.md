@@ -683,6 +683,12 @@ The station has two language modes, set by the operator (admin Engine Room → "
 
 Swappable listener strings live in `mammamiradio/web/ui_copy.py` (single source of truth). Admin UI copy lives in `admin.html`; keep it direct and operator-focused rather than routing it through listener copy.
 
+### The station's name
+
+**Mamma Mi Radio**, three words, in every sentence a human reads. `mammamiradio` is the slug: URLs, file paths, package names, env vars, entity ids, container names. Nothing in between — the squashed one-word form is always wrong, and it shipped once inside a First Listen error before anyone caught it.
+
+`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` enforces this across every tracked file. Two consequences: four audio-pack provenance files are excluded because correcting them rewrites committed receipts, and no changelog entry or doc can quote the wrong spelling to explain a fix — describe it instead.
+
 ## Rules and anti-patterns
 
 | Rule | Reason |
