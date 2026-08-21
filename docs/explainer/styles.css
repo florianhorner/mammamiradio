@@ -300,7 +300,7 @@ body[data-audio="failed"] .install-cta { animation: none; }
 .gate-orbit::before { inset: -8px; }
 .gate-orbit::after { inset: -15px; opacity: .25; }
 .gate-orbit img { width: 52px; height: 52px; object-fit: contain; filter: drop-shadow(0 5px 10px rgba(0,0,0,.35)); animation: radio-breathe 2.6s ease-in-out infinite; }
-.translation-gate p { position: relative; z-index: 2; width: 68px; margin: 0; color: var(--muted); font-size: 8px; font-weight: 700; letter-spacing: .12em; line-height: 1.4; text-align: center; text-transform: uppercase; transition: color 250ms ease; }
+.translation-gate p { position: relative; z-index: 2; width: 68px; margin: 0; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .12em; line-height: 1.4; text-align: center; text-transform: uppercase; transition: color 250ms ease; }
 .transport-track { position: relative; z-index: 2; width: 3px; height: 118px; overflow: hidden; border-radius: 999px; background: rgba(245,237,216,.12); }
 .transport-progress { position: absolute; top: 0; left: 0; width: 100%; height: var(--progress, 0%); border-radius: 999px; background: linear-gradient(180deg, var(--scenario), rgba(var(--scenario-rgb),.55)); box-shadow: 0 0 9px rgba(var(--scenario-rgb),.6); transition: height 300ms linear; }
 body[data-phase="onair"] .gate-orbit { transform: scale(1.17); border-color: rgba(var(--scenario-rgb),.9); box-shadow: 0 0 0 12px rgba(var(--scenario-rgb),.1), 0 0 40px rgba(var(--scenario-rgb),.36); }
@@ -395,7 +395,7 @@ body[data-phase="revealed"] .listen-button.is-speaking {
 .scenario-button.is-active { color: var(--cream); border-color: rgba(var(--scenario-rgb),.55); background: rgba(var(--scenario-rgb),.11); }
 .scenario-button.is-active span { color: var(--scenario); }
 /* The one moment a fresh install can reach gets said out loud. */
-.day-one-chip { display: inline-block; margin-left: 5px; padding: 1px 6px; border: 1px solid rgba(96,165,250,.45); border-radius: 999px; color: var(--ok-text); font-size: 8px; font-style: normal; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; vertical-align: 1px; }
+.day-one-chip { display: inline-block; margin-left: 5px; padding: 1px 6px; border: 1px solid rgba(96,165,250,.45); border-radius: 999px; color: var(--ok-text); font-size: 9px; font-style: normal; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; vertical-align: 1px; }
 
 .thesis { max-width: 1180px; margin: 0 auto; padding: 92px 32px 112px; border-top: 1px solid var(--line); animation: wake 700ms var(--ease-out) 240ms both; }
 .thesis > h2 { max-width: 900px; margin: 0; font-family: var(--font-display); font-size: clamp(38px, 4.4vw, 62px); font-style: italic; font-weight: 700; line-height: 1.03; letter-spacing: -.025em; }
@@ -416,7 +416,7 @@ body[data-phase="revealed"] .listen-button.is-speaking {
 .privacy-note { display: flex; gap: 15px; align-items: flex-start; margin-top: 18px; padding: 20px 22px; border: 1px solid rgba(96,165,250,.3); border-radius: 12px; background: var(--bg-elevated); }
 .privacy-note > span { display: grid; place-items: center; width: 33px; height: 33px; flex: 0 0 auto; border: 1px solid rgba(96,165,250,.42); border-radius: 50%; color: var(--ok-text); }
 .privacy-note strong { font-family: var(--font-display); font-size: 16px; font-style: italic; }
-.privacy-note p { margin: 3px 0 0; color: var(--text-secondary); font-size: 11px; }
+.privacy-note p { margin: 3px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
 footer { max-width: 1440px; margin: 0 auto; padding: 0 32px 34px; color: var(--muted); font-size: 10px; }
 .aired-truth { max-width: 620px; margin: 0 0 14px !important; color: var(--text-secondary); font-family: var(--font-display); font-size: 13px; font-style: italic; line-height: 1.6; }
 footer .flag-line { margin-bottom: 14px; }
