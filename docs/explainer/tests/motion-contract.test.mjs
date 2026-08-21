@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import nextPhase from "../phase.mjs";
+import nextPhase, { waitingLineIndex } from "../phase.mjs";
+import scenarios, { transcriptFor } from "../scenarios.mjs";
 
 const [html, css, js, build] = await Promise.all([
   readFile("index.html", "utf8"),
@@ -48,7 +49,7 @@ test("audio position drives the reveal, not a stopwatch", () => {
   // is a pure function fed by timeupdate, and the deadline exists only for
   // the silent case where playback never begins.
   assert.doesNotMatch(js, /motionTiming/);
-  assert.match(js, /import nextPhase from "\.\/phase\.mjs"/);
+  assert.match(js, /import nextPhase, \{ waitingLineIndex \} from "\.\/phase\.mjs"/);
   assert.match(js, /addEventListener\("timeupdate"/);
   assert.match(js, /revealAtSec: scenario\.revealAtSec/);
   assert.match(js, /AUDIO_DEADLINE_MS/);
@@ -80,11 +81,39 @@ test("the phase machine follows aired-truth", () => {
   assert.deepEqual(nextPhase({ phase: "revealed", positionSec: 0 }), { phase: "revealed", audio: "" });
 });
 
+test("the waiting line escalates on the cue's own clock", () => {
+  // Pure decision, tested at its boundaries: opener until 45% of the way to
+  // the moment, "the house knows" until 80%, "any second now" after.
+  assert.equal(waitingLineIndex(0, 20), 0);
+  assert.equal(waitingLineIndex(8.9, 20), 0);
+  assert.equal(waitingLineIndex(9, 20), 1);
+  assert.equal(waitingLineIndex(15.9, 20), 1);
+  assert.equal(waitingLineIndex(16, 20), 2);
+  // A null cue never escalates — there is no beat to pace against.
+  assert.equal(waitingLineIndex(25, null), 0);
+});
+
+test("the transcript is derived from the beats, never stored", () => {
+  // The transcript is definitionally the voice beats' lines in air order;
+  // storing a second copy let it drift from the audio. Derived, it cannot.
+  for (const scenario of Object.values(scenarios)) {
+    assert.equal("transcript" in scenario, false, "no stored transcript field");
+    const derived = transcriptFor(scenario);
+    assert.match(derived, /^Marco: |^Giulia: /);
+    for (const beat of scenario.beats) {
+      if (beat.kind !== "voice") continue;
+      for (const line of beat.lines) assert.ok(derived.includes(line.text), "every aired line is in the transcript");
+    }
+  }
+  assert.match(js, /transcriptFor\(scenario\)/);
+  assert.doesNotMatch(js, /scenario\.transcript/);
+});
+
 test("a failed clip never wears the on-air treatment", () => {
   assert.match(html, /id="audio-trouble" hidden/);
   assert.match(html, /You should have heard this:/);
   assert.match(js, /function reportFailure/);
-  assert.match(js, /troubleTranscript\.textContent = scenario\.transcript/);
+  assert.match(js, /troubleTranscript\.textContent = transcriptFor\(scenario\)/);
   assert.match(css, /body\[data-audio="failed"\] \.on-air-card/);
   assert.match(css, /body\[data-audio="failed"\] \.live-pill i \{ animation: none/);
   // The failure copy names the way forward, not just the problem.
@@ -163,5 +192,5 @@ test("motion alternatives and progress remain understandable", () => {
   assert.match(html, /aria-current="step"/);
   assert.match(js, /setAttribute\("aria-current", "step"\)/);
   // The transcript is announced once, at the reveal — not read over the clip.
-  assert.match(js, /translationAnnouncement\.textContent = `\$\{scenario\.transcript\}/);
+  assert.match(js, /translationAnnouncement\.textContent = `\$\{transcriptFor\(scenario\)\}/);
 });

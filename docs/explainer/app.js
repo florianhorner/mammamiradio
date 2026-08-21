@@ -1,8 +1,8 @@
 // The scenario data lives in scenarios.mjs — the single source of truth the
 // page, the clip producer, and the build guards all read. The phase decisions
 // live in phase.mjs as a pure function so they are testable without a browser.
-import scenarios from "./scenarios.mjs";
-import nextPhase from "./phase.mjs";
+import scenarios, { transcriptFor } from "./scenarios.mjs";
+import nextPhase, { waitingLineIndex } from "./phase.mjs";
 
 const siteLinks = globalThis.mammamiSiteLinks ?? {};
 
@@ -152,9 +152,8 @@ function setWaitingLine(index, { instant = false } = {}) {
   }, 260);
 }
 function updateWaitingLine(positionSec, revealAtSec) {
-  if (body.dataset.phase !== "onair" || !revealAtSec) return;
-  const progress = positionSec / revealAtSec;
-  setWaitingLine(progress >= 0.8 ? 2 : progress >= 0.45 ? 1 : 0);
+  if (body.dataset.phase !== "onair") return;
+  setWaitingLine(waitingLineIndex(positionSec, revealAtSec));
 }
 function applyState({ phase, audio }) {
   const wasRevealed = body.dataset.phase === "revealed";
@@ -228,7 +227,7 @@ function reportFailure(kind) {
   troubleLine.textContent = kind === "blocked"
     ? "Your browser held the audio back — tap ▶ to hear it. You should have heard:"
     : "The clip is catching its breath — try ▶ again in a moment. You should have heard:";
-  troubleTranscript.textContent = scenario.transcript;
+  troubleTranscript.textContent = transcriptFor(scenario);
   audioTrouble.hidden = false;
   gateLabel.textContent = "Audio held back";
   applyState(nextPhase({ phase: body.dataset.phase === "idle" ? "onair" : body.dataset.phase, failed: true }));
@@ -256,7 +255,7 @@ function onReveal(audio) {
   // not get the reveal before the show any more than a sighted visitor does.
   if (revealContent) revealContent.removeAttribute("aria-hidden");
   // The transcript is announced once, at the reveal — not read over the clip.
-  translationAnnouncement.textContent = `${scenario.transcript} ${scenario.heading} ${scenario.summary}`;
+  translationAnnouncement.textContent = `${transcriptFor(scenario)} ${scenario.heading} ${scenario.summary}`;
   updateJourney("reveal");
   revealResult();
 }

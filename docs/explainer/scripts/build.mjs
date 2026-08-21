@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
-import scenarios from "../scenarios.mjs";
+import scenarios, { transcriptFor } from "../scenarios.mjs";
 
 const indexTemplate = await readFile("index.html", "utf8");
 const configMatch = indexTemplate.match(/window\.mammamiSiteLinks\s*=\s*({[\s\S]*?});/);
@@ -52,8 +52,8 @@ try {
 }
 for (const id of truthIds) {
   const scenario = scenarios[id];
-  if (!scenario.transcript || !scenario.transcript.trim()) {
-    throw new Error(`Scenario "${id}" has no transcript — a visitor who cannot hear the clip would get nothing`);
+  if (!transcriptFor(scenario).trim()) {
+    throw new Error(`Scenario "${id}" derives an empty transcript — a visitor who cannot hear the clip would get nothing`);
   }
   const produced = producedManifest?.segments?.[id];
   if (produced) {

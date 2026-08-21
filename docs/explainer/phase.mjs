@@ -32,4 +32,15 @@ export function nextPhase({ phase, positionSec = 0, revealAtSec = null, ended = 
   return { phase: "onair", audio: buffering ? "loading" : "" };
 }
 
+// Maps playback progress toward the cue onto the escalating waiting lines:
+// the opening stretch stays on line 0, past 45% of the way to the moment the
+// house "knows something" (1), past 80% it is "any second now" (2). A null
+// cue (clips predating the produced manifest) never escalates — there is no
+// beat to pace against.
+export function waitingLineIndex(positionSec, revealAtSec) {
+  if (!revealAtSec) return 0;
+  const progress = positionSec / revealAtSec;
+  return progress >= 0.8 ? 2 : progress >= 0.45 ? 1 : 0;
+}
+
 export default nextPhase;

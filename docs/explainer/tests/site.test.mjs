@@ -54,7 +54,7 @@ test("the experience has multiple interactive home moments", () => {
     assert.match(scenariosSource, new RegExp(`${id}: \\{`));
   }
   // The data lives in scenarios.mjs and only there; app.js imports it.
-  assert.match(js, /import scenarios from "\.\/scenarios\.mjs"/);
+  assert.match(js, /import scenarios, \{ transcriptFor \} from "\.\/scenarios\.mjs"/);
   assert.doesNotMatch(js, /binary_sensor\.front_door/, "sensor data must not creep back into app.js");
 });
 
