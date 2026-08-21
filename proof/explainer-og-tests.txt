@@ -8,7 +8,8 @@ FAILED tests/web/test_streamer_routes.py::test_handoff_normal_head_eof_keeps_suc
 2 failed, 7450 passed, 3 skipped, 47 deselected, 1 warning in 631.93s (0:10:31)
    The two failures reproduce on pristine origin/main (7e2bec29) in a clean
    worktree with none of this branch applied. This branch changes no Python
-   outside tests/repo/.
+   outside tests/repo/. The PNG-signature amendment above is JavaScript only,
+   so the Python figures are unchanged from that run.
 
 == tests: repo guards (includes the new workflow guard) ==
 313 passed in 66.53s (0:01:06)
@@ -32,7 +33,14 @@ tests/repo/test_explainer_pages_workflow.py::test_the_publish_workflow_triggers_
    og:image:type set to image/jpeg .................... 30 pass / 1 fail
    deploy job `if:` guard stripped .................... 3 pass / 2 fail (pytest)
    workflow removed from its own path filter .......... 4 pass / 1 fail (pytest)
+   PNG signature byte 0 + trailer corrupted ........... 30 pass / 1 fail
+   share card truncated to 20 bytes ................... 30 pass / 1 fail
    restored ........................................... all green
+
+   The last two were added after review pointed out that a 3-byte "PNG" check
+   passes data that is not a PNG. The corrupted-signature case above passed the
+   old check and fails the new one, so the objection is confirmed rather than
+   taken on faith.
 
 == build ==
 Built local static site in dist/ (2 browser module(s) verified)

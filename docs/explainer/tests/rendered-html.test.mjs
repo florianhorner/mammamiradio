@@ -78,7 +78,15 @@ test("link previews point at a card that actually ships, at its real size", asyn
   // Pages serves, and build.mjs's copy list is hand-maintained.
   const imagePath = ogImage.slice(origin.length);
   const bytes = await readFile(`dist/${imagePath}`);
-  assert.equal(bytes.subarray(1, 4).toString("ascii"), "PNG", "the share card must be a real PNG");
+  // The full 8-byte signature, not just the "PNG" in the middle of it: byte 0
+  // is 0x89 and the trailing CR LF SUB LF exist to catch a file mangled in
+  // transit. Checking three bytes would pass a truncated or wrong binary that
+  // happens to spell PNG, which is the opposite of what this line claims.
+  assert.ok(
+    bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")),
+    "the share card must carry a real PNG signature",
+  );
+  assert.ok(bytes.length >= 24, "a PNG shorter than its own IHDR header cannot be read for dimensions");
 
   // Twitter/X and Slack size the card from these; a re-rendered card of a
   // different size would otherwise preview cropped.
