@@ -66,16 +66,30 @@ def test_incomplete_mode_is_green_while_strict_mode_is_red(tmp_path: Path, monke
 
 
 def test_validator_wrapper_forwards_scaffold_mode() -> None:
-    result = subprocess.run(
-        [sys.executable, os.fspath(VALIDATOR), "--allow-incomplete"],
+    """Assert the mode the run reports, not a status both modes produce.
+
+    Against a complete catalog every group reads PASS with or without the flag,
+    so asserting PASS proved nothing about forwarding. The JSON report echoes
+    the mode it actually ran in, which only scaffold mode sets.
+    """
+    scaffold = subprocess.run(
+        [sys.executable, os.fspath(VALIDATOR), "--allow-incomplete", "--json"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    default = subprocess.run(
+        [sys.executable, os.fspath(VALIDATOR), "--json"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
 
-    assert result.returncode == 0
-    assert "MEDIA-EVIDENCE PASS" in result.stdout
+    assert scaffold.returncode == 0, scaffold.stdout
+    assert json.loads(scaffold.stdout)["allow_incomplete"] is True, "the wrapper dropped --allow-incomplete"
+    assert json.loads(default.stdout)["allow_incomplete"] is False
 
 
 @pytest.mark.parametrize(
