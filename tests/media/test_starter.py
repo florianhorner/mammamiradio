@@ -24,19 +24,20 @@ from mammamiradio.media.starter import (
 )
 
 LOCKED_TRACKS = [
-    ("USUAN1400037", "Carefree", 205),
-    ("USUAN1700019", "Miami Viceroy", 268),
-    ("USUAN1600018", "Floating Cities", 184),
-    ("USUAN1500001", "Allada", 223),
-    ("USUAN1400054", "Life of Riley", 235),
-    ("USUAN1900056", "Night in Venice", 218),
-    ("USUAN1100106", "Pride", 349),
-    ("USUAN1600012", "Casa Bossa Nova", 242),
-    ("USUAN1100844", "Cipher", 231),
-    ("USUAN1500025", "Daily Beetle", 317),
-    ("USUAN1300012", "Local Forecast - Elevator", 189),
-    ("USUAN1100843", "Wallpaper", 215),
+    ("USUAN1100173", "Long Time Coming", 274),
+    ("USUAN1900024", "Realizer", 310),
+    ("USUAN2000024", "Newer Wave", 175),
+    ("USUAN1800018", "Laserpack", 186),
+    ("USUAN1700080", "Andreas Theme", 217),
+    ("USUAN1900042", "Limit 70", 302),
+    ("JAMENDO-1317779", "Stuttgart", 215),
+    ("JAMENDO-1608716", "Smallest - Stories", 247),
+    ("JAMENDO-1564796", "The Tide", 224),
+    ("JAMENDO-1215805", "Dance with me", 204),
+    ("JAMENDO-1093607", "Stitches ft. Shane MauX", 270),
+    ("JAMENDO-1295439", "Set Me On Fire (feat. Ashley Jana)", 201),
 ]
+LOCKED_TOTAL_SECONDS = 2825
 
 
 def _approved_manifest(root: Path, *, count: int = 3) -> Path:
@@ -107,42 +108,43 @@ def _approved_manifest(root: Path, *, count: int = 3) -> Path:
     return path
 
 
-def test_canonical_manifest_locks_exact_pending_catalog() -> None:
+def test_canonical_manifest_locks_exact_approved_catalog() -> None:
     data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 
     assert data["schema_version"] == "1"
     assert data["catalog_id"] == "starter-v1"
     assert [(row["isrc"], row["title"], row["expected_duration_seconds"]) for row in data["tracks"]] == LOCKED_TRACKS
-    assert sum(row["expected_duration_seconds"] for row in data["tracks"]) == 2876
+    assert sum(row["expected_duration_seconds"] for row in data["tracks"]) == LOCKED_TOTAL_SECONDS
+    assert LOCKED_TOTAL_SECONDS >= STARTER_MINIMUM_DURATION_SECONDS
     assert STARTER_MINIMUM_DURATION_SECONDS == 2700
     assert (STARTER_MINIMUM_INTEGRATED_LOUDNESS_LUFS, STARTER_MAXIMUM_INTEGRATED_LOUDNESS_LUFS) == (-17.0, -15.0)
-    artists = {row["isrc"]: row["artist"] for row in data["tracks"]}
-    assert artists["USUAN1500025"] == "Kevin MacLeod feat. Brett Van Donsel"
-    assert all(artist == "Kevin MacLeod" for isrc, artist in artists.items() if isrc != "USUAN1500025")
-    daily_beetle = next(row for row in data["tracks"] if row["isrc"] == "USUAN1500025")
-    assert daily_beetle["credits"] == [
-        {"name": "Kevin MacLeod", "role": "composer and copyright holder"},
-        {
-            "name": "Brett Van Donsel",
-            "role": "featured guitar",
-            "evidence_url": "https://incompetech.com/wordpress/2015/04/daily-beetle/",
-        },
-    ]
-    assert all(row["license"]["id"] == "CC-BY-4.0" for row in data["tracks"])
+
+    # Two providers, each pinned to the licence tier it actually publishes.
+    providers = {row["isrc"]: row.get("provider", "incompetech") for row in data["tracks"]}
+    assert sorted(providers.values()) == ["incompetech"] * 6 + ["jamendo"] * 6
+    for row in data["tracks"]:
+        expected = "CC-BY-3.0" if providers[row["isrc"]] == "jamendo" else "CC-BY-4.0"
+        assert row["license"]["id"] == expected, row["isrc"]
+
+    # Attribution-only, always. NC/ND/SA can never appear here: ND in particular
+    # would forbid the loudness normalization every bundled track goes through.
+    assert all("licenses/by/" in row["license"]["url"] for row in data["tracks"])
     assert all(len(row["source"]["sha256"]) == 64 for row in data["tracks"])
-    assert all(row["approval"]["status"] == "pending_full_audition" for row in data["tracks"])
-    assert all(row["derivative"] is None for row in data["tracks"])
+    # Every row is shippable: audited by a human and backed by a real derivative.
+    assert all(row["approval"]["status"] == "approved" for row in data["tracks"])
+    assert all(row["derivative"] is not None for row in data["tracks"])
+    assert all(row["evidence"]["audition_receipt"] for row in data["tracks"])
 
 
-def test_pending_catalog_never_becomes_playable_placeholder() -> None:
-    catalog = load_starter_catalog(require_complete=False)
+def test_approved_catalog_is_complete_and_playable() -> None:
+    catalog = load_starter_catalog()
 
     assert catalog.declared_count == 12
-    assert catalog.expected_duration_seconds == 2876
-    assert catalog.entries == ()
-    assert load_starter_tracks(require_complete=False) == []
-    with pytest.raises(StarterCatalogError, match="0 approved derivatives"):
-        load_starter_catalog()
+    assert catalog.expected_duration_seconds == LOCKED_TOTAL_SECONDS
+    assert len(catalog.entries) == 12
+    assert len(load_starter_tracks()) == 12
+    # The whole point of the crate: a fresh install is never silent.
+    assert sum(entry.duration_seconds for entry in catalog.entries) >= STARTER_MINIMUM_DURATION_SECONDS
 
 
 def test_approved_catalog_loads_and_maps_to_track(tmp_path: Path) -> None:
@@ -494,3 +496,32 @@ def test_loader_refuses_a_licence_the_attribution_gate_would_reject(
 
     with pytest.raises(StarterCatalogError, match="attribution-only"):
         load_starter_catalog(manifest_path)
+
+
+def test_every_bundled_track_surfaces_its_attribution() -> None:
+    """CC BY requires the credit to travel with the work — for all twelve.
+
+    This is the licence-compliance guard, and it has to run against the real
+    catalog rather than a fixture. It was missing, and the gap was not
+    theoretical: when Jamendo rows were added, `starter_track` still reported
+    every row as Incompetech, the public attribution gate had no shape for a
+    bundled Jamendo track, and six of twelve tracks silently reached the
+    listener with no credit at all. Fixture-only coverage could not see it,
+    because the fixture was Incompetech-shaped.
+    """
+    from mammamiradio.core.models import safe_media_attribution_dict
+
+    catalog = load_starter_catalog()
+    assert catalog.entries, "the crate must not be empty"
+
+    for entry in catalog.entries:
+        track = starter_track(entry)
+        assert track.attribution is not None, entry.isrc
+        # The declared provider must be the real one, not an assumed default.
+        assert track.attribution.provider == entry.provider, entry.isrc
+
+        public = safe_media_attribution_dict(track.attribution)
+        assert public is not None, f"{entry.isrc} ({entry.provider}) reaches no surface with a credit"
+        assert public["credit"] == entry.attribution
+        assert public["license_id"] == entry.license_id
+        assert entry.artist in public["credit"], entry.isrc

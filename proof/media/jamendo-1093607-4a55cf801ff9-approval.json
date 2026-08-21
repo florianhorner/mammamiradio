@@ -1,0 +1,44 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-track-approval",
+  "isrc": "JAMENDO-1093607",
+  "title": "Stitches ft. Shane MauX",
+  "artist": "Lilly Wolf",
+  "reviewed_at": "2026-08-20T20:01:11Z",
+  "reviewer_role": "project-maintainer",
+  "license": {
+    "id": "CC-BY-3.0",
+    "url": "https://creativecommons.org/licenses/by/3.0/",
+    "provider": "jamendo"
+  },
+  "decisions": {
+    "listened_from_start_to_finish": true,
+    "title_and_artist_match": true,
+    "no_unexpected_speech_or_restricted_content": true,
+    "editorially_approved": true,
+    "license_evidence_reviewed": true
+  },
+  "notes_present": false,
+  "notes_sha256": null,
+  "source": {
+    "requested_url": "https://prod-1.storage.jamendo.com/?trackid=1093607&format=mp31",
+    "final_url": "https://prod-1.storage.jamendo.com/?trackid=1093607&format=mp31",
+    "sha256": "e4217d1b8b9bcf9fa650b98c7b6c56042645eb9c27b27aa29745cfc79cf5eab7",
+    "bytes": 3270656,
+    "acquired_at": "2026-08-20T19:52:27Z",
+    "piece_sha256": "130065cdbeef26b7130f7dc75b4c49e1ab2794cd3e683f1288186c7ec2abc8cc",
+    "pieces_sha256": "130065cdbeef26b7130f7dc75b4c49e1ab2794cd3e683f1288186c7ec2abc8cc"
+  },
+  "derivative": {
+    "sha256": "4a55cf801ff900df3a29259f2ce5bcd3b9406d9be8fa593d32af620abd16db04",
+    "bytes": 6497325,
+    "codec": "mp3",
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "bitrate_kbps": 192,
+    "duration_seconds": 270.67,
+    "integrated_loudness_lufs": -16.2,
+    "staged_at": "2026-08-20T19:55:31Z",
+    "modification_notice": "Converted from the official MP3, stripped of metadata/artwork, resampled to 48 kHz stereo, encoded at 192 kbps, and level-checked/normalized to approximately -16 LUFS."
+  }
+}
