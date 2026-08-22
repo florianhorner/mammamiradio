@@ -9,10 +9,13 @@ after this one on the branch touches proof/ only, which is checkable:
   git diff --name-only f75549448b5a764fa1664979e064113070a23e62..HEAD | grep -v '^proof/'
 must print nothing.
 
-== tests: full Python suite, on the merged state ==
+== tests: default non-FFmpeg Python suite, on the merged state ==
+Command: pytest tests/ -m 'not requires_ffmpeg'
 FAILED tests/core/test_spoken_assets.py::test_symlink_loop_fails_closed_instead_of_raising
 FAILED tests/web/test_streamer_routes.py::test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next
 2 failed, 7477 passed, 3 skipped, 47 deselected, 1 warning in 412.02s (0:06:52)
+This is the default non-FFmpeg selection; separate requires_ffmpeg results are
+not recorded here, so this result is not the full Python suite.
    Both failures reproduce on pristine origin/main (7e2bec29) in a clean
    worktree with none of this branch applied. This branch changes no Python
    outside tests/repo/. Passing count rose from 7450 to 7477 because the
