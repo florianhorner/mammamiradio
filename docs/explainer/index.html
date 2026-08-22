@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Mamma Mi Radio is your own Italian radio station for Home Assistant: two hosts, music, invented ads, and every so often a moment only your house could have told them." />
+    <meta name="theme-color" content="#14110F" />
+    <title>Mamma Mi Radio for Home Assistant | Interactive demo</title>
+
+    <!-- Link previews. og:image must be an absolute URL, because scrapers
+         fetch the tag value as-is and never resolve it against the page: a
+         relative path here previews as a bare link. This block is the only
+         place the PAGE names the deployed origin; the guard test pins the
+         same string, and a test counts the occurrences so a fifth one fails
+         instead of quietly appearing. Runtime assets stay relative so the
+         page survives any subpath. -->
+    <link rel="canonical" href="https://florianhorner.github.io/mammamiradio/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Mamma Mi Radio" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:url" content="https://florianhorner.github.io/mammamiradio/" />
+    <meta property="og:title" content="Your own radio station. It listens to the house." />
+    <meta property="og:description" content="Two Italian hosts, music, and ads for companies that do not exist. Every so often, something only your house could have told them." />
+    <meta property="og:image" content="https://florianhorner.github.io/mammamiradio/public/share-card.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta property="og:image:alt" content="A dark radio card reading: Mamma Mi Radio. Your own radio station. It listens to the house. An on-air light glows in the corner." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Your own radio station. It listens to the house." />
+    <meta name="twitter:description" content="Two Italian hosts, music, and ads for companies that do not exist. Every so often, something only your house could have told them." />
+    <meta name="twitter:image" content="https://florianhorner.github.io/mammamiradio/public/share-card.png" />
+    <meta name="twitter:image:alt" content="A dark radio card reading: Mamma Mi Radio. Your own radio station. It listens to the house. An on-air light glows in the corner." />
+    <script>
+      window.mammamiSiteLinks = {
+        addon: {
+          label: "Add Mamma Mi Radio to Home Assistant",
+          href: "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fflorianhorner%2Fmammamiradio",
+        },
+        source: {
+          label: "Browse the source on GitHub",
+          href: "https://github.com/florianhorner/mammamiradio",
+        },
+        // listen: { label: "Listen live", href: "https://..." },
+      };
+    </script>
+    <link rel="icon" href="public/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-phase="idle" data-audio="" data-scenario="arrival">
+    <a class="skip-link" href="#experience">Skip to the experience</a>
+    <div class="ambient-glow" aria-hidden="true"></div>
+    <div class="noise" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <div class="flag-line" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="header-inner">
+        <a class="brand" href="#top" aria-label="Mamma Mi Radio home">
+          <img src="public/icon-192.svg" alt="" />
+          <span>Mamma <em>Mi</em> Radio</span>
+        </a>
+        <span class="concept-label"><i></i> Interactive demo · no live data</span>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" id="experience">
+        <div class="hero-copy">
+          <p class="eyebrow" lang="it">La radio che ascolta la tua casa</p>
+          <h1>Your own radio station.<span>It listens to the house.</span></h1>
+          <p class="hero-intro">Marco and Giulia host the music and argue through ads for companies that do not exist. Somewhere in the show, they notice something from your home.</p>
+          <div class="hero-actions">
+            <button class="primary-button" id="translate-button" type="button"><span>Tune in</span><b aria-hidden="true">→</b></button>
+            <a class="install-cta" id="install-cta" hidden target="_blank" rel="noreferrer noopener"><span>Add it to Home Assistant</span><b aria-hidden="true">→</b></a>
+            <button class="text-button" id="reset-button" type="button" hidden>Start over</button>
+          </div>
+          <ol class="journey" aria-label="How the demonstration works">
+            <li class="is-current" data-step="onair" aria-current="step"><span>On air</span></li>
+            <li data-step="reveal"><span>The reveal</span></li>
+          </ol>
+        </div>
+
+        <div class="experience-card" aria-label="Interactive station demo">
+          <div class="experience-topline">
+            <span><i class="status-dot"></i> A moment from the station</span>
+            <time id="moment-time">18:42 · Tuesday</time>
+          </div>
+          <div class="translation-stage">
+            <section class="onair-panel" aria-labelledby="onair-title">
+              <div class="panel-heading">
+                <div><p>What you hear first</p><h2 id="onair-title">On air</h2></div>
+              </div>
+              <p class="sr-only" id="translation-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
+              <div class="onair-idle" aria-hidden="true">
+                <div class="idle-preview">
+                  <span class="idle-kicker"><i></i> The show is already on</span>
+                  <div class="waveform hero-wave" data-waveform="hero"></div>
+                  <div class="teaser-stack">
+                    <p><span>Marco &amp; Giulia</span><strong>Two hosts who know each other too well.</strong></p>
+                    <p><span>the ad break</span><strong>Companies best left imaginary.</strong></p>
+                    <p><span>and sometimes</span><strong>Your home, part of the show.</strong></p>
+                  </div>
+                  <p class="idle-prompt">Tune in. Somewhere between the music and the argument, the station notices home.</p>
+                </div>
+              </div>
+              <div class="on-air-card">
+                <div class="on-air-meta"><span class="live-pill"><i></i> On air</span><strong id="host-name">Marco noticed</strong></div>
+                <div class="radio-controls">
+                  <div class="waveform strip-wave" data-waveform="strip" aria-hidden="true"></div>
+                  <button id="speak-button" class="listen-button" type="button"><span aria-hidden="true">▶</span> Listen again</button>
+                </div>
+                <blockquote id="host-quote" hidden>“Someone’s home early, the light is fading, and it’s fourteen degrees outside. Benvenuto a casa.”</blockquote>
+                <div class="audio-trouble" id="audio-trouble" hidden>
+                  <p class="trouble-line" id="trouble-line">You should have heard this:</p>
+                  <p class="trouble-transcript" id="trouble-transcript"></p>
+                </div>
+                <p class="voice-note">The home data in this demo is invented. <strong>Marco and Giulia are not.</strong> This is the station fully wired: bring your own voice and AI keys and it sounds exactly like this. A fresh install starts simpler and grows into it.</p>
+              </div>
+            </section>
+
+            <div class="translation-gate" aria-hidden="true">
+              <div class="gate-orbit"><img src="public/logo.svg" alt="" /></div>
+              <div class="transport-track"><i class="transport-progress" id="transport-progress"></i></div>
+              <p id="gate-label">Ready</p>
+            </div>
+
+            <section class="sensor-panel" aria-labelledby="sensor-title">
+              <div class="panel-heading">
+                <div><p>What the hosts noticed</p><h2 id="sensor-title">The reveal</h2></div>
+              </div>
+              <div class="reveal-waiting" aria-hidden="true"><i></i><p>Tune in to hear what they notice.</p><span>The details appear once the moment reaches the air.</span></div>
+              <!-- Hidden from assistive tech until the moment airs: the panel
+                   is visually face-down, and a screen reader must not get the
+                   answer before the show. Same promise, different sense. The
+                   aria-live announcement carries the reveal when it happens. -->
+              <div class="reveal-content" id="reveal-content" aria-hidden="true">
+              <div class="meaning-content">
+                <span class="moment-tag" id="moment-tag">Welcome home</span>
+                <h3 id="moment-heading">Someone’s home early.</h3>
+                <p id="moment-summary">The front door opened four minutes ago. Evening light is fading. The kitchen is still quiet.</p>
+              </div>
+              <div class="sensor-list" id="sensor-list">
+                <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">⌂</span><span class="sensor-name">person.flo</span><strong class="sensor-value">home · 4 min</strong></div>
+                <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">↗</span><span class="sensor-name">binary_sensor.front_door</span><strong class="sensor-value">closed</strong></div>
+                <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">☼</span><span class="sensor-name">sensor.living_room_lux</span><strong class="sensor-value">36 lx</strong></div>
+                <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">°</span><span class="sensor-name">sensor.outdoor_temperature</span><strong class="sensor-value">14 °C</strong></div>
+                <div class="sensor-row"><span class="sensor-icon" aria-hidden="true">♪</span><span class="sensor-name">media_player.kitchen</span><strong class="sensor-value">idle</strong></div>
+              </div>
+              <p class="sensor-footnote">These are the liner notes, not the show.</p>
+              </div>
+            </section>
+          </div>
+          <div class="scenario-picker">
+            <p>Choose another moment</p>
+            <div class="scenario-buttons" role="group" aria-label="Choose a home moment">
+              <button class="scenario-button is-active" data-scenario-id="arrival" type="button"><span>⌂</span> Someone came home</button>
+              <button class="scenario-button" data-scenario-id="coffee" type="button"><span>◌</span> Coffee just started</button>
+              <button class="scenario-button" data-scenario-id="laundry" type="button"><span>↻</span> Laundry forgotten</button>
+              <button class="scenario-button" data-scenario-id="quiet" type="button"><span>☾</span> Evening arrives <em class="day-one-chip">day one</em></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="thesis" aria-labelledby="thesis-title">
+        <p class="eyebrow">Your home, in character</p>
+        <h2 id="thesis-title">The show goes on. Now and then it mentions your laundry.</h2>
+        <ol class="thesis-flow">
+          <li>
+            <div class="flow-copy"><h3>Your house carries on</h3><p>Existing entities and automations keep doing their jobs. Nothing changes for them.</p></div>
+            <p class="flow-sample code-sample">sensor.washing_machine<br /><b>finished · 2h 07m</b></p>
+          </li>
+          <li>
+            <div class="flow-copy"><h3>The station notices</h3><p>Related states become one thing worth saying out loud, or nothing at all.</p></div>
+            <p class="flow-sample human-sample">“The laundry finished.<br />Nobody noticed.”</p>
+          </li>
+          <li>
+            <div class="flow-copy"><h3>The hosts put it on air</h3><p>Not an alert. It lands between the songs, in a voice you already know.</p></div>
+            <div class="flow-sample station-sample"><div class="mini-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><p>A home moment, told like radio.</p></div>
+          </li>
+        </ol>
+        <div class="privacy-note"><span aria-hidden="true">◎</span><div><strong>On day one the station knows the sky.</strong><p>A fresh install shares only daylight and the weather. Giulia can call the sunset, nothing more. The other moments on this page happen after you open the door: you choose what the hosts may use, entity by entity, and until you do, they talk about the weather like every other station on earth. This demo reads no Home Assistant data.</p></div></div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="flag-line" aria-hidden="true"><i></i><i></i><i></i></div>
+      <p class="aired-truth">Mamma Mi Radio remembers what listeners heard, not what it tried to play. Host memory and home moments count only after the audio reaches someone.</p>
+      <nav id="site-links" class="footer-links" aria-label="Project links"></nav>
+      <p class="music-credit">Music tails in the demo clips: Kevin MacLeod (incompetech.com), licensed under CC BY 4.0.</p>
+      <p><strong>Mamma <em>Mi</em> Radio</strong> · Local interactive demo · No live data connected</p>
+    </footer>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

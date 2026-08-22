@@ -779,10 +779,23 @@ attributed starter/local base and the first `Producing MUSIC:` line follows
 without an external provider download. A manifest, hash, evidence, or audio
 validation error is a release/image regression, not expected degradation.
 
-**Jamendo unavailable (optional)**: a coarse `degraded` or `blocked` provider
-state leaves starter/local music on air. Status never includes the client ID,
-private audio URL, or raw provider exception; the single-use artifact is absent
-after cancellation, failure, playback, or restart.
+**Jamendo unavailable (optional)**: The provider logs
+`Jamendo provider preparation started`, followed by `Jamendo provider ready`,
+when preparation succeeds. Retryable failures log
+`Jamendo provider attempt failed` with only a coarse `failure_code`, a bounded
+numeric `provider_code` (or `none`), and `retry_in_seconds`. Blocked attempts
+log `Jamendo provider blocked` with a coarse `failure_code` and bounded numeric
+`provider_code`. Configuration apply, queue cleanup, and manual retry failures
+log `Jamendo provider control failed` with only a `failure_code` set to
+`config_apply_failed`, `queue_cleanup_failed`, or `retry_failed`.
+
+`failure_code=api_failed provider_code=3` means Jamendo rejected the request
+format or one of its parameters, so the provider enters the blocked state.
+Invalid or suspended client IDs also block. Rate limits remain retryable.
+Starter and local music continue while Jamendo is degraded or blocked. Status
+and logs omit the client ID, private audio URL, raw response text, and raw
+provider exception. The provider removes its single-use artifact after
+cancellation, failure, playback, or restart.
 
 **Session track denylist (intentional)**: `WARNING Skipping music track due to
 invalid audio (…): …` plus `WARNING Purged rejected cache artifact …` when an

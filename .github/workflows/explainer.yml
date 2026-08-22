@@ -14,10 +14,10 @@ name: Explainer
 on:
   push:
     branches: [main]
-    paths: ["docs/explainer/**"]
+    paths: ["docs/explainer/**", ".github/workflows/explainer.yml", ".github/workflows/explainer-pages.yml"]
   pull_request:
     branches: [main]
-    paths: ["docs/explainer/**"]
+    paths: ["docs/explainer/**", ".github/workflows/explainer.yml", ".github/workflows/explainer-pages.yml"]
 
 permissions:
   contents: read
@@ -31,17 +31,36 @@ jobs:
         working-directory: docs/explainer
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # The workflow sits in its own path filter, so it also fires on refs where
+      # the page does not exist yet — every step below would fail on a missing
+      # working-directory. Absent page is "nothing to test", not a failure.
+      - name: Is there a page to test?
+        id: page
+        working-directory: .
+        run: |
+          if [ -f docs/explainer/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::docs/explainer is not on this ref - skipping the explainer suite."
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.page.outputs.present == 'true'
         with:
           node-version: "22.17.1"
           check-latest: false
       - name: Install
+        if: steps.page.outputs.present == 'true'
         run: npm ci
       - name: Test (includes framing guards and build validation)
+        if: steps.page.outputs.present == 'true'
         run: npm test
       - name: Build static site
+        if: steps.page.outputs.present == 'true'
         run: npm run build
       - name: Install Chromium for the funnel test
+        if: steps.page.outputs.present == 'true'
         run: npx playwright install chromium --with-deps
       - name: Funnel end-to-end (real browser, reduced motion)
+        if: steps.page.outputs.present == 'true'
         run: npm run test:e2e
