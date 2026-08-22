@@ -1,8 +1,25 @@
 Runtime evidence — explainer link previews
-Captured 2026-08-22T00:38:31Z from the deployed site, before this branch merged.
-Code under test: f75549448b5a764fa1664979e064113070a23e62 (merge of origin/main; see the note in explainer-og-tests.txt)
+Captured 2026-08-22T00:38:31Z.
 
-The URL og:image names must already answer 200, or the card previews as a broken image.
+Two different commits are involved here, and conflating them is easy, so both
+are named:
+
+  Branch commit this evidence supports:  f75549448b5a764fa1664979e064113070a23e62
+  Commit actually deployed and probed:   7e2bec291fe5884bc113bb1515653a9ecb4a0251
+
+The second is what is live at florianhorner.github.io/mammamiradio right now.
+The branch commit CANNOT be probed: the og: tags it adds are unmerged, and the
+site only publishes from main, so a capture "from the tested revision" is not
+available until this PR lands.
+
+That is not a gap, because it is not what this file claims. The claim is
+narrower and is the one that actually decides whether the card renders: the
+absolute URL og:image points at must ALREADY answer 200 on the live site,
+because a scraper fetches it verbatim and does not resolve it against the page.
+If it 404s, the card previews broken no matter how correct the tags are.
+
+The tags themselves are covered by the unit guards in
+docs/explainer/tests/rendered-html.test.mjs, not by this file.
 
   HTTP 200  /                                              11925 bytes  text/html;
   HTTP 200  /public/share-card.png                         223856 bytes  image/png
