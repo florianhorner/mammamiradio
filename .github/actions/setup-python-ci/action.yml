@@ -6,6 +6,10 @@ inputs:
     description: Install apt ffmpeg before Python setup.
     required: false
     default: "false"
+  cache-playwright:
+    description: Restore Playwright browsers from cache using .playwright-cli-version.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -25,3 +29,10 @@ runs:
       run: |
         pip install -e .
         pip install -r requirements-dev.txt
+
+    - name: Cache Playwright browsers
+      if: inputs.cache-playwright == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-${{ hashFiles('.playwright-cli-version') }}

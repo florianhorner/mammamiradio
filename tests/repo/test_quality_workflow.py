@@ -121,6 +121,16 @@ def test_quality_lanes_use_shared_python_setup() -> None:
         assert "./.github/actions/setup-python-ci" in uses, f"{name} must use the shared Python CI setup"
 
 
+def test_browser_smoke_caches_playwright_browsers() -> None:
+    action = (REPO_ROOT / ".github" / "actions" / "setup-python-ci" / "action.yml").read_text()
+    assert "cache-playwright" in action
+    assert "hashFiles('.playwright-cli-version')" in action
+    assert "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830" in action
+
+    browser_block = _job_block(_workflow_text(), "browser-smoke")
+    assert 'cache-playwright: "true"' in browser_block
+
+
 def test_quality_workflow_runs_shellcheck_on_scripts() -> None:
     lint_block = _job_block(_workflow_text(), "lint")
 

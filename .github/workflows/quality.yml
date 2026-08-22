@@ -226,6 +226,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-python-ci
+        with:
+          cache-playwright: "true"
 
       - name: Set up Node.js for browser smoke
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
