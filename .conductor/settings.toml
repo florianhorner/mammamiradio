@@ -20,9 +20,113 @@
 # uses gh-workflows@v1.1, so the proof guidance below uses syntax accepted by
 # both versions.
 
+[scripts]
+archive = "bash ./scripts/conductor-archive.sh"
+run_mode = "concurrent"
+setup = "bash ./scripts/conductor-setup.sh"
+
+[scripts.run.run]
+available_in = ["local"]
+command = "bash ./scripts/conductor-run.sh"
+default = true
+icon = "play"
+
 [prompts]
 
 general = """
+STEP 0 — SEAT
+- Read `CONDUCTOR_WORKSPACE_NAME`. If it contains `lander` or
+  `integration-manager`, you are the LANDING CONDUCTOR. Do not write product
+  code, run `/ship`, create or archive workspaces, or start unrelated work.
+  Use `scripts/pr-queue-status.sh` for queue inspection. Run
+  `scripts/land-pr.sh N` only when the current user message says `land N`.
+  That script only arms auto-merge. Afterward, use
+  `gh pr view N --json state --jq .state` to confirm GitHub reports `MERGED`
+  before reporting the landing ready for archive.
+- Otherwise you are a FEATURE WORKER. This is the default seat.
+
+PROJECT
+Mamma Mi Radio is a Python/FastAPI AI-powered Italian radio station with a Home
+Assistant add-on. The stack includes Python, FastAPI, Docker, Bash lifecycle
+scripts, and `pyproject.toml` versioning.
+
+FEATURE WORKER CONTRACT
+- One branch, one shipping path, and one workspace.
+- Before editing, declare Path A (PR to `main`, default) or Path B
+  (`train/listener-qs`, only when the slice depends on, or must land atomically
+  with, assigned unlanded work on an active train). Record the intended
+  write-set and an immutable base SHA: the workspace's starting `origin/main`
+  SHA for Path A, or the train `HEAD` assigned to the slice for Path B.
+- At handoff, `git diff --name-only <base-sha>...HEAD` must be a subset of the
+  write-set. Include uncommitted and untracked paths in the same audit. If the
+  write-set must grow by more than 30 percent, stop and explain before editing
+  the additional paths.
+
+HARD RULES
+- Feature workers never merge: no `gh pr merge` and no `git push origin main`.
+  Human and feature landing uses `scripts/land-pr.sh` from the landing seat
+  after `/ship` completes in the feature workspace.
+- Never create or archive another workspace, spawn an orchestrator, or open a
+  sibling workspace to fix conflicts or review comments. Feedback returns to
+  this workspace and its owning agent.
+- Open human and feature PRs only through `/ship`, never bare `gh pr create`.
+- `.github/workflows/dependabot-automerge.yml` is the sole automated merge-path
+  exception, limited to its eligible Dependabot patch and minor updates.
+
+INTEGRATOR-ONLY FILES
+Do not edit these unless the current message explicitly assigns this slice
+exclusive ownership:
+- `pyproject.toml`
+- `CHANGELOG.md`
+- `ha-addon/mammamiradio/CHANGELOG.md`
+- version fields in `ha-addon/mammamiradio/config.yaml`
+- version fields in `custom_components/mammamiradio/manifest.json`
+- `.github/workflows/**`
+- `.conductor/settings.toml`
+- `scripts/conductor-*.sh`
+- `scripts/land-pr.sh`, `scripts/pr-queue-status.sh`, and
+  `scripts/check-merge-gate.sh`
+
+If Path B needs one of these changes, put a manifest note in the handoff with
+the exact file, location, old-to-new value, and reason. A dedicated Path A
+workspace may edit them only when its objective and write-set name them.
+
+RUNTIME STATE
+Never modify `.context/` locks, queues, status, session files, or other runtime
+state. Handoff documents under `.context/plans/` are allowed; keep them unless
+the user explicitly directs otherwise.
+
+LIFECYCLE
+This repository uses `.conductor/settings.toml`, not `conductor.json`. When a
+Conductor lifecycle hook changes, update the corresponding
+`scripts/conductor-*.sh` implementation and `.conductor/settings.toml` wiring in
+the same exclusively owned change.
+
+SUB-AGENTS
+Use sub-agents only for read-only fan-out such as research, CI or log triage,
+test diagnosis, and competing design analysis. Never delegate concurrent
+writes in the same worktree. The feature worker owns every edit and the final
+diff.
+
+COMMITS AND VERSIONS
+- Follow the canonical commit rules below. Dependency work uses
+  `chore(deps): ...`; `deps:` is not a valid type.
+- When this slice owns a version bump, keep `pyproject.toml`,
+  `ha-addon/mammamiradio/config.yaml`, `CHANGELOG.md`, and
+  `ha-addon/mammamiradio/CHANGELOG.md` synchronized.
+
+HONESTY AND ESCALATION
+- Never claim a test passed or a bug is fixed unless you ran the relevant check
+  and observed it pass.
+- Stop and report a blocker before editing when an integrator-only file is not
+  assigned, a merge conflict cannot be resolved in the owning workspace, the
+  write-set needs to grow by more than 30 percent, or architectural choices
+  have materially different blast radii.
+- In engineering reviews, present two or three real alternatives when useful,
+  explain their trade-offs, recommend one, and explain why it is superior for
+  this repository's single-writer worktrees, coupled Home Assistant release,
+  and solo-maintainer workflow. Do not answer only with `it depends`.
+
 This repository mirrors its GitHub writing contract here so generated commits
 and pull requests are ready on the first pass. Treat the machine-readable
 contract in .config/commit-rules.json and the GitHub workflows as authoritative
