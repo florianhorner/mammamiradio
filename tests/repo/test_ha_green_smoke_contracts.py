@@ -42,7 +42,7 @@ def test_pi_smoke_keeps_required_check_name_when_arm_work_is_path_gated() -> Non
     document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
     jobs = document["jobs"]
     assert "pi-smoke" in jobs
-    assert jobs["pi-smoke"]["if"] == "always() && !cancelled()"
+    assert jobs["pi-smoke"]["if"] == "${{ always() && !cancelled() }}"
     assert jobs["pi-smoke"]["needs"] == ["changes", "pi-smoke-run"]
     assert jobs["pi-smoke-run"]["if"] == "needs.changes.outputs.audio == 'true'"
     assert jobs["pi-smoke-run"]["runs-on"] == "ubuntu-24.04-arm"

@@ -355,7 +355,7 @@ jobs:
           if-no-files-found: error
 
   quality:
-    if: always() && !cancelled()
+    if: ${{ always() && !cancelled() }}
     needs: [changes, lint, types, tests, invariants, browser-smoke, media-report]
     runs-on: ubuntu-latest
     timeout-minutes: 5

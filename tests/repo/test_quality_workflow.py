@@ -46,7 +46,7 @@ def test_quality_workflow_pr_job_is_read_only() -> None:
 
 def test_quality_aggregator_requires_every_lane() -> None:
     quality = _workflow()["jobs"]["quality"]
-    assert quality["if"] == "always() && !cancelled()"
+    assert quality["if"] == "${{ always() && !cancelled() }}"
     assert quality["needs"] == ["changes", "lint", "types", "tests", "invariants", "browser-smoke", "media-report"]
     assert quality["timeout-minutes"] == 5
     assert _workflow()["jobs"]["tests"]["timeout-minutes"] == 45
