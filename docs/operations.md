@@ -969,10 +969,33 @@ The interactive explainer (`docs/explainer/`) publishes to GitHub Pages at
 `https://florianhorner.github.io/mammamiradio/` via
 `.github/workflows/explainer-pages.yml`: on any `main` push touching
 `docs/explainer/**`, the workflow tests, builds `dist/`, and deploys it.
-One-time setup: **Settings → Pages → Source: "GitHub Actions"** (until that is
-flipped, the deploy job fails with a Pages-not-enabled error). Manual
-re-deploys run from the workflow's dispatch button. The page is static, reads
+The one-time setup (**Settings → Pages → Source: "GitHub Actions"**) is
+already done; it is listed here because a deploy job fails with a
+Pages-not-enabled error if it is ever switched back. The deploy job also
+carries `if: github.ref == 'refs/heads/main'`, so a `workflow_dispatch` from
+any other ref builds and tests but does not publish. The page is static, reads
 no Home Assistant data, and streams nothing — it is not the live station.
+
+**The trigger is a path filter, so a change outside it publishes nothing.**
+The filter is `docs/explainer/**` plus the workflow's own path, matching
+`explainer.yml`. A commit touching neither lands on `main` without redeploying,
+which is usually right, and is a trap exactly once: when the page and its
+publish workflow arrive in separate pull requests, whichever lands second does
+not match the filter and the site stays a 404 until someone dispatches by hand.
+That is how this site first went live. After a change of that shape, run the
+dispatch button against `main` and confirm
+`https://florianhorner.github.io/mammamiradio/` answers 200. A green workflow
+list with no run in it looks identical to a site that published.
+
+The canonical link and the link-preview tags (`<link rel="canonical">` plus the
+`og:` / `twitter:` tags in `docs/explainer/index.html`) are the one place the
+deployed origin is written as an absolute URL, because scrapers fetch an
+`og:image` verbatim instead of resolving it against the page.
+`tests/rendered-html.test.mjs` asserts those four URLs agree, that no runtime
+asset is pinned to the origin, that the og: and twitter: copy cannot drift
+apart, that the card ships in `dist/`, and that the declared width and height
+match the real PNG. `tests/repo/test_explainer_pages_workflow.py` holds the
+main-only deploy gate and the path filter, and runs on every pull request.
 
 ## What is still not documented because it does not exist yet
 

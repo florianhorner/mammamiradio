@@ -42,6 +42,11 @@ DEFAULT_LINK_FILES=(
   ha-addon/README.md
   ha-addon/mammamiradio/DOCS.md
   CONTRIBUTING.md
+  docs/REPO_MAP.md
+  docs/agents.md
+  docs/conductor.md
+  docs/listener-qs-train.md
+  docs/runbooks/parallel-workspaces.md
   docs/troubleshooting.md
 )
 

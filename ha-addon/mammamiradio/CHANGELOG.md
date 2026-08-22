@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Jamendo connects again and now logs failed attempts.** The Edge provider joined two metadata fields with a comma. Jamendo returned HTTP 200 but rejected the fields in the response body. Discovery and exact-track checks now request only the license data the station uses. Invalid requests and account errors stop further attempts; rate limits use the existing retry schedule. Operators can see whether Jamendo is preparing, ready, retrying, or blocked without exposing client IDs, private audio URLs, or provider response text. Starter and local music continue when Jamendo is unavailable.
+
 - **An empty music crate no longer loops the station ident every second.** With no starter tracks, no local MP3s, and Jamendo waiting for two songs that cannot exist, Home Assistant Green kept rebuilding its four-second send-ahead cushion by bursting `continuity_1.mp3` from the first syllable. The recovery clip now follows the same send timeline as any other segment, operator files in the music folder are picked up while the crate is empty, and Jamendo can start when there is no base rotation to wait for.
 
 - **A steered stretch stops replaying the same few songs.** Point the station somewhere with Record Hunt and it favours what it found, for as long as you leave the course set. When the hunt only resolved a handful of tracks, that favouring kept landing on the same ones, and a song could come back within half an hour. A found track now waits for the rest of its set before it can play again. The course still gets the same share of the show; it works through the crate instead of reaching for the same record.

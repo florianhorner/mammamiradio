@@ -54,7 +54,10 @@ clip has a `revealAtSec` that is absent or falls outside the clip.
 The unit tests pin the framing (station first, sensors as the reveal, no
 pipeline ordinals, including the meta description), the failure contract, the
 transport, the day-one scenario's ambient-only entities, and the responsive
-and reduced-motion treatments. The end-to-end test clicks through the real
+and reduced-motion treatments, plus the link-preview card: that its URLs
+agree, that the og: and twitter: copy cannot drift apart, that the card ships
+in `dist/`, and that the declared size matches the real PNG. The end-to-end
+test clicks through the real
 page: tune in, reveal at the cue, install button, retirement after the fourth
 moment. It runs under emulated reduced motion, which also exercises that
 contract on every run.
@@ -76,6 +79,17 @@ Two scripts, both operator commands rather than CI steps:
 
 ## Publishing
 
-The directory root is a complete static site: prebuilt files plus `.nojekyll`,
-no build step needed to read it. Point GitHub Pages at it, or serve `dist/`
-from anywhere that serves files.
+`.github/workflows/explainer-pages.yml` is the publish path. A push to `main`
+touching `docs/explainer/**` or that workflow runs `npm test`, `npm run build`,
+and deploys `dist/` to GitHub Pages at
+<https://florianhorner.github.io/mammamiradio/>. The deploy job is gated on
+`refs/heads/main`, so the dispatch button tests a branch without publishing it.
+Operator detail lives in `docs/operations.md` under "Explainer page deployment".
+
+The directory root is also a complete static site on its own: prebuilt files
+plus `.nojekyll`, no build step needed to read it. Serving it from another
+origin needs one edit first. `index.html` names
+`https://florianhorner.github.io/mammamiradio/` in `rel="canonical"`, `og:url`,
+`og:image` and `twitter:image`, and `tests/rendered-html.test.mjs` pins the
+same string, so a copy served elsewhere would advertise a canonical URL and a
+link-preview card pointing back here.

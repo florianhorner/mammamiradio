@@ -5,24 +5,31 @@ name: Explainer Pages
 # test guards it), so the project origin works as-is:
 #   https://florianhorner.github.io/mammamiradio/
 #
-# One-time repo setting required before the first run succeeds:
-# Settings -> Pages -> Source: "GitHub Actions". Pages is not enabled today
-# (the REST endpoint 404s), so nothing existing gets replaced.
+# Settings -> Pages -> Source is already set to "GitHub Actions"; the setting
+# is named here because the deploy job fails with a Pages-not-enabled error if
+# it is ever switched back.
 #
-# Deploys only from main, only when the explainer changes, plus a manual
-# dispatch for the first publish and for re-deploys after a Pages hiccup.
+# Deploys only from main, and only when the explainer or this workflow
+# changes. The filter self-includes this file for the same reason explainer.yml
+# does: a change to the publish path must run its own publish path, or a guard
+# can be removed here with no CI signal at all. The dispatch button covers a
+# re-deploy after a Pages hiccup, and a change elsewhere in the repo that the
+# filter does not match.
 
 on:
   push:
     branches: [main]
-    paths: ["docs/explainer/**"]
+    paths: ["docs/explainer/**", ".github/workflows/explainer-pages.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Scoped by ref, not global. A dispatched branch build shares nothing with a
+# main deploy, so a run from a branch cannot sit in front of a production
+# publish that cancel-in-progress: false is deliberately not allowed to cancel.
 concurrency:
-  group: explainer-pages
+  group: explainer-pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -51,6 +58,13 @@ jobs:
 
   deploy:
     needs: build
+    # Defence in depth. The push trigger is already main-only, and the
+    # github-pages environment carries a main-only branch policy, so this
+    # guard exists for the case those drift: workflow_dispatch accepts any
+    # ref, and a dispatch from a branch would otherwise publish that branch.
+    # Build still runs on any ref, so a dispatch elsewhere tests without
+    # deploying.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

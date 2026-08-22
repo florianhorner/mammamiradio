@@ -6,6 +6,31 @@
     <meta name="description" content="Mamma Mi Radio is your own Italian radio station for Home Assistant: two hosts, music, invented ads, and every so often a moment only your house could have told them." />
     <meta name="theme-color" content="#14110F" />
     <title>Mamma Mi Radio for Home Assistant | Interactive demo</title>
+
+    <!-- Link previews. og:image must be an absolute URL, because scrapers
+         fetch the tag value as-is and never resolve it against the page: a
+         relative path here previews as a bare link. This block is the only
+         place the PAGE names the deployed origin; the guard test pins the
+         same string, and a test counts the occurrences so a fifth one fails
+         instead of quietly appearing. Runtime assets stay relative so the
+         page survives any subpath. -->
+    <link rel="canonical" href="https://florianhorner.github.io/mammamiradio/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Mamma Mi Radio" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:url" content="https://florianhorner.github.io/mammamiradio/" />
+    <meta property="og:title" content="Your own radio station. It listens to the house." />
+    <meta property="og:description" content="Two Italian hosts, music, and ads for companies that do not exist. Every so often, something only your house could have told them." />
+    <meta property="og:image" content="https://florianhorner.github.io/mammamiradio/public/share-card.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta property="og:image:alt" content="A dark radio card reading: Mamma Mi Radio. Your own radio station. It listens to the house. An on-air light glows in the corner." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Your own radio station. It listens to the house." />
+    <meta name="twitter:description" content="Two Italian hosts, music, and ads for companies that do not exist. Every so often, something only your house could have told them." />
+    <meta name="twitter:image" content="https://florianhorner.github.io/mammamiradio/public/share-card.png" />
+    <meta name="twitter:image:alt" content="A dark radio card reading: Mamma Mi Radio. Your own radio station. It listens to the house. An on-air light glows in the corner." />
     <script>
       window.mammamiSiteLinks = {
         addon: {
