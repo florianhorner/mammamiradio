@@ -1,0 +1,47 @@
+Runtime evidence — explainer link previews
+Captured 2026-08-22T00:38:31Z.
+
+Two different commits are involved here, and conflating them is easy, so both
+are named:
+
+  Branch commit this evidence supports:  f75549448b5a764fa1664979e064113070a23e62
+  Commit actually deployed and probed:   7e2bec291fe5884bc113bb1515653a9ecb4a0251
+
+The second is what is live at florianhorner.github.io/mammamiradio right now.
+The branch commit CANNOT be probed: the og: tags it adds are unmerged, and the
+site only publishes from main, so a capture "from the tested revision" is not
+available until this PR lands.
+
+That is not a gap, because it is not what this file claims. The claim is
+narrower and is the one that actually decides whether the card renders: the
+absolute URL og:image points at must ALREADY answer 200 on the live site,
+because a scraper fetches it verbatim and does not resolve it against the page.
+If it 404s, the card previews broken no matter how correct the tags are.
+
+The tags themselves are covered by the unit guards in
+docs/explainer/tests/rendered-html.test.mjs, not by this file.
+
+  HTTP 200  /                                              11925 bytes  text/html;
+  HTTP 200  /public/share-card.png                         223856 bytes  image/png
+  HTTP 200  /app.js                                        18033 bytes  application/javascript;
+  HTTP 200  /styles.css                                    40374 bytes  text/css;
+  HTTP 200  /public/logo.svg                               2532 bytes  image/svg+xml
+  HTTP 200  /public/favicon.svg                            2532 bytes  image/svg+xml
+  HTTP 200  /public/icon-192.svg                           495 bytes  image/svg+xml
+  HTTP 200  /public/fonts/playfair-display.woff2           38460 bytes  font/woff2
+  HTTP 200  /public/fonts/playfair-display-italic.woff2    38888 bytes  font/woff2
+  HTTP 200  /public/fonts/outfit.woff2                     32228 bytes  font/woff2
+  HTTP 200  /public/fonts/jetbrains-mono.woff2             40480 bytes  font/woff2
+  HTTP 200  /public/audio/arrival.mp3                      375333 bytes  audio/mp3
+  HTTP 200  /public/audio/coffee.mp3                       457461 bytes  audio/mp3
+  HTTP 200  /public/audio/laundry.mp3                      397101 bytes  audio/mp3
+  HTTP 200  /public/audio/quiet.mp3                        445485 bytes  audio/mp3
+
+The share card is a real PNG at the size the meta tags declare:
+  signature ok: True   IHDR: IHDR   1280x640   223856 bytes
+
+Deploy run that published this state:
+  https://github.com/florianhorner/mammamiradio/actions/runs/32533463490 (build: success, deploy: success)
+
+Rendered page checked in a real browser: zero console errors, zero warnings.
+  <title>Mamma Mi Radio for Home Assistant | Interactive demo</title>
