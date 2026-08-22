@@ -46,6 +46,10 @@ command -v jq >/dev/null 2>&1 || fail "jq not found" "install jq"
 jq empty "$FILE" 2>/dev/null || fail "$FILE is not valid JSON" \
   "re-run scripts/emit-review-evidence.sh — do not hand-edit the artifact"
 
+document_count="$(jq -s 'length' "$FILE")"
+[ "$document_count" -eq 1 ] || fail "$FILE contains $document_count JSON documents" \
+  "re-run scripts/emit-review-evidence.sh so the artifact contains one top-level object"
+
 skill="$(jq -r '.skill // ""' "$FILE")"
 case "$skill" in
   review | adversarial-review) ;;

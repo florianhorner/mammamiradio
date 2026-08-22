@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# land-pr.sh — the only legitimate merge path for this repo.
+# land-pr.sh — the only legitimate human/feature merge path for this repo.
 #
 #   scripts/land-pr.sh <pr-number> [<pr-number>...]
 #
-# Landing contract (CLAUDE.md "Quality gates" → "Landing contract"): PRs are
+# Landing contract (CLAUDE.md "Quality gates" → "Landing contract"): human and feature PRs are
 # opened by /ship and never armed for auto-merge. On the operator's explicit
 # merge signal, this wrapper:
 #

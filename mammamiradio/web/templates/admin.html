@@ -4299,6 +4299,9 @@ function updateRuntimeStatus(st){
         air_next_overflow:'queue overflow',
         egress_stale:'stale on air',
         blocklist_gate:'banned song',
+        listener_request_reserved:'held for its dedication',
+        playback_file_error:'audio unavailable before air',
+        playback_admission_denied:'source withdrew it before air',
         operator_ban:'banned song',
         operator_stop:'operator stop',
         operator_panic:'panic stop',
@@ -7383,14 +7386,20 @@ async function applyHostPreset(n,presetName){
 
 // ── Listener Requests ──
 const LISTENER_SONG_ERROR_TEXT={
-  longform_audio:['not a single-track song','Not a single-track song'],
-  non_music_audio:['not a song','Not a song'],
-  banned:['banned song','Banned song'],
-  download_failed:['download failed','Download failed'],
-  download_cancelled:['cancelled','Cancelled'],
+  low_confidence:['needs exact title + artist','Try exact title + artist'],
+  not_found:['no match — try title + artist','No match — try title + artist'],
+  longform_audio:['too long — choose one song','Too long — choose one song'],
+  non_music_audio:['not playable — choose another','Not playable — choose another'],
+  banned:['blocked — unban or choose another','Blocked — unban or choose another'],
+  downloads_disabled:['song requests are off — enable them','Song requests off — enable them'],
+  lookup_failed:['catalogue unavailable — retry later','Catalogue unavailable — retry later'],
+  lookup_timed_out:['no catalogue answer — retry','No catalogue answer — retry'],
+  source_changed:['music changed — submit again','Music changed — submit again'],
+  download_failed:['could not prepare track — retry or add it','Could not prepare track — retry or add it'],
+  download_cancelled:['preparation stopped — retry','Preparation stopped — retry'],
 };
-function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['not found'])[0];}
-function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'Song not found'])[1];}
+function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['no match — try title + artist'])[0];}
+function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'No match — try title + artist'])[1];}
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
@@ -7413,7 +7422,6 @@ function updateListenerRequests(reqs,consumed){
     if(r.type==='song_request'){
       if(r.song_found){
         status=statusInline('ready',r.song_track||'ready');
-        actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
         status=statusInline('blocked',listenerSongErrorLabel(r.song_error_reason));
       } else {
@@ -7434,7 +7442,9 @@ function updateListenerRequests(reqs,consumed){
     html+=consumed.map(r=>{
       const age=formatRequestAge(r.age_s);
       const badge=r.status==='source_changed'
-        ?'<span class="lr-badge lr-badge-warn">&#8635; Playlist changed</span>'
+        ?'<span class="lr-badge lr-badge-warn">&#8635; Music changed — submit again</span>'
+        :r.status==='dismissed'
+        ?'<span class="lr-badge lr-badge-warn">&#10005; Dismissed — resubmit if still wanted</span>'
         :r.status==='song_not_found'
         ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
@@ -7454,14 +7464,6 @@ async function lrDismiss(id){
   if(!r||r.ok===false){toast(wayOut('remove that request'));return;}
   if(r.removed>0)toast('Request removed');
   else toast('Already removed');
-}
-async function lrQueueNext(i){
-  const req=_lrReqs[i];if(!req)return;
-  if(req.type==='song_request'&&req.song_found){
-    const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
-    if(!r||r.ok===false){toast(wayOut('handle that request'));return;}
-    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
-  }
 }
 
 // ── Log / Archivio ──

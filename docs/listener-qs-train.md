@@ -1,77 +1,109 @@
 # Train/Listener QS
 
-`Train/Listener QS` is the integration train for Listener QS work. It is not an
-implementation slice.
+`Train/Listener QS` is the Path B integration train for coupled Listener QS
+slices. Independent work uses Path A and goes direct to `main`.
+
+The train is dormant unless the maintainer has created both the
+`train/listener-qs` branch and its dedicated Conductor workspace. Use the
+maintainer-only activation procedure in
+[`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md#activate-a-train-maintainer-only)
+before assigning work. Do not open a Path A PR for commits assigned to this
+train.
 
 ## Contract
 
 - Human train name: `Train/Listener QS`
-- Git branch: `train/listener-qs`
-- Base branch: `origin/main`
-- Owner role: train owner
-- Purpose: receive Listener QS feature worktrees, integrate them in order,
-  resolve conflicts, and hand off one coherent train state for review.
+- Git branch when active: `train/listener-qs`
+- Starting point: an immutable `origin/main` SHA recorded at activation
+- Owner: the maintainer acting as train integrator
+- Purpose: integrate named Listener QS slices in dependency order and hand off
+  one train PR for review
 
-The train owner does not invent product behavior while integrating. Feature
-behavior enters the train only through an explicit feature worktree handoff.
+The train owner does not define product behavior. A feature workspace owns its
+behavior and resolves semantic conflicts. The train owner verifies clean
+integration and may handle mechanical conflicts that do not choose behavior.
 
 ## Intake
 
-Each feature worktree must hand off:
+Each feature workspace hands off:
 
-- Branch name and commit SHA
+- Branch name, assigned base SHA, and head SHA
 - Short objective and user-visible behavior, if any
-- Changed files grouped by area
-- Validation run and result
+- Assigned write-set and actual diff against the base SHA
+- Validation command and result
 - Known conflicts, risks, or follow-up work
-- Whether changelog, version, docs, or runtime hooks changed
+- Shared-file manifest for changelog, version, CI, or lifecycle changes
 - Any manual verification needed after integration
 
-Incomplete handoffs can be parked until the missing information is supplied.
-The train should stay reviewable before it absorbs another slice.
+The assigned base SHA is the train `HEAD` given to the worker before that slice
+starts. Verify the slice with:
 
-## Mapped Feature Worktrees
+```bash
+git merge-base --is-ancestor <base-sha> HEAD
+git diff --name-only <base-sha>...HEAD
+```
 
-| Worktree | Branch | Current SHA | Status |
-|----------|--------|-------------|--------|
-| `havana` | `florianhorner/feat/festival-party-mode` | `194a27e24d2a40c7fcdfc3ba102a37487274c845` | Mapped to `Train/Listener QS`; no unique commits ahead of `origin/main` at mapping time. |
+Do not compare a train-based slice to `origin/main`; that includes earlier
+train slices in the worker's write-set. Park incomplete handoffs.
 
-## Integration Rules
+## Integration rules
 
-- Keep `train/listener-qs` based on `origin/main`.
+- Keep the train's recorded starting point tied to `origin/main`.
+- Integrate one slice at a time and run its assigned checks before the next.
 - Do not commit `.context/` or runtime state.
-- Do not change product/runtime behavior as part of train setup or conflict
-  resolution unless the behavior came from a named feature worktree.
-- Keep changelogs and version files unchanged unless a feature slice ships
-  user-visible behavior or performs an intentional version bump.
-- If Conductor lifecycle hooks change in an integrated slice, update the
-  `scripts/conductor-*.sh` files in the same integration commit.
-- Preserve conventional commits. Use `feat:`, `fix:`, `chore:`, `ci:`, or
-  `deps:` only.
-- Prefer small integration commits grouped by feature slice or conflict class.
+- Do not invent product behavior during setup or conflict handling.
+- Leave release metadata to the train integrator and the release cut.
+- Follow the commit contract in `docs/agents.md`. Dependency work uses
+  `chore(deps): ...`; `deps:` is not a commit type.
+- Use small integration commits grouped by feature slice or mechanical
+  conflict class.
 
-## Merge Gate
+Direct pushes and merges into the train do not run `quality.yml` or
+`pi-smoke.yml`. Run local slice checks after each intake. The final train PR to
+`main` runs both workflows.
 
-Before handing off or merging the train:
+## Conflict ownership
 
-- `git status --short --branch` is clean except for intentional staged changes.
-- The branch is still `train/listener-qs`.
-- The branch still targets `origin/main`.
+- The source workspace resolves product-semantic conflicts against the current
+  train SHA, records that SHA as its new base, reruns checks, and submits a new
+  handoff.
+- The train owner verifies and integrates the clean result. Mechanical conflict
+  edits are allowed only when they preserve both sides without a product choice.
+- No third workspace resolves a train conflict.
+
+## Merge gate
+
+Before opening or landing the train PR:
+
+- `git status --short --branch` is clean.
+- The branch is `train/listener-qs` and still targets `origin/main`.
 - No `.context/` files are staged.
-- Relevant tests/checks from the integrated slices have passed.
+- Every integrated slice has a base-aware handoff and passing validation.
 - `git diff --check` passes.
-- Any runtime, route, config, auth, fallback, lifecycle, changelog, or version
-  changes have matching docs or repo-process updates required by `CLAUDE.md`.
+- Runtime, route, config, auth, fallback, lifecycle, changelog, and version
+  changes have the matching docs or repo-process updates required by
+  `CLAUDE.md`.
 
-## Handoff Template
+Run `/ship` once for the train-to-`main` PR. The maintainer lands it through
+`scripts/land-pr.sh <PR#>`, then confirms:
+
+```bash
+gh pr view <PR#> --json state --jq .state
+```
+
+Archive the train only after the command prints `MERGED`. For the next batch,
+create a fresh train workspace and branch from the new `origin/main`. Never
+reset or force-push a live train.
+
+## Handoff template
 
 ```text
 Train: Train/Listener QS
 Branch: train/listener-qs
-Base: origin/main
+Train starting SHA: <origin/main SHA recorded at activation>
 
 Integrated slices:
-- <feature branch> @ <sha> - <one-line objective>
+- <feature branch> base <assigned-base-sha> head <head-sha> - <objective>
 
 Changed files:
 - <area>: <files>
@@ -80,18 +112,17 @@ Validation:
 - <command> - <result>
 
 Conflicts resolved:
-- <file or area> - <resolution>
+- <none | file/area - mechanical resolution>
 
 Behavior shipped:
 - <none | summary>
 
-Changelog/version changes:
+Shared-file changes:
 - <none | summary>
 
 Residual risks:
 - <none | risk>
 
 Next action:
-- Feature worktrees should branch/rebase against train/listener-qs and hand off
-  using this template.
+- Open one train-to-main PR with /ship
 ```
