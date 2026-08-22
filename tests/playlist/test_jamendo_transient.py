@@ -373,7 +373,7 @@ async def test_provider_code_three_failure_log_omits_credentials_and_provider_er
             json={
                 "headers": {
                     "status": "failed",
-                    "code": 3,
+                    "code": "3",
                     "error_message": provider_error,
                 },
                 "results": [],
@@ -417,7 +417,7 @@ async def test_provider_code_three_failure_log_omits_credentials_and_provider_er
             [60.0],
         ),
         (
-            5,
+            "5",
             "blocked",
             "api_auth_failed",
             "Jamendo provider blocked failure_code=api_auth_failed provider_code=5",
