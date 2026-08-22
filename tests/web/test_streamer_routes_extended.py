@@ -2185,6 +2185,10 @@ def test_source_switch_retries_on_air_promised_song_when_admitted_file_vanished(
     initial_queue = (missing_promised,) if fallback_kind == "assetless" else (missing_promised, ordinary)
     for segment in initial_queue:
         app.state.queue.put_nowait(segment)
+    if fallback_kind != "assetless":
+        # Real produced music carries a reservation. Without one the slot
+        # assertion below passes on a segment that could never actually start.
+        _reserve_music_segment(state, state.playlist[1], ordinary)
     state.queued_segments = [
         {
             "id": str(segment.metadata["queue_id"]),
@@ -2221,6 +2225,11 @@ def test_source_switch_retries_on_air_promised_song_when_admitted_file_vanished(
         fresh if fallback_kind == "fresh-runway" else ordinary if fallback_kind == "preserved-runway" else None
     )
     assert state.continuity_slot is expected_slot
+    if fallback_kind == "preserved-runway":
+        # The runway moved this out of the queue into the capacity slot. Reading
+        # only the queue for survivors leaves its reservation revoked, so the one
+        # thing standing between the listener and silence is refused at air time.
+        assert ordinary.mark_playback_started() is True
     assert state.listener_request_admitted_reservations == {}
     restored = state.listener_request_handoff
     assert restored is not None

@@ -1424,13 +1424,17 @@ music segment owns a `music_admission_reservations` entry, and
 through the segment's playback-start callback. A `False` there is not a warning:
 playback releases the segment and moves on, so revoking a *surviving* segment's
 reservation deletes it as surely as dropping it from the queue, only later and
-silently. Three paths keep a segment across a crate change and therefore keep its
-reservation: `apply_source_metadata_only` (preserves the whole queue),
-`switch_playlist(..., preserve_reservation_ids=...)` — which `_apply_loaded_source`
-calls with the ids still in the queue after the runway pass, covering both the
-on-air dedication's promised song and the assetless branch's preserved runway
-head — and `restore_playlist_if_still_empty`, which refills an emptied crate
-without purging anything. A retained starter reservation keeps its
+silently. Four paths keep a segment across a crate change and therefore keep its
+reservation: `apply_source_metadata_only` (preserves the whole queue);
+`_apply_loaded_source` and `purge_pool`, which both call
+`switch_playlist(..., preserve_reservation_ids=...)` with
+`_protected_reservation_ids` — the ids still protected after the runway pass,
+covering the on-air dedication's promised song, the assetless branch's preserved
+runway head, and `purge_pool`'s deliberately-kept head; and
+`restore_playlist_if_still_empty`, which refills an emptied crate without purging
+anything. `_protected_reservation_ids` reads `state.continuity_slot` as well as
+the queue, because a capacity-constrained runway parks a survivor out of band —
+reading only the queue leaves precisely the assetless last-runway case unfixed. A retained starter reservation keeps its
 `starter_cycle_reserved` slot; `_sync_starter_cycle` rebuilds that set from the
 live reservations whenever the catalogue changes, so a crate that loses and
 regains a starter track cannot offer a copy that is still queued.

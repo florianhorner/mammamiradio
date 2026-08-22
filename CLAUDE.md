@@ -229,9 +229,11 @@ private durable system for strategy or relationship context.
   would leave one ahead. A queued music segment also keeps its
   `music_admission_reservations` entry, without which `mark_playback_started`
   denies it and playback skips it at the moment it should air; the ordinary
-  cutover takes `preserve_reservation_ids` for the segments it deliberately
-  keeps (the on-air dedication's promised song, the assetless branch's preserved
-  runway head), and `restore_playlist_if_still_empty` keeps them all.
+  cutover and `/api/playlist/purge` both pass `preserve_reservation_ids` from
+  `_protected_reservation_ids` (the queue **and** `continuity_slot`, since a
+  capacity-constrained runway parks a survivor out of band), covering the on-air
+  dedication's promised song and every deliberately-kept runway head, and
+  `restore_playlist_if_still_empty` keeps them all.
   Applies to `/api/playlist/load`, `/api/playlist/enrich`,
   `/api/heading`, `/api/direction`, and the external/listener download commit. The
   normal producer replenishes audio after a valid Resume. The four admin routes

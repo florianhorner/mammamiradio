@@ -4404,6 +4404,27 @@ def _on_air_listener_promise_ownership(
     return ownership
 
 
+def _protected_reservation_ids(app_state, state: StationState) -> set[str]:
+    """Queue ids that outlive a crate change, wherever the runway parked them.
+
+    A preserved music segment cannot start without its
+    ``music_admission_reservations`` entry, and the runway keeps survivors in two
+    places: the rebuilt queue, and ``state.continuity_slot`` when it had to move
+    one out of band to fit a capacity-constrained queue. Reading only the queue
+    misses the slot, which is the assetless branch's last runway before silence.
+    """
+    ids = {
+        str((segment.metadata if isinstance(segment.metadata, dict) else {}).get("queue_id") or "")
+        for segment in getattr(getattr(app_state, "queue", None), "_queue", ())
+    }
+    slot = state.continuity_slot
+    if isinstance(slot, Segment):
+        slot_metadata = slot.metadata if isinstance(slot.metadata, dict) else {}
+        ids.add(str(slot_metadata.get("queue_id") or ""))
+    ids.discard("")
+    return ids
+
+
 def _apply_loaded_source(
     request,
     tracks: list,
@@ -4543,9 +4564,7 @@ def _apply_loaded_source(
             purged += dropped_source_switch_segments
             state.continuity_epoch += 1
             runway.preserved_existing = _playable_runway_available(request.app.state.queue, state)
-    surviving_queue_ids = {
-        str(segment.metadata.get("queue_id") or "") for segment in getattr(request.app.state.queue, "_queue", ())
-    }
+    surviving_queue_ids = _protected_reservation_ids(request.app.state, state)
     surviving_on_air_handoffs = {
         token: handoff
         for queue_id, (token, _segment, handoff) in on_air_promise_ownership.items()
@@ -5442,14 +5461,18 @@ async def run_playback_loop(app) -> None:
             # segment vanishes with its listener-request reservation still held,
             # so the promised recording stays excluded from ordinary rotation
             # for the rest of the session with no retry and no waste trail.
+            # Its own reason, too: the usual cause is the segment's provider
+            # withdrawing it (an expired or released transient lease), which is
+            # not an operator action. `operator_purge` renders to the operator as
+            # "queue cleared" and would name them for something they did not do.
             state.record_discard(
                 segment,
-                reason=GenerationWasteReason.OPERATOR_PURGE,
+                reason=GenerationWasteReason.PLAYBACK_ADMISSION_DENIED,
                 already_counted_in_produced=pulled_from_queue,
             )
-            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.PLAYBACK_ADMISSION_DENIED)
             _settle_discarded_selection_handoff(
-                segment_queue, state, segment, reason=GenerationWasteReason.OPERATOR_PURGE
+                segment_queue, state, segment, reason=GenerationWasteReason.PLAYBACK_ADMISSION_DENIED
             )
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
@@ -8875,7 +8898,10 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
             replace_queue=True,
             discard_reason=GenerationWasteReason.OPERATOR_PURGE,
         )
-        state.switch_playlist([], None)
+        # Purging the pool is not a reason to cut the air, so the runway may have
+        # kept a playable head. Its reservation has to survive with it, or that
+        # head is refused at the exact moment it becomes the only thing to play.
+        state.switch_playlist([], None, preserve_reservation_ids=_protected_reservation_ids(request.app.state, state))
         jamendo_provider = getattr(request.app.state, "jamendo_provider", None)
         invalidate_jamendo = getattr(jamendo_provider, "invalidate_source", None)
         if callable(invalidate_jamendo):

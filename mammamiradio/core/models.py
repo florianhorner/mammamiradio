@@ -96,6 +96,7 @@ class GenerationWasteReason:
     OPERATOR_BAN = "operator_ban"
     OPERATOR_QUEUE_REMOVE = "operator_queue_remove"
     PLAYBACK_FILE_ERROR = "playback_file_error"
+    PLAYBACK_ADMISSION_DENIED = "playback_admission_denied"
     STALE_PLAYED_TRACK_REF = "stale_played_track_ref"
     LISTENER_SESSION_STALE = "listener_session_stale"
 
