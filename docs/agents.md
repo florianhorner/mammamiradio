@@ -27,7 +27,24 @@ This file supplements the global instructions for the `mammamiradio` repository.
   committed artifact is what makes the squad auditable everywhere.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
-- In engineering reviews, when presenting multiple options, explain the tradeoffs without framing one as the choice the user should automatically take
+- In engineering reviews, present real alternatives and their trade-offs, then
+  recommend one and explain why it is superior for this repository.
+
+## Parallel workspaces
+
+Admission, Path A vs Path B, write-sets, and the "do this now" triage live in
+[`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md).
+Hard rules agents must not invent around:
+
+- Max 3 active Conductor workspaces for this repo, including an active train.
+  Do not create a fourth to "help" merge, fix conflicts, or orchestrate the
+  others.
+- Do not merge. The maintainer lands with `scripts/land-pr.sh`.
+- Path B workers do not edit shared files listed in that runbook; put a
+  manifest note in the handoff. A dedicated Path A workspace may own those
+  files only when its objective and exclusive write-set name them.
+- Do not spawn workspaces, trains, or extra PRs unless the current message
+  assigned that role.
 
 ## PR Landing Queue
 
@@ -63,6 +80,9 @@ This file supplements the global instructions for the `mammamiradio` repository.
 
 ## Integration Trains
 
-- `Train/Listener QS` lives on `train/listener-qs` and uses `origin/main` as
-  its base. Feature worktrees that target this train must hand off through
-  `docs/listener-qs-train.md`.
+- Default ship path, WIP cap, and write-sets:
+  [`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md).
+- When active, `Train/Listener QS` uses `train/listener-qs` from a recorded
+  `origin/main` SHA. Path B stays dormant until the maintainer creates that
+  branch and its dedicated Conductor workspace. Feature worktrees targeting
+  the active train hand off through `docs/listener-qs-train.md`.

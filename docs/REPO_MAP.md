@@ -103,6 +103,7 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Admitted-audio queue refactor    | `docs/2026-07-27-admitted-audio-queue-refactor.md` |
 | Radio appliance architecture ADR | `docs/2026-08-20-open-source-radio-landscape-assessment.md` |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
+| Parallel workspaces + landing    | `docs/runbooks/parallel-workspaces.md` |
 | Listener QS integration train    | `docs/listener-qs-train.md`      |
 | Cathedral restructure plan       | `docs/archive/2026-04-28-cathedral-restructure.md` |
 
