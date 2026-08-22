@@ -35,7 +35,7 @@ owners. For add-ons, Supervisor could optionally expose a standard capability
 flag that tells the add-on to stop pushing compatibility ghosts once the
 registered integration is installed.
 
-Mamma Mi Radio local behavior: the add-on pushes a compatibility media-player
+Mammamiradio local behavior: the add-on pushes a compatibility media-player
 ghost by default, so an add-on-only setup gets a tile out of the box. When the
 HACS integration is installed, the operator turns that push off so the registered
 entity owns the id, and the integration raises a Repair if it still detects the
@@ -52,7 +52,7 @@ derived context is stored, and how generated speech can cite or expose its
 source. Assist surfaces should show whether a response used live home context,
 cached labels, or no HA context.
 
-Mamma Mi Radio local behavior: sensitive domains and attributes are filtered
+Mammamiradio local behavior: sensitive domains and attributes are filtered
 before prompts, label generation has a narrower payload than script generation,
 and the ledger records provenance locally so the operator can inspect how an
 aired moment was made.

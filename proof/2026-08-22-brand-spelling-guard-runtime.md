@@ -9,8 +9,9 @@ The run did not write to `.context/`, connect to Home Assistant, or update an
 add-on.
 
 A preliminary playback check loaded a local ElevenLabs key from `.env` and sent
-one TTS request while filling the isolated queue. I discarded those results and
-repeated both browser guards with all provider credentials blank.
+one TTS request while filling the isolated queue. Its live-browser observations
+are labeled below; they do not prove provider isolation. I repeated both
+executable browser guards with all provider credentials blank.
 
 ## Admin QA: PASS
 
@@ -26,9 +27,11 @@ repeated both browser guards with all provider credentials blank.
 - The separate executable Player smoke returned `ok: true`.
 - Stream intent reached the audio element in 22 ms.
 - Station identity remained `Mamma Mi Radio`.
-- The live page played `/stream`, showed now-playing and three up-next rows, and
-  changed each play control to `Pause station`.
-- The 375 x 812 layout had zero horizontal overflow and no console errors.
+
+The preliminary live-browser check also confirmed that `/stream` played,
+now-playing and three up-next rows appeared, and each play control changed to
+`Pause station`. At 375 x 812, the page had no horizontal overflow or console
+errors.
 
 ## Runtime health: PASS
 

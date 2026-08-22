@@ -58,14 +58,26 @@ _FROZEN_BRAND_PROVENANCE = frozenset(
     }
 )
 
-# Keep pre-existing copy fixes out of unrelated strategic-plan PRs. Each entry
-# permits one exact legacy line, not a whole file, so any new occurrence in the
-# same document still fails. Remove an entry when its docs-only correction lands.
+# Keep pre-existing copy fixes out of unrelated plan and proposal PRs. Each
+# entry permits one legacy line at its current line number, not a whole file, so
+# any new occurrence in the same document still fails. Remove an entry when its
+# docs-only correction lands.
 _LEGACY_BRAND_LINES = frozenset(
     {
         (
             "docs/2026-07-27-admitted-audio-queue-refactor.md",
+            12,
             "Mammami Radio will preserve its current listener, operator, HTTP, and Home",
+        ),
+        (
+            "docs/integrations/ha-privacy-and-upstream-proposals.md",
+            38,
+            "Mammamiradio local behavior: the add-on pushes a compatibility media-player",
+        ),
+        (
+            "docs/integrations/ha-privacy-and-upstream-proposals.md",
+            55,
+            "Mammamiradio local behavior: sensitive domains and attributes are filtered",
         ),
     }
 )
@@ -152,7 +164,7 @@ def _scan_brand(root: Path, relpaths: Iterable[str]) -> tuple[list[str], list[st
         if not _brand_violation(text):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _brand_violation(line) and (rel, line) not in _LEGACY_BRAND_LINES:
+            if _brand_violation(line) and (rel, lineno, line) not in _LEGACY_BRAND_LINES:
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     return offenders, unreadable, scanned
 
@@ -425,10 +437,13 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
     frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
     frozen.mkdir(parents=True)
     (frozen / "ATTRIBUTION.md").write_text(_MISSPELLED_BRAND, encoding="utf-8")
-    legacy_rel, legacy_line = next(iter(_LEGACY_BRAND_LINES))
+    legacy_rel, legacy_lineno, legacy_line = sorted(_LEGACY_BRAND_LINES)[0]
     legacy = tmp_path / legacy_rel
     legacy.parent.mkdir(parents=True)
-    legacy.write_text(f"{legacy_line}\n{_MISSPELLED_BRAND} appears again.\n", encoding="utf-8")
+    legacy.write_text(
+        ("\n" * (legacy_lineno - 1)) + f"{legacy_line}\n{_MISSPELLED_BRAND} appears again.\n",
+        encoding="utf-8",
+    )
 
     offenders, unreadable, scanned = _scan_brand(
         tmp_path,
@@ -451,7 +466,7 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
         'hyphenated.json:1: {"name": "mammami-radio-explainer"}',
         "underscored.py:1: PACKAGE = 'mammami_radio_tools'",
         "squashed.md:1: Mammamiradio local behavior: does X.",
-        f"{legacy_rel}:2: {_MISSPELLED_BRAND} appears again.",
+        f"{legacy_rel}:{legacy_lineno + 1}: {_MISSPELLED_BRAND} appears again.",
     ]
     assert not unreadable
     assert set(scanned) == {
@@ -505,14 +520,15 @@ def test_frozen_brand_provenance_allowlist_has_no_dead_entries():
 def test_legacy_brand_line_allowlist_has_no_dead_entries():
     """Require each scoped legacy allowance to match one exact tracked line."""
     stale = []
-    for rel, allowed_line in sorted(_LEGACY_BRAND_LINES):
+    for rel, allowed_lineno, allowed_line in sorted(_LEGACY_BRAND_LINES):
         path = _REPO_ROOT / rel
         if not path.is_file():
             stale.append(f"{rel} (missing)")
             continue
-        matches = path.read_text(encoding="utf-8").splitlines().count(allowed_line)
-        if matches != 1 or not _brand_violation(allowed_line):
-            stale.append(f"{rel} (expected one exact invalid line, found {matches})")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        actual_line = lines[allowed_lineno - 1] if allowed_lineno <= len(lines) else None
+        if actual_line != allowed_line or not _brand_violation(allowed_line):
+            stale.append(f"{rel}:{allowed_lineno} (legacy line moved or changed)")
     assert not stale, "remove or update stale entries in _LEGACY_BRAND_LINES:\n  " + "\n  ".join(stale)
 
 

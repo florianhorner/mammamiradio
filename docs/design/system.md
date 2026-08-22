@@ -687,7 +687,7 @@ Swappable listener strings live in `mammamiradio/web/ui_copy.py` (single source 
 
 Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URLs, file paths, package names, environment variables, entity IDs, and container names. Earlier First Listen recovery copy used the joined spelling.
 
-`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes the test file, which defines the banned string, and four generated audio-pack files: the committed `manifest.json` and `ATTRIBUTION.md`, their generator, and the test that pins their hashes. The allowlist permits one exact line in the dated plan until a docs-only PR corrects it. All other lines in that file remain covered. The suite rejects stale allowances. Changelogs and docs must describe the typo without repeating it.
+`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes the test file, which defines the banned string, and four generated audio-pack files: the committed `manifest.json` and `ATTRIBUTION.md`, their generator, and the test that pins their hashes. Three exact-line allowances keep this PR out of a dated plan and an upstream-proposal document. All other lines in those files remain covered. The suite rejects stale allowances. Changelogs and docs must describe the typo without repeating it.
 
 ## Rules and anti-patterns
 
