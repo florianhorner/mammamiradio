@@ -1231,7 +1231,11 @@ input[type="range"]:focus-visible {
 .kept-row:last-child { border-bottom: none; }
 .kept-link { color: var(--cream); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kept-when { font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
-#keptList .sub { padding: 10px 14px; }
+/* Child combinator on purpose: this pads the empty-state line, and `.sub` is
+   also on the timestamp inside a row. Unscoped it indented the timestamp 14px
+   past the title on a narrow screen, breaking the left edge the stacked layout
+   exists to line up. */
+#keptList > .sub { padding: 10px 14px; }
 /* Narrow screens: the title is how the operator recognizes the moment, so it
    gets its own line rather than being squeezed to a few characters by an
    auto-width timestamp sitting beside it. */

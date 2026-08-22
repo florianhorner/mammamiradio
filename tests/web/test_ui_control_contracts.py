@@ -689,12 +689,29 @@ class TestBanNowPlayingEndpoint:
     def test_kept_moment_titles_survive_a_narrow_viewport(self):
         """At 390px the three-column row squeezed the title to a few characters
         while the auto-width timestamp kept its full size. The title is how the
-        operator recognizes the moment, so it gets its own line."""
+        operator recognizes the moment, so it gets its own line.
+
+        Asserted against the media block's own body, not against the file. A
+        whole-file search passes when the full-width rule is hoisted OUT of the
+        query into unconditional CSS, which silently breaks the desktop layout
+        (title spans every width, timestamp and button always wrap). Spacing is
+        matched tolerantly so reformatting to the file's other `@media(...)`
+        style cannot red-build correct CSS.
+        """
         html = ADMIN_HTML.read_text()
-        assert re.search(r"@media \(max-width: 720px\) \{\s*\.kept-row", html), (
-            "the kept-row narrow-viewport rule is gone; titles collapse again"
+        blocks = re.findall(
+            r"@media\s*\([^)]*max-width:\s*720px[^)]*\)\s*\{(.*?)\n\}",
+            html,
+            re.DOTALL,
         )
-        assert ".kept-link { grid-column: 1 / -1; }" in html
+        body = next((b for b in blocks if ".kept-row" in b), None)
+        assert body, "the kept-row narrow-viewport media query is gone; titles collapse again"
+        assert re.search(r"\.kept-link\s*\{[^}]*grid-column:\s*1\s*/\s*-1", body), (
+            "the title no longer spans the row on a narrow screen"
+        )
+        # `.sub` is on the timestamp too, so the empty-state padding has to stay
+        # scoped to a direct child or it indents the timestamp past the title.
+        assert "#keptList > .sub" in html, "the empty-state padding leaks onto the row timestamp"
 
     def test_keep_grace_never_outlives_the_server_lookback(self):
         """If the console's grace window outlives CLIP_LOOKBACK_SECONDS, the
