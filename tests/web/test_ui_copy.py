@@ -24,6 +24,18 @@ _MISSPELLED_BRAND_CASEFOLD = _MISSPELLED_BRAND.casefold()
 # and must never be flagged.
 _MISSPELLED_BRAND_PATTERN = re.compile(r"mammami[-_ ]radio", re.IGNORECASE)
 
+# The zero-separator form is only correct as a technical identifier: all
+# lowercase ("mammamiradio") or shouting case in an env var/entity id
+# ("MAMMAMIRADIO"). Title Case ("Mammamiradio") only happens when someone
+# typed the brand as one word in prose. Case-SENSITIVE on purpose — matching
+# this case-insensitively would also flag every legitimate slug occurrence.
+_SQUASHED_TITLECASE_PATTERN = re.compile(r"\bMammamiradio\b")
+
+
+def _brand_violation(text: str) -> bool:
+    return bool(_MISSPELLED_BRAND_PATTERN.search(text) or _SQUASHED_TITLECASE_PATTERN.search(text))
+
+
 # Exclude this file by path because it defines the rejected spelling. Splitting
 # the literal is fragile: Ruff can join adjacent string literals during
 # formatting. A path-based exclusion survives formatter and lint changes.
@@ -125,10 +137,10 @@ def _scan_brand(root: Path, relpaths: Iterable[str]) -> tuple[list[str], list[st
             unreadable.append(f"{rel} ({type(exc).__name__})")
             continue
         scanned.append(rel)
-        if not _MISSPELLED_BRAND_PATTERN.search(text):
+        if not _brand_violation(text):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _MISSPELLED_BRAND_PATTERN.search(line):
+            if _brand_violation(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     return offenders, unreadable, scanned
 
@@ -395,6 +407,7 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
     (tmp_path / "uppercase.html").write_text(f"<p>{uppercase_misspelling} is on air</p>", encoding="utf-8")
     (tmp_path / "hyphenated.json").write_text('{"name": "mammami-radio-explainer"}', encoding="utf-8")
     (tmp_path / "underscored.py").write_text("PACKAGE = 'mammami_radio_tools'\n", encoding="utf-8")
+    (tmp_path / "squashed.md").write_text("Mammamiradio local behavior: does X.\n", encoding="utf-8")
     (tmp_path / "clean.html").write_text("<p>Mamma Mi Radio is on air</p>", encoding="utf-8")
     (tmp_path / "song.mp3").write_bytes(_MISSPELLED_BRAND.encode("utf-8"))
     frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
@@ -408,6 +421,7 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
             "uppercase.html",
             "hyphenated.json",
             "underscored.py",
+            "squashed.md",
             "clean.html",
             "song.mp3",
             "mammamiradio/assets/imaging/ATTRIBUTION.md",
@@ -419,15 +433,24 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
         f"uppercase.html:1: <p>{uppercase_misspelling} is on air</p>",
         'hyphenated.json:1: {"name": "mammami-radio-explainer"}',
         "underscored.py:1: PACKAGE = 'mammami_radio_tools'",
+        "squashed.md:1: Mammamiradio local behavior: does X.",
     ]
     assert not unreadable
-    assert set(scanned) == {"page.html", "uppercase.html", "hyphenated.json", "underscored.py", "clean.html"}
+    assert set(scanned) == {
+        "page.html",
+        "uppercase.html",
+        "hyphenated.json",
+        "underscored.py",
+        "squashed.md",
+        "clean.html",
+    }
 
 
 def test_brand_guard_ignores_the_correct_joined_slug(tmp_path):
-    """The zero-separator slug (`mammamiradio`) is the correct form and must never be flagged."""
+    """The zero-separator slug is correct in lowercase or shouting case; only Title Case is a violation."""
     (tmp_path / "urls.py").write_text(
-        "ENTITY_ID = 'media_player.mammamiradio'\nCONTAINER = 'mammamiradio'\n", encoding="utf-8"
+        "ENTITY_ID = 'media_player.mammamiradio'\nCONTAINER = 'mammamiradio'\nENV_VAR = 'MAMMAMIRADIO_BIND_HOST'\n",
+        encoding="utf-8",
     )
 
     offenders, unreadable, scanned = _scan_brand(tmp_path, ["urls.py"])
