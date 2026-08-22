@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +74,14 @@ def _app(*, enabled: bool = False, client_id: str = "", acknowledged: bool = Fal
     app.state.queue = asyncio.Queue()
     app.state.jamendo_provider = _Provider()
     return app
+
+
+def _provider_control_records(caplog) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name == media_sources.__name__ and record.getMessage().startswith("Jamendo provider control failed")
+    ]
 
 
 def test_disabled_status_cannot_leak_stale_provider_readiness() -> None:
@@ -248,6 +257,29 @@ async def test_apply_provider_config_fails_closed_when_enabled_provider_has_no_a
 
     assert await media_sources._apply_provider_config(enabled.state.config, None) is False
     assert await media_sources._apply_provider_config(disabled.state.config, None) is True
+
+
+@pytest.mark.asyncio
+async def test_config_apply_failure_logs_when_provider_hook_is_absent(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(media_sources, "_save_media_source_settings", lambda *_args, **_kwargs: None)
+    app = _app(enabled=True, client_id="client_123", acknowledged=True)
+    app.state.jamendo_provider = None
+    caplog.set_level(logging.INFO, logger=media_sources.__name__)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.put(
+            "/api/media-sources/jamendo",
+            json={"enabled": True, "noncommercial_acknowledged": True},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"]["state"] == "blocked"
+    control_records = _provider_control_records(caplog)
+    assert [record.getMessage() for record in control_records] == [
+        "Jamendo provider control failed failure_code=config_apply_failed"
+    ]
+    assert all(record.levelno == logging.WARNING for record in control_records)
+    assert "client_123" not in caplog.text
 
 
 def test_mark_provider_apply_failure_is_optional_and_exception_safe() -> None:
@@ -459,14 +491,15 @@ async def test_disabling_drops_only_queued_jamendo_segments(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_queue_drop_failure_blocks_live_apply_without_reverting_persisted_intent(monkeypatch) -> None:
+async def test_queue_drop_failure_blocks_live_apply_without_reverting_persisted_intent(monkeypatch, caplog) -> None:
     monkeypatch.setattr(media_sources, "_save_media_source_settings", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         media_sources,
         "_drop_queued_jamendo",
-        lambda _request: (_ for _ in ()).throw(RuntimeError("queue internals")),
+        lambda _request: (_ for _ in ()).throw(RuntimeError("queue internals for client_123")),
     )
     app = _app(enabled=True, client_id="client_123", acknowledged=True)
+    caplog.set_level(logging.INFO, logger=media_sources.__name__)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.put(
@@ -479,6 +512,13 @@ async def test_queue_drop_failure_blocks_live_apply_without_reverting_persisted_
     assert response.json()["status"]["stream_status"] == "unaffected"
     assert app.state.config.playlist.jamendo_enabled is False
     assert app.state.jamendo_apply_failed is True
+    control_records = _provider_control_records(caplog)
+    assert [record.getMessage() for record in control_records] == [
+        "Jamendo provider control failed failure_code=queue_cleanup_failed"
+    ]
+    assert all(record.levelno == logging.WARNING for record in control_records)
+    assert "client_123" not in caplog.text
+    assert "queue internals" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -725,7 +765,7 @@ def test_credential_save_read_error_preserves_secret_store(tmp_path: Path, monke
 
 
 @pytest.mark.asyncio
-async def test_persisted_intent_survives_live_apply_failure_with_safe_status(monkeypatch) -> None:
+async def test_persisted_intent_survives_live_apply_failure_with_safe_status(monkeypatch, caplog) -> None:
     saved: list[dict[str, str]] = []
     monkeypatch.setattr(
         media_sources,
@@ -734,6 +774,12 @@ async def test_persisted_intent_survives_live_apply_failure_with_safe_status(mon
     )
     app = _app()
     app.state.jamendo_provider.apply_error = RuntimeError("live apply exposed client_123")
+
+    def fail_marker() -> None:
+        raise RuntimeError("marker exposed client_123")
+
+    app.state.jamendo_provider.mark_apply_failure = fail_marker
+    caplog.set_level(logging.INFO, logger=media_sources.__name__)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.put(
@@ -755,6 +801,14 @@ async def test_persisted_intent_survives_live_apply_failure_with_safe_status(mon
     assert saved[0]["JAMENDO_CLIENT_ID"] == "client_123"
     assert "client_123" not in response.text
     assert "live apply" not in response.text
+    control_records = _provider_control_records(caplog)
+    assert [record.getMessage() for record in control_records] == [
+        "Jamendo provider control failed failure_code=config_apply_failed"
+    ]
+    assert all(record.levelno == logging.WARNING for record in control_records)
+    assert "client_123" not in caplog.text
+    assert "live apply" not in caplog.text
+    assert "marker exposed" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -811,10 +865,11 @@ async def test_retry_converges_after_live_apply_failure_without_leaking_secret(m
 
 
 @pytest.mark.asyncio
-async def test_retry_reports_blocked_when_reapplying_persisted_config_fails() -> None:
+async def test_retry_reports_blocked_when_reapplying_persisted_config_fails(caplog) -> None:
     app = _app(enabled=True, client_id="client_123", acknowledged=True)
     app.state.jamendo_apply_failed = True
     app.state.jamendo_provider.apply_error = RuntimeError("private client_123")
+    caplog.set_level(logging.INFO, logger=media_sources.__name__)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/media-sources/jamendo/retry")
@@ -824,12 +879,19 @@ async def test_retry_reports_blocked_when_reapplying_persisted_config_fails() ->
     assert response.json()["status"]["state"] == "blocked"
     assert app.state.jamendo_apply_failed is True
     assert "client_123" not in response.text
+    control_records = _provider_control_records(caplog)
+    assert [record.getMessage() for record in control_records] == [
+        "Jamendo provider control failed failure_code=config_apply_failed"
+    ]
+    assert all(record.levelno == logging.WARNING for record in control_records)
+    assert "client_123" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_retry_reports_blocked_when_provider_has_no_retry_hook() -> None:
+async def test_retry_reports_blocked_when_provider_has_no_retry_hook(caplog) -> None:
     app = _app(enabled=True, client_id="client_123", acknowledged=True)
     app.state.jamendo_provider = SimpleNamespace(status=lambda: {"state": "idle"})
+    caplog.set_level(logging.INFO, logger=media_sources.__name__)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/media-sources/jamendo/retry")
@@ -838,12 +900,18 @@ async def test_retry_reports_blocked_when_provider_has_no_retry_hook() -> None:
     assert response.json()["started"] is False
     assert response.json()["status"]["state"] == "blocked"
     assert app.state.jamendo_apply_failed is True
+    control_records = _provider_control_records(caplog)
+    assert [record.getMessage() for record in control_records] == [
+        "Jamendo provider control failed failure_code=retry_failed"
+    ]
+    assert all(record.levelno == logging.WARNING for record in control_records)
 
 
 @pytest.mark.asyncio
-async def test_retry_failure_stays_safe_and_does_not_leak_exception() -> None:
+async def test_retry_failure_stays_safe_and_does_not_leak_exception(caplog) -> None:
     app = _app(enabled=True, client_id="client_123", acknowledged=True)
     app.state.jamendo_provider.retry_error = RuntimeError("retry failed for client_123")
+    caplog.set_level(logging.INFO, logger=media_sources.__name__)
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/media-sources/jamendo/retry")
@@ -855,3 +923,10 @@ async def test_retry_failure_stays_safe_and_does_not_leak_exception() -> None:
     assert response.json()["status"]["stream_status"] == "unaffected"
     assert "client_123" not in response.text
     assert "retry failed" not in response.text
+    control_records = _provider_control_records(caplog)
+    assert [record.getMessage() for record in control_records] == [
+        "Jamendo provider control failed failure_code=retry_failed"
+    ]
+    assert all(record.levelno == logging.WARNING for record in control_records)
+    assert "client_123" not in caplog.text
+    assert "retry failed for" not in caplog.text

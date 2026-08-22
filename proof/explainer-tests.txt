@@ -1,0 +1,27 @@
+explainer unit + build suite (2026-08-21T16:23:21Z, c160a429)
+✔ the day-one boundary is said in plain words (0.08925ms)
+✔ exactly two calls to action carry the gold (0.144167ms)
+✔ the starter-catalog music tail carries its attribution (0.0405ms)
+✔ responsive and reduced-motion treatments are present (0.036875ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 61.361542
+
+funnel e2e (playwright chromium, reduced motion)
+✔ tune in starts the show and the answer stays hidden until the cue (899.766083ms)
+✔ the no-spoiler promise holds on every scenario, not just the first (46.794334ms)
+✔ after the last unheard moment the hero button retires (190.123ms)
+✔ start over returns the page to an honest idle (27.31175ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1354.270083

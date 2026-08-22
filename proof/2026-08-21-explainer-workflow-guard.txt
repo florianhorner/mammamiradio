@@ -1,0 +1,10 @@
+explainer workflow: self-coverage + absent-page guard
+commit: (this branch)
+date:   2026-08-21T17:16:04Z
+
+$ python -c 'yaml.safe_load(...)'  # structure + guard coverage
+  parses; 8 steps
+  triggers push: ['docs/explainer/**', '.github/workflows/explainer.yml']
+  triggers pull_request: ['docs/explainer/**', '.github/workflows/explainer.yml']
+  post-checkout steps gated on the presence check: 6/6
+  top-level permissions: {'contents': 'read'}
