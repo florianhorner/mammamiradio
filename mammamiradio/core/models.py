@@ -2401,9 +2401,10 @@ class StationState:
         ``Segment.mark_playback_started``; clearing the map under a queue that
         survives makes every one of those segments fail admission and get
         skipped at the moment it should air. ``_sync_starter_cycle`` rebuilds
-        ``starter_cycle_reserved`` from the live reservations whenever the crate
-        changes, so leaving the cycle alone here is self-healing rather than
-        stale, in both directions of a swap.
+        ``starter_cycle_reserved`` from the live reservations the next time the
+        cycle is consulted and finds the catalogue changed, so leaving the cycle
+        alone here is self-healing rather than stale, in both directions of a
+        swap.
         """
         self.playlist_revision += 1
         self.source_revision += 1

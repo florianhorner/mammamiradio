@@ -1512,6 +1512,12 @@ def test_metadata_only_commit_cannot_re_offer_a_still_reserved_starter_track():
     assert state.reserve_music_admission("queued", starter)
 
     state.apply_source_metadata_only([_track(9)], PlaylistSource(kind="url"))
+    # The reconciliation runs when the cycle is next consulted, not when the
+    # crate is assigned. Force that read while the starter track is out of the
+    # crate: this is the moment the old trim dropped a live reservation, and
+    # without it the catalogue never appears to change and the test proves
+    # nothing.
+    state.select_next_track()
     state.apply_source_metadata_only([starter], PlaylistSource(kind="starter"))
 
     assert state.reserve_music_admission("second", starter) is False
