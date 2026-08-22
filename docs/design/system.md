@@ -685,9 +685,9 @@ Swappable listener strings live in `mammamiradio/web/ui_copy.py` (single source 
 
 ### The station's name
 
-**Mamma Mi Radio**, three words, in every sentence a human reads. `mammamiradio` is the slug: URLs, file paths, package names, env vars, entity ids, container names. Nothing in between — the squashed one-word form is always wrong, and it shipped once inside a First Listen error before anyone caught it.
+Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URLs, file paths, package names, environment variables, entity IDs, and container names. We once shipped a First Listen error with the words joined.
 
-`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` enforces this across every tracked file. Two consequences: four audio-pack provenance files are excluded because correcting them rewrites committed receipts, and no changelog entry or doc can quote the wrong spelling to explain a fix — describe it instead.
+`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes four audio-pack provenance files because changing them would rewrite committed receipts. Changelogs and docs must describe the typo without repeating it.
 
 ## Rules and anti-patterns
 

@@ -621,11 +621,10 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
 
 
 def test_every_first_listen_error_states_a_failure_and_a_way_out() -> None:
-    """Leadership principle #5: an error names the problem AND the next step.
+    """Require each error to name the problem and recovery action (principle #5).
 
-    The parity assert above only compares the KEY set, so an entry could be
-    emptied to `action:''` and stay green. This pins the shape, not the
-    sentences, so the copy can still be reworded.
+    The key-parity test cannot detect empty fields. This check leaves the
+    wording flexible.
     """
     html = _html()
     start = html.index("const FIRST_LISTEN_ERRORS={")
@@ -637,7 +636,7 @@ def test_every_first_listen_error_states_a_failure_and_a_way_out() -> None:
     for code, body in entries:
         for field in ("title", "message", "action"):
             match = re.search(rf"{field}:'([^']*)'", body)
-            assert match and match.group(1).strip(), f"{code} has no {field} — every failure needs a way out"
+            assert match and match.group(1).strip(), f"{code}.{field} must contain text"
 
     media_source = re.search(r"action:'([^']*)'", dict(entries)["media_source_missing"])
     assert media_source is not None and "Mamma Mi Radio" in media_source.group(1)

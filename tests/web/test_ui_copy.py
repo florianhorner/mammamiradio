@@ -18,24 +18,19 @@ _LISTENER_JS = _REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
 _MISSPELLED_BRAND = "Mammami Radio"
 _MISSPELLED_BRAND_CASEFOLD = _MISSPELLED_BRAND.casefold()
 
-# This file names the misspelling, so it excludes itself by PATH. An earlier
-# version split the literal (`"Mammami" + " Radio"`); that is only a lexical
-# dodge, and `ruff format` had already folded the implicit-concatenation form
-# back into one string. A path check cannot be folded by a formatter or
-# undone by enabling a new lint rule.
+# Exclude this file by path because it defines the rejected spelling. Splitting
+# the literal is fragile: Ruff can join adjacent string literals during
+# formatting. A path-based exclusion survives formatter and lint changes.
 _BRAND_GUARD_SELF = Path(__file__).resolve().relative_to(_REPO_ROOT).as_posix()
 
-# Four files still carry the misspelling and are deliberately not fixed here.
-# This is deferred debt, not a blessing:
-#   - assets/imaging/{manifest.json,ATTRIBUTION.md} hold ~1175 committed
-#     `"creator"` rows, hash-pinned by tests/audio/test_sonic_asset_pack.py.
-#     ATTRIBUTION.md is package data (pyproject.toml), so it ships in the wheel.
-#   - scripts/complete_audio_pack_gate.py is the GENERATOR that writes those
-#     rows. It is the source, not a receipt: regenerating the pack without
-#     touching it reproduces the misspelling.
-#   - tests/audio/test_sonic_asset_pack.py is the pin itself.
-# Exclusion is whole-file, so a NEW typo inside these four is invisible to the
-# guard. Correcting them rewrites committed receipts and needs its own change.
+# Four files retain the joined spelling until the audio pack is regenerated:
+#   - assets/imaging/{manifest.json,ATTRIBUTION.md} contain the same 47
+#     committed creator records.
+#   - scripts/complete_audio_pack_gate.py generates those rows.
+#   - tests/audio/test_sonic_asset_pack.py pins their hashes.
+#   - ATTRIBUTION.md ships as package data through pyproject.toml.
+# Whole-file exclusions can hide new occurrences in these paths. Regenerate the
+# pack and remove the exclusions in a separate change.
 _FROZEN_BRAND_PROVENANCE = frozenset(
     {
         "mammamiradio/assets/imaging/manifest.json",
@@ -45,9 +40,8 @@ _FROZEN_BRAND_PROVENANCE = frozenset(
     }
 )
 
-# Deny binaries rather than allow text. An allowlist of text suffixes silently
-# dropped the macOS launchers (`Start Radio.command`), both Dockerfiles, the
-# Makefile, NOTICE and every .svg — all of which carry brand text.
+# Skip known binary suffixes. This keeps extensionless text, Dockerfiles, macOS
+# launchers, and SVGs in scope.
 _BRAND_BINARY_SUFFIXES = frozenset(
     {
         ".mp3",
@@ -73,13 +67,11 @@ _BRAND_BINARY_SUFFIXES = frozenset(
     }
 )
 
-# Floor for the real-repo scan (831 files at the time of writing). Without it,
-# an empty candidate list would make the guard pass while inspecting nothing —
-# the same false-green shape as a grep-only assertion.
+# The repository scan covered 831 files when this guard was added. An empty or
+# narrowed candidate list falls below this floor.
 _MIN_BRAND_SCAN_FILES = 500
 
-# Surfaces the guard must be able to reach. A refactor that moves _REPO_ROOT or
-# narrows the scan has to fail here rather than go quietly green.
+# Require representative surfaces so a moved root or narrowed scan fails.
 _REQUIRED_BRAND_SCAN_FILES = (
     "mammamiradio/web/templates/admin.html",
     "mammamiradio/web/templates/listener.html",
@@ -91,14 +83,11 @@ _REQUIRED_BRAND_SCAN_FILES = (
 
 
 def _tracked_files(root: Path) -> list[str]:
-    """Repo-relative paths git tracks under `root`.
+    """Return repository-relative paths tracked by Git under `root`.
 
-    Tracked-only on purpose: it scopes the guard to what the repo ships. The
-    cost is that a brand-new file is invisible until `git add`, so a local run
-    can be green and CI red on the next commit. `git` is required; there is no
-    walk fallback, because a walk scans a measurably different set (it reaches
-    ignored trees and misses tracked ones) and a guard that quietly changes
-    scope is worse than one that fails to run.
+    Untracked files enter the scan after `git add`. The guard requires Git
+    because a filesystem walk includes ignored paths and produces a different
+    candidate set.
     """
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     listing = subprocess.run(
@@ -108,8 +97,8 @@ def _tracked_files(root: Path) -> list[str]:
         timeout=30,
         env=env,
     )
-    # fsdecode, not decode("utf-8"): -z emits raw path bytes, and a lossy
-    # replacement char would turn a real file into one that never resolves.
+    # Git emits raw path bytes with -z. os.fsdecode preserves platform filename
+    # handling; UTF-8 replacement could change a path before resolution.
     return [os.fsdecode(entry) for entry in listing.stdout.split(b"\0") if entry]
 
 
@@ -372,33 +361,29 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
 
 
 def test_station_brand_name_is_never_misspelled():
-    """The station is "Mamma Mi Radio". The squashed spelling reached the First
-    Listen media-source error and shipped, so this guard covers the whole repo
-    instead of one template. It is just as wrong in a doc as in a rendered
-    string.
+    """Reject the joined station name in tracked text files.
 
-    Consequence worth knowing: CHANGELOG.md and docs/ are scanned too, so no
-    entry can quote the misspelling to explain a fix. Describe it instead.
+    The original typo shipped in a First Listen error. Scanning docs and
+    changelogs also prevents new references from repeating it.
     """
     offenders, unreadable, scanned = _scan_brand(_REPO_ROOT, _tracked_files(_REPO_ROOT))
 
-    assert not offenders, f'the station is "Mamma Mi Radio", never "{_MISSPELLED_BRAND}":\n  ' + "\n  ".join(offenders)
+    assert not offenders, f'use "Mamma Mi Radio"; found invalid name "{_MISSPELLED_BRAND}":\n  ' + "\n  ".join(
+        offenders
+    )
     assert not unreadable, (
-        "the brand guard could not read these tracked files, so they were never "
-        "checked — add the suffix to _BRAND_BINARY_SUFFIXES if that is correct:\n  " + "\n  ".join(unreadable)
+        "the brand guard could not read these tracked files; classify expected "
+        "binary suffixes in _BRAND_BINARY_SUFFIXES:\n  " + "\n  ".join(unreadable)
     )
     assert len(scanned) >= _MIN_BRAND_SCAN_FILES, (
-        f"the brand guard only inspected {len(scanned)} files (floor "
-        f"{_MIN_BRAND_SCAN_FILES}) — it is passing without looking at the repo"
+        f"brand scan covered {len(scanned)} files; minimum is {_MIN_BRAND_SCAN_FILES}"
     )
     missing = [rel for rel in _REQUIRED_BRAND_SCAN_FILES if rel not in set(scanned)]
-    assert not missing, f"the brand guard never reached these surfaces: {missing}"
+    assert not missing, f"brand scan missed required surfaces: {missing}"
 
 
 def test_brand_guard_flags_a_synthetic_offender(tmp_path):
-    """Prove the guard can fail. Without this it only ever reports "found
-    nothing", which is indistinguishable from "looked at nothing".
-    """
+    """Exercise detection, case folding, and path exclusions."""
     uppercase_misspelling = _MISSPELLED_BRAND.upper()
     (tmp_path / "page.html").write_text(f"<p>{_MISSPELLED_BRAND} is on air</p>", encoding="utf-8")
     (tmp_path / "uppercase.html").write_text(f"<p>{uppercase_misspelling} is on air</p>", encoding="utf-8")
@@ -422,10 +407,7 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
 
 
 def test_frozen_brand_provenance_allowlist_has_no_dead_entries():
-    """Every excluded path must still need the exclusion. When the audio pack is
-    regenerated with the correct spelling, this forces the allowlist to shrink
-    instead of quietly outliving its reason.
-    """
+    """Limit the allowlist to files that still contain the joined spelling."""
     stale = []
     for rel in sorted(_FROZEN_BRAND_PROVENANCE):
         path = _REPO_ROOT / rel
@@ -433,7 +415,7 @@ def test_frozen_brand_provenance_allowlist_has_no_dead_entries():
             stale.append(f"{rel} (missing)")
         elif _MISSPELLED_BRAND not in path.read_text(encoding="utf-8"):
             stale.append(f"{rel} (already correct)")
-    assert not stale, "drop these from _FROZEN_BRAND_PROVENANCE — they no longer need it:\n  " + "\n  ".join(stale)
+    assert not stale, "remove stale paths from _FROZEN_BRAND_PROVENANCE:\n  " + "\n  ".join(stale)
 
 
 def test_listener_never_shows_raw_server_error():
