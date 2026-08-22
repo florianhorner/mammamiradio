@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 external-media = [
-    "yt-dlp>=2026.6.9",
+    "yt-dlp>=2026.7.4",
 ]
 
 [tool.setuptools.packages.find]
