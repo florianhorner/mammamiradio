@@ -1,19 +1,39 @@
 # Conductor Workspace
 
-This repo's workspace lifecycle for [Conductor](https://conductor.run) is defined by the committed `scripts/conductor-*.sh` hooks below. Shared repository behavior, including the commit and PR writing contract, lives in the committed `.conductor/settings.toml`; personal machine-only overrides belong in `.conductor/settings.local.toml` and are managed by the Conductor app.
+This repo's workspace lifecycle for [Conductor](https://conductor.build) is
+defined by the committed `scripts/conductor-*.sh` hooks below. The committed
+`.conductor/settings.toml` wires those scripts and carries the shared workspace
+role and GitHub writing contracts. Conductor reads shared settings from the
+default branch on the remote, so lifecycle changes take effect for new local
+workspaces after merge. Cloud workspaces read the settings from their creation
+branch.
+
+Machine-only overrides belong in `.conductor/settings.local.toml`. That file
+has higher precedence than the shared settings. Do not copy setup, run, or
+archive hooks or shared prompt keys into it; copied values mask later fixes to
+the committed configuration. Keep existing local copies until the shared
+settings reach the default branch, then remove only the duplicated keys after
+verifying the shared values are active.
 
 ## Scripts
 
 - `scripts/conductor-setup.sh` — bootstraps the workspace venv and dev dependencies. Looks for `~/.config/mammamiradio/.env`, then falls back to `$CONDUCTOR_ROOT_PATH/.env`, and symlinks the first match into the workspace.
 - `scripts/conductor-run.sh` — starts the app with workspace-scoped runtime paths under `.context/conductor/` and keeps `MAMMAMIRADIO_ALLOW_YTDLP=false`. External extraction is a deliberate standalone opt-in that also requires the optional `external-media` package extra; the default Conductor run uses local-or-starter music.
-- `scripts/conductor-archive.sh` — cleans up workspace runtime state when the workspace is archived.
+- `scripts/conductor-archive.sh` — cleans up workspace runtime state when the workspace is archived. The shared archive hook invokes this file.
 
-## Commit and PR convention contract
+## Workspace and writing contracts
 
-`.conductor/settings.toml` mirrors the repository's current GitHub writing rules
-into Conductor's general, create-PR, code-review, and branch-rename prompts.
-GitHub remains the enforcement authority; the Conductor prompts are an early
-preflight so agents do not need a cleanup turn after generating a commit or PR.
+The shared general prompt assigns the seat first. Names containing `lander` or
+`integration-manager` are landing conductors; every other workspace defaults to
+a feature worker. It then applies the Path A/Path B, immutable base SHA,
+write-set, shared-file ownership, single-writer, and escalation rules from the
+parallel-workspace runbook.
+
+`.conductor/settings.toml` also mirrors the repository's current GitHub writing
+rules into Conductor's general, create-PR, code-review, and branch-rename
+prompts. GitHub remains the enforcement authority; the Conductor prompts are an
+early preflight so agents do not need a cleanup turn after generating a commit
+or PR.
 
 The pinned snapshot is sourced from:
 
@@ -40,12 +60,19 @@ local hooks or GitHub Actions.
 
 Runtime artifacts created by these scripts land under `.context/` which is gitignored. Do not commit anything from `.context/`.
 
-## Integration trains
+## Parallel workspaces and integration trains
 
-Conductor workspaces may be used as integration trains for parallel feature
-worktrees. `Train/Listener QS` is the Listener QS train and should be visible as
-branch `train/listener-qs`. Its intake, merge gate, and handoff contract live in
-[`docs/listener-qs-train.md`](listener-qs-train.md).
+Default ship path is a feature workspace, a PR to `main`,
+`scripts/land-pr.sh`, confirmation that GitHub reports `MERGED`, and then
+archive. Admission, write-sets, and Path A vs Path B are in
+[`docs/runbooks/parallel-workspaces.md`](runbooks/parallel-workspaces.md).
+
+A train workspace is Path B only: tightly coupled slices that must land
+together. `Train/Listener QS` uses branch `train/listener-qs` when the
+maintainer activates it. Until that branch and its dedicated Conductor
+workspace exist, Path B is dormant. The activation check, intake, merge gate,
+and handoff live in [`docs/listener-qs-train.md`](listener-qs-train.md). Do not
+use a train and a direct-to-`main` PR for the same work.
 
 ## Shared credentials
 
