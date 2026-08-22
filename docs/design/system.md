@@ -683,6 +683,12 @@ The station has two language modes, set by the operator (admin Engine Room → "
 
 Swappable listener strings live in `mammamiradio/web/ui_copy.py` (single source of truth). Admin UI copy lives in `admin.html`; keep it direct and operator-focused rather than routing it through listener copy.
 
+### The station's name
+
+Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URLs, file paths, package names, environment variables, entity IDs, and container names. We once shipped a First Listen error with the words joined.
+
+`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes its own file (which defines the typo string for the test) plus four audio-pack files that still carry the joined spelling until the pack is regenerated: the two committed receipts (`manifest.json`, `ATTRIBUTION.md`), the generator that produced them, and the test that pins their hashes. Changelogs and docs must describe the typo without repeating it.
+
 ## Rules and anti-patterns
 
 | Rule | Reason |

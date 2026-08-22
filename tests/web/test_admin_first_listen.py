@@ -39,11 +39,14 @@ def _server_setup_error_codes() -> set[str]:
     raise AssertionError("_SETUP_ERRORS not found")
 
 
-def _ui_first_listen_error_codes() -> set[str]:
+def _first_listen_errors_block() -> str:
     html = _html()
     start = html.index("const FIRST_LISTEN_ERRORS={")
-    end = html.index("\n};", start)
-    return set(re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{", html[start:end], re.MULTILINE))
+    return html[start : html.index("\n};", start)]
+
+
+def _ui_first_listen_error_codes() -> set[str]:
+    return set(re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{", _first_listen_errors_block(), re.MULTILINE))
 
 
 def test_first_listen_is_one_vertical_progressive_path_before_advanced_details() -> None:
@@ -618,6 +621,24 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
     error_block = _function("firstListenErrorCopy", "firstListenErrorMessage")
     assert "response?.error?.code" in error_block
     assert "response?.error?.message" not in error_block
+
+
+def test_every_first_listen_error_states_a_failure_and_a_way_out() -> None:
+    """Require each error to name the problem and recovery action (principle #5).
+
+    The key-parity test cannot detect empty fields. This check leaves the
+    wording flexible.
+    """
+    entries = re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{(.*)\},$", _first_listen_errors_block(), re.MULTILINE)
+    assert len(entries) == len(_ui_first_listen_error_codes())
+
+    for code, body in entries:
+        for field in ("title", "message", "action"):
+            match = re.search(rf"{field}:'([^']*)'", body)
+            assert match and match.group(1).strip(), f"{code}.{field} must contain text"
+
+    media_source = re.search(r"action:'([^']*)'", dict(entries)["media_source_missing"])
+    assert media_source is not None and "Mamma Mi Radio" in media_source.group(1)
 
 
 def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() -> None:
