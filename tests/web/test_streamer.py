@@ -246,8 +246,15 @@ def test_run_playback_loop_settles_a_denied_admission_before_moving_on():
         None,
     )
     assert denied_branch is not None, "admission-denied branch not found"
-    body = ast.get_source_segment(src, denied_branch) or ""
 
+    # Match call nodes, never raw source: a substring check over the branch text
+    # is satisfied by a comment naming the helper, which is the same vacuity this
+    # guard exists to prevent.
+    called = {
+        c.func.id if isinstance(c.func, ast.Name) else c.func.attr
+        for c in ast.walk(denied_branch)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name | ast.Attribute)
+    }
     discard_calls = [
         c
         for c in ast.walk(denied_branch)
@@ -257,11 +264,22 @@ def test_run_playback_loop_settles_a_denied_admission_before_moving_on():
     kwargs = {k.arg: ast.unparse(k.value) for k in discard_calls[0].keywords}
     assert kwargs.get("reason") == "GenerationWasteReason.PLAYBACK_ADMISSION_DENIED"
     assert kwargs.get("already_counted_in_produced") == "pulled_from_queue"
-    assert "_settle_discarded_selection_handoff" in body, (
+    assert "_settle_discarded_selection_handoff" in called, (
         "a denied promised segment must settle its handoff, or the listener gets no retry"
     )
-    assert "_drop_segment_moment_receipts" in body
-    assert "OPERATOR_PURGE" not in body, "a provider withdrawing a segment is not an operator action"
+    assert "_drop_segment_moment_receipts" in called
+    # Reason attributes, again as nodes: the in-code comment mentions the old
+    # reason on purpose, and a cosmetic edit to it must not turn this red.
+    reasons = {
+        node.attr
+        for node in ast.walk(denied_branch)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "GenerationWasteReason"
+    }
+    assert reasons == {"PLAYBACK_ADMISSION_DENIED"}, (
+        f"a provider withdrawing a segment is not an operator action; got {sorted(reasons)}"
+    )
 
 
 def test_run_playback_loop_records_session_stop_discard_before_airing():

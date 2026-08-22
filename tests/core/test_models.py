@@ -1518,6 +1518,10 @@ def test_metadata_only_commit_cannot_re_offer_a_still_reserved_starter_track():
     # without it the catalogue never appears to change and the test proves
     # nothing.
     state.select_next_track()
+    # Pin the precondition rather than trusting that `select_next_track` still
+    # consults the cycle: if that consult point ever moves, this test silently
+    # reverts to the vacuous version it replaced.
+    assert state.starter_cycle_catalog == set(), "the cycle must have reconciled against the swapped-in crate"
     state.apply_source_metadata_only([starter], PlaylistSource(kind="starter"))
 
     assert state.reserve_music_admission("second", starter) is False

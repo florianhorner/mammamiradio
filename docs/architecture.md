@@ -1426,8 +1426,10 @@ queued without one, and are unaffected by any of this), and
 through the segment's playback-start callback. A `False` there is not a warning:
 playback releases the segment and moves on, so revoking a *surviving* segment's
 reservation deletes it as surely as dropping it from the queue, only later and
-silently. Four paths keep a segment across a crate change and therefore keep its
-reservation: `apply_source_metadata_only` (preserves the whole queue);
+silently. Four *source-replacement* paths keep a segment across a crate change
+and therefore keep its reservation (the in-place filters — `_apply_ban` and
+dismissing a listener request — also rewrite `state.playlist`, but never touch
+the reservation map, so they keep them by construction): `apply_source_metadata_only` (preserves the whole queue);
 `_apply_loaded_source` and `purge_pool`, which both call `switch_playlist(...,
 preserve_reservation_ids=...)` with `_protected_reservation_ids` — the ids still
 protected after the runway pass, covering the on-air dedication's promised song,
