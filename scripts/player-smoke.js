@@ -19,6 +19,7 @@ async (page) => {
     lateLift: 'smoke-late-lift',
     notPlayable: 'smoke-not-playable',
     temporarilyUnavailable: 'smoke-temporarily-unavailable',
+    trackingDeadline: 'smoke-tracking-deadline',
   };
   const receiptPlans = new Map();
   let requestScenario = 'success_shoutout';
@@ -714,7 +715,9 @@ async (page) => {
           `${expiryStatus} expiry was never polled`,
         );
         expiryStep.release();
-        await waitForReceiptText(copy.form_song_tracking_expired);
+        // A pruned record is gone; only the client deadline can claim the hosts
+        // still hold the message. The two branches carry different copy.
+        await waitForReceiptText(copy.form_song_tracking_lost);
         const expired = await receiptUiState();
         assert(expired.name === started.name, `${expiryStatus} expiry did not restore the original name`);
         assert(expired.message === started.message, `${expiryStatus} expiry did not restore the original input`);
@@ -729,10 +732,12 @@ async (page) => {
         steps: [{ abort: true }, transientRetry],
       });
       const transientStart = await startTrackedSong('song_transient', 'Smoke transient retry');
+      // The retry after a transport failure backs off to 6s, and the init
+      // script only compresses the 3s cadence, so this wait is real time.
       await waitForRouteCount(
         () => receiptPolls.length,
         transientStart.pollsBefore + 2,
-        3000,
+        9000,
         'transient receipt failure did not retry',
       );
       const retrying = await receiptUiState();
@@ -780,7 +785,41 @@ async (page) => {
         token: receiptTokens.lateLift,
         deferFrame: false,
       });
+      // A stored receipt older than the tracking deadline must stop the loop on
+      // sight — before any request goes out — and hand the form back. The
+      // source-level guard in tests/web/ can only see that the constants exist;
+      // this is what proves the deadline is enforced and that an expired
+      // receipt costs the station zero further polls.
+      stage = 'tracking deadline on resume';
+      setReceiptPlan(receiptTokens.trackingDeadline, { steps: [{ body: searchingReceipt() }] });
+      await page.evaluate(
+        ([storageKey, token]) => sessionStorage.setItem(storageKey, JSON.stringify({
+          public_token: token,
+          name: 'Anna',
+          message: 'Smoke tracking deadline',
+          started_at: Date.now() - 700000,
+        })),
+        [songReceiptStorageKey, receiptTokens.trackingDeadline],
+      );
+      const deadlinePollsBefore = receiptPolls.length;
+      await loadFreshPage();
+      await waitForReceiptText(copy.form_song_tracking_expired);
+      const deadline = await receiptUiState();
+      assert(deadline.message === 'Smoke tracking deadline', 'tracking deadline lost the listener input');
+      assert(deadline.messageVisible, 'tracking deadline left the retry input hidden');
+      assert(
+        !deadline.submitDisabled && !deadline.submitting,
+        'tracking deadline left the request form locked',
+      );
+      assert(deadline.stored === null, 'tracking deadline retained a dead tracking token');
+      await page.waitForTimeout(200);
+      assert(
+        receiptPolls.length === deadlinePollsBefore,
+        'an already-expired receipt still polled the station',
+      );
+
       stage = 'receipt scenario reset';
+      await page.evaluate((storageKey) => sessionStorage.removeItem(storageKey), songReceiptStorageKey);
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await loadFreshPage();
     } catch (error) {

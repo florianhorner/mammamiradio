@@ -2393,6 +2393,15 @@ class StationState:
         ownership, pending work) so a caller that must not disturb the live
         timeline can reuse it. ``switch_playlist`` adds the revocation half on
         top; ``apply_source_metadata_only`` does not.
+
+        Music admission reservations and the starter cycle live in the
+        revocation half for the same reason. A queued music segment holds its
+        reservation until ``commit_music_admission`` runs from
+        ``Segment.mark_playback_started``; clearing the map under a queue that
+        survives makes every one of those segments fail admission and get
+        skipped at the moment it should air. ``_sync_starter_cycle`` already
+        reconciles ``starter_cycle_reserved`` against whatever crate is current,
+        so leaving the cycle alone here is self-healing rather than stale.
         """
         self.playlist_revision += 1
         self.source_revision += 1
@@ -2403,10 +2412,6 @@ class StationState:
         self.songs_since_banter = 0
         self.songs_since_ad = 0
         self.songs_since_news = 0
-        self.starter_cycle_remaining.clear()
-        self.starter_cycle_catalog.clear()
-        self.starter_cycle_reserved.clear()
-        self.music_admission_reservations.clear()
         self.music_admission_changed.set()
         self.jamendo_base_music_since_last = 0
         # Clear play history so diversity filters start fresh for the new
@@ -2446,6 +2451,10 @@ class StationState:
         # download tasks from the old source can't zombie-pin a track into
         # the new playlist context. Keep an admin-visible trail so accepted
         # listener requests never disappear without an outcome.
+        self.starter_cycle_remaining.clear()
+        self.starter_cycle_catalog.clear()
+        self.starter_cycle_reserved.clear()
+        self.music_admission_reservations.clear()
         self._mark_pending_requests_source_changed()
         self.pending_actions.clear()
         self._listener_request_rl.clear()

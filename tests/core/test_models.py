@@ -1456,6 +1456,37 @@ def test_metadata_only_source_commit_keeps_every_ownership_field_and_revision():
     assert list(state.listener_request_retry_handoffs) == [retry_handoff]
 
 
+def test_metadata_only_source_commit_keeps_queued_music_admissible():
+    """Preserving the queue is a lie if its music can no longer start.
+
+    A queued music segment holds a reservation until ``commit_music_admission``
+    runs from ``Segment.mark_playback_started``. Clearing the map under a queue
+    the commit promises to preserve made every queued song fail that admission
+    and get skipped at the moment it should have aired.
+    """
+    track = _track(1)
+    state = StationState(playlist=[track])
+    assert state.reserve_music_admission("q1", track)
+
+    state.apply_source_metadata_only([_track(2)], None)
+
+    assert state.music_admission_reservations == {"q1": track}
+    assert state.commit_music_admission("q1") is True
+
+
+def test_switch_playlist_still_revokes_music_admission_reservations():
+    """The ordinary cutover replaces the queue, so its reservations must go."""
+    track = _track(1)
+    state = StationState(playlist=[track])
+    assert state.reserve_music_admission("q1", track)
+
+    state.switch_playlist([_track(2)])
+
+    assert state.music_admission_reservations == {}
+    assert state.starter_cycle_reserved == set()
+    assert state.commit_music_admission("q1") is False
+
+
 def test_force_next_revision_protects_same_valued_replacement():
     state = StationState()
 

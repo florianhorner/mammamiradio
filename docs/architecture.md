@@ -1253,6 +1253,18 @@ available for 300 seconds and then returns `404`. Receipt responses are
 `Cache-Control: no-store`, and the service worker excludes the route, so a
 transient `searching` response cannot mask a later terminal result.
 
+The bound on following a receipt is the listener page's, not the route's: a
+pending request has no server-side deadline, so `searching` can be the honest
+answer for as long as it sits in the queue. `listener.js` stamps each stored
+receipt with a start time and stops tracking after ten minutes, backing off to
+at most 30s on retryable answers (transport failure, non-`2xx`, unparseable or
+unknown body) while keeping the responsive 3s cadence whenever the station still
+answers `searching`. Hitting that deadline hands the request form back and says
+tracking stopped **without** claiming the request is gone — it is still queued —
+so the listener is not invited into an immediate duplicate. The separate
+`404`/`410` answer means the record really has been archived and pruned, and
+gets its own copy (`form_song_tracking_lost`) that says so.
+
 ### Route table
 
 Write routes that consume request details use `mammamiradio.web.json_body.read_json_object`.
@@ -1395,8 +1407,9 @@ does not own transport work admitted after the epoch it captured. That is
 enforced by *which method it calls*, not by restoring fields afterwards:
 `switch_playlist` is split into `_apply_playlist_context` (the crate — records,
 rotation state, play history, steering) and the revocation half on top of it
-(pin, force slot, pending actions, pending listener requests, and the active /
-admitted / retry listener-request handoff stores). A metadata-only commit calls
+(pin, force slot, pending actions, pending listener requests, the per-IP request
+rate limiter, and the active / admitted / retry listener-request handoff
+stores). A metadata-only commit calls
 `apply_source_metadata_only`, which is the crate half alone. Snapshot-and-restore
 could not hold this line: it silently missed every store a later `switch_playlist`
 learned to revoke — which is how a queued listener dedication kept airing while

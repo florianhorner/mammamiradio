@@ -1457,11 +1457,21 @@
     return ['matched', 'not_matched', 'failed'].includes(value);
   }
 
-  function _songTerminalText(payload, expired) {
-    if (expired) {
+  // '' = the server gave a real answer. 'deadline' = we stopped watching a
+  // request that is still pending. 'gone' = the record itself is no longer
+  // there. The three need different copy: only 'deadline' can honestly say the
+  // hosts still have the message.
+  function _songTerminalText(payload, reason) {
+    if (reason === 'deadline') {
       return _t(
         'form_song_tracking_expired',
         'We’ve stopped watching this one for now — the hosts still have your message. Keep listening, and send it again if it doesn’t turn up.',
+      );
+    }
+    if (reason) {
+      return _t(
+        'form_song_tracking_lost',
+        'We’ve lost track of this one. Your message is back in the box — send it again whenever you like.',
       );
     }
     if (payload.song_resolution === 'matched') {
@@ -1495,7 +1505,7 @@
     );
   }
 
-  function _showTerminalSongReceipt(receipt, payload, expired = false) {
+  function _showTerminalSongReceipt(receipt, payload, reason = '') {
     if (activeSongReceiptToken && activeSongReceiptToken !== receipt.public_token) return;
     _stopSongReceiptPoll(receipt.public_token);
     _clearStoredSongReceipt(receipt.public_token);
@@ -1503,8 +1513,8 @@
 
     const formEl = $('request-form');
     const sentEl = $('request-sent');
-    const matched = !expired && payload.song_resolution === 'matched';
-    const text = _songTerminalText(payload, expired);
+    const matched = !reason && payload.song_resolution === 'matched';
+    const text = _songTerminalText(payload, reason);
     _setRequestReceiptText(sentEl, text);
 
     if (matched) {
@@ -1533,7 +1543,7 @@
     if (_songReceiptExpired(receipt)) {
       // Stop watching and hand the form back. The request itself may still be
       // in the queue, so the copy must not promise it is gone.
-      _showTerminalSongReceipt(receipt, { song_resolution: 'failed' }, true);
+      _showTerminalSongReceipt(receipt, { song_resolution: 'failed' }, 'deadline');
       return;
     }
     if (backoff) {
@@ -1560,7 +1570,7 @@
       );
       if (activeSongReceiptToken !== receipt.public_token) return;
       if (r.status === 404 || r.status === 410) {
-        _showTerminalSongReceipt(receipt, { song_resolution: 'failed' }, true);
+        _showTerminalSongReceipt(receipt, { song_resolution: 'failed' }, 'gone');
         return;
       }
       if (!r.ok) {
@@ -1665,7 +1675,7 @@
         isSongRequest = d.type === 'song_request';
         immediateSongTerminal = isSongRequest && _isTerminalSongResolution(d.song_resolution);
         text = isSongRequest
-          ? (immediateSongTerminal ? _songTerminalText(d, false) : _songSearchingText())
+          ? (immediateSongTerminal ? _songTerminalText(d, '') : _songSearchingText())
           : _t('form_success_shoutout', 'Dedication received! The hosts will read it soon.');
         if (isSongRequest && typeof d.public_token === 'string' && d.public_token.trim()) {
           songReceipt = {

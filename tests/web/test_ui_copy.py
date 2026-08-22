@@ -32,6 +32,50 @@ def test_every_listener_copy_reference_exists_in_both_modes():
         assert not missing, f"listener copy references missing from {lang}: {sorted(missing)}"
 
 
+def test_listener_js_fallback_strings_match_the_english_copy():
+    """A listener must read the same words whether or not the payload loaded.
+
+    Every `_t('key', 'literal')` call carries an inline English fallback used
+    when `/public-status` copy has not arrived. Nothing kept those literals in
+    step with `COPY["en"]`, so a copy edit on one side silently forked the two
+    surfaces — which is exactly what a hand-edit across both files invites.
+    """
+    js = _LISTENER_JS.read_text(encoding="utf-8")
+    # Single-quoted JS literals only; a fallback built from concatenation or a
+    # template literal is skipped rather than guessed at.
+    pairs = re.findall(r"_t\(\s*'([^']+)'\s*,\s*'((?:[^'\\]|\\.)*)'\s*[,)]", js)
+    assert pairs, "no inline copy fallbacks found — the extraction pattern has drifted"
+    drift = {}
+    for key, literal in pairs:
+        fallback = literal.replace("\\'", "'").replace("\\n", "\n").replace("\\\\", "\\")
+        expected = COPY["en"].get(key)
+        if expected is not None and fallback != expected:
+            drift[key] = (fallback, expected)
+    # These forked before the guard existed. Each is a listener-visible wording
+    # decision, not a mechanical fix, so they are named rather than silently
+    # skipped — and the assertion below fails if one is repaired without being
+    # removed here, so the list can only shrink.
+    known_drift = {
+        "clip_copied",
+        "clip_copy_prompt",
+        "clip_rate_limited",
+        "clip_saving",
+        "credits_catalog_unavailable",
+        "credits_licensed_under",
+        "credits_no_current_music",
+        "credits_provided_by_jamendo",
+        "normalized_notice",
+        "np_on_air",
+        "np_paused",
+        "provider_reported_notice",
+        "source_unavailable",
+    }
+    new_drift = sorted(set(drift) - known_drift)
+    assert not new_drift, f"listener.js fallback copy has drifted from COPY['en']: {new_drift}"
+    repaired = sorted(known_drift - set(drift))
+    assert not repaired, f"these no longer drift — drop them from known_drift: {repaired}"
+
+
 def test_default_off_returns_english():
     assert get_copy(False, "listen_now") == "Listen Now"
     assert get_copy(False, "listen_pause_aria") == "Pause station"
@@ -69,6 +113,7 @@ def test_request_outcome_copy_is_complete_in_both_modes():
         "form_song_not_playable",
         "form_song_temporarily_unavailable",
         "form_song_tracking_expired",
+        "form_song_tracking_lost",
         "form_rate_limited",
         "form_queue_full",
         "form_declined",

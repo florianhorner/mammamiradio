@@ -53,7 +53,7 @@ from mammamiradio.core.models import (
 )
 from mammamiradio.home.authorization import HomeAuthorization, HomeAuthorizationMode
 from mammamiradio.scheduling.handoff import PreparedMusicHandoff, commit_music_handoff
-from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow
+from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow, _reserve_music_segment
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.mp3_frames import Mp3HandoffSplit
 from mammamiradio.web.streamer import (
@@ -7312,8 +7312,12 @@ def test_source_load_epoch_change_preserves_listener_request_ownership(tmp_path)
     assert admitted_reservations
     assert state.arm_listener_request_handoff({"request_id": "active-request"}, promised)
     active_handoff = state.listener_request_handoff
+    _reserve_music_segment(state, promised, admitted)
     app.state.queue.put_nowait(admitted)
     state.queued_segments = [{"id": "promised"}]
+    pinned = Track(title="Newer Pin", artist="Operator", duration_ms=180_000)
+    pin_revision = state.set_pinned_track(pinned)
+    force_revision = state.set_force_next(SegmentType.BANTER)
 
     result = _apply_loaded_source(
         SimpleNamespace(app=app),
@@ -7328,6 +7332,63 @@ def test_source_load_epoch_change_preserves_listener_request_ownership(tmp_path)
     assert state.listener_request_admitted_reservations == admitted_reservations
     assert [req["request_id"] for req in state.pending_requests] == ["newer-request"]
     assert list(state.recently_consumed_requests) == []
+    # The revisions the surviving owners recorded must not move either — a
+    # hand-restore reassigns the value but cannot undo the guarded clears' bump,
+    # which orphans every handoff and request holding the old revision.
+    assert state.pinned_track is pinned
+    assert state.pinned_track_revision == pin_revision
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == force_revision
+    # Preserving the promise is worthless if its song can no longer be admitted:
+    # the queued segment holds a music reservation until playback commits it.
+    assert admitted.mark_playback_started() is True
+
+
+def test_stopped_station_source_load_preserves_listener_request_ownership(tmp_path):
+    """Post-restart variant: a Stop must not be the thing that eats the promise.
+
+    The epoch-race variant above runs against a live station. A source load that
+    lands while the station is stopped takes the same metadata-only branch, and
+    the CLAUDE.md audio-delivery rule asks for that scenario explicitly: the
+    operator resumes and the promised song must still be owned and admissible.
+    """
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = True
+    state.continuity_epoch = 6
+    promised = Track(title="Promised", artist="Artist", duration_ms=180_000)
+    assert state.arm_listener_request_handoff({"request_id": "stopped-request"}, promised)
+    admitted_path = tmp_path / "promised-stopped.mp3"
+    admitted_path.write_bytes(b"promised")
+    admitted = Segment(
+        type=SegmentType.MUSIC,
+        path=admitted_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "promised",
+            "artist": promised.artist,
+            "title_only": promised.title,
+            **state.listener_request_handoff_metadata(promised),
+        },
+    )
+    state.admit_listener_request_handoff(admitted)
+    admitted_reservations = dict(state.listener_request_admitted_reservations)
+    _reserve_music_segment(state, promised, admitted)
+    app.state.queue.put_nowait(admitted)
+    state.queued_segments = [{"id": "promised"}]
+
+    result = _apply_loaded_source(
+        SimpleNamespace(app=app),
+        [Track(title="New", artist="Artist", duration_ms=180_000)],
+        PlaylistSource(kind="url", url="https://example.test/new", label="New source"),
+    )
+
+    assert result["metadata_only"] is True
+    assert result["resume_required"] is True
+    assert list(app.state.queue._queue) == [admitted]
+    assert state.listener_request_admitted_reservations == admitted_reservations
+    assert admitted.mark_playback_started() is True
 
 
 @pytest.mark.asyncio

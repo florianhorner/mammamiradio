@@ -223,9 +223,11 @@ private durable system for strategy or relationship context.
   through `StationState.apply_source_metadata_only` (the crate half of
   `switch_playlist`) rather than through `switch_playlist` plus a hand-restore,
   so the pinned track, force slot, queued operator work, pending listener
-  requests, and all three listener-request handoff stores survive untouched —
-  including the `pinned_track_revision` / `force_next_revision` counters each
-  owner recorded, which a restore-after-clear would leave one ahead. Applies to `/api/playlist/load`, `/api/playlist/enrich`,
+  requests, the per-IP request rate limiter, and all three listener-request
+  handoff stores survive untouched — including the `pinned_track_revision` /
+  `force_next_revision` counters each owner recorded, which a restore-after-clear
+  would leave one ahead.
+  Applies to `/api/playlist/load`, `/api/playlist/enrich`,
   `/api/heading`, `/api/direction`, and the external/listener download commit. The
   normal producer replenishes audio after a valid Resume. The four admin routes
   (`load`, `enrich`, `heading`, `direction`) also return `resume_required: true`

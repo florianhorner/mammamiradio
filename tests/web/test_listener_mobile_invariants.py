@@ -415,11 +415,15 @@ def test_song_receipt_polling_is_bounded_and_backs_off() -> None:
         request_flow.index("function _scheduleSongReceiptPoll") : request_flow.index("async function _pollSongReceipt")
     ]
     assert "_songReceiptExpired(receipt)" in scheduler, "the deadline must gate scheduling, not just the first poll"
-    assert "'failed' }, true)" in scheduler, "an expired receipt must show the honest tracking-stopped copy"
+    assert "'deadline'" in scheduler, "an expired receipt must show the honest tracking-stopped copy"
     assert "SONG_RECEIPT_MAX_BACKOFF_MS" in scheduler
 
     poll = request_flow[request_flow.index("async function _pollSongReceipt") :]
     poll = poll[: poll.index("function _resumeSongReceipt")]
+    # A request we merely stopped watching is still queued; an archived-and-pruned
+    # one is not. Sharing one string would let the page claim the hosts still hold
+    # a message they have already finished with.
+    assert "'gone'" in poll, "the 404/410 answer needs its own copy, not the deadline copy"
     searching_branch = poll[poll.index("payload.song_resolution === 'searching'") :]
     searching_branch = searching_branch[: searching_branch.index("if (_isTerminalSongResolution")]
     assert "backoff" not in searching_branch, (
