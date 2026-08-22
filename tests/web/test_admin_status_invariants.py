@@ -384,6 +384,8 @@ def test_runtime_status_card_renders_generated_waste_from_generation_waste() -> 
     assert "const gw=rs.generation_waste" in block
     assert "statusRow('Generated waste'" in block
     assert "const wasteState=gw.degraded?'degraded':'ready'" in block
+    assert "listener_request_reserved:'held for its dedication'" in block
+    assert "playback_file_error:'audio unavailable before air'" in block
     assert "wasteRow," in block
 
 
@@ -640,19 +642,33 @@ def test_listener_request_statuses_map_to_canonical_states() -> None:
         "statusInline('working','searching…')",
         "statusInline('working','shoutout')",  # shoutout is pending, not idle
         "r.status==='source_changed'",
-        "Playlist changed",
+        "Music changed — submit again",
+        "Dismissed — resubmit if still wanted",
         "listenerSongErrorBadge(r.song_error_reason)",
     ):
         assert expected in block
     html = _read_admin_html()
-    assert "not a single-track song" in html
-    assert "not a song" in html
-    assert "Not a song" in html
-    assert "Banned song" in html
-    assert "download failed" in html
-    assert "Download failed" in html
-    assert "cancelled" in html
-    assert "Cancelled" in html
+    for actionable_label in (
+        "needs exact title + artist",
+        "too long — choose one song",
+        "not playable — choose another",
+        "blocked — unban or choose another",
+        "song requests are off — enable them",
+        "catalogue unavailable — retry later",
+        "no catalogue answer — retry",
+        "music changed — submit again",
+        "could not prepare track — retry or add it",
+        "preparation stopped — retry",
+    ):
+        assert actionable_label in html
+    for implementation_label in (
+        "song lookup unavailable",
+        "lookup failed",
+        "lookup timed out",
+        "download failed",
+        "download cancelled",
+    ):
+        assert implementation_label not in html
     # ensure double-glyph pattern is gone
     assert "'▶ '" not in block
 
@@ -792,3 +808,12 @@ def test_scaletta_runway_translates_rendered_audio_into_host_progress() -> None:
     # a hash guard skips the DOM write when nothing actually changed.
     assert "_lastRunwayHash" in block
     assert "updateProgrammeRunway(_st)" in _function_block(html, "refreshFast")
+
+
+def test_ready_listener_request_cannot_be_marked_done_before_dedication() -> None:
+    html = _read_admin_html()
+    dismissed = _function_block(html, "lrDismiss")
+
+    assert "lrMarkHandled" not in html
+    assert "action:'handled'" not in html
+    assert "{id}" in dismissed

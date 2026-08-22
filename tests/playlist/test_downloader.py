@@ -704,6 +704,17 @@ def test_search_ytdlp_metadata_disabled_returns_empty():
         assert search_ytdlp_metadata("vasco", max_results=3) == []
 
 
+def test_search_ytdlp_metadata_outcome_distinguishes_disabled():
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata_outcome
+
+    with patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "false"}):
+        outcome = search_ytdlp_metadata_outcome("vasco", max_results=3)
+
+    assert outcome.status == "disabled"
+    assert outcome.succeeded is False
+    assert outcome.results == []
+
+
 def test_external_media_gate_requires_both_opt_in_and_optional_module():
     from mammamiradio.playlist.downloader import external_media_enabled
 
@@ -729,6 +740,19 @@ def test_search_ytdlp_metadata_import_error_returns_empty():
         patch.dict(sys.modules, {"yt_dlp": None}),
     ):
         assert search_ytdlp_metadata("vasco", max_results=3) == []
+
+
+def test_search_ytdlp_metadata_outcome_distinguishes_unavailable_import():
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata_outcome
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": None}),
+    ):
+        outcome = search_ytdlp_metadata_outcome("vasco", max_results=3)
+
+    assert outcome.status == "unavailable"
+    assert outcome.results == []
 
 
 def test_search_ytdlp_metadata_success_parses_entries():
@@ -788,6 +812,58 @@ def test_search_ytdlp_metadata_success_parses_entries():
     assert results[1]["youtube_id"] == "volare00001"
     assert results[1]["artist"] == "Modugno Channel"
     assert results[1]["album_art"] == "https://img.example/large.jpg"
+
+
+def test_search_ytdlp_metadata_outcome_preserves_structured_identity_and_empty_success():
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata_outcome
+
+    class _FakeYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, query, download=False):
+            if "empty" in query:
+                return {"entries": []}
+            return {
+                "entries": [
+                    {
+                        "id": "battisti001",
+                        "title": "Provided to YouTube",
+                        "track": "Emozioni",
+                        "artist": "Lucio Battisti",
+                        "creator": "Ignored fallback",
+                        "uploader": "Lucio Battisti - Topic",
+                        "channel": "Lucio Channel",
+                        "duration": 180,
+                    }
+                ]
+            }
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FakeYoutubeDL
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
+        found = search_ytdlp_metadata_outcome("battisti", max_results=1)
+        empty = search_ytdlp_metadata_outcome("empty", max_results=1)
+
+    assert found.status == "ok"
+    assert found.succeeded is True
+    assert found.results[0]["artist"] == "Lucio Battisti - Topic"  # legacy uploader identity
+    assert found.results[0]["track_title"] == "Emozioni"
+    assert found.results[0]["track_artist"] == "Lucio Battisti"
+    assert found.results[0]["uploader"] == "Lucio Battisti - Topic"
+    assert found.results[0]["channel"] == "Lucio Channel"
+    assert empty.status == "ok"
+    assert empty.results == []
 
 
 def test_search_ytdlp_metadata_sets_socket_timeout():
@@ -1260,6 +1336,35 @@ def test_search_ytdlp_metadata_returns_empty_on_extract_exception():
         patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
     ):
         assert search_ytdlp_metadata("vasco", max_results=3) == []
+
+
+def test_search_ytdlp_metadata_outcome_distinguishes_extraction_failure():
+    from mammamiradio.playlist.downloader import search_ytdlp_metadata_outcome
+
+    class _FailingYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, _query, download=False):
+            raise RuntimeError("yt-dlp exploded")
+
+    mock_yt_dlp = MagicMock()
+    mock_yt_dlp.YoutubeDL = _FailingYoutubeDL
+
+    with (
+        patch.dict("os.environ", {"MAMMAMIRADIO_ALLOW_YTDLP": "true"}),
+        patch.dict(sys.modules, {"yt_dlp": mock_yt_dlp}),
+    ):
+        outcome = search_ytdlp_metadata_outcome("vasco", max_results=3)
+
+    assert outcome.status == "failed"
+    assert outcome.results == []
 
 
 # ---------------------------------------------------------------------------
