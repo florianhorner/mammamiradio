@@ -1,44 +1,45 @@
 # Brand spelling guard runtime proof
 
-Tested code SHA: `15f2d9d7c32a6c6169f958f6a0345c651daad537`
+Tested integrated code SHA: `e9eb6e7dc002bbf6225f4809fae6d21933d91fbd`
 
-The final pass used an isolated loopback server. Before starting it, I cleared
-Anthropic, OpenAI, Azure, ElevenLabs, Jamendo, and Home Assistant credentials. I
-also disabled yt-dlp and kept temporary state under `tmp/qa-pr-1011-final/`.
-The run did not write to `.context/`, connect to Home Assistant, or update an
-add-on.
+The final pass used an isolated loopback server at `http://127.0.0.1:8766`.
+Anthropic, OpenAI, Azure, ElevenLabs, Jamendo, and Home Assistant credentials
+were explicitly blank, yt-dlp was disabled, and temporary state stayed under
+`tmp/qa-pr-1011/`. The run did not write to `.context/`, contact Home
+Assistant, update an add-on, or exercise a deployed runtime.
 
-A preliminary playback check loaded a local ElevenLabs key from `.env` and sent
-one TTS request while filling the isolated queue. Its live-browser observations
-are labeled below; they do not prove provider isolation. I repeated both
-executable browser guards with all provider credentials blank.
+The manual Player play action caused the app's credential-free Edge TTS
+fallback to synthesize one local banter asset while filling the isolated queue.
+That was external network activity; no key-backed provider was used.
 
 ## Admin QA: PASS
 
-- The Admin browser guard passed: 1 test in 6.58 seconds.
-- The real `/admin` page rendered the `media_source_missing` state with the
-  corrected `Mamma Mi Radio` recovery text.
-- The error state remained readable at desktop and 375 x 812.
-- The guard covered protected controls, keyboard behavior, 320-768 px layouts,
-  retry states, and uncaught page errors.
+- The Admin executable real-browser guard passed separately: 2 tests in 7.43
+  seconds.
+- It rendered the real `/admin` page and covered the `media_source_missing`
+  state with the corrected `Mamma Mi Radio` recovery text, protected controls,
+  keyboard behavior, retry states, layouts from 320 to 768 px, and uncaught
+  page errors.
+- A separate manual pass rendered `/admin` at desktop and 375 x 812 with no
+  horizontal overflow or initial console errors. The deliberate no-Home-
+  Assistant retry returned its expected 409 and displayed the controlled
+  recovery state.
 
 ## Player QA: PASS
 
-- The separate executable Player smoke returned `ok: true`.
-- Stream intent reached the audio element in 22 ms.
-- Station identity remained `Mamma Mi Radio`.
-
-The preliminary live-browser check also confirmed that `/stream` played,
-now-playing and three up-next rows appeared, and each play control changed to
-`Pause station`. At 375 x 812, the page had no horizontal overflow or console
-errors.
+- The deterministic Player browser smoke passed separately against `/`.
+- A manual play action reached `/stream`; the audio element reported
+  `paused=false`, all three controls changed to `Pause station`, and three
+  schedule rows were present.
+- Desktop and 375 x 812 checks had no console errors or horizontal overflow.
 
 ## Runtime health: PASS
 
-- `/healthz` returned `status: ok` with no listener silence.
+- `/healthz` returned `status: ok`; queue and shadow queue were both at depth
+  4 and in sync, with no listener silence.
 - `/readyz` returned `status: ready`; producer and playback tasks were alive.
 - `pytest tests/web/test_route_smoke.py -q`: 18 passed.
 
-The ignored `.gstack/qa-reports/qa-report-127-0-0-1-2026-08-22.md` file holds
-the screenshots and detailed local report. This receipt covers local branch
-behavior only; it does not claim deployment or Home Assistant QA.
+The ignored `.gstack/qa-reports/qa-report-127-0-0-1-2026-08-23.md` file holds
+the screenshots and detailed local report. This receipt covers local integrated
+branch behavior only.
