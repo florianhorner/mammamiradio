@@ -687,7 +687,7 @@ Swappable listener strings live in `mammamiradio/web/ui_copy.py` (single source 
 
 Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URLs, file paths, package names, environment variables, entity IDs, and container names. We once shipped a First Listen error with the words joined.
 
-`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes four audio-pack provenance files because changing them would rewrite committed receipts. Changelogs and docs must describe the typo without repeating it.
+`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes its own file (which defines the typo string for the test) plus four audio-pack files that still carry the joined spelling until the pack is regenerated: the two committed receipts (`manifest.json`, `ATTRIBUTION.md`), the generator that produced them, and the test that pins their hashes. Changelogs and docs must describe the typo without repeating it.
 
 ## Rules and anti-patterns
 
