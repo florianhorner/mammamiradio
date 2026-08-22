@@ -1,6 +1,6 @@
 Runtime evidence — explainer link previews
-Captured 2026-08-21T22:55:58Z from the deployed site, before this branch merged.
-Commit under test: 0ea4c2bf54a32e8e3d39a52264a7f4c6e1a1f468
+Captured 2026-08-22T00:38:31Z from the deployed site, before this branch merged.
+Code under test: 90c5eb32e37404e01df162854cd81e3d20e57e71 (see the note in explainer-og-tests.txt about self-reference)
 
 The URL og:image names must already answer 200, or the card previews as a broken image.
 
@@ -20,8 +20,11 @@ The URL og:image names must already answer 200, or the card previews as a broken
   HTTP 200  /public/audio/laundry.mp3                      397101 bytes  audio/mp3
   HTTP 200  /public/audio/quiet.mp3                        445485 bytes  audio/mp3
 
+The share card is a real PNG at the size the meta tags declare:
+  signature ok: True   IHDR: IHDR   1280x640   223856 bytes
+
 Deploy run that published this state:
   https://github.com/florianhorner/mammamiradio/actions/runs/32533463490 (build: success, deploy: success)
 
-Rendered page: title + zero console errors/warnings, checked in a real browser.
-<title>Mamma Mi Radio for Home Assistant | Interactive demo</title>
+Rendered page checked in a real browser: zero console errors, zero warnings.
+  <title>Mamma Mi Radio for Home Assistant | Interactive demo</title>
