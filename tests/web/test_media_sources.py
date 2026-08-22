@@ -125,6 +125,15 @@ def test_safe_status_has_exact_redacted_contract_even_with_hostile_provider_fact
         "last_success_age_sec": 12.5,
         "last_failure_code": "unexpected-private-detail",
         "rejected_count": 3,
+        "rejected_this_attempt": 2,
+        # Hostile per-attempt facts: an unknown dominant code must coerce, and a
+        # breakdown carrying a private key must not survive the projection.
+        "dominant_failure_code_this_attempt": "unexpected-private-detail",
+        "attempt_rejections": {
+            "identity_mismatch": 2,
+            "operation_id": "private-operation",
+            "empty_results": -1,
+        },
         "client_id": "client_123",
         "stream_url": "https://storage.jamendo.com/file.mp3?token=private",
         "filesystem_path": "/tmp/jamendo/private/normalized.mp3",
@@ -147,6 +156,11 @@ def test_safe_status_has_exact_redacted_contract_even_with_hostile_provider_fact
         "last_success_age_sec": 12.5,
         "last_failure_code": "api_failed",
         "rejected_count": 3,
+        "rejected_this_attempt": 2,
+        "dominant_failure_code_this_attempt": "api_failed",
+        # Only the known code with a positive count survives: the private key is
+        # dropped and the negative count is refused.
+        "attempt_rejections": {"identity_mismatch": 2},
     }
     rendered = str(status)
     for private_value in (

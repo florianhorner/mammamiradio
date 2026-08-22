@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -36,6 +37,40 @@ logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.jamendo.com/v3.0/tracks/"
 _API_INCLUDE = "licenses"
+
+# Single source of truth for every failure code this provider can surface.
+# Three lists used to drift independently: the raise sites here, the sanitizer
+# allowlist in web/media_sources.py, and the operator copy table in admin.html.
+# The middle one silently laundered any code it did not know into "api_failed",
+# so the three codes the edge install reports most often never reached a human.
+# tests/playlist/test_jamendo_failure_code_contract.py asserts all three agree.
+JAMENDO_FAILURE_CODES = frozenset(
+    {
+        "api_auth_failed",
+        "api_failed",
+        "api_malformed",
+        "audio_empty",
+        "audio_fetch_failed",
+        "audio_oversize",
+        "audio_size_invalid",
+        "duration_rejected",
+        "empty_results",
+        "ffmpeg_failed",
+        "ffmpeg_timeout",
+        "ffprobe_failed",
+        "identity_mismatch",
+        "internal_error",
+        "invalid_url",
+        "lease_invalid",
+        "license_rejected",
+        "metadata_changed",
+        "metadata_invalid",
+        "metadata_oversize",
+        "network_timeout",
+        "source_revision_invalid",
+        "temp_root_invalid",
+    }
+)
 _BLOCKED_PROVIDER_CONTRACT_CODES = frozenset({2, 3, 4, 7, 8, 9, 10, 12, 13})
 _BLOCKED_PROVIDER_AUTH_CODES = frozenset({5, 11})
 _TRACK_ID_RE = re.compile(r"[1-9][0-9]{0,19}")
@@ -279,6 +314,35 @@ def _candidate_from_exact_result(item: object, expected_id: str) -> _CandidateDa
         "audio_url": audio_url,
         "duration_sec": duration_sec,
     }
+
+
+def _stable_admission_identity(candidate: _CandidateData) -> tuple[object, ...]:
+    """Fields compared across discovery and exact-ID revalidation.
+
+    Stream URLs and share-page paths can differ between Jamendo list and id
+    lookups without changing the track, license, or attribution. Comparing the
+    full candidate dict rejected every live candidate after discovery recovered.
+    """
+    return (
+        candidate["provider_track_id"],
+        candidate["title"],
+        candidate["artist"],
+        candidate["license_id"],
+        candidate["license_url"],
+        candidate["duration_sec"],
+    )
+
+
+def _dominant_code(rejections: Mapping[str, int]) -> str | None:
+    """Return the failure code that accounts for most of one attempt's rejections.
+
+    Ties break on the code name so the operator card does not flip between two
+    equally-common reasons on consecutive polls. Returns ``None`` for an attempt
+    with no rejections, which is how the card knows to stay quiet.
+    """
+    if not rejections:
+        return None
+    return max(sorted(rejections), key=lambda code: rejections[code])
 
 
 def _coarse_provider_code(value: object) -> int | None:
@@ -642,6 +706,12 @@ class JamendoStreamProvider:
         self._last_failure_code: str | None = None
         self._last_success_at: float | None = None
         self._rejected_count = 0
+        # Per-attempt rejection breakdown, replaced wholesale at the end of each
+        # discovery pass. The lifetime ``_rejected_count`` above only ever grows,
+        # so it answers "how long has this been broken" and nothing else; the
+        # operator card needs "what is going wrong right now", which is this.
+        # Never rendered as a bare number — it selects which sentence to show.
+        self._attempt_rejections: dict[str, int] = {}
         self._configuration_apply_blocked = False
         self._started = False
         self._stopped = False
@@ -883,6 +953,12 @@ class JamendoStreamProvider:
                 "client_id_configured": bool(self._client_id),
                 "noncommercial_acknowledged": self._acknowledged,
                 "terms_scope": "noncommercial_api_use",
+                # Deliberately always "pending": this reports whether JAMENDO has
+                # cleared the operator's station model, which it never does. It is
+                # not the operator's acknowledgement — that is
+                # ``noncommercial_acknowledged`` above. See
+                # docs/troubleshooting.md "Jamendo stays off or temporarily
+                # unavailable" before changing this.
                 "provider_confirmation": "pending",
                 "ready": self._state == JamendoProviderState.READY,
                 "in_flight": self._state
@@ -895,6 +971,9 @@ class JamendoStreamProvider:
                 "last_success_age_sec": round(success_age, 3) if success_age is not None else None,
                 "last_failure_code": self._last_failure_code,
                 "rejected_count": self._rejected_count,
+                "rejected_this_attempt": sum(self._attempt_rejections.values()),
+                "dominant_failure_code_this_attempt": _dominant_code(self._attempt_rejections),
+                "attempt_rejections": dict(self._attempt_rejections),
             }
 
     async def stop(self) -> None:
@@ -1167,7 +1246,84 @@ class JamendoStreamProvider:
             if operation_dir is not None:
                 _cleanup_operation(operation_dir, self._jamendo_root)
 
+    def _publish_attempt_rejections(
+        self,
+        rejections: Mapping[str, int],
+        epoch: int,
+        fingerprint: str,
+        source_revision: int,
+        *,
+        succeeded: bool,
+    ) -> None:
+        """Replace the per-attempt breakdown, and log it once per attempt.
+
+        A superseded attempt publishes nothing: its counts describe a source or
+        configuration the operator has already moved on from, and showing them
+        would explain the wrong thing on the card.
+
+        A *successful* attempt publishes an empty breakdown even when it rejected
+        candidates on the way. Discovery routinely skips a few rows before one
+        works; leaving those counts on the card meant a track that prepared
+        correctly sat in the queue under "Jamendo sent back a different song than
+        expected", and then aired under it.
+
+        The log line is the diagnosis channel a lifetime total could never
+        provide, and it records the rejections either way because "succeeded
+        after skipping three" is exactly the shape worth seeing. It carries codes
+        and counts only, never client IDs, private audio URLs, or provider
+        response text.
+        """
+        with self._lock:
+            if not self._still_current_unlocked(epoch, fingerprint, source_revision):
+                return
+            self._attempt_rejections = {} if succeeded else dict(rejections)
+        if rejections:
+            logger.info(
+                "Jamendo attempt %s after rejecting %d candidate(s) breakdown=%s dominant=%s",
+                "succeeded" if succeeded else "failed",
+                sum(rejections.values()),
+                ",".join(f"{code}:{count}" for code, count in sorted(rejections.items())),
+                _dominant_code(rejections),
+            )
+
     async def _discover_candidate(self, epoch: int, fingerprint: str, source_revision: int) -> _CandidateData:
+        # Built locally rather than reset on the instance: a concurrent attempt
+        # cannot clobber a local Counter, so there is no window where one pass
+        # zeroes another's in-flight tally. Published once, atomically, at exit.
+        attempt_rejections: Counter[str] = Counter()
+
+        def record_rejection(code: str) -> None:
+            with self._lock:
+                self._rejected_count += 1
+            attempt_rejections[code] += 1
+
+        def note_attempt_reason(code: str) -> None:
+            """Name a reason without counting a rejected candidate.
+
+            ``empty_results`` means nothing came back to examine, so it belongs
+            in the breakdown the card reads but not in the lifetime tally of
+            candidates thrown away — those are different facts.
+            """
+            attempt_rejections[code] += 1
+
+        try:
+            candidate = await self._discover_candidate_inner(
+                epoch, fingerprint, source_revision, record_rejection, note_attempt_reason
+            )
+        except BaseException:
+            self._publish_attempt_rejections(attempt_rejections, epoch, fingerprint, source_revision, succeeded=False)
+            raise
+        self._publish_attempt_rejections(attempt_rejections, epoch, fingerprint, source_revision, succeeded=True)
+        return candidate
+
+    async def _discover_candidate_inner(
+        self,
+        epoch: int,
+        fingerprint: str,
+        source_revision: int,
+        record_rejection: Callable[[str], None],
+        note_attempt_reason: Callable[[str], None],
+    ) -> _CandidateData:
         params = {
             "client_id": self._client_id,
             "format": "json",
@@ -1192,28 +1348,33 @@ class JamendoStreamProvider:
         last_rejection: _CandidateRejectedError | None = None
         for item in results:
             if not isinstance(item, Mapping):
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection("metadata_invalid")
                 last_rejection = _CandidateRejectedError("metadata_invalid")
                 continue
             track_id = str(item.get("id", "")).strip()
             if _TRACK_ID_RE.fullmatch(track_id) is None or track_id in seen_ids:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection("identity_mismatch")
                 last_rejection = _CandidateRejectedError("identity_mismatch")
                 continue
             seen_ids.add(track_id)
             try:
                 candidates.append((track_id, _candidate_from_exact_result(item, track_id)))
             except _CandidateRejectedError as exc:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection(exc.code)
                 last_rejection = exc
         if not candidates:
             if last_rejection is not None:
                 raise _TransientError(last_rejection.code)
+            # Noted, not just raised: an attempt that found nothing at all is
+            # the single most useful thing the breakdown can say, and without
+            # this the code could never appear in it or be the dominant reason.
+            note_attempt_reason("empty_results")
             raise _TransientError("empty_results")
         for track_id, discovered_candidate in candidates:
+            # Exact-ID lookup omits discovery license filters. Combining ``id``
+            # with ``ccnc``/``ccsa``/``ccnd`` can return no rows for tracks that
+            # discovery already found. The exact payload still goes through
+            # ``_canonical_license``.
             exact_params = {
                 "client_id": self._client_id,
                 "format": "json",
@@ -1221,30 +1382,28 @@ class JamendoStreamProvider:
                 "id": track_id,
                 "audioformat": "mp32",
                 "include": _API_INCLUDE,
-                "ccnc": "false",
-                "ccsa": "false",
-                "ccnd": "false",
             }
             exact_results = await _bounded_api_results(self._http_client, exact_params)
             with self._lock:
                 if not self._still_current_unlocked(epoch, fingerprint, source_revision):
                     raise _StaleOperationError
             if len(exact_results) != 1:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection("identity_mismatch")
                 last_rejection = _CandidateRejectedError("identity_mismatch")
                 continue
             try:
                 exact_candidate = _candidate_from_exact_result(exact_results[0], track_id)
-                if exact_candidate != discovered_candidate:
+                if _stable_admission_identity(exact_candidate) != _stable_admission_identity(discovered_candidate):
                     raise _CandidateRejectedError("metadata_changed")
+                # Use the exact lookup's stream and share URLs, which are the
+                # latest private audio link and attribution page.
                 return exact_candidate
             except _CandidateRejectedError as exc:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection(exc.code)
                 last_rejection = exc
         if last_rejection is not None:
             raise _TransientError(last_rejection.code)
+        note_attempt_reason("empty_results")
         raise _TransientError("empty_results")
 
     def _mark_normalizing(self, operation_id: str, epoch: int, fingerprint: str, source_revision: int) -> None:

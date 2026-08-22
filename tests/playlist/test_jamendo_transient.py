@@ -121,6 +121,9 @@ async def test_default_start_is_inert_and_redacted(tmp_path):
             "last_success_age_sec": None,
             "last_failure_code": None,
             "rejected_count": 0,
+            "rejected_this_attempt": 0,
+            "dominant_failure_code_this_attempt": None,
+            "attempt_rejections": {},
         }
         assert requests == []
         assert provider.take_ready_segment() is None
@@ -155,6 +158,9 @@ async def test_enabled_provider_prepares_single_use_segment_from_audio_field(tmp
         assert "audiodownload" not in requests[0].url.params
         assert requests[1].url.params["id"] == "12345"
         assert requests[1].url.params["include"] == "licenses"
+        assert "ccnc" not in requests[1].url.params
+        assert "ccsa" not in requests[1].url.params
+        assert "ccnd" not in requests[1].url.params
         assert candidates[0]["audio_url"] == _item()["audio"]
         assert "evil.example" not in str(candidates[0])
 
@@ -539,16 +545,18 @@ async def test_cumulative_metadata_deadline_stops_serial_exact_lookup(tmp_path):
         track_id = request.url.params.get("id")
         requested.append(track_id)
         if track_id is None:
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(0.02)
             results = list(items.values())
         elif track_id == "111":
-            await asyncio.sleep(0.025)
-            results = [{**items[track_id], "audio": "https://storage.jamendo.com/download/changed.mp3"}]
+            await asyncio.sleep(0.02)
+            # Return no exact row so lookup falls through. Stream-URL drift alone
+            # no longer rejects a candidate.
+            results = []
         else:
-            # This request is individually below the total budget, but the
-            # discovery and prior exact-ID lookup have already consumed most
-            # of the shared deadline.
-            await asyncio.sleep(0.05)
+            # This request stays within its per-call budget, but discovery and the
+            # prior exact-ID lookup have consumed most of the shared deadline.
+            # Wait long enough for cancellation to win.
+            await asyncio.sleep(1.0)
             results = [items[track_id]]
         completed.append(track_id)
         return httpx.Response(200, json=_payload(results), request=request)
@@ -595,13 +603,92 @@ async def test_exact_identity_mismatch_never_reaches_worker(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_license_or_stream_url_change_during_exact_revalidation_is_rejected(tmp_path):
+async def test_stream_or_share_url_drift_during_exact_revalidation_is_accepted(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("id") is None:
+            item = _item()
+        else:
+            item = _item(
+                audio_url="https://mp3l.jamendo.com/?trackid=12345&format=mp32&from=app-edge",
+                source_url="https://www.jamendo.com/track/12345",
+            )
+        return httpx.Response(200, json=_payload([item]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    candidates: list[dict[str, object]] = []
+    provider = jt.JamendoStreamProvider(
+        tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker(candidates)
+    )
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "ready")
+        assert candidates[0]["audio_url"] == ("https://mp3l.jamendo.com/?trackid=12345&format=mp32&from=app-edge")
+        assert candidates[0]["source_url"] == "https://www.jamendo.com/track/12345"
+        assert provider.status()["rejected_count"] == 0
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_license_change_during_exact_revalidation_is_rejected(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         item = (
             _item()
             if request.url.params.get("id") is None
-            else _item(audio_url="https://storage.jamendo.com/download/changed.mp3")
+            else _item(license_url="https://creativecommons.org/licenses/by/3.0/")
         )
+        return httpx.Response(200, json=_payload([item]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    calls: list[Path] = []
+    provider = jt.JamendoStreamProvider(
+        tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker(calls=calls)
+    )
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+        assert provider.status()["last_failure_code"] == "metadata_changed"
+        assert provider.status()["rejected_count"] == 1
+        assert calls == []
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_title_change_during_exact_revalidation_is_rejected(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        item = _item() if request.url.params.get("id") is None else {**_item(), "name": "Altro Titolo"}
+        return httpx.Response(200, json=_payload([item]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    calls: list[Path] = []
+    provider = jt.JamendoStreamProvider(
+        tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker(calls=calls)
+    )
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+        assert provider.status()["last_failure_code"] == "metadata_changed"
+        assert provider.status()["rejected_count"] == 1
+        assert calls == []
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field_override",
+    [
+        {"artist_name": "Altro Artista"},
+        {"duration": 240},
+    ],
+)
+async def test_artist_or_duration_change_during_exact_revalidation_is_rejected(tmp_path, field_override):
+    def handler(request: httpx.Request) -> httpx.Response:
+        item = _item() if request.url.params.get("id") is None else {**_item(), **field_override}
         return httpx.Response(200, json=_payload([item]), request=request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -1851,6 +1938,110 @@ async def test_lease_revalidation_and_release_state_edge_cases(tmp_path):
         provider._state = jt.JamendoProviderState.READY
         provider._release_current_unlocked("config_changed")
         assert provider.status()["state"] == "needs_config"
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_multi_code_attempt_names_its_dominant_reason_in_status_and_log(tmp_path, caplog):
+    """Three identity_mismatch plus one license_rejected resolves to identity_mismatch.
+
+    ``last_failure_code`` reports the LAST rejection, so it says
+    ``license_rejected`` here. That divergence is the whole reason the dominant
+    code exists: the card must name what mostly went wrong, not what went wrong
+    last.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        results: list[object] = [
+            {"id": "aaa"},
+            {"id": "bbb"},
+            {"id": "ccc"},
+            _item(license_url="https://creativecommons.org/licenses/by-nc/4.0/"),
+        ]
+        return httpx.Response(200, json=_payload(results), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client)
+    caplog.set_level(logging.INFO, logger=jt.__name__)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+
+        status = provider.status()
+        assert status["attempt_rejections"] == {"identity_mismatch": 3, "license_rejected": 1}
+        assert status["rejected_this_attempt"] == 4
+        assert status["dominant_failure_code_this_attempt"] == "identity_mismatch"
+        assert status["last_failure_code"] == "license_rejected"
+
+        lines = [r for r in caplog.records if "Jamendo attempt" in r.getMessage()]
+        assert len(lines) == 1, "the breakdown logs once per attempt, not once per rejection"
+        assert lines[0].getMessage() == (
+            "Jamendo attempt failed after rejecting 4 candidate(s) "
+            "breakdown=identity_mismatch:3,license_rejected:1 dominant=identity_mismatch"
+        )
+        # Codes and counts only: no client ID, no private audio URL, no provider
+        # response text, no filesystem path.
+        for private_value in (_CLIENT_ID, "token=private", "storage.jamendo.com", "by-nc", str(tmp_path)):
+            assert private_value not in caplog.text
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_successful_attempt_leaves_no_failure_reason_on_the_card(tmp_path, caplog):
+    """Skipping bad rows on the way to a good one is not a failure to report.
+
+    Discovery routinely rejects a few candidates before one works. Publishing
+    those counts on success meant a track that prepared correctly sat in the
+    queue — and then aired — under "Jamendo sent back a different song than
+    expected".
+    """
+    client, _ = _client_for_items(
+        {"12345": _item()},
+        discovery_ids=["bad-id", "12345"],
+    )
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker())
+    caplog.set_level(logging.INFO, logger=jt.__name__)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "ready")
+
+        status = provider.status()
+        assert status["attempt_rejections"] == {}
+        assert status["rejected_this_attempt"] == 0
+        assert status["dominant_failure_code_this_attempt"] is None
+        # The lifetime counter still records it, and the log still says so.
+        assert status["rejected_count"] == 1
+        assert "Jamendo attempt succeeded after rejecting 1 candidate(s)" in caplog.text
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_attempt_that_finds_nothing_reports_empty_results(tmp_path):
+    """An attempt that found no usable rows must be able to say so.
+
+    ``empty_results`` was raised but never recorded, so it could never appear in
+    the breakdown or be the dominant reason — the card could not name the very
+    case the operator sees most.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_payload([]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+
+        status = provider.status()
+        assert status["attempt_rejections"] == {"empty_results": 1}
+        assert status["dominant_failure_code_this_attempt"] == "empty_results"
     finally:
         await provider.stop()
         await client.aclose()
