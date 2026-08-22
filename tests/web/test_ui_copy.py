@@ -58,6 +58,18 @@ _FROZEN_BRAND_PROVENANCE = frozenset(
     }
 )
 
+# Keep pre-existing copy fixes out of unrelated strategic-plan PRs. Each entry
+# permits one exact legacy line, not a whole file, so any new occurrence in the
+# same document still fails. Remove an entry when its docs-only correction lands.
+_LEGACY_BRAND_LINES = frozenset(
+    {
+        (
+            "docs/2026-07-27-admitted-audio-queue-refactor.md",
+            "Mammami Radio will preserve its current listener, operator, HTTP, and Home",
+        ),
+    }
+)
+
 # Skip known binary suffixes. This keeps extensionless text, Dockerfiles, macOS
 # launchers, and SVGs in scope.
 _BRAND_BINARY_SUFFIXES = frozenset(
@@ -140,7 +152,7 @@ def _scan_brand(root: Path, relpaths: Iterable[str]) -> tuple[list[str], list[st
         if not _brand_violation(text):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _brand_violation(line):
+            if _brand_violation(line) and (rel, line) not in _LEGACY_BRAND_LINES:
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     return offenders, unreadable, scanned
 
@@ -413,6 +425,10 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
     frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
     frozen.mkdir(parents=True)
     (frozen / "ATTRIBUTION.md").write_text(_MISSPELLED_BRAND, encoding="utf-8")
+    legacy_rel, legacy_line = next(iter(_LEGACY_BRAND_LINES))
+    legacy = tmp_path / legacy_rel
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(f"{legacy_line}\n{_MISSPELLED_BRAND} appears again.\n", encoding="utf-8")
 
     offenders, unreadable, scanned = _scan_brand(
         tmp_path,
@@ -425,6 +441,7 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
             "clean.html",
             "song.mp3",
             "mammamiradio/assets/imaging/ATTRIBUTION.md",
+            legacy_rel,
         ],
     )
 
@@ -434,6 +451,7 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
         'hyphenated.json:1: {"name": "mammami-radio-explainer"}',
         "underscored.py:1: PACKAGE = 'mammami_radio_tools'",
         "squashed.md:1: Mammamiradio local behavior: does X.",
+        f"{legacy_rel}:2: {_MISSPELLED_BRAND} appears again.",
     ]
     assert not unreadable
     assert set(scanned) == {
@@ -443,6 +461,7 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
         "underscored.py",
         "squashed.md",
         "clean.html",
+        legacy_rel,
     }
 
 
@@ -481,6 +500,20 @@ def test_frozen_brand_provenance_allowlist_has_no_dead_entries():
         elif _MISSPELLED_BRAND not in path.read_text(encoding="utf-8"):
             stale.append(f"{rel} (already correct)")
     assert not stale, "remove stale paths from _FROZEN_BRAND_PROVENANCE:\n  " + "\n  ".join(stale)
+
+
+def test_legacy_brand_line_allowlist_has_no_dead_entries():
+    """Require each scoped legacy allowance to match one exact tracked line."""
+    stale = []
+    for rel, allowed_line in sorted(_LEGACY_BRAND_LINES):
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            stale.append(f"{rel} (missing)")
+            continue
+        matches = path.read_text(encoding="utf-8").splitlines().count(allowed_line)
+        if matches != 1 or not _brand_violation(allowed_line):
+            stale.append(f"{rel} (expected one exact invalid line, found {matches})")
+    assert not stale, "remove or update stale entries in _LEGACY_BRAND_LINES:\n  " + "\n  ".join(stale)
 
 
 def test_listener_never_shows_raw_server_error():

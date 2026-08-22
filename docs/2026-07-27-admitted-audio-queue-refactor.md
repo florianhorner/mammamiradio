@@ -9,7 +9,7 @@
 
 ## Summary
 
-Mamma Mi Radio will preserve its current listener, operator, HTTP, and Home
+Mammami Radio will preserve its current listener, operator, HTTP, and Home
 Assistant behavior while moving admitted-audio queue ownership behind one deep
 internal module.
 
