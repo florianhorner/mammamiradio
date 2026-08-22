@@ -1,0 +1,79 @@
+name: Explainer Pages
+
+# Publishes the interactive explainer (docs/explainer/dist) to GitHub Pages.
+# The page is subpath-safe by construction (all asset refs are relative and a
+# test guards it), so the project origin works as-is:
+#   https://florianhorner.github.io/mammamiradio/
+#
+# Settings -> Pages -> Source is already set to "GitHub Actions"; the setting
+# is named here because the deploy job fails with a Pages-not-enabled error if
+# it is ever switched back.
+#
+# Deploys only from main, and only when the explainer or this workflow
+# changes. The filter self-includes this file for the same reason explainer.yml
+# does: a change to the publish path must run its own publish path, or a guard
+# can be removed here with no CI signal at all. The dispatch button covers a
+# re-deploy after a Pages hiccup, and a change elsewhere in the repo that the
+# filter does not match.
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/explainer/**", ".github/workflows/explainer-pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Scoped by ref, not global. A dispatched branch build shares nothing with a
+# main deploy, so a run from a branch cannot sit in front of a production
+# publish that cancel-in-progress: false is deliberately not allowed to cancel.
+concurrency:
+  group: explainer-pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: docs/explainer
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.17.1"
+          check-latest: false
+      - name: Install
+        run: npm ci
+      - name: Test before publishing
+        run: npm test
+      - name: Build static site
+        run: npm run build
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: docs/explainer/dist
+
+  deploy:
+    needs: build
+    # Defence in depth. The push trigger is already main-only, and the
+    # github-pages environment carries a main-only branch policy, so this
+    # guard exists for the case those drift: workflow_dispatch accepts any
+    # ref, and a dispatch from a branch would otherwise publish that branch.
+    # Build still runs on any ref, so a dispatch elsewhere tests without
+    # deploying.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
