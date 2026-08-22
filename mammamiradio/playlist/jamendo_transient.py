@@ -71,6 +71,10 @@ JAMENDO_FAILURE_CODES = frozenset(
         "temp_root_invalid",
     }
 )
+# Reasons an attempt can report that are not a rejected candidate. They belong in
+# the breakdown the operator card reads, but must never inflate a count of
+# candidates thrown away: "no usable songs came back" examined nothing.
+_NON_CANDIDATE_REASONS = frozenset({"empty_results"})
 _BLOCKED_PROVIDER_CONTRACT_CODES = frozenset({2, 3, 4, 7, 8, 9, 10, 12, 13})
 _BLOCKED_PROVIDER_AUTH_CODES = frozenset({5, 11})
 _TRACK_ID_RE = re.compile(r"[1-9][0-9]{0,19}")
@@ -712,6 +716,10 @@ class JamendoStreamProvider:
         # operator card needs "what is going wrong right now", which is this.
         # Never rendered as a bare number — it selects which sentence to show.
         self._attempt_rejections: dict[str, int] = {}
+        # Resolved once per attempt at publish time. The error that ENDED the
+        # attempt outranks the most common rejection, so a pass killed by a
+        # timeout does not report an earlier candidate mismatch as the reason.
+        self._attempt_dominant: str | None = None
         self._configuration_apply_blocked = False
         self._started = False
         self._stopped = False
@@ -972,7 +980,7 @@ class JamendoStreamProvider:
                 "last_failure_code": self._last_failure_code,
                 "rejected_count": self._rejected_count,
                 "rejected_this_attempt": sum(self._attempt_rejections.values()),
-                "dominant_failure_code_this_attempt": _dominant_code(self._attempt_rejections),
+                "dominant_failure_code_this_attempt": self._attempt_dominant,
                 "attempt_rejections": dict(self._attempt_rejections),
             }
 
@@ -1254,6 +1262,7 @@ class JamendoStreamProvider:
         source_revision: int,
         *,
         succeeded: bool,
+        terminal_code: str | None = None,
     ) -> None:
         """Replace the per-attempt breakdown, and log it once per attempt.
 
@@ -1267,23 +1276,37 @@ class JamendoStreamProvider:
         correctly sat in the queue under "Jamendo sent back a different song than
         expected", and then aired under it.
 
-        The log line is the diagnosis channel a lifetime total could never
-        provide, and it records the rejections either way because "succeeded
-        after skipping three" is exactly the shape worth seeing. It carries codes
-        and counts only, never client IDs, private audio URLs, or provider
-        response text.
+        ``terminal_code`` names the error that ended the attempt. When it is not
+        itself a candidate rejection — a network timeout on the third exact-ID
+        lookup, say — it wins the dominant slot, because otherwise an attempt
+        killed by a timeout would report "Jamendo sent back a different song than
+        expected" from two earlier rejections while the retry schedule is acting
+        on the timeout.
+
+        The log counts only real candidate rejections. ``empty_results`` means
+        nothing came back to examine, so counting it would report "rejecting 1
+        candidate(s)" for a response that contained none.
         """
+        candidate_rejections = {code: count for code, count in rejections.items() if code not in _NON_CANDIDATE_REASONS}
+        dominant = _dominant_code(rejections)
+        if terminal_code and terminal_code not in rejections:
+            dominant = terminal_code
         with self._lock:
             if not self._still_current_unlocked(epoch, fingerprint, source_revision):
                 return
-            self._attempt_rejections = {} if succeeded else dict(rejections)
+            if succeeded:
+                self._attempt_rejections = {}
+                self._attempt_dominant = None
+            else:
+                self._attempt_rejections = dict(rejections)
+                self._attempt_dominant = dominant
         if rejections:
             logger.info(
                 "Jamendo attempt %s after rejecting %d candidate(s) breakdown=%s dominant=%s",
                 "succeeded" if succeeded else "failed",
-                sum(rejections.values()),
+                sum(candidate_rejections.values()),
                 ",".join(f"{code}:{count}" for code, count in sorted(rejections.items())),
-                _dominant_code(rejections),
+                None if succeeded else dominant,
             )
 
     async def _discover_candidate(self, epoch: int, fingerprint: str, source_revision: int) -> _CandidateData:
@@ -1310,6 +1333,16 @@ class JamendoStreamProvider:
             candidate = await self._discover_candidate_inner(
                 epoch, fingerprint, source_revision, record_rejection, note_attempt_reason
             )
+        except _ProviderError as exc:
+            self._publish_attempt_rejections(
+                attempt_rejections,
+                epoch,
+                fingerprint,
+                source_revision,
+                succeeded=False,
+                terminal_code=exc.code,
+            )
+            raise
         except BaseException:
             self._publish_attempt_rejections(attempt_rejections, epoch, fingerprint, source_revision, succeeded=False)
             raise

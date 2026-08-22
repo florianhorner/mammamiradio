@@ -143,6 +143,34 @@ def test_jamendo_chip_renders_the_human_word() -> None:
     assert "'status: '+presentation.state" not in chip.group(1)
 
 
+def test_blocked_row_never_promises_a_retry() -> None:
+    """Blocked schedules no retry, so no blocked sentence may claim one.
+
+    Jamendo's non-retryable contract rejections surface as ``api_failed``, whose
+    normal copy says "retrying automatically" — on the blocked row that tells the
+    operator to wait for something that will never happen.
+    """
+    body = _ADMIN_TEMPLATE.read_text(encoding="utf-8")
+    presentation = re.search(r"function jamendoPresentation\(status\)\{(.*?)\n\}", body, re.DOTALL)
+    assert presentation is not None
+    blocked = presentation.group(1)[presentation.group(1).rindex("blockedReason") - 400 :]
+    assert "retrying automatically" in blocked, "blocked branch must screen the retry wording"
+    assert "isn't trying again" in blocked, "blocked needs a no-retry fallback sentence"
+
+
+def test_operator_copy_is_deployment_neutral() -> None:
+    """The provider runs standalone too, so copy must not assume the add-on.
+
+    Telling a standalone operator to check "the add-on's storage" names a place
+    that does not exist on their install.
+    """
+    table = _hint_table()
+    for code, sentence in table.items():
+        lowered = sentence.lower()
+        for addon_word in ("add-on", "addon", "supervisor", "home assistant"):
+            assert addon_word not in lowered, f"{code!r} copy assumes a deployment: {sentence!r}"
+
+
 def test_announcement_dedup_key_includes_the_reason() -> None:
     """State and label are constant per branch, so the reason must be in the key.
 

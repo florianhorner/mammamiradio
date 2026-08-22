@@ -4412,7 +4412,7 @@ const JAMENDO_ERROR_COPY={
 function jamendoFailureHint(code){
   return {
     api_auth_failed:"Jamendo isn't accepting the client ID — check it in your Jamendo account and enter it again.",
-    temp_root_invalid:"The station's working folder can't be used — check the add-on's storage.",
+    temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
     api_failed:"Jamendo didn't respond — retrying automatically.",
     api_malformed:"Jamendo sent a reply the station couldn't read — retrying automatically.",
     network_timeout:'Jamendo took too long to answer — retrying automatically.',
@@ -4474,8 +4474,15 @@ function jamendoPresentation(status){
   // api_auth_failed and temp_root_invalid are raised as blocking errors, so a
   // branch that never called jamendoFailureHint left their wording as dead code
   // and told the operator nothing on the one failure that is theirs to fix.
-  const blockedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
-  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:blockedReason?blockedReason+' Starter and local music continue.':'Starter and local music continue.',actions:['retry','off'],announcement:blockedReason||''};
+  // Blocked schedules no retry, so any sentence promising one is wrong here.
+  // Jamendo's non-retryable contract rejections surface as api_failed, whose
+  // normal copy says "retrying automatically" — that would tell the operator to
+  // wait for something that will never happen.
+  let blockedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
+  if(!blockedReason||blockedReason.indexOf('retrying automatically')!==-1){
+    blockedReason="Jamendo turned the station away and isn't trying again — check the Jamendo settings, or turn it off.";
+  }
+  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:blockedReason+' Starter and local music continue.',actions:['retry','off'],announcement:blockedReason};
 }
 // The chip's CSS class stays the machine state; the visible and spoken text
 // does not. "working" / "degraded" / "blocked" are enum values — they tell an

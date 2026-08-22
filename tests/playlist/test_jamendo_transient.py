@@ -2045,3 +2045,64 @@ async def test_attempt_that_finds_nothing_reports_empty_results(tmp_path):
     finally:
         await provider.stop()
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_empty_response_does_not_claim_a_candidate_was_rejected(tmp_path, caplog):
+    """An empty result set examined nothing, so it cannot have rejected anything.
+
+    ``empty_results`` belongs in the breakdown the card reads, but counting it as
+    a candidate made the diagnostic log report "rejecting 1 candidate(s)" for a
+    response that contained none.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_payload([]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client)
+    caplog.set_level(logging.INFO, logger=jt.__name__)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+        assert provider.status()["attempt_rejections"] == {"empty_results": 1}
+        assert provider.status()["rejected_count"] == 0
+        assert "rejecting 0 candidate(s)" in caplog.text
+        assert "rejecting 1 candidate(s)" not in caplog.text
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_error_that_ends_the_attempt_outranks_earlier_rejections(tmp_path):
+    """A pass killed mid-flight must report what killed it.
+
+    Two candidates are rejected, then the next exact-ID lookup fails outright.
+    The retry schedule acts on that terminal failure, so the card naming an
+    earlier candidate mismatch would explain the wrong thing.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("id") is None:
+            return httpx.Response(
+                200,
+                json=_payload([{"id": "aaa"}, {"id": "bbb"}, _item()]),
+                request=request,
+            )
+        return httpx.Response(500, request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+        status = provider.status()
+        # Both earlier rejections stay visible in the breakdown...
+        assert status["attempt_rejections"].get("identity_mismatch") == 2
+        # ...but the reason the attempt ended is what the operator is told.
+        assert status["dominant_failure_code_this_attempt"] == status["last_failure_code"]
+        assert status["dominant_failure_code_this_attempt"] != "identity_mismatch"
+    finally:
+        await provider.stop()
+        await client.aclose()
