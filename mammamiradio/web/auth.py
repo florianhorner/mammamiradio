@@ -25,6 +25,15 @@ _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _CSRF_TOKEN_PLACEHOLDER = "__MAMMAMIRADIO_CSRF_TOKEN__"
 
 
+def has_valid_admin_basic_credentials(credentials: HTTPBasicCredentials | None, config) -> bool:
+    """Return whether the supplied HTTP Basic credentials match the admin config."""
+    if not config.admin_password or credentials is None:
+        return False
+    return secrets.compare_digest(credentials.username, config.admin_username) and secrets.compare_digest(
+        credentials.password, config.admin_password
+    )
+
+
 def _get_csrf_token(app) -> str:
     token = getattr(app.state, "csrf_token", "")
     if not token:
@@ -217,11 +226,7 @@ def require_admin_access(
             return
 
     if config.admin_password:
-        username = credentials.username if credentials else ""
-        password = credentials.password if credentials else ""
-        if secrets.compare_digest(username, config.admin_username) and secrets.compare_digest(
-            password, config.admin_password
-        ):
+        if has_valid_admin_basic_credentials(credentials, config):
             _enforce_csrf_for_basic_auth(request, credentials, config)
             return
         client_ip = request.client.host if request.client else "unknown"

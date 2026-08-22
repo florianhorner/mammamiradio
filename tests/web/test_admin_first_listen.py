@@ -64,6 +64,7 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Hear Mamma Mi Radio in one room." in html
     assert "Meet Marco and Giulia" in html
     assert "Choose one room" in html
+    assert "Play the station" in html
     assert "Check the sound" in html
     assert "Choose whether the hosts can use Home details" in html
     assert "Add new conversations between songs" in html
@@ -175,42 +176,38 @@ def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None
 
 def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> None:
     html = _html()
-    assert "apiResponse('POST','/api/setup/first-listen/players',{},FIRST_LISTEN_TIMEOUTS.players)" in html
-    assert "apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.play)" in html
+    assert "apiResponse('POST','/api/setup/first-listen/players'" not in html
+    assert "apiResponse('POST','/api/setup/first-listen/play'" not in html
+    assert "Find my speakers" not in html
+    assert "Play in this room" not in html
+    assert 'id="firstListenPlayerChoices"' not in html
+    assert 'id="firstListenPlayerSelect"' not in html
+    assert 'id="firstListenFindPlayersBtn"' not in html
     assert (
-        "apiResponse('POST','/api/setup/first-listen/receipt/retry',"
-        "{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.receipt)" in html
-    )
-    assert (
-        "apiResponse('POST','/api/setup/first-listen/verify',"
-        "{attempt_id:attemptId,heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)" in html
+        "apiResponse('POST','/api/setup/first-listen/listener-confirm',"
+        "{heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)" in html
     )
     assert "media-source://mammamiradio/live" in html
-    assert "Play in this room" in html
+    assert "Play the station" in html
     assert "Yes, I hear it" in html
     assert "Not yet" in html
-    assert 'type="radio"' not in html  # choices are built safely after deliberate discovery
-
-    players = _function("renderFirstListenPlayers", "renderFirstListenShow")
-    assert "input.type='radio'" in players
-    assert "input.name='first-listen-player'" in players
-    assert "input.checked=entityId===current" in players
-    assert "firstListenPlayerChanged(select)" in players
-    assert "select.value=entityId" in players
-    assert "players[0]" not in players
+    audio_tag = re.search(r'<audio id="firstListenStationAudio"[^>]*>', html)
+    assert audio_tag is not None
+    assert 'preload="none"' in audio_tag.group(0)
+    assert "playsinline" in audio_tag.group(0)
+    assert "autoplay" not in audio_tag.group(0)
+    assert html.count('id="firstListenStationAudio"') == 1
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    assert "audio.src=`${_base}${FIRST_LISTEN_STREAM}`" in start
+    assert "FIRST_LISTEN_STREAM='/stream?first_listen=1'" in html
+    assert "audio.play()" in start
+    assert "addEventListener('playing',firstListenStationPlaying)" in html
     assert "volume_set" not in html
-    assert "volume_level" not in _function("startFirstListen", "saveFirstListenAttempt")
+    assert "volume_level" not in start
 
 
 def test_home_assistant_labels_are_added_with_text_content() -> None:
-    player_block = _function("renderFirstListenPlayers", "renderFirstListenShow")
-    preview_block = _function("renderHomeContextPreview", "findFirstListenPlayers")
-
-    assert "const friendlyName=firstListenPlayerLabel(player)" in player_block
-    assert "option.textContent=friendlyName" in player_block
-    assert "copy.textContent=friendlyName" in player_block
-    assert "select.replaceChildren()" in player_block
-    assert ".innerHTML" not in player_block
+    preview_block = _function("renderHomeContextPreview", "retestFirstListenSpeaker")
     for assignment in (
         "title.textContent=label",
         "meta.textContent=",
@@ -259,13 +256,13 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     assert "configuredKeys.length?'complete':'optional'" in progress
     assert "aiFieldset.disabled=(!privacyMilestone&&projection.haAccess)||!projection.showAi" in progress
     assert "You do not need to play the station again." in progress
-    assert "Your existing speaker choice still stands. Review your Home details next." in progress
+    assert "Your existing listening check still stands. Review your Home details next." in progress
 
     html = _html()
     render_start = html.index("function renderFirstListen(setup")
     setup = html[render_start : html.index("function renderSetup", render_start)]
     assert "Your existing station stays as it is." in setup
-    assert "You do not need to replay the speaker." in setup
+    assert "You do not need to replay the station." in setup
     assert "/api/setup/first-listen/play',{entity_id" not in setup + progress
 
     choice = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
@@ -310,7 +307,7 @@ def test_privacy_choice_invalidates_the_client_preview_proof() -> None:
     assert "Show your Home details again, then save the choice." in progress
     assert "Save the private choice again." in progress
 
-    preview = _function("renderHomeContextPreview", "findFirstListenPlayers")
+    preview = _function("renderHomeContextPreview", "retestFirstListenSpeaker")
     assert "payload.status==='review_retry'" in preview
     assert "payload.enabled===true?'Home context is on" in preview
 
@@ -318,29 +315,22 @@ def test_privacy_choice_invalidates_the_client_preview_proof() -> None:
 def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
     cases = (
         (
-            "findFirstListenPlayers",
-            "firstListenPlayerChanged",
-            "apiResponse('POST','/api/setup/first-listen/players',{},FIRST_LISTEN_TIMEOUTS.players)",
-            "_firstListenUi.players=players",
-        ),
-        (
             "startFirstListen",
             "saveFirstListenAttempt",
-            "apiResponse('POST','/api/setup/first-listen/play',{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.play)",
-            "_firstListenUi.dispatch='accepted'",
+            "apiResponse('POST','/api/resume',undefined,FIRST_LISTEN_TIMEOUTS.play)",
+            "audio.src=`${_base}${FIRST_LISTEN_STREAM}`",
         ),
         (
             "saveFirstListenAttempt",
             "verifyFirstListen",
-            "apiResponse('POST','/api/setup/first-listen/receipt/retry',"
-            "{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.receipt)",
+            "apiResponse('POST','/api/setup/first-listen/listener-confirm',{heard:true},FIRST_LISTEN_TIMEOUTS.receipt)",
             "_firstListenUi.attemptId=attemptId",
         ),
         (
             "verifyFirstListen",
             "loadHomeContextPreview",
-            "apiResponse('POST','/api/setup/first-listen/verify',"
-            "{attempt_id:attemptId,heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)",
+            "apiResponse('POST','/api/setup/first-listen/listener-confirm',"
+            "{heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)",
             "_firstListenUi.verification=requestedHeard?'heard':'not_yet'",
         ),
         (
@@ -360,14 +350,19 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
     for name, next_name, request, state_advance in cases:
         block = _function(name, next_name)
         assert request in block
-        assert "const resp=payload&&typeof payload==='object'?payload:{}" in block
+        if name != "startFirstListen":
+            assert "const resp=payload&&typeof payload==='object'?payload:{}" in block
         guard_text = {
-            "findFirstListenPlayers": "if(!discoveryReady){",
+            "startFirstListen": "}catch(error){",
             "loadHomeContextPreview": "if(!detachedPreview){",
             "chooseFirstListenPrivacy": "if(!choiceSaved){",
         }.get(name, "if(!response.ok||resp?.ok!==true")
-        guard = block.index(guard_text)
-        assert guard < block.index(state_advance)
+        if name == "startFirstListen":
+            assert state_advance in block
+            assert block.index("}catch(error){") < block.index("_firstListenUi.dispatch='rejected'")
+        else:
+            guard = block.index(guard_text)
+            assert guard < block.index(state_advance)
 
     privacy = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert "api('PATCH','/api/setup/home-context-choice'" not in privacy
@@ -377,30 +372,24 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
 
 def test_first_listen_side_effect_responses_are_bound_to_the_exact_request() -> None:
     start = _function("startFirstListen", "saveFirstListenAttempt")
-    partial_play = (
-        "const acceptedWithoutReceipt=response.ok===false&&response.status===503&&resp?.ok===false"
-        "&&resp?.accepted===true&&resp?.receipt_persisted===false&&resp?.entity_id===entityId"
-        "&&resp?.error?.code==='receipt_unavailable'"
-    )
-    assert partial_play in start
-    assert "if(!response.ok||resp?.ok!==true||resp?.accepted!==true||resp?.entity_id!==entityId){" in start
-    assert "resp?.receipt_persisted!==true||!attemptId" in start
-    assert "resp?.error?.code==='receipt_unavailable'?{error:{code:'invalid_request'}}:resp" in start
-    assert start.index(partial_play) < start.index("_firstListenUi.dispatch='receipt_failed'")
-    assert start.index("resp?.entity_id!==entityId") < start.index("_firstListenUi.dispatch='accepted'")
+    assert "audio.src=`${_base}${FIRST_LISTEN_STREAM}`" in start
+    assert "audio.play()" in start
+    assert "_firstListenUi.dispatch='starting'" in start
+    playing = _function("firstListenStationPlaying", "initFirstListenStationAudio")
+    assert "_firstListenUi.dispatch='accepted'" in playing
+    assert "firstListenVerifyHeading" in playing
 
     save = _function("saveFirstListenAttempt", "verifyFirstListen")
-    retry_guard = "if(!response.ok||resp?.ok!==true||resp?.accepted!==true||resp?.entity_id!==entityId){"
+    retry_guard = "if(!response.ok||resp?.ok!==true||resp?.heard!==true||resp?.first_listen_achieved!==true){"
     assert retry_guard in save
     assert "resp?.receipt_persisted!==true||!attemptId" in save
     assert save.index(retry_guard) < save.index("_firstListenUi.attemptId=attemptId")
 
     verify = _function("verifyFirstListen", "loadHomeContextPreview")
     assert "const requestedHeard=Boolean(heard)" in verify
-    assert "{attempt_id:attemptId,heard:requestedHeard}" in verify
+    assert "{heard:requestedHeard}" in verify
     verification_binding = (
-        "const verificationMatches=resp?.attempt_id===attemptId&&resp?.heard===requestedHeard"
-        "&&(!requestedHeard||resp?.first_listen_achieved===true)"
+        "const verificationMatches=resp?.heard===requestedHeard&&(!requestedHeard||resp?.first_listen_achieved===true)"
     )
     assert verification_binding in verify
     assert "if(!response.ok||resp?.ok!==true||!verificationMatches){" in verify
@@ -428,20 +417,12 @@ def test_first_listen_side_effect_responses_are_bound_to_the_exact_request() -> 
 
 
 def test_discovery_and_privacy_preview_require_canonical_detached_envelopes() -> None:
-    discovery = _function("findFirstListenPlayers", "firstListenPlayerChanged")
-    assert (
-        "const discoveryReady=response.ok===true&&resp?.ok===true&&resp?.media_source_ready===true"
-        "&&resp?.media_source_uri===FIRST_LISTEN_MEDIA_SOURCE"
-    ) in discovery
-    assert "if(!discoveryReady){" in discovery
-    assert "{error:{code:'media_source_missing'}}" in discovery
-    assert discovery.index("if(!discoveryReady){") < discovery.index("_firstListenUi.players=players")
-    assert discovery.index("if(!discoveryReady){") < discovery.index("startFirstListenClock();")
-    transport_catch = discovery.split("}catch(error){", 1)[1]
-    assert "_firstListenUi.players=[]" in transport_catch
-    assert "const projectedRecovery=firstListenReceiptRecoveryEntity(firstListenProjection().first)" in transport_catch
-    assert "_firstListenUi.dispatch==='receipt_failed'?_firstListenUi.selectedEntityId:''" in transport_catch
-    assert "renderFirstListenPlayers([], '', pendingRecovery)" in transport_catch
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    assert "audio.src=`${_base}${FIRST_LISTEN_STREAM}`" in start
+    assert "startFirstListenClock();" in start
+    assert start.index("startFirstListenClock();") < start.index("audio.play()")
+    playing = _function("firstListenStationPlaying", "initFirstListenStationAudio")
+    assert playing.index("_firstListenUi.dispatch='accepted'") < playing.index("renderFirstListenProgress()")
 
     preview = _function("loadHomeContextPreview", "loadCachedHomeContextDiagnostics")
     assert (
@@ -503,24 +484,21 @@ def test_not_yet_has_warm_bounded_repair_and_no_volume_mutation() -> None:
     repair_end = html.index('id="firstListenRetestWrap"', repair_start)
     repair = html[repair_start:repair_end]
 
-    assert "Get the room playing." in repair
+    assert "Get this device playing." in repair
     assert "Wait a few seconds" in repair
     assert "check mute and volume" in repair
-    assert "Check that the saved speaker is the room you meant." in repair
+    assert "Confirm the sound is coming from this tab, not another app." in repair
     assert "Technical help is below the journey." in repair
     assert 'id="firstListenRetryBtn"' in repair
-    assert "Try this room again" in repair
-    assert 'id="firstListenChooseAnotherBtn"' in repair
-    assert "Choose another speaker" in repair
-    choose_another = _function("chooseAnotherFirstListenSpeaker", "startFirstListen")
-    assert "_firstListenUi.selectionDirty=true" in choose_another
-    assert "_firstListenUi.retestPending=true" in choose_another
-    assert "_firstListenUi.selectedEntityId=''" in choose_another
-    assert "_firstListenUi.attemptId=''" in choose_another
-    assert "_firstListenUi.dispatch='ready'" in choose_another
-    assert "_firstListenUi.verification='awaiting'" in choose_another
-    assert "document.querySelectorAll('#firstListenPlayerChoices input')" in choose_another
-    assert "input.checked=false" in choose_another
+    assert "Try this device again" in repair
+    assert 'id="firstListenChooseAnotherBtn"' not in html
+    assert "Choose another speaker" not in html
+    retest = _function("retestFirstListenSpeaker", "startFirstListen")
+    assert "_firstListenUi.selectionDirty=true" in retest
+    assert "_firstListenUi.retestPending=true" in retest
+    assert "_firstListenUi.attemptId=''" in retest
+    assert "_firstListenUi.dispatch='ready'" in retest
+    assert "_firstListenUi.verification='awaiting'" in retest
     projection = _function("firstListenProjection", "firstListenSourceStatus")
     assert "serverProofMatches=!_firstListenUi.selectionDirty" in projection
     assert "volume_set" not in html
@@ -532,28 +510,22 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     panel_start = html.index('id="firstListenReceiptRepair"')
     panel_end = html.index('id="firstListenRepair"', panel_start)
     panel = html[panel_start:panel_end]
-    start = _function("startFirstListen", "saveFirstListenAttempt")
+    verify = _function("verifyFirstListen", "loadHomeContextPreview")
     save = _function("saveFirstListenAttempt", "verifyFirstListen")
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    recovery_entity = _function("firstListenReceiptRecoveryEntity", "hydrateFirstListenReceiptRecovery")
-    hydrate = _function("hydrateFirstListenReceiptRecovery", "renderFirstListenPlayers")
-    players = _function("renderFirstListenPlayers", "renderFirstListenProgress")
-    discovery = _function("findFirstListenPlayers", "firstListenPlayerChanged")
     render_start = html.index("function renderFirstListen(setup")
     render = html[render_start : html.index("function renderSetup", render_start)]
     projection = _function("firstListenProjection", "firstListenSourceStatus")
 
-    assert "Home Assistant already sent the station." in panel
+    assert "The station already started on this device." in panel
     assert "Restore the missing sound check without playing it again." in panel
-    assert "This will not replay the room speaker." in panel
+    assert "This will not replay the station." in panel
     assert 'id="firstListenSaveAttemptBtn"' in panel
     assert "Restore sound check" in panel
     assert 'id="firstListenVerifyActions"' in html
-    assert "const acceptedWithoutReceipt=" in start
-    assert "if(acceptedWithoutReceipt)" in start
-    assert "_firstListenUi.attemptId=''" in start
-    assert "_firstListenUi.dispatch='receipt_failed'" in start
-    assert "_firstListenUi.repairOpen=true" in start
+    assert "receipt_unavailable" in verify
+    assert "_firstListenUi.dispatch='receipt_failed'" in verify
+    assert "_firstListenUi.repairOpen=true" in verify
     assert "const receiptRepairRequired=_firstListenUi.dispatch==='receipt_failed'" in progress
     assert "receiptRepairRequired||listenAccepted?'current'" in progress
     assert "verifyActions.hidden=receiptRepairRequired" in progress
@@ -562,37 +534,19 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "_firstListenUi.receiptSaving=true" in save
     assert "_firstListenUi.receiptSaving=false" in save
     assert (
-        "apiResponse('POST','/api/setup/first-listen/receipt/retry',"
-        "{entity_id:entityId},FIRST_LISTEN_TIMEOUTS.receipt)" in save
+        "apiResponse('POST','/api/setup/first-listen/listener-confirm',"
+        "{heard:true},FIRST_LISTEN_TIMEOUTS.receipt)" in save
     )
     assert "/api/setup/first-listen/play" not in save
     assert "resp?.receipt_persisted!==true||!attemptId" in save
     assert "_firstListenUi.dispatch='accepted'" in save
-    assert "code==='receipt_recovery_missing'" in save
-    assert "_firstListenUi.dispatch='ready'" in save
-    assert "focusTarget='firstListenPlayBtn'" in save
     assert "receiptRepair.hidden=!receiptRepairRequired" in progress
     assert "repair.hidden=!_firstListenUi.repairOpen||receiptRepairRequired" in progress
     assert "_firstListenUi.receiptSaving" in progress
     save_disabled = next(line for line in progress.splitlines() if "saveAttemptBtn.disabled=" in line)
     assert "_firstListenUi.players" not in save_disabled
-
-    assert "recovery.available!==true" in recovery_entity
-    assert "entityId.startsWith('media_player.')" in recovery_entity
-    assert "!entityId||_firstListenUi.selectionDirty" in hydrate
-    assert "_firstListenUi.attemptId=''" in hydrate
-    assert "_firstListenUi.selectedEntityId=entityId" in hydrate
-    assert "_firstListenUi.dispatch='receipt_failed'" in hydrate
-    assert "_firstListenUi.repairOpen=true" in hydrate
-    assert "startFirstListen(" not in hydrate
-    assert "pendingRecoveryEntityId" in players
-    assert "current===pendingRecovery" in players
-    assert "Previously selected speaker" in players
-    assert "hydrateFirstListenReceiptRecovery(resp)" in discovery
-    assert "renderFirstListenPlayers(players,saved,pendingRecovery)" in discovery
-    assert "const recoveredEntity=hydrateFirstListenReceiptRecovery(first)" in render
-    assert "if(!recoveredEntity&&attempt" in render
-    assert "if(!recoveredEntity&&!_firstListenUi.retestPending&&projectionMatchesSelection" in render
+    assert "hydrateFirstListenReceiptRecovery(first)" not in render
+    assert "const durableHeard=Boolean(first.audio_complete||first.heard_at" in render
     assert "const serverAttempt=String(first.accepted_attempt_id||verification.attempt_id||'')" in projection
     assert (
         "const localAttemptMatches=!_firstListenUi.attemptId||!serverAttempt||"
@@ -605,7 +559,8 @@ def test_unsaved_accepted_attempt_is_recovered_without_replaying() -> None:
     assert "pendingReceiptProjected" in projection
     assert "!localProofPending&&!pendingReceiptProjected&&serverProofMatches" in projection
     assert "!pendingReceiptProjected&&serverProofMatches" in projection
-    assert "/api/setup/first-listen/play" not in hydrate + render
+    assert "/api/setup/first-listen/play" not in render
+    assert "/api/setup/first-listen/players" not in html
 
 
 def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
@@ -623,27 +578,23 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
 def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() -> None:
     html = _html()
     for control_id in (
-        "firstListenFindPlayersBtn",
-        "firstListenPlayerChoices",
-        "firstListenPlayerSelect",
         "firstListenPlayBtn",
         "firstListenHeardBtn",
         "firstListenNotYetBtn",
         "firstListenRetryBtn",
-        "firstListenChooseAnotherBtn",
         "firstListenSaveAttemptBtn",
         "firstListenPreviewBtn",
         "firstListenKeepOffBtn",
         "firstListenEnableContextBtn",
         "firstListenRetestBtn",
-        "firstListenChooseSpeakerToRetestBtn",
+        "firstListenStationAudio",
     ):
         assert html.count(f'id="{control_id}"') == 1
 
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "quickAction" not in progress
     assert "quickCopy" not in progress
-    assert "firstListenSetActionTone(playBtn,_firstListenUi.players.length>0&&!listenAccepted)" in progress
+    assert "firstListenSetActionTone(playBtn,!listenAccepted)" in progress
     assert "select.replaceChildren" not in progress
     assert "playerSelect').innerHTML" not in progress
     assert "document.activeElement" not in progress
@@ -698,10 +649,9 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     assert 'preload="none"' in audio_tag.group(0)
     assert "autoplay" not in audio_tag.group(0)
     assert html.count('id="firstListenGuideAudio"') == 1
-    assert html.count('class="guide-audio-play"') == 8
+    assert html.count('class="guide-audio-play"') == 7
     for key in (
         "welcome",
-        "speaker",
         "sound-check",
         "not-yet",
         "receipt-recovery",
@@ -710,6 +660,7 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
         "success",
     ):
         assert f'data-guide-key="{key}"' in html
+    assert 'data-guide-key="speaker"' not in html
 
     guides_start = html.index("const FIRST_LISTEN_GUIDES={")
     guides_end = html.index("function initFirstListenTechnicalDetails", guides_start)
@@ -736,6 +687,7 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     for forbidden in (
         "/api/setup/first-listen/play",
         "/api/setup/first-listen/verify",
+        "/api/setup/first-listen/listener-confirm",
         "/api/setup/first-listen/receipt/retry",
         "/api/setup/home-context-choice",
         "startFirstListen(",
@@ -775,7 +727,9 @@ def test_existing_install_retest_requires_a_fresh_human_confirmation() -> None:
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     retest = _function("retestFirstListenSpeaker", "startFirstListen")
     start = _function("startFirstListen", "saveFirstListenAttempt")
-    save = _function("saveFirstListenAttempt", "verifyFirstListen")
+    # Not asserted on here; the call still pins that saveFirstListenAttempt
+    # exists in admin.html, because _function raises when the symbol is absent.
+    _function("saveFirstListenAttempt", "verifyFirstListen")
     verify = _function("verifyFirstListen", "loadHomeContextPreview")
     render_start = html.index("function renderFirstListen(setup")
     render = html[render_start : html.index("function setupProviderLabels", render_start)]
@@ -790,7 +744,6 @@ def test_existing_install_retest_requires_a_fresh_human_confirmation() -> None:
     assert "const existingProof=priorInstall&&!_firstListenUi.selectionDirty&&!projection.proofPending" in progress
     assert "_firstListenUi.retestPending=true" in retest
     assert "_firstListenUi.retestPending=false" not in start
-    assert "_firstListenUi.retestPending=false" not in save
     assert "if(!response.ok||resp?.ok!==true||!verificationMatches){" in verify
     assert verify.index("if(!response.ok||resp?.ok!==true||!verificationMatches){") < verify.index(
         "_firstListenUi.retestPending=false"
@@ -798,7 +751,7 @@ def test_existing_install_retest_requires_a_fresh_human_confirmation() -> None:
     heard_branch = verify.split("if(requestedHeard){", 1)[1].split("}else{", 1)[0]
     assert "_firstListenUi.retestPending=false" in heard_branch
     assert "_firstListenUi.retestPending=false" not in verify.split("}else{", 1)[1]
-    assert "!_firstListenUi.retestPending&&projectionMatchesSelection" in render
+    assert "durableHeard&&!_firstListenUi.retestPending" in render
 
 
 def test_existing_install_without_a_saved_speaker_routes_to_selection() -> None:
@@ -807,12 +760,11 @@ def test_existing_install_without_a_saved_speaker_routes_to_selection() -> None:
     retest = _function("retestFirstListenSpeaker", "startFirstListen")
 
     assert 'id="firstListenRetestBtn"' in html
-    assert 'id="firstListenChooseSpeakerToRetestBtn"' in html
-    assert "Choose a speaker to test" in html
-    assert "const canRetestSavedSpeaker=Boolean(_firstListenUi.selectedEntityId)" in progress
-    assert "if(retestBtn)retestBtn.hidden=!canRetestSavedSpeaker" in progress
-    assert "if(chooseSpeakerToRetestBtn)chooseSpeakerToRetestBtn.hidden=canRetestSavedSpeaker" in progress
-    assert "if(!_firstListenUi.selectedEntityId){chooseAnotherFirstListenSpeaker();return;}" in retest
+    assert 'id="firstListenChooseSpeakerToRetestBtn"' not in html
+    assert "Choose a speaker to test" not in html
+    assert "if(retestBtn)retestBtn.hidden=false" in progress
+    assert "startFirstListen(el)" in retest
+    assert "chooseAnotherFirstListenSpeaker" not in retest
 
 
 def test_fresh_completion_uses_a_separate_success_surface() -> None:
@@ -820,9 +772,13 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
     assert 'id="firstListenSuccess" aria-labelledby="firstListenSuccessTitle" hidden aria-hidden="true" inert' in html
     assert "Bravo! Your first broadcast is complete." in html
     assert "Your station is on air." in html
-    assert "Open your station" in html
+    assert "Open full listener" in html
+    assert 'onclick="openListener()"' in html
+    success_actions = html[html.index('class="success-actions"') : html.index('id="firstListenSuccessRepair"')]
+    assert success_actions.index("Open full listener") < success_actions.index("Station controls")
     assert "Review choices" in html
     assert "Play the celebration" in html
+    assert "Open your station" not in html
 
     update = _function("updateFirstListenSuccess", "reviewFirstListenChoices")
     assert "const show=Boolean(_firstListenUi.showSuccess)" in update
@@ -903,9 +859,8 @@ def test_post_hacs_timing_is_local_and_ends_only_on_heard_confirmation() -> None
     assert "mammamiradio:first-listen-ready" in html
     assert "mammamiradio:first-listen-heard" in html
     assert "mammamiradio:first-listen-post-hacs" in html
-    discovery = _function("findFirstListenPlayers", "firstListenPlayerChanged")
-    assert "if(!discoveryReady){" in discovery
-    assert "startFirstListenClock();" in discovery
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    assert "startFirstListenClock();" in start
     verify = _function("verifyFirstListen", "loadHomeContextPreview")
     assert "if(requestedHeard){" in verify
     assert "completeFirstListenClock();" in verify
@@ -950,19 +905,24 @@ def test_every_first_listen_mutation_carries_a_deadline_and_a_way_out() -> None:
     assert "const FIRST_LISTEN_TIMEOUTS={" in html
     assert "function firstListenTimedOut(error){return Boolean(error&&error.name==='AbortError')}" in html
 
-    for route, budget in (
-        ("/api/setup/first-listen/players", "FIRST_LISTEN_TIMEOUTS.players"),
-        ("/api/setup/first-listen/play", "FIRST_LISTEN_TIMEOUTS.play"),
-        ("/api/setup/first-listen/receipt/retry", "FIRST_LISTEN_TIMEOUTS.receipt"),
-        ("/api/setup/first-listen/verify", "FIRST_LISTEN_TIMEOUTS.verify"),
-    ):
+    for route, budget in (("/api/resume", "FIRST_LISTEN_TIMEOUTS.play"),):
         call = re.search(rf"apiResponse\('POST','{re.escape(route)}',[^;]*?\);", html)
         assert call is not None, f"{route} is no longer called through apiResponse"
         assert budget in call.group(0), f"{route} is dispatched with no deadline"
 
+    listener_confirm_calls = [
+        match.group(0)
+        for match in re.finditer(
+            r"apiResponse\('POST','/api/setup/first-listen/listener-confirm',[^;]*?\);",
+            html,
+        )
+    ]
+    assert listener_confirm_calls
+    for call in listener_confirm_calls:
+        assert "FIRST_LISTEN_TIMEOUTS." in call, f"{call} is dispatched with no deadline"
+
     # Every timeout tells the operator what to do next, never just that it failed.
     for owner, nxt, latch in (
-        ("findFirstListenPlayers", "firstListenPlayerChanged", "_firstListenUi.busy=false"),
         ("startFirstListen", "saveFirstListenAttempt", "_firstListenUi.busy=false"),
         ("saveFirstListenAttempt", "verifyFirstListen", "_firstListenUi.receiptSaving=false"),
         ("verifyFirstListen", "loadHomeContextPreview", "_firstListenUi.busy=false"),
@@ -1001,7 +961,7 @@ def test_a_slow_or_missing_guide_clip_cannot_block_setup() -> None:
 
 
 def test_a_superseded_guide_clip_never_tidies_up_the_shared_player() -> None:
-    """All eight clips share one <audio>, so attempts must not touch each other.
+    """All remaining clips share one <audio>, so attempts must not touch each other.
 
     Clicking a second guide calls stopFirstListenGuide, whose load() rejects the
     first pending play() with AbortError. Without a ticket, that older attempt's

@@ -6,11 +6,13 @@ One background task stays ahead and produces segments. Another reads the next re
 
 A fresh install awaiting audible First Listen proof has one client-local step
 in front of that shared timeline: `/stream` emits a reviewed, packaged mini-show
-and only then subscribes that client to `LiveStreamHub`. The asset starts with
-ready MP3 bytes, so it adds no startup render or network dependency. Because it
-never enters `asyncio.Queue[Segment]`, existing listeners, now-playing state,
-and the producer remain untouched. Completed and pre-feature installs go
-straight to the live hub.
+and only then subscribes that client to `LiveStreamHub`. Required proof is
+hearing that stream on this device; Home Assistant speaker dispatch stays an
+optional later route. The asset starts with ready MP3 bytes, so it adds no
+startup render or network dependency. Because it never enters
+`asyncio.Queue[Segment]`, existing listeners, now-playing state, and the
+producer remain untouched. Completed and pre-feature installs go straight to
+the live hub.
 
 ## Runtime overview
 

@@ -81,7 +81,6 @@ BROWSER_GUIDE_MAX_LUFS = -14.0
 BROWSER_GUIDE_MAX_TRUE_PEAK_DBTP = -1.0
 BROWSER_GUIDE_PATHS = (
     "first_listen/welcome.mp3",
-    "first_listen/speaker.mp3",
     "first_listen/sound-check.mp3",
     "first_listen/not-yet.mp3",
     "first_listen/receipt-recovery.mp3",

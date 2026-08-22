@@ -48,18 +48,6 @@
       ]
     },
     {
-      "path": "first_listen/speaker.mp3",
-      "sha256": "7d609a45835163b766cb79d83040e3a92a02d060a9f318f8ccad5b43c9a360b3",
-      "kind": "speech",
-      "language": "en",
-      "transcript": "Marco: Pick the room. Kitchen, living room, wherever radio belongs. Giulia: We only show speakers Home Assistant already knows. We never choose one or touch the volume.",
-      "duration_seconds": 10.68,
-      "speakers": [
-        "Marco",
-        "Giulia"
-      ]
-    },
-    {
       "path": "first_listen/sound-check.mp3",
       "sha256": "bbbff207124bee942b8e7a0b511f358e82601607f85888cb7ebae4d5b21cd7d6",
       "kind": "speech",

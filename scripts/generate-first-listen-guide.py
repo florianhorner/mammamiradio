@@ -65,16 +65,6 @@ GUIDE_CLIPS = (
         station_sting=True,
     ),
     GuideClip(
-        "speaker",
-        (
-            GuideLine("Marco", "Pick the room. Kitchen, living room, wherever radio belongs."),
-            GuideLine(
-                "Giulia",
-                "We only show speakers Home Assistant already knows. We never choose one or touch the volume.",
-            ),
-        ),
-    ),
-    GuideClip(
         "sound-check",
         (
             GuideLine("Marco", "We sent the station. If you can hear us, say yes."),

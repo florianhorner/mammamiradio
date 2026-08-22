@@ -48,7 +48,13 @@ recovery cover are described honestly. The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
 
-Select **Find my speakers**, choose one physical `media_player`, then select
+Required First Listen proof is hearing the station on this device in the add-on
+Web UI. Select **Play the station**, then **Yes, I hear it** only after you hear
+the opening, or use the [this-device repair
+steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
+
+Home Assistant speakers remain optional. After installing the HACS integration,
+select **Find my speakers**, choose one physical `media_player`, then select
 **Start Mamma Mi Radio**. The dispatch contract is always
 `media-source://mammamiradio/live`. An accepted Home Assistant service call is
 not audible proof: record **Yes — that’s Mamma Mi Radio** only after the opening

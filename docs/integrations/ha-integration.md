@@ -8,11 +8,11 @@ actually honor.
 It complements the add-on. The add-on plays the audio and serves the
 now-playing contract; this integration is the HA-native face of it.
 
-This integration is optional for browser-only listening, but required for the
-First Listen speaker path. Install it to register the Media Source that Setup
-dispatches to a physical speaker. The add-on can still serve its browser player
-without it, but browser audio is not accepted as First Listen proof. HACS
-installation takes effect only after a Home Assistant restart.
+This integration is optional. The First Listen flow, `/listen` page, and
+`/stream` work without HACS. Install it when you want Home Assistant speakers
+to play `media-source://mammamiradio/live`; that route is not required to
+finish setup. HACS installation takes effect only after a Home Assistant
+restart.
 
 ## What you get
 
@@ -48,7 +48,7 @@ integration domain, entity ID, and media-source ID stay stable:
 `mammamiradio`, `media_player.mammamiradio`, and
 `media-source://mammamiradio/live`.
 
-## Install the HACS integration for speaker playback
+## Install the HACS integration for HA-native playback
 
 If HACS itself is not installed and configured yet, complete the [official HACS
 installation](https://www.hacs.xyz/docs/use/download/download/) first. Then add
@@ -87,12 +87,14 @@ conflict, reload the integration (Settings → Devices & Services → Mamma Mi R
 → ⋮ → **Reload**) to clear the notice. If you leave the push on, Media Source
 speaker playback still works and the add-on keeps its basic media-player tile.
 
-## Play it on one speaker
+## Optional: play it on a Home Assistant speaker
 
-This is the First Listen proof: a real Home Assistant speaker playing the
-station through Media Source, rather than a browser tab. Complete the following
-in order after you have installed the integration and restarted Home Assistant.
-The media-player ownership choice above does not change this route.
+Required First Listen proof is hearing the station on the current device.
+This section is an optional later route: a physical `media_player` playing
+`media-source://mammamiradio/live`. Confirm the room is audible yourself;
+Home Assistant accepting the request is not firsthand confirmation. Complete
+the following after you have installed the integration and restarted Home
+Assistant. The media-player ownership choice above does not change this route.
 
 1. Open the Mamma Mi Radio add-on Web UI. A fresh unfinished install opens
    **First Listen** automatically; completed or existing installs can select

@@ -336,6 +336,14 @@ Voice validation now runs at config load, not at synthesis time:
 - When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
+## First Listen does not play on this device
+
+Required First Listen proof is hearing the station in the add-on Web UI on this
+device. If **Play the station** is quiet, check mute and volume on this tab,
+confirm the sound is coming from this browser and not another app, then try
+**Play the station** again. Technical details under the journey name the stream
+URL. Home Assistant speakers are an optional later route, not this step.
+
 ## First Listen cannot find any speakers
 
 Speaker discovery asks Home Assistant for its `media_player` entities, so it

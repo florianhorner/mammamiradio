@@ -135,6 +135,9 @@ scripts/first-listen-lab.sh replay
 open http://127.0.0.1:8000/admin
 ```
 
+Required First Listen proof is hearing the station on this device in `/admin`.
+This lab remains the way to exercise the optional Home Assistant speaker path.
+
 Then, in **First Listen** (the automatic fresh-install landing):
 
 1. Confirm that the opening card leads with the authored 27-second mini-show:

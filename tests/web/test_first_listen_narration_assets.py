@@ -27,7 +27,6 @@ GENERATOR_PATH = ROOT / "scripts" / "generate-first-listen-guide.py"
 SHIPPED_AUDIO_ROOT = ROOT / "mammamiradio" / "web" / "static" / "audio"
 EXPECTED_CLIPS = (
     "first_listen/welcome.mp3",
-    "first_listen/speaker.mp3",
     "first_listen/sound-check.mp3",
     "first_listen/not-yet.mp3",
     "first_listen/receipt-recovery.mp3",
@@ -363,10 +362,10 @@ def test_admin_guide_metadata_rejects_container_inventory_drift(tmp_path: Path) 
 def test_admin_guide_metadata_rejects_button_key_and_onclick_mismatch(tmp_path: Path) -> None:
     manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
     source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    source = source.replace('data-guide-key="welcome"', 'data-guide-key="speaker"', 1)
+    source = source.replace('data-guide-key="welcome"', 'data-guide-key="sound-check"', 1)
     source = source.replace(
         "onclick=\"toggleFirstListenGuide('welcome',this)\"",
-        "onclick=\"toggleFirstListenGuide('speaker',this)\"",
+        "onclick=\"toggleFirstListenGuide('sound-check',this)\"",
         1,
     )
     template_path = tmp_path / "admin.html"
@@ -374,7 +373,7 @@ def test_admin_guide_metadata_rejects_button_key_and_onclick_mismatch(tmp_path: 
 
     errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
 
-    assert "admin guide welcome play button data-guide-key 'speaker' does not match its container" in errors
+    assert "admin guide welcome play button data-guide-key 'sound-check' does not match its container" in errors
     assert any(
         "admin guide welcome play button onclick" in error and "toggleFirstListenGuide('welcome',this)" in error
         for error in errors
@@ -404,8 +403,8 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     assert source.count(welcome_button) == 1
     source = source.replace(welcome_button, f"{welcome_button}{welcome_button}", 1)
     source = source.replace(
-        'class="guide-audio-play" data-guide-key="speaker"',
-        'class="guide-audio-play-disabled" data-guide-key="speaker"',
+        'class="guide-audio-play" data-guide-key="sound-check"',
+        'class="guide-audio-play-disabled" data-guide-key="sound-check"',
         1,
     )
     template_path = tmp_path / "admin.html"
@@ -414,7 +413,7 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
 
     assert "admin guide welcome must contain exactly one guide-audio-play button; found 2" in errors
-    assert "admin guide speaker must contain exactly one guide-audio-play button; found 0" in errors
+    assert "admin guide sound-check must contain exactly one guide-audio-play button; found 0" in errors
 
 
 def test_default_validates_both_inventories_and_custom_root_stays_single(
@@ -519,7 +518,7 @@ def test_browser_narration_rejects_fallback_render(
 @pytest.mark.requires_ffmpeg
 def test_hash_approved_non_audio_still_fails_ffprobe(copied_pack: tuple[Path, Path]) -> None:
     static_root, audio_root = copied_pack
-    relative_path = "first_listen/speaker.mp3"
+    relative_path = "first_listen/sound-check.mp3"
     payload = b"not an audio stream" * 200
     (audio_root / relative_path).write_bytes(payload)
 
