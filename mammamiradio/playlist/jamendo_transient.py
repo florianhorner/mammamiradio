@@ -282,7 +282,7 @@ def _candidate_from_exact_result(item: object, expected_id: str) -> _CandidateDa
 
 
 def _coarse_provider_code(value: object) -> int | None:
-    """Return a bounded numeric provider code without reflecting response text."""
+    """Normalize a provider code to an integer from 0 through 9999, or return ``None``."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):

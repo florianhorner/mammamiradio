@@ -191,7 +191,7 @@ def _mark_provider_apply_failure(provider: object | None) -> None:
 
 
 def _log_provider_control_failure(code: str) -> None:
-    """Log a stable failure category without reflecting exception details."""
+    """Log the stable failure code without exception text."""
     logger.warning("Jamendo provider control failed failure_code=%s", code)
 
 

@@ -364,7 +364,7 @@ async def test_api_contract_failures_are_bounded_and_coarse(tmp_path, status_cod
 
 
 @pytest.mark.asyncio
-async def test_provider_code_three_failure_is_logged_without_credentials_or_response_text(tmp_path, caplog):
+async def test_provider_code_three_failure_log_omits_credentials_and_provider_error_message(tmp_path, caplog):
     provider_error = f"invalid include {_CLIENT_ID} token=private https://storage.jamendo.com/private.mp3 {tmp_path}"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1310,7 +1310,7 @@ def test_provider_code_logging_accepts_only_bounded_numeric_values(value, expect
         (11, "api_auth_failed"),
     ],
 )
-def test_all_deterministic_provider_codes_are_blocked(provider_code, failure_code):
+def test_known_nonretryable_provider_codes_raise_blocked_errors(provider_code, failure_code):
     body = json.dumps({"headers": {"status": "failed", "code": provider_code}, "results": []}).encode()
 
     with pytest.raises(jt._BlockedError) as caught:
@@ -1519,7 +1519,7 @@ async def test_task_done_callback_handles_unexpected_and_cancelled_errors(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_unexpected_current_task_failure_degrades_retries_and_redacts_exception(tmp_path, caplog):
+async def test_unexpected_current_task_failure_retries_without_logging_exception_details(tmp_path, caplog):
     private_failure = f"{_CLIENT_ID} token=private https://api.jamendo.com/private {tmp_path}"
     sleeps: list[float] = []
     sleep_gate = asyncio.Event()
