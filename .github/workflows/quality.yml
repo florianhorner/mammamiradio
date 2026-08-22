@@ -115,6 +115,7 @@ jobs:
       - name: Coverage gate (runs pytest + per-module floors)
         env:
           COVERAGE_RATCHET_SNAPSHOT: coverage-ratchet-current.json
+          COVERAGE_RATCHET_XDIST: auto
         run: python scripts/coverage-ratchet.py check
 
       - name: Upload coverage ratchet snapshot

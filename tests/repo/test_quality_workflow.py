@@ -105,6 +105,7 @@ def test_quality_workflow_passes_coverage_snapshot_by_artifact() -> None:
     ratchet_block = _job_block(text, "coverage-ratchet")
 
     assert "COVERAGE_RATCHET_SNAPSHOT: coverage-ratchet-current.json" in tests_block
+    assert "COVERAGE_RATCHET_XDIST: auto" in tests_block
     assert "python scripts/coverage-ratchet.py check" in tests_block
     assert re.search(r"actions/upload-artifact@", tests_block) is not None
     assert "name: coverage-ratchet-current" in tests_block
