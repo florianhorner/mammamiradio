@@ -1468,10 +1468,10 @@
         'We’ve stopped watching this one for now — the hosts still have your message. Keep listening, and send it again if it doesn’t turn up.',
       );
     }
-    if (reason) {
+    if (reason === 'gone') {
       return _t(
         'form_song_tracking_lost',
-        'We’ve lost track of this one. Your message is back in the box — send it again whenever you like.',
+        'We’ve lost track of this one. Your message is back in the box — if you didn’t hear it, send it again.',
       );
     }
     if (payload.song_resolution === 'matched') {

@@ -2399,9 +2399,10 @@ class StationState:
         reservation until ``commit_music_admission`` runs from
         ``Segment.mark_playback_started``; clearing the map under a queue that
         survives makes every one of those segments fail admission and get
-        skipped at the moment it should air. ``_sync_starter_cycle`` already
-        reconciles ``starter_cycle_reserved`` against whatever crate is current,
-        so leaving the cycle alone here is self-healing rather than stale.
+        skipped at the moment it should air. ``_sync_starter_cycle`` rebuilds
+        ``starter_cycle_reserved`` from the live reservations whenever the crate
+        changes, so leaving the cycle alone here is self-healing rather than
+        stale, in both directions of a swap.
         """
         self.playlist_revision += 1
         self.source_revision += 1
@@ -2441,20 +2442,46 @@ class StationState:
         """
         self._apply_playlist_context(tracks, source)
 
-    def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
+    def switch_playlist(
+        self,
+        tracks: list[Track],
+        source: PlaylistSource | None = None,
+        *,
+        preserve_reservation_ids: frozenset[str] | set[str] = frozenset(),
+    ) -> None:
         """Replace the active playlist and bump revision counter.
 
         In-flight producer segments are discarded on next commit check.
+
+        ``preserve_reservation_ids`` names queue ids the caller deliberately kept
+        in the queue across the switch: the on-air dedication's promised song,
+        and the assetless branch's preserved runway head. A queued music segment
+        cannot start without its ``music_admission_reservations`` entry
+        (``commit_music_admission`` runs from ``Segment.mark_playback_started``),
+        so revoking a survivor's reservation is the same as deleting the segment,
+        only later and silently. Everything not named here is genuinely gone and
+        its reservation goes with it.
         """
         self._apply_playlist_context(tracks, source)
-        # Clear listener requests and pinned track so in-flight background
-        # download tasks from the old source can't zombie-pin a track into
-        # the new playlist context. Keep an admin-visible trail so accepted
-        # listener requests never disappear without an outcome.
+        retained_reservations = {
+            reservation_id: track
+            for reservation_id, track in self.music_admission_reservations.items()
+            if reservation_id in preserve_reservation_ids
+        }
         self.starter_cycle_remaining.clear()
         self.starter_cycle_catalog.clear()
         self.starter_cycle_reserved.clear()
         self.music_admission_reservations.clear()
+        self.music_admission_reservations.update(retained_reservations)
+        # A retained starter reservation keeps holding its cycle slot, or the
+        # rebuilt cycle would hand the same recording out a second time.
+        self.starter_cycle_reserved.update(
+            track.cache_key for track in retained_reservations.values() if track.source == "starter"
+        )
+        # Clear listener requests and pinned track so in-flight background
+        # download tasks from the old source can't zombie-pin a track into
+        # the new playlist context. Keep an admin-visible trail so accepted
+        # listener requests never disappear without an outcome.
         self._mark_pending_requests_source_changed()
         self.pending_actions.clear()
         self._listener_request_rl.clear()
@@ -2473,7 +2500,9 @@ class StationState:
         heading (Record Hunt steering), pending listener requests, the pinned
         track, force_next/operator_force_pending, and play history — none of
         that operator intent should be wiped just because the crate briefly
-        went empty and refilled.
+        went empty and refilled. It does not purge the queue either, so music
+        admission reservations stay with the segments still holding them; a
+        queued song that outlived the empty crate must remain startable.
 
         Returns False and mutates nothing if the playlist is no longer empty
         (e.g. an admin source switch landed while the caller's directory scan
@@ -2486,7 +2515,6 @@ class StationState:
         self.playlist_revision += 1
         self.startup_source_error = ""
         self._reset_source_readiness()
-        self.music_admission_reservations.clear()
         self.music_admission_changed.set()
         self.jamendo_base_music_since_last = 0
         return True
@@ -3001,7 +3029,16 @@ class StationState:
         if catalog != self.starter_cycle_catalog:
             self.starter_cycle_catalog = catalog
             self.starter_cycle_remaining = set(catalog)
-            self.starter_cycle_reserved.intersection_update(catalog)
+            # Rebuild the reserved set from the reservations that actually exist
+            # rather than trimming the old one. Trimming is lossy in one
+            # direction: a crate that drops a starter track forgets a live
+            # reservation, and if that track returns the cycle offers it again
+            # while the first copy is still queued.
+            self.starter_cycle_reserved = {
+                reserved.cache_key
+                for reserved in self.music_admission_reservations.values()
+                if reserved.source == "starter" and reserved.cache_key in catalog
+            }
         elif catalog and not self.starter_cycle_remaining and not self.starter_cycle_reserved:
             # A new cycle may begin only after the last reservation in the old
             # cycle actually started (commit) or was removed (rollback).

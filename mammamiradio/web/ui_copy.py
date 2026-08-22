@@ -84,7 +84,7 @@ COPY: dict[str, dict[str, str]] = {
             "Keep listening, and send it again if it doesn’t turn up."
         ),
         "form_song_tracking_lost": (
-            "We’ve lost track of this one. Your message is back in the box — send it again whenever you like."
+            "We’ve lost track of this one. Your message is back in the box — if you didn’t hear it, send it again."
         ),
         "form_rate_limited": "Give the DJ {s}s before sending another dedication.",
         "form_queue_full": "The dedication queue is full — wait a moment and try again.",
@@ -204,7 +204,8 @@ COPY: dict[str, dict[str, str]] = {
             "Resta in ascolto e rimandala se non arriva."
         ),
         "form_song_tracking_lost": (
-            "Abbiamo perso le tracce di questa richiesta. Il messaggio è di nuovo qui — rimandalo quando vuoi."
+            "Abbiamo perso le tracce di questa richiesta. Il messaggio è di nuovo qui — "
+            "se non l’hai sentita, rimandala."
         ),
         "form_rate_limited": "Aspetta {s}s prima di mandare un'altra dedica.",
         "form_queue_full": "La coda delle dediche è piena — aspetta un attimo e riprova.",

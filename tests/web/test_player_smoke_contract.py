@@ -212,6 +212,13 @@ def test_player_smoke_wires_listener_song_receipt_scenarios() -> None:
         "song_temporarily_unavailable",
         "form_song_temporarily_unavailable",
         "continued polling after its terminal receipt",
+        # A pruned record and a request we merely stopped watching are
+        # different situations and must not share one string.
+        "form_song_tracking_lost",
+        # The tracking deadline is only really covered by the browser: the
+        # source-level guard can see the constants but not that they are obeyed.
+        "tracking deadline on resume",
+        "an already-expired receipt still polled the station",
     ):
         assert retryable_outcome in code
 

@@ -23,6 +23,7 @@ from mammamiradio.playlist.blocklist import load_blocklist
 from mammamiradio.playlist.downloader import YtdlpSearchOutcome
 from mammamiradio.playlist.playlist import ExplicitSourceError, normalized_track_key
 from mammamiradio.playlist.request_matching import SongRequestIntent, parse_song_request
+from mammamiradio.scheduling.producer import _reserve_music_segment
 from mammamiradio.web.listener_requests import _download_listener_song as _download_listener_song_impl
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
@@ -2059,6 +2060,9 @@ async def test_source_switch_keeps_song_promised_by_on_air_dedication(
     initial_queue = (ordinary, promised) if queue_capacity > 1 else (promised,)
     for segment in initial_queue:
         app.state.queue.put_nowait(segment)
+    # Every produced MUSIC segment carries one, including this promise. Without
+    # it the assertions below pass while the real segment could never start.
+    _reserve_music_segment(state, requested, promised)
     state.queued_segments = [
         {
             "id": str(segment.metadata["queue_id"]),
@@ -2110,6 +2114,10 @@ async def test_source_switch_keeps_song_promised_by_on_air_dedication(
     assert state.listener_request_admitted_reservations[token].matches_track(requested)
     assert state.playlist == new_tracks
     assert not app.state.skip_event.is_set()
+    # Keeping the promise in the queue is worth nothing if its music admission
+    # reservation went with the old source: playback would deny the segment and
+    # skip it, so the dedication airs and the promised song never plays.
+    assert promised.mark_playback_started() is True
 
 
 @pytest.mark.parametrize(

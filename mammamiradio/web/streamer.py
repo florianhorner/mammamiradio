@@ -4556,7 +4556,12 @@ def _apply_loaded_source(
         None,
     )
     retry_on_air_handoff = active_on_air_handoff or lost_on_air_handoff
-    state.switch_playlist(tracks, resolved_source)
+    # Whatever is still in the queue here was kept on purpose: the on-air
+    # dedication's promised song, or the assetless branch's preserved runway
+    # head. Their music admission reservations must survive with them, or each
+    # one fails `mark_playback_started` and is skipped at the moment it should
+    # air -- a broken promise in the first case, dead air in the second.
+    state.switch_playlist(tracks, resolved_source, preserve_reservation_ids=surviving_queue_ids)
     # The ordinary source switch revokes old-source requests. Retain a ready
     # admitted song behind its on-air dedication, or restore the same promise
     # for a clean retry when its queued file vanished before playback.
@@ -5433,6 +5438,19 @@ async def run_playback_loop(app) -> None:
             continue
 
         if not segment.mark_playback_started():
+            # Settle like every other pre-air drop site. Without this the
+            # segment vanishes with its listener-request reservation still held,
+            # so the promised recording stays excluded from ordinary rotation
+            # for the rest of the session with no retry and no waste trail.
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.OPERATOR_PURGE,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.OPERATOR_PURGE)
+            _settle_discarded_selection_handoff(
+                segment_queue, state, segment, reason=GenerationWasteReason.OPERATOR_PURGE
+            )
             _unlink_ephemeral_best_effort(segment)
             if pulled_from_queue:
                 segment_queue.task_done()

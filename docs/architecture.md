@@ -1406,10 +1406,10 @@ preserves the real queue, queue shadow, and protected slots byte-for-byte. It
 does not own transport work admitted after the epoch it captured. That is
 enforced by *which method it calls*, not by restoring fields afterwards:
 `switch_playlist` is split into `_apply_playlist_context` (the crate — records,
-rotation state, play history, steering) and the revocation half on top of it
-(pin, force slot, pending actions, pending listener requests, the per-IP request
-rate limiter, and the active / admitted / retry listener-request handoff
-stores). A metadata-only commit calls
+diversity history, cadence counters, steering) and the revocation half on top of
+it (pin, force slot, pending actions, pending listener requests, the per-IP
+request rate limiter, the active / admitted / retry listener-request handoff
+stores, the starter cycle, and music admission reservations). A metadata-only commit calls
 `apply_source_metadata_only`, which is the crate half alone. Snapshot-and-restore
 could not hold this line: it silently missed every store a later `switch_playlist`
 learned to revoke — which is how a queued listener dedication kept airing while
@@ -1417,6 +1417,23 @@ the promise that owned its song was revoked underneath it — and it could not u
 the `pinned_track_revision` / `force_next_revision` bumps that the guarded clears
 perform, leaving every handoff and pending request that recorded a revision
 unable to clear the slot it owns.
+
+**Music admission reservations follow the segment, not the crate.** Every queued
+music segment owns a `music_admission_reservations` entry, and
+`Segment.mark_playback_started()` starts it by calling `commit_music_admission`
+through the segment's playback-start callback. A `False` there is not a warning:
+playback releases the segment and moves on, so revoking a *surviving* segment's
+reservation deletes it as surely as dropping it from the queue, only later and
+silently. Three paths keep a segment across a crate change and therefore keep its
+reservation: `apply_source_metadata_only` (preserves the whole queue),
+`switch_playlist(..., preserve_reservation_ids=...)` — which `_apply_loaded_source`
+calls with the ids still in the queue after the runway pass, covering both the
+on-air dedication's promised song and the assetless branch's preserved runway
+head — and `restore_playlist_if_still_empty`, which refills an emptied crate
+without purging anything. A retained starter reservation keeps its
+`starter_cycle_reserved` slot; `_sync_starter_cycle` rebuilds that set from the
+live reservations whenever the catalogue changes, so a crate that loses and
+regains a starter track cannot offer a copy that is still queued.
 Text-direction expansion performs its network work before entering
 `source_switch_lock` and captures that epoch at the serialized commit boundary;
 an unrelated Stop/Resume transaction that has already completed therefore does

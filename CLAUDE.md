@@ -226,7 +226,12 @@ private durable system for strategy or relationship context.
   requests, the per-IP request rate limiter, and all three listener-request
   handoff stores survive untouched — including the `pinned_track_revision` /
   `force_next_revision` counters each owner recorded, which a restore-after-clear
-  would leave one ahead.
+  would leave one ahead. A queued music segment also keeps its
+  `music_admission_reservations` entry, without which `mark_playback_started`
+  denies it and playback skips it at the moment it should air; the ordinary
+  cutover takes `preserve_reservation_ids` for the segments it deliberately
+  keeps (the on-air dedication's promised song, the assetless branch's preserved
+  runway head), and `restore_playlist_if_still_empty` keeps them all.
   Applies to `/api/playlist/load`, `/api/playlist/enrich`,
   `/api/heading`, `/api/direction`, and the external/listener download commit. The
   normal producer replenishes audio after a valid Resume. The four admin routes

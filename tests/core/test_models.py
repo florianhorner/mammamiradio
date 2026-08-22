@@ -1474,17 +1474,65 @@ def test_metadata_only_source_commit_keeps_queued_music_admissible():
     assert state.commit_music_admission("q1") is True
 
 
-def test_switch_playlist_still_revokes_music_admission_reservations():
-    """The ordinary cutover replaces the queue, so its reservations must go."""
+def test_switch_playlist_revokes_reservations_but_keeps_named_survivors():
+    """The cutover replaces the queue, except for what the caller kept in it.
+
+    `_apply_loaded_source` deliberately preserves the on-air dedication's
+    promised song and the assetless branch's runway head. Revoking their
+    reservations deletes them just as surely, only later: they fail
+    `mark_playback_started` and are skipped at the moment they should air.
+
+    Starter tracks are used on purpose. A `_track()` fixture has
+    `source="youtube"`, never populates `starter_cycle_reserved`, and would
+    assert nothing about the cycle half of the same move.
+    """
+    gone, survivor = _starter_track(1), _starter_track(2)
+    state = StationState(playlist=[gone, survivor], playlist_source=PlaylistSource(kind="starter"))
+    assert state.reserve_music_admission("gone", gone)
+    assert state.reserve_music_admission("survivor", survivor)
+    assert state.starter_cycle_reserved == {gone.cache_key, survivor.cache_key}
+
+    state.switch_playlist([survivor, _starter_track(3)], preserve_reservation_ids={"survivor"})
+
+    assert state.music_admission_reservations == {"survivor": survivor}
+    assert state.starter_cycle_reserved == {survivor.cache_key}
+    assert state.commit_music_admission("gone") is False
+    assert state.commit_music_admission("survivor") is True
+
+
+def test_metadata_only_commit_cannot_re_offer_a_still_reserved_starter_track():
+    """The self-healing claim must hold in BOTH directions of a crate swap.
+
+    Trimming the reserved set against the new catalogue forgets a live
+    reservation when the crate loses that track; if it comes back, the cycle
+    offers the same recording again while the first copy is still queued.
+    """
+    starter = _starter_track(1)
+    state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))
+    assert state.reserve_music_admission("queued", starter)
+
+    state.apply_source_metadata_only([_track(9)], PlaylistSource(kind="url"))
+    state.apply_source_metadata_only([starter], PlaylistSource(kind="starter"))
+
+    assert state.reserve_music_admission("second", starter) is False
+    assert state.music_admission_reservations == {"queued": starter}
+
+
+def test_empty_crate_recovery_keeps_queued_music_startable():
+    """Refilling an emptied crate is not a cutover and must not strip the queue.
+
+    `restore_playlist_if_still_empty` explicitly preserves operator intent and
+    never purges the queue, so a song that outlived the empty crate has to stay
+    startable.
+    """
     track = _track(1)
-    state = StationState(playlist=[track])
-    assert state.reserve_music_admission("q1", track)
+    state = StationState(playlist=[])
+    assert state.reserve_music_admission("queued", track)
 
-    state.switch_playlist([_track(2)])
+    assert state.restore_playlist_if_still_empty([_track(2)]) is True
 
-    assert state.music_admission_reservations == {}
-    assert state.starter_cycle_reserved == set()
-    assert state.commit_music_admission("q1") is False
+    assert state.music_admission_reservations == {"queued": track}
+    assert state.commit_music_admission("queued") is True
 
 
 def test_force_next_revision_protects_same_valued_replacement():

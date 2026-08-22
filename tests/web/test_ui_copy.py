@@ -41,20 +41,29 @@ def test_listener_js_fallback_strings_match_the_english_copy():
     surfaces — which is exactly what a hand-edit across both files invites.
     """
     js = _LISTENER_JS.read_text(encoding="utf-8")
-    # Single-quoted JS literals only; a fallback built from concatenation or a
-    # template literal is skipped rather than guessed at.
-    pairs = re.findall(r"_t\(\s*'([^']+)'\s*,\s*'((?:[^'\\]|\\.)*)'\s*[,)]", js)
+    # Both quote styles: matching only single-quoted literals silently skipped
+    # four calls, one of which had forked into a different licensing statement.
+    # A fallback built from concatenation or a template literal is still skipped
+    # rather than guessed at.
+    pairs = [
+        (match.group(2), match.group(4))
+        for match in re.finditer(
+            r"""_t\(\s*(['"])([^'"]+?)\1\s*,\s*(['"])((?:(?!\3)[^\\]|\\.)*)\3\s*[,)]""",
+            js,
+        )
+    ]
     assert pairs, "no inline copy fallbacks found — the extraction pattern has drifted"
     drift = {}
     for key, literal in pairs:
-        fallback = literal.replace("\\'", "'").replace("\\n", "\n").replace("\\\\", "\\")
+        fallback = literal.replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n").replace("\\\\", "\\")
         expected = COPY["en"].get(key)
         if expected is not None and fallback != expected:
             drift[key] = (fallback, expected)
     # These forked before the guard existed. Each is a listener-visible wording
     # decision, not a mechanical fix, so they are named rather than silently
     # skipped — and the assertion below fails if one is repaired without being
-    # removed here, so the list can only shrink.
+    # removed here, so the list can only shrink. A listener reads whichever
+    # version wins the race between the page and its /public-status payload.
     known_drift = {
         "clip_copied",
         "clip_copy_prompt",
@@ -64,6 +73,12 @@ def test_listener_js_fallback_strings_match_the_english_copy():
         "credits_licensed_under",
         "credits_no_current_music",
         "credits_provided_by_jamendo",
+        # Deliberate, not an oversight: the inline fallback is the explicit
+        # fail-closed licensing disclaimer pinned by
+        # tests/web/test_media_ui.py::test_listener_credit_data_has_no_html_sink_and_links_fail_closed,
+        # while the served string is the softer "rights remain their
+        # responsibility". Reconciling them is a copy decision, not a rename.
+        "local_credit",
         "normalized_notice",
         "np_on_air",
         "np_paused",
@@ -73,7 +88,9 @@ def test_listener_js_fallback_strings_match_the_english_copy():
     new_drift = sorted(set(drift) - known_drift)
     assert not new_drift, f"listener.js fallback copy has drifted from COPY['en']: {new_drift}"
     repaired = sorted(known_drift - set(drift))
-    assert not repaired, f"these no longer drift — drop them from known_drift: {repaired}"
+    assert not repaired, (
+        f"these keys no longer drift (repaired, or their _t call was removed) — drop them from known_drift: {repaired}"
+    )
 
 
 def test_default_off_returns_english():
