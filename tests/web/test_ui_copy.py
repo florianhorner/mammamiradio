@@ -16,6 +16,7 @@ _LISTENER_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "listener.h
 _LISTENER_JS = _REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
 
 _MISSPELLED_BRAND = "Mammami Radio"
+_MISSPELLED_BRAND_CASEFOLD = _MISSPELLED_BRAND.casefold()
 
 # This file names the misspelling, so it excludes itself by PATH. An earlier
 # version split the literal (`"Mammami" + " Radio"`); that is only a lexical
@@ -129,10 +130,10 @@ def _scan_brand(root: Path, relpaths: Iterable[str]) -> tuple[list[str], list[st
             unreadable.append(f"{rel} ({type(exc).__name__})")
             continue
         scanned.append(rel)
-        if _MISSPELLED_BRAND not in text:
+        if _MISSPELLED_BRAND_CASEFOLD not in text.casefold():
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _MISSPELLED_BRAND in line:
+            if _MISSPELLED_BRAND_CASEFOLD in line.casefold():
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     return offenders, unreadable, scanned
 
@@ -398,7 +399,9 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
     """Prove the guard can fail. Without this it only ever reports "found
     nothing", which is indistinguishable from "looked at nothing".
     """
+    uppercase_misspelling = _MISSPELLED_BRAND.upper()
     (tmp_path / "page.html").write_text(f"<p>{_MISSPELLED_BRAND} is on air</p>", encoding="utf-8")
+    (tmp_path / "uppercase.html").write_text(f"<p>{uppercase_misspelling} is on air</p>", encoding="utf-8")
     (tmp_path / "clean.html").write_text("<p>Mamma Mi Radio is on air</p>", encoding="utf-8")
     (tmp_path / "song.mp3").write_bytes(_MISSPELLED_BRAND.encode("utf-8"))
     frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
@@ -407,12 +410,15 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
 
     offenders, unreadable, scanned = _scan_brand(
         tmp_path,
-        ["page.html", "clean.html", "song.mp3", "mammamiradio/assets/imaging/ATTRIBUTION.md"],
+        ["page.html", "uppercase.html", "clean.html", "song.mp3", "mammamiradio/assets/imaging/ATTRIBUTION.md"],
     )
 
-    assert offenders == [f"page.html:1: <p>{_MISSPELLED_BRAND} is on air</p>"]
+    assert offenders == [
+        f"page.html:1: <p>{_MISSPELLED_BRAND} is on air</p>",
+        f"uppercase.html:1: <p>{uppercase_misspelling} is on air</p>",
+    ]
     assert not unreadable
-    assert set(scanned) == {"page.html", "clean.html"}
+    assert set(scanned) == {"page.html", "uppercase.html", "clean.html"}
 
 
 def test_frozen_brand_provenance_allowlist_has_no_dead_entries():
