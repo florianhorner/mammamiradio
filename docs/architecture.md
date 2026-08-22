@@ -892,7 +892,8 @@ durable base; Jamendo is deliberately outside this function:
    They receive no project license claim; the operator owns their provenance and
    permitted use.
 3. **Bundled starter catalog.** With no local base, runtime loads the twelve
-   hash-pinned Kevin MacLeod/Incompetech derivatives from the canonical manifest.
+   hash-pinned attribution-only derivatives from the canonical manifest
+   (Incompetech under CC BY 4.0, Jamendo under CC BY 3.0).
    They play directly without normalization and complete one full cycle before a
    starter repeat. A release fails unless the exact 12 tracks, at least 45 minutes,
    complete human audition evidence, and no more than 75 MiB pass media proof.

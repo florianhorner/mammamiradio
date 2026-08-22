@@ -1001,7 +1001,14 @@ def test_media_attribution_object_serializes_through_the_public_validator() -> N
         {"license_url": "https://creativecommons.org:bad/licenses/by/4.0/"},
         {"source_url": "https://incompetech.com/%2e%2e/private"},
         {"source_url": "https://incompetech.com/music/royalty-free/index.html?token=secret"},
+        # A bundled Jamendo row must still point at a jamendo.com track page:
+        # the provider/basis pair is now legitimate, the mismatched host is not.
         {"provider": "jamendo", "basis": "bundled_manifest"},
+        {
+            "provider": "jamendo",
+            "basis": "bundled_manifest",
+            "source_url": "https://evil.example.com/track/1",
+        },
     ],
 )
 def test_media_attribution_rejects_malformed_or_mismatched_public_facts(override) -> None:

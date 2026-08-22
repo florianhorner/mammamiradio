@@ -9,6 +9,22 @@
 #
 # Each pattern is a POSIX extended regex (grep -E). Patterns are word-anchored or
 # specific multi-word phrases to minimize false positives on legitimate text.
+#
+# These are mammamiradio's OWN patterns. The shared baseline lives in
+# florianhorner/gh-workflows and adds the classes every repo needs — review
+# archaeology, operator telemetry, process tallies — matched by grammatical
+# SHAPE rather than literal phrase, so paraphrase does not walk through. CI
+# passes this file to the reusable body-lint workflow as `extra_patterns` and
+# the two sets are unioned.
+#
+# Overlap with the baseline is deliberate and must not be "cleaned up". The
+# local check-*-lint.sh scripts source THIS FILE ALONE, so deleting a pattern
+# because the baseline also has it silently drops changelog and issue coverage.
+# That regression was caught by tests/workflows/test_issue_body_lint.sh.
+#
+# POSIX ERE only: identical behaviour required under BSD grep (macOS, local
+# hook) and GNU grep (ubuntu-latest, CI). No lookahead, no non-capturing groups
+# — a `(?:...)` construct sat on line 22 of this file for four months.
 
 # shellcheck disable=SC2034  # consumed by sourcing scripts (check-changelog-lint.sh, check-pr-body-lint.sh, check-issue-body-lint.sh)
 LINT_PATTERNS=(
@@ -19,7 +35,6 @@ LINT_PATTERNS=(
   '\b[Ii]tem [0-9]+'              # Item 1, Item 19, Item 21
   '\bP[0-9]-[0-9]+\b'             # P0-1, P1-2, P1-3
   '\b[HM][0-9]+/[HM][0-9]+\b'     # H2/H3
-  '\b[HM][0-9]+\b(?: \()'         # M1 (used in (M1) context — covered by parens form below)
   '\([HM][0-9]+\)'                # (M1), (M4), (H2/H3)
   '\bsoak window\b'
   '\blive session\b'

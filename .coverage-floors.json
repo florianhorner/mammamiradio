@@ -21,6 +21,7 @@
   "mammamiradio.integrations.schema": 100,
   "mammamiradio.integrations.serializer": 92,
   "mammamiradio.main": 100,
+  "mammamiradio.media.starter": 97,
   "mammamiradio.playlist.downloader": 98,
   "mammamiradio.playlist.playlist": 91,
   "mammamiradio.playlist.song_cues": 100,
