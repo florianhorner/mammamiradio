@@ -18,6 +18,12 @@ _LISTENER_JS = _REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
 _MISSPELLED_BRAND = "Mammami Radio"
 _MISSPELLED_BRAND_CASEFOLD = _MISSPELLED_BRAND.casefold()
 
+# Matches "mammami" joined to "radio" by a space, hyphen, or underscore — every
+# separator except none. Zero separator ("mammamiradio") is the correct slug
+# for URLs, paths, package names, env vars, entity IDs, and container names,
+# and must never be flagged.
+_MISSPELLED_BRAND_PATTERN = re.compile(r"mammami[-_ ]radio", re.IGNORECASE)
+
 # Exclude this file by path because it defines the rejected spelling. Splitting
 # the literal is fragile: Ruff can join adjacent string literals during
 # formatting. A path-based exclusion survives formatter and lint changes.
@@ -119,10 +125,10 @@ def _scan_brand(root: Path, relpaths: Iterable[str]) -> tuple[list[str], list[st
             unreadable.append(f"{rel} ({type(exc).__name__})")
             continue
         scanned.append(rel)
-        if _MISSPELLED_BRAND_CASEFOLD not in text.casefold():
+        if not _MISSPELLED_BRAND_PATTERN.search(text):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _MISSPELLED_BRAND_CASEFOLD in line.casefold():
+            if _MISSPELLED_BRAND_PATTERN.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     return offenders, unreadable, scanned
 
@@ -383,10 +389,12 @@ def test_station_brand_name_is_never_misspelled():
 
 
 def test_brand_guard_flags_a_synthetic_offender(tmp_path):
-    """Exercise detection, case folding, and path exclusions."""
+    """Exercise detection, case folding, separator variants, and path exclusions."""
     uppercase_misspelling = _MISSPELLED_BRAND.upper()
     (tmp_path / "page.html").write_text(f"<p>{_MISSPELLED_BRAND} is on air</p>", encoding="utf-8")
     (tmp_path / "uppercase.html").write_text(f"<p>{uppercase_misspelling} is on air</p>", encoding="utf-8")
+    (tmp_path / "hyphenated.json").write_text('{"name": "mammami-radio-explainer"}', encoding="utf-8")
+    (tmp_path / "underscored.py").write_text("PACKAGE = 'mammami_radio_tools'\n", encoding="utf-8")
     (tmp_path / "clean.html").write_text("<p>Mamma Mi Radio is on air</p>", encoding="utf-8")
     (tmp_path / "song.mp3").write_bytes(_MISSPELLED_BRAND.encode("utf-8"))
     frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
@@ -395,15 +403,49 @@ def test_brand_guard_flags_a_synthetic_offender(tmp_path):
 
     offenders, unreadable, scanned = _scan_brand(
         tmp_path,
-        ["page.html", "uppercase.html", "clean.html", "song.mp3", "mammamiradio/assets/imaging/ATTRIBUTION.md"],
+        [
+            "page.html",
+            "uppercase.html",
+            "hyphenated.json",
+            "underscored.py",
+            "clean.html",
+            "song.mp3",
+            "mammamiradio/assets/imaging/ATTRIBUTION.md",
+        ],
     )
 
     assert offenders == [
         f"page.html:1: <p>{_MISSPELLED_BRAND} is on air</p>",
         f"uppercase.html:1: <p>{uppercase_misspelling} is on air</p>",
+        'hyphenated.json:1: {"name": "mammami-radio-explainer"}',
+        "underscored.py:1: PACKAGE = 'mammami_radio_tools'",
     ]
     assert not unreadable
-    assert set(scanned) == {"page.html", "uppercase.html", "clean.html"}
+    assert set(scanned) == {"page.html", "uppercase.html", "hyphenated.json", "underscored.py", "clean.html"}
+
+
+def test_brand_guard_ignores_the_correct_joined_slug(tmp_path):
+    """The zero-separator slug (`mammamiradio`) is the correct form and must never be flagged."""
+    (tmp_path / "urls.py").write_text(
+        "ENTITY_ID = 'media_player.mammamiradio'\nCONTAINER = 'mammamiradio'\n", encoding="utf-8"
+    )
+
+    offenders, unreadable, scanned = _scan_brand(tmp_path, ["urls.py"])
+
+    assert not offenders
+    assert not unreadable
+    assert scanned == ["urls.py"]
+
+
+def test_brand_guard_reports_undecodable_files_as_unreadable(tmp_path):
+    """A non-UTF-8 text file must surface in `unreadable`, not vanish silently."""
+    (tmp_path / "latin1.txt").write_bytes("café".encode("latin-1"))
+
+    offenders, unreadable, scanned = _scan_brand(tmp_path, ["latin1.txt"])
+
+    assert not offenders
+    assert unreadable == ["latin1.txt (UnicodeDecodeError)"]
+    assert not scanned
 
 
 def test_frozen_brand_provenance_allowlist_has_no_dead_entries():

@@ -39,11 +39,14 @@ def _server_setup_error_codes() -> set[str]:
     raise AssertionError("_SETUP_ERRORS not found")
 
 
-def _ui_first_listen_error_codes() -> set[str]:
+def _first_listen_errors_block() -> str:
     html = _html()
     start = html.index("const FIRST_LISTEN_ERRORS={")
-    end = html.index("\n};", start)
-    return set(re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{", html[start:end], re.MULTILINE))
+    return html[start : html.index("\n};", start)]
+
+
+def _ui_first_listen_error_codes() -> set[str]:
+    return set(re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{", _first_listen_errors_block(), re.MULTILINE))
 
 
 def test_first_listen_is_one_vertical_progressive_path_before_advanced_details() -> None:
@@ -626,11 +629,7 @@ def test_every_first_listen_error_states_a_failure_and_a_way_out() -> None:
     The key-parity test cannot detect empty fields. This check leaves the
     wording flexible.
     """
-    html = _html()
-    start = html.index("const FIRST_LISTEN_ERRORS={")
-    block = html[start : html.index("\n};", start)]
-
-    entries = re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{(.*)\},$", block, re.MULTILINE)
+    entries = re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{(.*)\},$", _first_listen_errors_block(), re.MULTILINE)
     assert len(entries) == len(_ui_first_listen_error_codes())
 
     for code, body in entries:
