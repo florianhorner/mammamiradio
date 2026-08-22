@@ -1,14 +1,14 @@
 # Pre-merge evidence: brand-spelling guard
 # branch: florianhorner/chore/execute-pasted-plan
-# commit: 6dda10671e7001b4807eaf2b01d92bcf840c142f
-# date:   2026-08-22T21:48:52Z
+# commit: d10b781bb2435af9461f5419315e1bea4f1c151c
+# date:   2026-08-22T21:53:15Z
 # python: Python 3.14.3  (CI pins 3.11)
 
 $ pytest tests/web/test_ui_copy.py tests/web/test_admin_first_listen.py tests/scripts/test_validate_audio_asset_pack.py -q
 ........................................................................ [ 44%]
 ........................................................................ [ 88%]
 ...................                                                      [100%]
-163 passed, 6 deselected in 31.18s
+163 passed, 6 deselected in 30.96s
 
 $ ruff check .
 All checks passed!
@@ -29,7 +29,7 @@ Changelog lint clean.
 $ bash scripts/check-release-invariants.sh
 Passed: 17  Failed: 0
 
-$ make check
+$ make check  # run at 6dda10671e7001b4807eaf2b01d92bcf840c142f
 The media, lint, format, type, and dead-code gates passed. The Python 3.14
 coverage run ended with 7483 passed, 4 skipped, 47 deselected, and these two
 failures:
@@ -39,3 +39,6 @@ failures:
 
 Both failures reproduce in isolation. The implementation and test paths are
 byte-for-byte unchanged from origin/main; CI pins Python 3.11.
+
+Commit d10b781bb2435af9461f5419315e1bea4f1c151c then changed one sentence in
+`docs/design/system.md`; the focused 163-test run above was repeated afterward.
