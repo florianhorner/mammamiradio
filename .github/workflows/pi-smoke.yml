@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main, "train/**"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   pi-smoke:
     runs-on: ubuntu-24.04-arm

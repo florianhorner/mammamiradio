@@ -21,6 +21,13 @@ def _job_block(text: str, job_name: str) -> str:
     return match.group(1)
 
 
+def test_quality_workflow_cancels_superseded_pr_runs_only() -> None:
+    document = yaml.safe_load(_workflow_text())
+    concurrency = document["concurrency"]
+    assert concurrency["group"] == "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}"
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+
+
 def test_quality_workflow_pr_job_is_read_only() -> None:
     text = _workflow_text()
     top_permissions = re.search(r"^permissions:\n((?:  .+\n)*)", text, re.MULTILINE)
