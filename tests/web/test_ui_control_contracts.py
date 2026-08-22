@@ -736,6 +736,11 @@ class TestBanNowPlayingEndpoint:
         assert 'id="keptList"' in html
         assert "/api/clip/keep" in _admin_function_block("refreshKeptMoments")
         assert "data-keepsake-remove" in _admin_function_block("refreshKeptMoments")
+        # Trash, not the ban glyph. Ban means "never play this song again" in the
+        # same console, and one symbol cannot carry two destructive meanings.
+        block = _admin_function_block("refreshKeptMoments")
+        assert "#ic-trash" in block
+        assert "btn-icon-ban" not in block
         assert "'DELETE'" in _admin_function_block("doUnkeep")
         # A delegated listener, not an inline onclick: `esc` escapes for HTML
         # text, and an id inside a JS string inside an attribute is decoded back

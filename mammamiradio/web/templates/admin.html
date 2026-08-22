@@ -3413,8 +3413,11 @@ async function refreshKeptMoments(){
     const when=row.created_at?new Date(row.created_at*1000).toLocaleString():'';
     return `<div class="kept-row"><a class="kept-link" href="${esc(_base+row.share_url)}" target="_blank" rel="noopener">${title}</a>`+
       `<span class="sub kept-when">${esc(when)}</span>`+
-      `<button type="button" class="btn-icon btn-icon-ban" title="Remove this kept moment" aria-label="Remove ${title}" data-keepsake-remove="${esc(row.keepsake_id)}">`+
-      `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg></button></div>`;
+      // Trash, not the ban glyph: Ban means "never play this song again" a few
+      // rows up in the same console, and one symbol cannot carry both meanings.
+      // Same icon the queue's own remove button uses.
+      `<button type="button" class="btn-icon" title="Remove this kept moment" aria-label="Remove ${title}" data-keepsake-remove="${esc(row.keepsake_id)}">`+
+      `<svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button></div>`;
   }).join('');
 }
 // Delegated rather than an inline onclick: `esc` escapes for HTML text, and an
