@@ -686,6 +686,16 @@ class TestBanNowPlayingEndpoint:
             f"console allowlist {client_types} drifted from the server's {set(KEEPSAKE_SEGMENT_TYPES)}"
         )
 
+    def test_kept_moment_titles_survive_a_narrow_viewport(self):
+        """At 390px the three-column row squeezed the title to a few characters
+        while the auto-width timestamp kept its full size. The title is how the
+        operator recognizes the moment, so it gets its own line."""
+        html = ADMIN_HTML.read_text()
+        assert re.search(r"@media \(max-width: 720px\) \{\s*\.kept-row", html), (
+            "the kept-row narrow-viewport rule is gone; titles collapse again"
+        )
+        assert ".kept-link { grid-column: 1 / -1; }" in html
+
     def test_keep_grace_never_outlives_the_server_lookback(self):
         """If the console's grace window outlives CLIP_LOOKBACK_SECONDS, the
         button stays up for a press the route can only refuse — the exact failure

@@ -1232,6 +1232,14 @@ input[type="range"]:focus-visible {
 .kept-link { color: var(--cream); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kept-when { font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
 #keptList .sub { padding: 10px 14px; }
+/* Narrow screens: the title is how the operator recognizes the moment, so it
+   gets its own line rather than being squeezed to a few characters by an
+   auto-width timestamp sitting beside it. */
+@media (max-width: 720px) {
+  .kept-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .kept-link { grid-column: 1 / -1; }
+  .kept-when { grid-column: 1; }
+}
 
 /* 2-column grid */
 .a-row-2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; align-items: start; }
