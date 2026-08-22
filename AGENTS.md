@@ -29,10 +29,20 @@ as in-process asyncio tasks.
 ### Environment caveats (non-obvious)
 
 - **Python is 3.12 here, not 3.11.** The repo targets `>=3.11` and the Conductor
-  bootstrap defaults to `python3.11`, which is not installed on this VM. Use
-  `python3` (3.12) — `pip install -e .` and the full suite pass on it. A fresh
-  venv ships setuptools < the `>=82.0.1` build requirement, so the update script
-  upgrades pip/setuptools/wheel before the editable install.
+ bootstrap defaults to `python3.11`, which is not installed on this VM. Use
+ `python3` (3.12) — `pip install -e .` and the full suite pass on it.
+
+- **`ensurepip` is missing, so `python3 -m venv .venv` hard-fails.** The base
+ image ships the system `python3-pip` (`/usr/bin/pip`, v24) but not
+ `python3.12-venv`/`ensurepip`, so a plain `python -m venv` aborts with "ensurepip
+ is not available". The update script sidesteps this without an apt install:
+ it creates the venv with `python3 -m venv --without-pip .venv`, then bootstraps
+ pip into it with the system pip's interpreter-targeting flag
+ (`python3 -m pip --python .venv/bin/python install --upgrade pip setuptools wheel`
+ — note `--python` must come *before* the `install` subcommand). That also clears
+ the setuptools `>=82.0.1` build requirement before the editable install. If you
+ need to recreate the venv by hand, use the same two steps — a bare
+ `python3 -m venv .venv` will fail.
 
 - **yt-dlp YouTube downloads are bot-blocked from this datacenter IP.** Chart
   metadata fetches fine (you'll see "Using live Italian charts (75 tracks)"), but
@@ -53,8 +63,21 @@ as in-process asyncio tasks.
   green. Don't uncomment them unless you actually need a non-default port.
 
 - **FFmpeg audio tests are deselected by default.** `pyproject.toml` sets
-  `addopts = -m 'not requires_ffmpeg'`. FFmpeg is installed here, so run those
-  explicitly with `pytest -m requires_ffmpeg` when touching the audio pipeline.
+ `addopts = -m 'not requires_ffmpeg'`. FFmpeg is installed here, so run those
+ explicitly with `pytest -m requires_ffmpeg` when touching the audio pipeline.
+
+- **Two tests fail here only because of coarse overlay-filesystem mtime.** Both
+ `/workspace` and `/tmp` are on an overlay mount whose `st_mtime_ns` advances
+ only about every ~3 ms, so two files written back-to-back in the same test get
+ an *identical* `st_mtime_ns`. That defeats the strict `st_mtime_ns >` freshness
+ comparison in `has_fresh_concrete_track_source` (`playlist/downloader.py`), so
+ `tests/playlist/test_downloader.py::test_fresh_concrete_track_source_allows_replaced_local_recovery_once`
+ and
+ `tests/scheduling/test_producer_unit.py::test_valid_local_recovery_reopens_a_session_denied_track`
+ fail. This is a VM filesystem-resolution artifact, **not** a code or dependency
+ regression — both pass in CI on ext4 (nanosecond granularity), and the wider
+ suite (5916 + 21 `requires_ffmpeg`) is green. Do not "fix" them by editing code;
+ the app behaves correctly. Everything else in `pytest` passes reliably.
 
 - No API keys are set by default (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   `HA_TOKEN` all empty), so the station runs in the "Demo Radio" tier with stock
