@@ -302,7 +302,7 @@ def test_ci_publishes_short_sha_edge_tag():
     """
     workflow_text = _workflow_text()
 
-    stable_block = _extract_step_block(workflow_text, "Build add-on image without publishing")
+    stable_block = _extract_step_block(workflow_text, "Build and push SHA and edge tags")
     assert ":${{ needs.validate.outputs.short_sha }}" in stable_block, (
         "the add-on build must push :<short-sha> so a manual edge release can point at it"
     )
@@ -322,7 +322,7 @@ def test_ci_sha_artifact_uses_stable_addon_version_label():
     label is wired to the stable config.yaml version and not to something else.
     """
     workflow_text = _workflow_text()
-    stable_block = _extract_step_block(workflow_text, "Build add-on image without publishing")
+    stable_block = _extract_step_block(workflow_text, "Build and push SHA and edge tags")
 
     assert "BUILD_VERSION=${{ needs.validate.outputs.addon_version }}" in stable_block, (
         "the :sha artifact promoted by addon-release.yml must carry config.yaml's stable version "
@@ -348,42 +348,40 @@ def test_ci_emits_strict_quick_media_proof_before_build() -> None:
     assert "if-no-files-found: error" in validate_block
 
 
-def test_ci_proves_both_unpushed_images_before_any_publish() -> None:
-    """The full both-image proof runs and uploads its report before any push.
+def test_ci_proves_sha_tagged_images_before_smoke() -> None:
+    """The full both-image proof pulls SHA tags from the registry, then smoke runs.
 
-    While the twelve starter-catalog tracks are absent by design the job is
-    report-only (missing content prints a NOTICE instead of failing, so image
-    publish and the edge channel keep flowing); the stable promotion media-proof
-    job in addon-release.yml and scripts/pre-release-check.sh section 10 keep
-    the hard gate on the release path.
+    SHA and short-SHA tags are published by the build job (never :latest).
+    media-proof.py still never pulls on its own — the workflow pulls first so
+    inspect stays local. While the twelve starter-catalog tracks are absent by
+    design the job is report-only; the stable promotion media-proof job in
+    addon-release.yml and scripts/pre-release-check.sh section 10 keep the hard
+    gate on the release path.
     """
     text = _workflow_text()
     build_block = _extract_job_block(text, "build")
     proof_block = _extract_job_block(text, "media-proof")
-    push_block = _extract_job_block(text, "push")
+    smoke_block = _extract_job_block(text, "smoke")
 
-    assert "push: false" in build_block
-    assert "load: true" in build_block
-    assert "docker save --output" in build_block
-    assert "packages: write" not in build_block
+    assert "push: true" in build_block
+    assert "packages: write" in build_block
+    assert "docker save --output" not in build_block
     assert "needs: [validate, build]" in proof_block
     assert "docker/setup-qemu-action@" in proof_block
-    assert "addon-image-amd64-${{ github.sha }}" in proof_block
-    assert "addon-image-aarch64-${{ github.sha }}" in proof_block
+    assert 'docker pull --platform linux/amd64 "$AMD64_IMAGE"' in proof_block
+    assert 'docker pull --platform linux/arm64 "$AARCH64_IMAGE"' in proof_block
     assert "--amd64-image" in proof_block
     assert "--aarch64-image" in proof_block
     assert "--output media-proof.json" in proof_block
     assert "NOTICE: media-proof reported missing content" in proof_block
     assert "name: media-proof-full-${{ github.sha }}" in proof_block
-    assert "needs: [validate, media-proof]" in push_block
-    assert "packages: write" in push_block
-    assert 'docker push "$SHA_REF"' in push_block
-    assert 'docker push "$SHORT_REF"' in push_block
-    assert "push: true" not in text
-    assert text.count("docker push ") == 2
+    assert "needs: media-proof" in smoke_block
+    assert "Publish proven SHA and edge images" not in text
+    assert "docker save --output" not in text
+    assert "addon-image-amd64-" not in text
 
 
 def test_ci_smoke_waits_for_proven_image_publication() -> None:
     smoke_block = _extract_job_block(_workflow_text(), "smoke")
 
-    assert "needs: push" in smoke_block
+    assert "needs: media-proof" in smoke_block

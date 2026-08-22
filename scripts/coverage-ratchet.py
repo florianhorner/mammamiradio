@@ -56,8 +56,7 @@ def xdist_args() -> list[str]:
     if raw == "auto" or (raw.isdigit() and int(raw) > 0):
         return ["-n", raw]
     print(
-        f"WARNING: ignoring invalid COVERAGE_RATCHET_XDIST={raw!r}; "
-        "use 'auto' or a positive integer.",
+        f"WARNING: ignoring invalid COVERAGE_RATCHET_XDIST={raw!r}; use 'auto' or a positive integer.",
         file=sys.stderr,
     )
     return []
