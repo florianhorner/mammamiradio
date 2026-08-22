@@ -34,6 +34,13 @@ as in-process asyncio tasks.
   venv ships setuptools < the `>=82.0.1` build requirement, so the update script
   upgrades pip/setuptools/wheel before the editable install.
 
+- **`python3.12-venv` is required before `python3 -m venv`.** The default image
+  ships Python 3.12 without `ensurepip`. Creating `.venv` in that state yields a
+  tree with no pip and the install exits 1. The environment install script
+  installs `python3.12-venv` first (`sudo apt-get update` then
+  `sudo apt-get install -y python3.12-venv`) and recreates `.venv` if pip is
+  missing. Recreating the venv by hand needs the same package.
+
 - **yt-dlp YouTube downloads are bot-blocked from this datacenter IP.** Chart
   metadata fetches fine (you'll see "Using live Italian charts (75 tracks)"), but
   each track download fails with "Sign in to confirm you're not a bot" and the
