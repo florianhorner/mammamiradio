@@ -58,7 +58,7 @@ def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
     above keeps release blocked."""
 
     build = _read(".github/workflows/addon-build.yml")
-    quality = _job(_read(".github/workflows/quality.yml"), "quality")
+    quality = _job(_read(".github/workflows/quality.yml"), "media-report")
     validate = _job(build, "validate")
     build_proof = _job(build, "media-proof")
     invariants = _read("scripts/check-release-invariants.sh")
