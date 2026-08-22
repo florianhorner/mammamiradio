@@ -61,14 +61,14 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert positions == sorted(positions)
     assert html.count('class="first-listen-step"') == 5
     assert 'id="firstListenPath"' in html
-    assert "Hear Mamma Mi Radio in one room." in html
+    assert "Hear Mamma Mi Radio right here." in html
     assert "Meet Marco and Giulia" in html
-    assert "Choose one room" in html
+    assert "Play it on this device" in html
     assert "Play the station" in html
     assert "Check the sound" in html
     assert "Choose whether the hosts can use Home details" in html
     assert "Add new conversations between songs" in html
-    assert "Step 1 of 5. Next: choose one room." in html
+    assert "Step 1 of 5. Next: play it on this device." in html
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
     assert "const current=state==='current'" in step
@@ -918,8 +918,8 @@ def test_every_first_listen_mutation_carries_a_deadline_and_a_way_out() -> None:
         )
     ]
     assert listener_confirm_calls
-    for call in listener_confirm_calls:
-        assert "FIRST_LISTEN_TIMEOUTS." in call, f"{call} is dispatched with no deadline"
+    for confirm_call in listener_confirm_calls:
+        assert "FIRST_LISTEN_TIMEOUTS." in confirm_call, f"{confirm_call} is dispatched with no deadline"
 
     # Every timeout tells the operator what to do next, never just that it failed.
     for owner, nxt, latch in (
@@ -985,3 +985,72 @@ def test_a_superseded_guide_clip_never_tidies_up_the_shared_player() -> None:
     assert toggle.rindex("if(attempt!==_firstListenGuideAttempt)return;") < toggle.index(
         "resetFirstListenGuideSource(audio)"
     )
+
+
+def test_leaving_first_listen_releases_the_station_audio_element() -> None:
+    """The hidden station element must be stopped on every way out of the step.
+
+    `hidden` is display:none and does NOT pause media. Without a teardown the
+    admin tab keeps its own hub subscription while `openListener()` opens a
+    second one in a new tab, and the operator hears two unsynchronized copies
+    of the same live stream at the moment onboarding is supposed to land.
+    """
+    html = _html()
+    assert "stopFirstListenStationAudio" in html
+
+    open_listener = _function("openListener", "jamendoFailureHint")
+    assert "stopFirstListenStationAudio()" in open_listener
+    assert open_listener.index("stopFirstListenStationAudio()") < open_listener.index("window.open(")
+
+    open_station = _function("openFirstListenStation", "startFirstListenClock")
+    assert "stopFirstListenStationAudio()" in open_station
+    assert open_station.index("stopFirstListenStationAudio()") < open_station.index("showAdminTab(")
+
+    # Host narration must not layer on top of the live station either.
+    toggle_guide = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    assert "stopFirstListenStationAudio()" in toggle_guide
+
+
+def test_first_listen_force_start_is_confirmed_not_silent() -> None:
+    """Onboarding must not silently rebuild the station with no runway.
+
+    Force Start sets force_recovery_active and resumes with nothing playable.
+    The producer desk gates the identical call behind a confirm; First Listen
+    is the one surface that should be MORE careful, not less.
+    """
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    assert "/api/resume?force=true" in start
+    assert "window.confirm(FORCE_RESUME_CONFIRM_COPY)" in start
+    assert start.index("window.confirm(FORCE_RESUME_CONFIRM_COPY)") < start.index("/api/resume?force=true")
+    # A failed force must not fall through to loading the stream anyway.
+    assert "forceResponse.ok" in start
+
+
+def test_first_listen_renders_the_servers_own_authored_error_copy() -> None:
+    """A dependency raising HTTPException(detail={...}) serializes as {"detail": {...}}.
+
+    The client's usual accessor reads {"ok":false,"error":{...}}, so without a
+    detail branch the untrusted-host 403 loses its authored next step and the
+    operator sees the generic fallback instead of "Reopen /admin using this
+    machine's local IP".
+    """
+    copy_fn = _function("firstListenErrorCopy", "firstListenErrorMessage")
+    assert "response?.detail" in copy_fn
+    assert "authored.title" in copy_fn
+    assert "authored.action" in copy_fn
+
+
+def test_first_listen_step_copy_names_this_device_not_a_speaker_or_room() -> None:
+    """Leadership principle #5: every word on screen is product copy.
+
+    The step no longer offers a speaker or a room, so it must not ask for one.
+    """
+    html = _html()
+    for stale in (
+        "Choose one room",
+        "One speaker in your home",
+        "Confirm that you heard the speaker first",
+        "Tell us when you hear the station in the room",
+        "Choose one room, then play the opening there",
+    ):
+        assert stale not in html, f"stale speaker/room copy still rendered: {stale!r}"

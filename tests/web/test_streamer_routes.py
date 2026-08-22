@@ -145,6 +145,21 @@ def _packets_to_fill_lead(pacer: StreamPacer, chunk_bytes: int) -> int:
 # ---------------------------------------------------------------------------
 
 
+# Every route behind `_require_active_setup_access`. Shared by both rebinding
+# tests so the credential-less and password-configured cases can never drift.
+ACTIVE_SETUP_ROUTE_CASES = [
+    ("POST", "/api/setup/recheck", {}),
+    ("POST", "/api/setup/provider-check", {}),
+    ("POST", "/api/setup/save-keys", {"ANTHROPIC_API_KEY": "attacker-key"}),
+    (
+        "PATCH",
+        "/api/homeassistant/entity-policy",
+        {"entity_id": "switch.coffee_machine", "muted": False},
+    ),
+    ("POST", "/api/setup/first-listen/listener-confirm", {"heard": True}),
+]
+
+
 def _make_test_app(
     *,
     admin_password: str = "",
@@ -4554,6 +4569,105 @@ async def test_stream_enables_resume_wait_only_for_exact_first_listen_query():
 
 
 @pytest.mark.asyncio
+async def test_first_listen_stream_without_packaged_show_or_cache_still_yields_audio():
+    """Scenario 2: empty container. No packaged show, no warm cache, still audio.
+
+    The other ``first_listen=True`` tests mock ``approved_first_listen_show_path``
+    into returning a file they wrote themselves, which is exactly the shape that
+    hides this bug class: the real add-on image can ship without the show, and
+    ``?first_listen=1`` is a path that can end a 200 response with zero bytes.
+    Here the approval returns ``None`` like a container with nothing packaged,
+    ``immediate_audio_index`` is empty, and the requirement is only that the
+    generator still reaches the live hub instead of returning silently.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = False
+    state.resume_event.set()
+    state.immediate_audio_index.clear()
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=None),
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks") as chunks,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        live_chunk = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("empty-container First Listen stream never reached the live hub")
+            await asyncio.sleep(0)
+
+        await app.state.stream_hub.broadcast(b"live-station")
+        assert await asyncio.wait_for(live_chunk, timeout=1.0) == b"live-station"
+        await generator.aclose()
+
+    chunks.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_first_listen_stream_treats_a_stale_resume_signal_as_no_start():
+    """A set resume_event while still stopped is stale, and must not subscribe.
+
+    The producer loop and the playback loop both clear this event about once a
+    second while the station is stopped, so observing it set-but-still-stopped
+    is a real interleaving rather than a theoretical one. The stream is
+    read-only: it must end rather than treat the stale signal as permission.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.resume_event.set()
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with patch("mammamiradio.web.streamer.first_listen_show_required") as show_required:
+        generator = _audio_generator(mock_request, first_listen=True)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(generator), timeout=1.0)
+
+    assert state.session_stopped is True
+    assert app.state.station_state.listeners_active == 0
+    show_required.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path", "payload"), ACTIVE_SETUP_ROUTE_CASES)
+async def test_password_configured_active_setup_still_rejects_a_rebound_host_without_credentials(method, path, payload):
+    """The Basic-credential path must not widen the rebinding hole it sits beside.
+
+    ``_require_active_setup_access`` returns early for verified Basic
+    credentials, which is what makes a custom hostname usable at all. Every
+    other rebinding test runs with ``admin_password=""``, where that branch
+    short-circuits to False and is never exercised. This runs the same rebound
+    host in the configuration where the branch is live, with no credentials
+    presented, and requires the refusal to hold.
+    """
+    app = _make_test_app(admin_password="s3cret")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    rebound_headers = {
+        "Host": "attacker.example",
+        "Origin": "http://attacker.example",
+        "X-Radio-CSRF-Token": TEST_CSRF_TOKEN,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://attacker.example") as client:
+        response = await client.request(method, path, headers=rebound_headers, json=payload)
+
+    assert response.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
 async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path):
     """A truncated packaged mini-show must hand off to live audio, never silence."""
     from mammamiradio.web.streamer import _audio_generator
@@ -5173,20 +5287,7 @@ async def test_active_setup_named_loopback_peer_still_requires_dashboard_csrf():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "path", "payload"),
-    [
-        ("POST", "/api/setup/recheck", {}),
-        ("POST", "/api/setup/provider-check", {}),
-        ("POST", "/api/setup/save-keys", {"ANTHROPIC_API_KEY": "attacker-key"}),
-        (
-            "PATCH",
-            "/api/homeassistant/entity-policy",
-            {"entity_id": "switch.coffee_machine", "muted": False},
-        ),
-        ("POST", "/api/setup/first-listen/listener-confirm", {"heard": True}),
-    ],
-)
+@pytest.mark.parametrize(("method", "path", "payload"), ACTIVE_SETUP_ROUTE_CASES)
 async def test_active_setup_rejects_dns_rebinding_host_even_with_page_csrf_token(method, path, payload):
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))

@@ -106,13 +106,14 @@ Assistant. The media-player ownership choice above does not change this route.
    and recovery cover says whether primary music, recovery cover, or a music
    repair follows the opening; it never blocks the speaker controls. Bundled
    demo music is reported as unavailable when this build has no song library.
-3. Select **Find my speakers**, choose one physical speaker — not
-   `media_player.mammamiradio` — then select **Start Mamma Mi Radio**. The fixed
-   source is `media-source://mammamiradio/live`.
-4. Wait for the room. The UI saying Home Assistant accepted the request proves
-   only that the service call was accepted; it does not claim the speaker was
-   audible. Select **Yes — that’s Mamma Mi Radio** only after you hear the
-   opening. Select **Not yet** for repair guidance.
+3. Open Home Assistant's own media browser: **Media → Mamma Mi Radio → Mamma Mi
+   Radio Live**, and send it to one physical speaker — not
+   `media_player.mammamiradio`. The equivalent service call is **Developer tools
+   → Actions → Play specified media** with `media-source://mammamiradio/live`
+   and content type `music`.
+4. Wait for the room. Home Assistant accepting the request proves only that the
+   service call was accepted; it does not mean the speaker was audible. Confirm
+   the room yourself.
 
 **Success:** the selected speaker starts playing the station. This proves the
 Home Assistant media-source route (`media-source://mammamiradio/live`), not

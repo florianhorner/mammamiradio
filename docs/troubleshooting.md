@@ -344,12 +344,14 @@ confirm the sound is coming from this browser and not another app, then try
 **Play the station** again. Technical details under the journey name the stream
 URL. Home Assistant speakers are an optional later route, not this step.
 
-## First Listen cannot find any speakers
+## First Listen: the optional Home Assistant speaker route is quiet
 
-Speaker discovery asks Home Assistant for its `media_player` entities, so it
-finds nothing when the station has no Home Assistant connection. Check
+First Listen no longer discovers or plays to speakers; it proves the station on
+the device you are reading it on. The Home Assistant speaker route is optional
+and lives in Home Assistant's own media browser, so it needs a working Home
+Assistant connection and the HACS integration installed. Check
 `/api/capabilities`: `ha: false` and `homeassistant_access: false` mean there is
-nothing to search.
+no connection to send audio over.
 
 On a standalone station (anything not run as the Home Assistant add-on), set
 `HA_URL` and `HA_TOKEN` in `.env` and restart. `HA_TOKEN` is a long-lived access

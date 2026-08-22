@@ -846,12 +846,24 @@ the Supervisor network. To require a credential on the add-on, set `admin_token`
 in the add-on options; a configured token is then enforced even on the LAN.
 
 The active First Listen/setup surface is stricter than the general matrix:
-`GET /api/setup/status` plus setup recheck, speaker playback, privacy preview,
-privacy choice, entity privacy controls, provider check, and key-save actions
-require the injected CSRF token and either a literal local/private IP host or
-genuine Home Assistant ingress. This prevents DNS-rebinding pages from using
-the token they can read from a rebound dashboard. Automation through a custom
-hostname must use `X-Radio-Admin-Token`.
+`GET /api/setup/status` plus setup recheck, listener confirmation, privacy
+preview, privacy choice, entity privacy controls, provider check, and key-save
+actions all require the injected CSRF token. On top of that they need one of
+three proofs of origin:
+
+1. **Verified HTTP Basic admin credentials** (`ADMIN_PASSWORD` configured). A
+   credential is an unguessable secret a rebound page cannot manufacture, so
+   this is the supported browser path for a custom hostname. The CSRF token is
+   still required as a second proof that the write came from this dashboard.
+2. **A literal local/private IP host, or genuine Home Assistant ingress.** This
+   is the credential-less path, and it is host-restricted precisely because a
+   per-process CSRF secret is no defense once an attacker can fetch a page from
+   the rebound host and read the embedded token.
+3. **`X-Radio-Admin-Token`** for automation.
+
+A custom hostname with no `ADMIN_PASSWORD` is refused with a `403` whose body is
+a structured object (`{"code": "active_setup_host_untrusted", "title",
+"message", "action"}`) naming the fix, rather than a bare string.
 
 ## Docker
 

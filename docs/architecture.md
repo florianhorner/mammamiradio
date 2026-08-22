@@ -1154,7 +1154,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
-| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub |
+| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped |
 | `/healthz` | GET | Public | Runtime-health probe with process uptime; prolonged silence with active listeners returns `503`, while an intentional Stop remains healthy |
 | `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped` |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), process-local `ad_experiment` completion counts, `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
@@ -1165,6 +1165,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/setup/first-listen/play` | POST | Admin (active setup) | Ask one selected player to start `media-source://mammamiradio/live` and record the accepted attempt |
 | `/api/setup/first-listen/receipt/retry` | POST | Admin (active setup) | Persist the server-owned accepted attempt after a receipt failure; never sends another playback request |
 | `/api/setup/first-listen/verify` | POST | Admin (active setup) | Record the operator's heard/not-yet result for the current accepted attempt |
+| `/api/setup/first-listen/listener-confirm` | POST | Admin (active setup) | Record browser-local audible proof as a `listener_*` attempt; this is the route that completes First Listen |
 | `/api/setup/home-context-preview` | POST | Admin (active setup) | Fetch a fresh detached, filtered Home context preview without publishing it into host scripts |
 | `/api/setup/home-context-choice` | PATCH | Admin (active setup) | Apply the explicit Home-context choice and record completion of the privacy review; enabling requires a fresh preview |
 | `/api/setup/provider-check` | POST | Admin (active setup) | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -1247,10 +1248,16 @@ Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must 
 
 First Listen, setup credential actions, and Home entity privacy controls use an
 additional DNS-rebinding boundary. Their setup-status read and active routes
-accept the browser CSRF token only with a literal local/private IP Host or
-genuine HA ingress; custom hostnames must use `X-Radio-Admin-Token`. This
-stricter rule is implemented by `_require_active_setup_access` and does not
-change the legacy admin matrix for unrelated endpoints.
+always require the injected CSRF token, plus one of: verified HTTP Basic admin
+credentials (the supported browser path when `ADMIN_PASSWORD` is configured,
+including on a custom hostname, because a credential is a secret a rebound page
+cannot manufacture), a literal local/private IP Host, genuine HA ingress, or
+`X-Radio-Admin-Token`. A custom hostname with no configured password is refused
+with a structured `403` (`{"code": "active_setup_host_untrusted", "title",
+"message", "action"}`) that names the fix. This stricter rule is implemented by
+`_require_active_setup_access` and does not change the legacy admin matrix for
+unrelated endpoints. `docs/operations.md` "Admin access model" is the SSOT; the
+two must change together.
 
 ### Source switch concurrency
 

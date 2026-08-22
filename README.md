@@ -10,7 +10,7 @@ an original music bed and a privacy-aware Marco/Giulia opening, followed by a
 source-aware handoff to the live stream. Add more music, Home context, and
 generated host conversations only when you want them.
 
-## First listen: one real speaker
+## First listen: on the device you already have open
 
 **Hear it on the current device before you choose what the hosts may use.**
 Install and start the Home Assistant OS app below, then open the producer desk
@@ -158,7 +158,7 @@ It starts in layers, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | Nothing | The First Listen mini-show proves the speaker path, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
+| **Hear it first** | Nothing | The First Listen mini-show plays right here on this device, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
 | **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
 | **Give your home a voice** | AI host key plus prompt-safe Home Assistant context | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 
