@@ -685,9 +685,9 @@ Swappable listener strings live in `mammamiradio/web/ui_copy.py` (single source 
 
 ### The station's name
 
-Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URLs, file paths, package names, environment variables, entity IDs, and container names. We once shipped a First Listen error with the words joined.
+Write **Mamma Mi Radio** as three words in prose. Reserve `mammamiradio` for URLs, file paths, package names, environment variables, entity IDs, and container names. Earlier First Listen recovery copy used the joined spelling.
 
-`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes its own file (which defines the typo string for the test) plus four audio-pack files that still carry the joined spelling until the pack is regenerated: the two committed receipts (`manifest.json`, `ATTRIBUTION.md`), the generator that produced them, and the test that pins their hashes. One exact line in a dated planning document is allowed until that correction lands in its own docs PR; the rest of the file remains covered. Tests reject stale allowances. Changelogs and docs must describe the typo without repeating it.
+`tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files. It excludes the test file, which defines the banned string, and four generated audio-pack files: the committed `manifest.json` and `ATTRIBUTION.md`, their generator, and the test that pins their hashes. The allowlist permits one exact line in the dated plan until a docs-only PR corrects it. All other lines in that file remain covered. The suite rejects stale allowances. Changelogs and docs must describe the typo without repeating it.
 
 ## Rules and anti-patterns
 
