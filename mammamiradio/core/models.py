@@ -2384,10 +2384,15 @@ class StationState:
             timestamp=timestamp,
         )
 
-    def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
-        """Replace the active playlist and bump revision counter.
+    def _apply_playlist_context(self, tracks: list[Track], source: PlaylistSource | None) -> None:
+        """Swap the crate and everything scoped to the crate, and nothing else.
 
-        In-flight producer segments are discarded on next commit check.
+        This is the half of a source change that belongs to the *playlist*:
+        which records exist, how they rotate, what steering they inherited. It
+        deliberately touches no transport intent (pin, force, listener
+        ownership, pending work) so a caller that must not disturb the live
+        timeline can reuse it. ``switch_playlist`` adds the revocation half on
+        top; ``apply_source_metadata_only`` does not.
         """
         self.playlist_revision += 1
         self.source_revision += 1
@@ -2409,6 +2414,34 @@ class StationState:
         # ~30-40 min because the deque fills and recency weights flatten.
         self.played_tracks.clear()
         self.played_track_log.clear()
+        self.heading = None
+        self.heading_revision += 1
+        self.heading_pending_announcement = ""
+        self.heading_pending_narration_kind = ""
+        self.heading_announced_id = ""
+
+    def apply_source_metadata_only(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
+        """Commit a stale source load as metadata, leaving the live timeline whole.
+
+        A source load whose captured continuity epoch has moved (a Stop, or a
+        Stop plus a fast Resume) owns the crate, not the controls. Every piece
+        of transport intent visible on the current epoch — the pinned track, the
+        force slot, listener request ownership, queued operator work — belongs to
+        a newer timeline than this request and must survive untouched, revision
+        counters included. Restoring those fields *after* ``switch_playlist``
+        revoked them cannot do that: the guarded clears bump
+        ``pinned_track_revision`` / ``force_next_revision``, orphaning every
+        handoff and pending request that recorded the revision it owns. So the
+        revocation half never runs here.
+        """
+        self._apply_playlist_context(tracks, source)
+
+    def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
+        """Replace the active playlist and bump revision counter.
+
+        In-flight producer segments are discarded on next commit check.
+        """
+        self._apply_playlist_context(tracks, source)
         # Clear listener requests and pinned track so in-flight background
         # download tasks from the old source can't zombie-pin a track into
         # the new playlist context. Keep an admin-visible trail so accepted
@@ -2422,11 +2455,6 @@ class StationState:
         self.listener_request_retry_handoffs.clear()
         self.clear_force_next()
         self.operator_force_pending = None
-        self.heading = None
-        self.heading_revision += 1
-        self.heading_pending_announcement = ""
-        self.heading_pending_narration_kind = ""
-        self.heading_announced_id = ""
 
     def restore_playlist_if_still_empty(self, tracks: list[Track], source: PlaylistSource | None = None) -> bool:
         """Repopulate an empty crate without the full source-switch reset.

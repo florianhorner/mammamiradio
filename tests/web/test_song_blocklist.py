@@ -170,6 +170,47 @@ def test_ban_releases_matching_listener_retry_reservation(tmp_path):
     assert state.listener_track_reservations().reserves_track(retained) is True
 
 
+def test_ban_revokes_playback_owned_admitted_reservation(tmp_path):
+    """A promise already claimed by playback has left the queue.
+
+    ``drop_matching_segments`` cannot see it, so nothing releases its admitted
+    token. Left behind, a pre-first-byte failure re-arms the banned promise as a
+    retry after the retry filter has already run — a stuck exclusive promise the
+    producer can only answer with BLOCKLIST_GATE — and the identity keeps
+    suppressing cache and recovery audio.
+    """
+    banned = _track("Volare", "Modugno", "banned-admitted")
+    retained = _track("Felicità", "Al Bano", "retained-admitted")
+    app = _make_app(tmp_path, [banned, retained])
+    state = app.state.station_state
+    for track, token in ((banned, "banned"), (retained, "retained")):
+        assert state.arm_listener_request_handoff({"request_id": f"req-{token}"}, track)
+        segment = Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / f"{token}.mp3",
+            duration_sec=180.0,
+            metadata={
+                "artist": track.artist,
+                "title_only": track.title,
+                **state.listener_request_handoff_metadata(track),
+            },
+        )
+        state.admit_listener_request_handoff(segment)
+        # Playback has claimed the segment: it is no longer in the queue.
+        if track is banned:
+            banned_segment = segment
+    assert len(state.listener_request_admitted_reservations) == 2
+
+    _apply_ban(state, app.state.config, [banned], queue=app.state.queue)
+
+    assert [handoff.track for handoff in state.listener_request_admitted_reservations.values()] == [retained]
+    assert state.listener_track_reservations().reserves_track(banned) is False
+    assert state.listener_track_reservations().reserves_track(retained) is True
+    # The banned promise can no longer be resurrected as a retry.
+    assert state.restore_listener_request_handoff_before_first_byte(banned_segment) is False
+    assert list(state.listener_request_retry_handoffs) == []
+
+
 def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path):
     from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
     from mammamiradio.scheduling.producer import _select_accepted_music_track

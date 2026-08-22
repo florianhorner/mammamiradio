@@ -7276,6 +7276,60 @@ def test_source_load_epoch_change_after_fast_resume_preserves_entire_queue(tmp_p
     assert list(state.pending_actions) == [{"type": "newer-control", "label": "keep me"}]
 
 
+def test_source_load_epoch_change_preserves_listener_request_ownership(tmp_path):
+    """The preserved queue and the promise that owns it must survive together.
+
+    A dedication queued after this load captured its epoch keeps airing on the
+    metadata-only path. If the commit revoked its handoff, the station would
+    announce a song it no longer owns and could no longer recover.
+    """
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = False
+    state.continuity_epoch = 6
+    state.now_streaming = {"type": "music", "label": "Current", "started": time.time(), "metadata": {}}
+    state.pending_requests.append(
+        {"request_id": "newer-request", "name": "Luca", "message": "ciao", "type": "song_request"}
+    )
+    promised = Track(title="Promised", artist="Artist", duration_ms=180_000)
+    assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, promised)
+    admitted_path = tmp_path / "promised.mp3"
+    admitted_path.write_bytes(b"promised")
+    admitted = Segment(
+        type=SegmentType.MUSIC,
+        path=admitted_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "promised",
+            "artist": promised.artist,
+            "title_only": promised.title,
+            **state.listener_request_handoff_metadata(promised),
+        },
+    )
+    state.admit_listener_request_handoff(admitted)
+    admitted_reservations = dict(state.listener_request_admitted_reservations)
+    assert admitted_reservations
+    assert state.arm_listener_request_handoff({"request_id": "active-request"}, promised)
+    active_handoff = state.listener_request_handoff
+    app.state.queue.put_nowait(admitted)
+    state.queued_segments = [{"id": "promised"}]
+
+    result = _apply_loaded_source(
+        SimpleNamespace(app=app),
+        [Track(title="New", artist="Artist", duration_ms=180_000)],
+        PlaylistSource(kind="url", url="https://example.test/new", label="New source"),
+        captured_continuity_epoch=5,
+    )
+
+    assert result["metadata_only"] is True
+    assert list(app.state.queue._queue) == [admitted]
+    assert state.listener_request_handoff is active_handoff
+    assert state.listener_request_admitted_reservations == admitted_reservations
+    assert [req["request_id"] for req in state.pending_requests] == ["newer-request"]
+    assert list(state.recently_consumed_requests) == []
+
+
 @pytest.mark.asyncio
 async def test_stop_clears_pending_interrupt_and_force_next(tmp_path):
     """A deliberate stop must drop any pending interrupt/forced segment so it

@@ -2354,6 +2354,21 @@ def _apply_ban(
             _reconcile_queue_tail_adjacency(queue, state, prior_tail=prior_tail)
     else:
         purged = 0
+    # Last: revoke admitted reservations the queue purge could not reach. A
+    # promised file already claimed by playback has left the queue, so
+    # `drop_matching_segments` never sees it and never releases its token. Left
+    # behind, a pre-first-byte failure would re-arm the banned promise as a retry
+    # *after* the retry filter above ran, and `listener_track_reservations()`
+    # would keep suppressing cache and recovery audio for a recording that may
+    # never air again. Runs after the purge so a still-queued dedication and its
+    # linked song settle through the normal paired mutation first.
+    if state.listener_request_admitted_reservations:
+        for token in [
+            token
+            for token, reservation in state.listener_request_admitted_reservations.items()
+            if _is_banned_track(reservation.track)
+        ]:
+            del state.listener_request_admitted_reservations[token]
     return {
         "ok": True,
         "banned": [state.blocklist[k].get("display") or f"{k[0]} - {k[1]}" for k in keys],
@@ -4414,17 +4429,12 @@ def _apply_loaded_source(
         # `switch_playlist()` intentionally clears old-source transport intent
         # during an ordinary cutover. This request is stale, though: controls
         # visible on the current continuity epoch belong to a newer timeline and
-        # must survive the metadata commit. Snapshot and restore them without an
-        # await so no concurrent control can interleave with the handoff.
-        preserved_pending_actions = list(state.pending_actions)
-        preserved_pinned_track = state.pinned_track
-        preserved_force_next = state.force_next
-        preserved_operator_force_pending = state.operator_force_pending
-        state.switch_playlist(tracks, resolved_source)
-        state.pending_actions.extend(preserved_pending_actions)
-        state.pinned_track = preserved_pinned_track
-        state.force_next = preserved_force_next
-        state.operator_force_pending = preserved_operator_force_pending
+        # must survive the metadata commit. Commit the crate half only —
+        # snapshotting the fields back afterwards cannot restore the revision
+        # counters the guarded clears bump, and silently drops every field a
+        # later `switch_playlist` learns to revoke (that is how listener request
+        # ownership went missing from this path).
+        state.apply_source_metadata_only(tracks, resolved_source)
         _delete_persisted_heading(request.app.state.config.cache_dir)
         logger.info(
             "Loaded source metadata only kind=%s tracks=%d captured_epoch=%d current_epoch=%d "

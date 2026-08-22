@@ -1401,6 +1401,61 @@ def test_switch_playlist_clears_listener_request_state():
     assert state.force_next_revision == force_revision + 1
 
 
+def test_metadata_only_source_commit_keeps_every_ownership_field_and_revision():
+    """A stale source load owns the crate, never the live timeline's controls.
+
+    This is the regression guard for the metadata-only path: it went through
+    ``switch_playlist`` and hand-restored four fields, so listener request
+    ownership (three stores plus the pending queue) was silently revoked, and
+    the guarded clears left ``pinned_track_revision`` / ``force_next_revision``
+    one ahead of the revision every surviving owner recorded.
+    """
+    state = StationState(playlist=[_track(1)])
+    state.pending_requests.append({"request_id": "req-1", "name": "Luca", "message": "ciao", "type": "shoutout"})
+    state.pending_actions.append({"type": "skip_bridge"})
+    state._listener_request_rl = {"127.0.0.1": 123.0}
+    promised = _track(99)
+    pin_revision = state.set_pinned_track(promised)
+    assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, promised)
+    admitted = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/admitted-request.mp3"),
+        metadata={
+            "artist": promised.artist,
+            "title_only": promised.title,
+            **state.listener_request_handoff_metadata(promised),
+        },
+    )
+    state.admit_listener_request_handoff(admitted)
+    admitted_reservations = dict(state.listener_request_admitted_reservations)
+    assert admitted_reservations
+    assert state.arm_listener_request_handoff({"request_id": "active-request"}, promised)
+    active_handoff = state.listener_request_handoff
+    retry_handoff = _handoff(_track(98), token="retry-token")
+    state.listener_request_retry_handoffs.append(retry_handoff)
+    force_revision = state.set_force_next(SegmentType.BANTER)
+    state.operator_force_pending = SegmentType.AD
+
+    state.apply_source_metadata_only([_track(2)], None)
+
+    # The crate half committed.
+    assert [track.title for track in state.playlist] == [_track(2).title]
+    # The ownership half did not run — values *and* the revisions their owners
+    # recorded are untouched.
+    assert [req["request_id"] for req in state.pending_requests] == ["req-1"]
+    assert list(state.recently_consumed_requests) == []
+    assert list(state.pending_actions) == [{"type": "skip_bridge"}]
+    assert state._listener_request_rl == {"127.0.0.1": 123.0}
+    assert state.pinned_track is promised
+    assert state.pinned_track_revision == pin_revision
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == force_revision
+    assert state.operator_force_pending is SegmentType.AD
+    assert state.listener_request_handoff is active_handoff
+    assert state.listener_request_admitted_reservations == admitted_reservations
+    assert list(state.listener_request_retry_handoffs) == [retry_handoff]
+
+
 def test_force_next_revision_protects_same_valued_replacement():
     state = StationState()
 
