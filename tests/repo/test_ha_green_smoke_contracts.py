@@ -38,6 +38,16 @@ def test_launch_smoke_names_the_listener_timing_boundary_honestly() -> None:
     assert "request-to-first-byte, not" in workflow_body
 
 
+def test_pi_smoke_keeps_required_check_name_when_arm_work_is_path_gated() -> None:
+    document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    jobs = document["jobs"]
+    assert "pi-smoke" in jobs
+    assert jobs["pi-smoke"]["if"] == "always() && !cancelled()"
+    assert jobs["pi-smoke"]["needs"] == ["changes", "pi-smoke-run"]
+    assert jobs["pi-smoke-run"]["if"] == "needs.changes.outputs.audio == 'true'"
+    assert jobs["pi-smoke-run"]["runs-on"] == "ubuntu-24.04-arm"
+
+
 def test_pi_smoke_cancels_superseded_pr_runs_only() -> None:
     document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
     concurrency = document["concurrency"]

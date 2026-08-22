@@ -14,6 +14,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      browser: ${{ steps.filter.outputs.browser }}
+      media: ${{ steps.filter.outputs.media }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+      audio: ${{ steps.filter.outputs.audio }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify expensive lanes
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci-changed-lanes.sh
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -104,6 +128,7 @@ jobs:
   invariants:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [changes]
     permissions:
       contents: read
     steps:
@@ -119,40 +144,56 @@ jobs:
           install-ffmpeg: "true"
 
       - name: Release cooldown gate self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_cooldown_gate.sh
 
       - name: Issue-body lint self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_issue_body_lint.sh
 
       - name: Cut-edge-release self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_cut_edge_release.sh
 
       - name: Advertised-version guard self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_advertised_version.sh
 
       - name: Edge add-on validation self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_validate_addon_edge.sh
 
       - name: Addon owner-fallback self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_validate_addon_owner.sh
 
       - name: Pre-ship squad gate self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_squad_gate.sh
 
       - name: Pre-ship evidence self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_evidence.sh
 
       - name: Landing wrapper self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_land_pr.sh
 
       - name: Dependabot nudge self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_dependabot_nudge.sh
 
       - name: Merge-gate drift check self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_check_merge_gate.sh
 
       - name: Documentation safety lint self-test
+        if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_docs_safety.sh
+
+      - name: Changed-lanes filter self-test
+        if: needs.changes.outputs.workflows == 'true'
+        run: bash tests/workflows/test_ci_changed_lanes.sh
 
       # On every PR: audio delivery invariants (FFmpeg eq count, empty-fallback test, post-restart test)
       - name: Release invariants
@@ -174,6 +215,8 @@ jobs:
   browser-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.browser == 'true'
     permissions:
       contents: read
     steps:
@@ -270,6 +313,8 @@ jobs:
   media-report:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.media == 'true'
     permissions:
       contents: read
     steps:
@@ -308,7 +353,7 @@ jobs:
 
   quality:
     if: always() && !cancelled()
-    needs: [lint, types, tests, invariants, browser-smoke, media-report]
+    needs: [changes, lint, types, tests, invariants, browser-smoke, media-report]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -316,6 +361,7 @@ jobs:
     steps:
       - name: All quality lanes passed
         env:
+          CHANGES: ${{ needs.changes.result }}
           LINT: ${{ needs.lint.result }}
           TYPES: ${{ needs.types.result }}
           TESTS: ${{ needs.tests.result }}
@@ -324,9 +370,29 @@ jobs:
           MEDIA: ${{ needs.media-report.result }}
         run: |
           set -euo pipefail
-          for r in "$LINT" "$TYPES" "$TESTS" "$INVARIANTS" "$BROWSER" "$MEDIA"; do
-            [ "$r" = "success" ]
-          done
+          require_success() {
+            name="$1"
+            result="$2"
+            if [ "$result" != "success" ]; then
+              echo "$name lane was $result" >&2
+              exit 1
+            fi
+          }
+          require_ok() {
+            name="$1"
+            result="$2"
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "$name lane was $result" >&2
+              exit 1
+            fi
+          }
+          require_success changes "$CHANGES"
+          require_success lint "$LINT"
+          require_success types "$TYPES"
+          require_success tests "$TESTS"
+          require_success invariants "$INVARIANTS"
+          require_ok browser-smoke "$BROWSER"
+          require_ok media-report "$MEDIA"
 
   coverage-ratchet:
     runs-on: ubuntu-latest

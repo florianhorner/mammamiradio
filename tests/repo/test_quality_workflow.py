@@ -47,10 +47,28 @@ def test_quality_workflow_pr_job_is_read_only() -> None:
 def test_quality_aggregator_requires_every_lane() -> None:
     quality = _workflow()["jobs"]["quality"]
     assert quality["if"] == "always() && !cancelled()"
-    assert quality["needs"] == ["lint", "types", "tests", "invariants", "browser-smoke", "media-report"]
+    assert quality["needs"] == ["changes", "lint", "types", "tests", "invariants", "browser-smoke", "media-report"]
     assert quality["timeout-minutes"] == 5
     assert _workflow()["jobs"]["tests"]["timeout-minutes"] == 45
     assert _workflow()["jobs"]["browser-smoke"]["timeout-minutes"] == 15
+
+
+def test_quality_aggregator_accepts_skipped_optional_lanes() -> None:
+    quality_block = _job_block(_workflow_text(), "quality")
+    assert "require_ok browser-smoke" in quality_block
+    assert "require_ok media-report" in quality_block
+    assert "require_success tests" in quality_block
+    assert "require_success lint" in quality_block
+
+
+def test_quality_path_gates_expensive_jobs() -> None:
+    jobs = _workflow()["jobs"]
+    assert jobs["browser-smoke"]["if"] == "needs.changes.outputs.browser == 'true'"
+    assert jobs["media-report"]["if"] == "needs.changes.outputs.media == 'true'"
+    assert jobs["browser-smoke"]["needs"] == ["changes"]
+    assert jobs["media-report"]["needs"] == ["changes"]
+    assert jobs["invariants"]["needs"] == ["changes"]
+    assert "if: needs.changes.outputs.workflows == 'true'" in _job_block(_workflow_text(), "invariants")
 
 
 def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
