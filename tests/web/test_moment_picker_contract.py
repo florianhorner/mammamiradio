@@ -103,7 +103,7 @@ def test_picker_keeps_quiet_visual_contract_and_mobile_sheet() -> None:
 def test_service_worker_never_caches_temporary_capture_audio() -> None:
     worker = SERVICE_WORKER.read_text(encoding="utf-8")
 
-    assert "radio-itali-v7" in worker
+    assert "radio-itali-v8" in worker
     capture_bypass = worker.index("path.includes('/captures/')")
     assert capture_bypass < worker.index("const isFreshAsset")
     assert capture_bypass < worker.index("Catch-all for any other same-origin GET")

@@ -64,8 +64,28 @@ COPY: dict[str, dict[str, str]] = {
         "form_message_placeholder": "Dear Radio, I'd like to dedicate a song to…",
         "form_message_required": "Write a message first, then send it to the DJ.",
         "form_submit": "Send with a kiss",
-        "form_success_song": "Song request received! The hosts will cue it soon.",
+        "form_success_song": "Request received. We’re checking the catalogue for a matching recording…",
         "form_success_shoutout": "Dedication received! The hosts will read it soon.",
+        "form_song_searching": "Request received. We’re checking the catalogue for a matching recording…",
+        "form_song_matched": "We found {track}. It’s ready for the hosts to introduce.",
+        "form_song_matched_generic": "We found a match. It’s ready for the hosts to introduce.",
+        "form_song_no_verified_match": (
+            "We couldn’t find a clear match for that request. Try again with the exact song title and artist."
+        ),
+        "form_song_not_playable": (
+            "We found a possible match, but couldn’t prepare it for air. Try another title or artist."
+        ),
+        "form_song_temporarily_unavailable": (
+            "We couldn’t finish that song request this time. Your message is still here — "
+            "try again later or rewrite it as a dedication instead."
+        ),
+        "form_song_tracking_expired": (
+            "We’ve stopped watching this one for now — the hosts still have your message. "
+            "Keep listening, and send it again if it doesn’t turn up."
+        ),
+        "form_song_tracking_lost": (
+            "We’ve lost track of this one. Your message is back in the box — if you didn’t hear it, send it again."
+        ),
         "form_rate_limited": "Give the DJ {s}s before sending another dedication.",
         "form_queue_full": "The dedication queue is full — wait a moment and try again.",
         "form_declined": "That dedication didn't go through — wait a moment and try again.",
@@ -191,8 +211,31 @@ COPY: dict[str, dict[str, str]] = {
         "form_message_placeholder": "Cara Radio, vorrei dedicare una canzone a…",
         "form_message_required": "Scrivi prima un messaggio, poi spediscilo al DJ.",
         "form_submit": "Spedisci con un bacio",
-        "form_success_song": "Richiesta ricevuta! I conduttori metteranno presto la canzone in scaletta.",
+        "form_success_song": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
         "form_success_shoutout": "Dedica ricevuta! I conduttori la leggeranno presto.",
+        "form_song_searching": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
+        "form_song_matched": "Abbiamo trovato {track}. I conduttori ora possono presentarla.",
+        "form_song_matched_generic": "Abbiamo trovato una corrispondenza. I conduttori ora possono presentarla.",
+        "form_song_no_verified_match": (
+            "Non abbiamo trovato una corrispondenza chiara per questa richiesta. "
+            "Riprova indicando titolo esatto e artista."
+        ),
+        "form_song_not_playable": (
+            "Abbiamo trovato una possibile corrispondenza, ma non siamo riusciti a prepararla "
+            "per la messa in onda. Prova un altro titolo o artista."
+        ),
+        "form_song_temporarily_unavailable": (
+            "Questa volta non siamo riusciti a completare la richiesta musicale. Il messaggio è ancora qui — "
+            "riprova più tardi oppure riscrivilo come dedica."
+        ),
+        "form_song_tracking_expired": (
+            "Per ora smettiamo di seguire la richiesta — i conduttori hanno ancora il tuo messaggio. "
+            "Resta in ascolto e rimandala se non arriva."
+        ),
+        "form_song_tracking_lost": (
+            "Abbiamo perso le tracce di questa richiesta. Il messaggio è di nuovo qui — "
+            "se non l’hai sentita, rimandala."
+        ),
         "form_rate_limited": "Aspetta {s}s prima di mandare un'altra dedica.",
         "form_queue_full": "La coda delle dediche è piena — aspetta un attimo e riprova.",
         "form_declined": "La dedica non è partita — aspetta un attimo e riprova.",

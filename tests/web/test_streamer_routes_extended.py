@@ -19,17 +19,57 @@ from fastapi import FastAPI
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
-from mammamiradio.playlist.playlist import ExplicitSourceError
-from mammamiradio.web.listener_requests import _download_listener_song
+from mammamiradio.playlist.blocklist import load_blocklist
+from mammamiradio.playlist.downloader import YtdlpSearchOutcome
+from mammamiradio.playlist.playlist import ExplicitSourceError, normalized_track_key
+from mammamiradio.playlist.request_matching import SongRequestIntent, parse_song_request
+from mammamiradio.scheduling.producer import _reserve_music_segment
+from mammamiradio.web.listener_requests import _download_listener_song as _download_listener_song_impl
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
     LiveStreamHub,
     _admin_track_id,
+    _apply_ban,
     _header_safe,
     router,
 )
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
+
+
+def _listener_search_ok(results: list[dict]) -> YtdlpSearchOutcome:
+    return YtdlpSearchOutcome(status="ok", results=results)
+
+
+def _listener_request_intent(request: dict) -> SongRequestIntent:
+    message = str(request.get("message") or "")
+    intent = parse_song_request(message)
+    assert intent is not None
+    return intent
+
+
+async def _download_listener_song(req: dict, app_state, originating_source_revision: int) -> None:
+    """Exercise the private worker with the intent guaranteed by its HTTP caller."""
+    await _download_listener_song_impl(
+        req,
+        app_state,
+        originating_source_revision,
+        _listener_request_intent(req),
+    )
+
+
+def _admit_listener_song_handoff(state: StationState, track: Track) -> Segment:
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/admitted-listener-song.mp3"),
+        metadata={
+            "artist": track.artist,
+            "title_only": track.title,
+            **state.listener_request_handoff_metadata(track),
+        },
+    )
+    state.admit_listener_request_handoff(segment)
+    return segment
 
 
 def _basic_auth_header(username: str = "admin", password: str = "secret") -> dict[str, str]:
@@ -1165,11 +1205,18 @@ async def test_listener_request_upgrades_thumbnail_to_cover(tmp_path):
         "youtube_id": "abc12345678",
         "album_art": thumb,
     }
-    req = {"request_id": "r1", "song_query": "canzone tizio"}
+    req = {
+        "request_id": "r1",
+        "type": "song_request",
+        "message": "play Canzone by Tizio",
+    }
     state.pending_requests.append(req)
     itunes = _cover_urlopen_mock({"results": [{"artworkUrl100": "https://is1.mzstatic.com/100x100bb.jpg"}]})
     with (
-        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[meta]),
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok([meta]),
+        ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
             new_callable=AsyncMock,
@@ -1263,6 +1310,80 @@ async def test_commit_external_download_purges_after_source_switch_lock(tmp_path
 
     assert status == "held"
     assert raw_path.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_commit_external_download_quarantines_operator_blocklist_artifact_after_lock(tmp_path):
+    from mammamiradio.playlist.downloader import (
+        clear_rejected_cache_keys,
+        is_rejected_cache_key,
+        reject_cached_download,
+    )
+    from mammamiradio.web import streamer
+
+    class ObservedLock:
+        def __init__(self) -> None:
+            self.locked = False
+
+        async def __aenter__(self):
+            self.locked = True
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            self.locked = False
+            return False
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.config.allow_ytdlp = True
+    state = app.state.station_state
+    lock = ObservedLock()
+    app.state.source_switch_lock = lock
+    state.blocklist = {("vasco rossi", "albachiara"): {"display": "Vasco Rossi - Albachiara"}}
+    original_playlist = list(state.playlist)
+    track = Track(
+        title="Albachiara (Live)",
+        artist="Vasco Rossi",
+        duration_ms=180_000,
+        youtube_id="operator-blocked-live",
+    )
+    raw_path = tmp_path / f"{track.cache_key}.mp3"
+    raw_path.write_bytes(b"blocked audio placeholder")
+    observed: dict[str, str] = {}
+
+    def _observed_reject(cache_dir, cache_key, reason):
+        assert lock.locked is False
+        observed.update(cache_key=cache_key, reason=reason)
+        return reject_cached_download(cache_dir, cache_key, reason)
+
+    clear_rejected_cache_keys()
+    try:
+        with (
+            patch(
+                "mammamiradio.playlist.downloader.download_external_track",
+                new_callable=AsyncMock,
+                return_value=raw_path,
+            ),
+            patch("mammamiradio.web.streamer.probe_duration_sec", return_value=180.0),
+            patch("mammamiradio.playlist.downloader.reject_cached_download", side_effect=_observed_reject),
+        ):
+            status = await streamer._commit_external_download(
+                track,
+                app.state,
+                state.source_revision,
+                should_commit=lambda: True,
+                should_pin=lambda: True,
+                blocked_identity_keys=frozenset({("Vasco Rossi", "Albachiara")}),
+            )
+
+        assert status == "banned"
+        assert observed == {"cache_key": track.cache_key, "reason": "operator_blocklist"}
+        assert raw_path.exists() is False
+        assert is_rejected_cache_key(track.cache_key)
+        assert state.playlist == original_playlist
+        assert state.pinned_track is None
+    finally:
+        clear_rejected_cache_keys()
 
 
 @pytest.mark.asyncio
@@ -1394,7 +1515,7 @@ async def test_commit_external_download_reaccepts_a_recovered_denied_track(tmp_p
         assert state.pinned_track is track
         assert not is_rejected_cache_key(track.cache_key)
         assert not marker_path.exists()
-        assert _select_accepted_music_track(state, app.state.config) is track
+        assert _select_accepted_music_track(state, app.state.config, app.state.queue) is track
     finally:
         clear_rejected_cache_keys()
 
@@ -1626,6 +1747,76 @@ async def test_playlist_load_keeps_ready_runway_when_assets_are_missing(tmp_path
     assert state.continuity_slot is slot
 
 
+def test_assetless_replacement_skips_music_orphaned_with_its_dedication(tmp_path):
+    """Fallback preserves ordinary runway, not request-exclusive orphan music."""
+    from mammamiradio.core.models import (
+        LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+        LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+        LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
+        LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+    )
+    from mammamiradio.web.streamer import ContinuityRunwayOutcome, _reserve_continuity_runway
+
+    app = _make_test_app()
+    state = app.state.station_state
+    dedication_queue_id = "missing-listener-dedication"
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "missing-dedication.mp3",
+        duration_sec=20.0,
+        metadata={"queue_id": dedication_queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    linked_path = tmp_path / "linked-request-music.mp3"
+    linked_path.write_bytes(b"linked")
+    linked_music = Segment(
+        type=SegmentType.MUSIC,
+        path=linked_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "linked-request-music",
+            "title": "Linked request music",
+            "artist": "Artist",
+            LISTENER_REQUEST_HANDOFF_TOKEN_KEY: "request-token",
+            LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True,
+            LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY: dedication_queue_id,
+            LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY: True,
+        },
+        ephemeral=False,
+    )
+    ordinary_path = tmp_path / "ordinary-runway.mp3"
+    ordinary_path.write_bytes(b"ordinary")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={"queue_id": "ordinary-runway", "title": "Ordinary runway", "artist": "Artist"},
+        ephemeral=False,
+    )
+    for segment in (dedication, linked_music, ordinary):
+        app.state.queue.put_nowait(segment)
+    state.queued_segments = [
+        {"id": str(segment.metadata["queue_id"]), "type": segment.type.value, "label": segment.metadata["title"]}
+        for segment in (dedication, linked_music, ordinary)
+    ]
+    outcome = ContinuityRunwayOutcome()
+
+    with patch("mammamiradio.web.streamer._continuity_reservation_segments", return_value=[]):
+        dropped = _reserve_continuity_runway(
+            app.state,
+            state,
+            app.state.config,
+            replace_queue=True,
+            outcome=outcome,
+        )
+
+    assert dropped == 2
+    assert list(app.state.queue._queue) == [ordinary]
+    assert state.queued_segments == [{"id": "ordinary-runway", "type": "music", "label": "Ordinary runway"}]
+    assert outcome.preserved_existing is True
+    assert outcome.fresh_reservation is False
+
+
 @pytest.mark.asyncio
 async def test_playlist_load_preserves_old_source_head_without_fresh_runway(tmp_path):
     """A preserved old-source head prevents a source switch from cutting early."""
@@ -1673,6 +1864,383 @@ async def test_playlist_load_preserves_old_source_head_without_fresh_runway(tmp_
     assert list(app.state.queue._queue) == [old_head]
     assert state.queued_segments[0]["label"] == "Old source head"
     assert state.playlist[0].title == "URL Track"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admit_promised_song",
+    [False, True],
+    ids=["active-handoff", "admitted-song"],
+)
+async def test_assetless_source_switch_drops_queued_listener_promise(tmp_path, admit_promised_song):
+    """Queued dedication and admitted music cannot survive source replacement."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    state = app.state.station_state
+    state.now_streaming = {"type": "music", "label": "Playing", "started": time.time()}
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": "source-switch-dedication",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+    prompt, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+
+    dedication_path = tmp_path / "old-source-dedication.mp3"
+    dedication_path.write_bytes(b"dedication")
+    queue_id = "old-source-dedication-q"
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=dedication_path,
+        duration_sec=20.0,
+        metadata={"queue_id": queue_id, "title": "Listener dedication"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(dedication)
+    state.queued_segments = [{"id": queue_id, "type": "banter", "label": "Listener dedication"}]
+    commit.apply(state, app.state.config, queue_id=queue_id)
+    assert state.listener_request_handoff is not None
+    if admit_promised_song:
+        promised_path = tmp_path / "old-source-promised-song.mp3"
+        promised_path.write_bytes(b"promised-song")
+        promised = Segment(
+            type=SegmentType.MUSIC,
+            path=promised_path,
+            duration_sec=180.0,
+            metadata={
+                "queue_id": "old-source-promised-song-q",
+                "title": requested.display,
+                "title_only": requested.title,
+                "artist": requested.artist,
+                **state.listener_request_handoff_metadata(requested),
+            },
+            ephemeral=False,
+        )
+        state.admit_listener_request_handoff(promised)
+        app.state.queue.put_nowait(promised)
+        state.queued_segments.append({"id": "old-source-promised-song-q", "type": "music", "label": requested.display})
+        assert state.listener_request_admitted_reservations
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch("mammamiradio.web.streamer._DEMO_ASSETS_DIR", tmp_path / "missing-demo-assets"),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] is False
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+    assert state.listener_request_handoff is None
+    assert state.listener_request_admitted_reservations == {}
+    assert state.pinned_track is None
+    assert state.force_next is None
+    assert state.playlist == new_tracks
+    assert not app.state.skip_event.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fresh_continuity", "queue_capacity"),
+    [(False, 2), (True, 2), (True, 1)],
+    ids=["assetless", "fresh-runway", "fresh-capacity-slot"],
+)
+async def test_source_switch_keeps_song_promised_by_on_air_dedication(
+    tmp_path,
+    fresh_continuity,
+    queue_capacity,
+):
+    """An audible request promise stays ahead of old and fresh runway."""
+    from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_TOKEN_KEY
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    listener_request = {
+        "request_id": "on-air-source-switch-request",
+        "name": "Luca",
+        "message": f"Play {requested.title} by {requested.artist}",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": requested.display,
+        "song_track_obj": requested,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(listener_request)
+    prompt, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None
+
+    dedication_queue_id = "on-air-listener-dedication"
+    commit.apply(state, app.state.config, queue_id=dedication_queue_id)
+    handoff_metadata = state.listener_request_handoff_metadata(requested)
+    promised_path = tmp_path / "promised-song.mp3"
+    promised_path.write_bytes(b"promised-music")
+    promised = Segment(
+        type=SegmentType.MUSIC,
+        path=promised_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "promised-song-q",
+            "title": requested.display,
+            "title_only": requested.title,
+            "artist": requested.artist,
+            **handoff_metadata,
+        },
+        ephemeral=False,
+    )
+    state.admit_listener_request_handoff(promised)
+    token = str(promised.metadata[LISTENER_REQUEST_HANDOFF_TOKEN_KEY])
+
+    ordinary_path = tmp_path / "unrelated-old-source.mp3"
+    ordinary_path.write_bytes(b"ordinary-music")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "unrelated-old-source-q",
+            "title": "Unrelated old-source song",
+            "title_only": "Unrelated old-source song",
+            "artist": "Old Artist",
+        },
+        ephemeral=False,
+    )
+    fresh_path = tmp_path / "fresh-continuity.mp3"
+    fresh_path.write_bytes(b"fresh-continuity")
+    fresh = Segment(
+        type=SegmentType.BANTER,
+        path=fresh_path,
+        duration_sec=20.0,
+        metadata={
+            "queue_id": "fresh-continuity-q",
+            "title": "Fresh continuity",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    app.state.queue = asyncio.Queue(maxsize=queue_capacity)
+    initial_queue = (ordinary, promised) if queue_capacity > 1 else (promised,)
+    for segment in initial_queue:
+        app.state.queue.put_nowait(segment)
+    # Every produced MUSIC segment carries one, including this promise. Without
+    # it the assertions below pass while the real segment could never start.
+    _reserve_music_segment(state, requested, promised)
+    state.queued_segments = [
+        {
+            "id": str(segment.metadata["queue_id"]),
+            "type": segment.type.value,
+            "label": str(segment.metadata["title"]),
+        }
+        for segment in initial_queue
+    ]
+    state.now_streaming = {
+        "type": "banter",
+        "label": "Listener dedication",
+        "started": time.time(),
+        "metadata": {"queue_id": dedication_queue_id, "title": "Listener dedication"},
+    }
+
+    new_tracks = [Track(title="URL Track", artist="A", duration_ms=180_000, spotify_id="u1")]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with (
+        patch(
+            "mammamiradio.web.streamer._continuity_reservation_segments",
+            return_value=[fresh] if fresh_continuity else [],
+        ),
+        patch(
+            "mammamiradio.web.streamer.load_explicit_source",
+            return_value=(
+                new_tracks,
+                MagicMock(
+                    kind="url",
+                    source_id="",
+                    url="https://open.spotify.com/playlist/abc",
+                    label="URL PL",
+                    track_count=1,
+                    selected_at=1.0,
+                ),
+            ),
+        ),
+        patch("mammamiradio.web.streamer.write_persisted_source"),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/playlist/load", json={"url": "https://open.spotify.com/playlist/abc"})
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] is False
+    expected_queue = [promised, fresh] if fresh_continuity and queue_capacity > 1 else [promised]
+    assert list(app.state.queue._queue) == expected_queue
+    assert state.queued_segments[0] == {"id": "promised-song-q", "type": "music", "label": requested.display}
+    assert state.continuity_slot is (fresh if fresh_continuity and queue_capacity == 1 else None)
+    assert state.listener_request_admitted_reservations[token].dedication_queue_id == dedication_queue_id
+    assert state.listener_request_admitted_reservations[token].matches_track(requested)
+    assert state.playlist == new_tracks
+    assert not app.state.skip_event.is_set()
+    # Keeping the promise in the queue is worth nothing if its music admission
+    # reservation went with the old source: playback would deny the segment and
+    # skip it, so the dedication airs and the promised song never plays.
+    assert promised.mark_playback_started() is True
+
+
+@pytest.mark.parametrize(
+    "fallback_kind",
+    ["assetless", "preserved-runway", "fresh-runway"],
+)
+def test_source_switch_retries_on_air_promised_song_when_admitted_file_vanished(tmp_path, fallback_kind):
+    """A missing admitted file takes playback's retry path during source replacement."""
+    from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_TOKEN_KEY
+    from mammamiradio.web.streamer import _apply_loaded_source
+
+    app = _make_test_app()
+    state = app.state.station_state
+    requested = state.playlist[0]
+    dedication_queue_id = "on-air-missing-song-dedication"
+    assert state.arm_listener_request_handoff(
+        {"request_id": "on-air-missing-song-request"},
+        requested,
+        dedication_queue_id=dedication_queue_id,
+    )
+    missing_promised = Segment(
+        type=SegmentType.MUSIC,
+        path=tmp_path / "vanished-promised-song.mp3",
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "vanished-promised-song-q",
+            "title": requested.display,
+            "title_only": requested.title,
+            "artist": requested.artist,
+            **state.listener_request_handoff_metadata(requested),
+        },
+        ephemeral=False,
+    )
+    state.admit_listener_request_handoff(missing_promised)
+    token = str(missing_promised.metadata[LISTENER_REQUEST_HANDOFF_TOKEN_KEY])
+
+    ordinary_path = tmp_path / "old-source-runway.mp3"
+    ordinary_path.write_bytes(b"old-source-runway")
+    ordinary = Segment(
+        type=SegmentType.MUSIC,
+        path=ordinary_path,
+        duration_sec=180.0,
+        metadata={
+            "queue_id": "old-source-runway-q",
+            "title": "Old source runway",
+            "title_only": "Old source runway",
+            "artist": "Old Artist",
+        },
+        ephemeral=False,
+    )
+    fresh_path = tmp_path / "fresh-source-runway.mp3"
+    fresh_path.write_bytes(b"fresh-source-runway")
+    fresh = Segment(
+        type=SegmentType.BANTER,
+        path=fresh_path,
+        duration_sec=20.0,
+        metadata={
+            "queue_id": "fresh-source-runway-q",
+            "title": "Fresh source runway",
+            "continuity_reservation": True,
+        },
+        ephemeral=False,
+    )
+    app.state.queue = asyncio.Queue(maxsize=2)
+    initial_queue = (missing_promised,) if fallback_kind == "assetless" else (missing_promised, ordinary)
+    for segment in initial_queue:
+        app.state.queue.put_nowait(segment)
+    if fallback_kind != "assetless":
+        # Real produced music carries a reservation. Without one the slot
+        # assertion below passes on a segment that could never actually start.
+        _reserve_music_segment(state, state.playlist[1], ordinary)
+    state.queued_segments = [
+        {
+            "id": str(segment.metadata["queue_id"]),
+            "type": segment.type.value,
+            "label": str(segment.metadata["title"]),
+        }
+        for segment in initial_queue
+    ]
+    state.now_streaming = {
+        "type": SegmentType.BANTER.value,
+        "label": "Listener dedication",
+        "started": time.time(),
+        "metadata": {"queue_id": dedication_queue_id, "title": "Listener dedication"},
+    }
+    new_tracks = [Track(title="New source song", artist="New Artist", duration_ms=180_000, spotify_id="new1")]
+    request = MagicMock()
+    request.app = app
+
+    with patch(
+        "mammamiradio.web.streamer._continuity_reservation_segments",
+        return_value=[fresh] if fallback_kind == "fresh-runway" else [],
+    ):
+        result = _apply_loaded_source(
+            request,
+            new_tracks,
+            PlaylistSource(kind="url", source_id="new-source", label="New source"),
+        )
+
+    assert result["skipped"] is False
+    assert not app.state.skip_event.is_set()
+    assert app.state.queue.empty()
+    assert state.queued_segments == []
+    expected_slot = (
+        fresh if fallback_kind == "fresh-runway" else ordinary if fallback_kind == "preserved-runway" else None
+    )
+    assert state.continuity_slot is expected_slot
+    if fallback_kind == "preserved-runway":
+        # The runway moved this out of the queue into the capacity slot. Reading
+        # only the queue for survivors leaves its reservation revoked, so the one
+        # thing standing between the listener and silence is refused at air time.
+        assert ordinary.mark_playback_started() is True
+    assert state.listener_request_admitted_reservations == {}
+    restored = state.listener_request_handoff
+    assert restored is not None
+    assert restored.token == token
+    assert restored.track is requested
+    assert restored.dedication_queue_id == dedication_queue_id
+    assert restored.music_selection_exclusive is True
+    assert restored.pin_revision is None
+    assert restored.force_next_revision == state.force_next_revision
+    assert state.force_next is SegmentType.MUSIC
+    assert state.playlist == new_tracks
 
 
 # ---------------------------------------------------------------------------
@@ -1846,7 +2414,10 @@ async def test_search_playlist_results_are_paginated_with_absolute_indices():
         Track(title=f"Song {i}", artist="Artist", duration_ms=180_000, spotify_id=f"t{i}") for i in range(7)
     ]
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[]):
+    with patch(
+        "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+        return_value=_listener_search_ok([]),
+    ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get("/api/search?q=Song&offset=2&limit=3")
     assert resp.status_code == 200
@@ -2012,17 +2583,35 @@ async def test_listener_request_valid_shoutout():
 @pytest.mark.asyncio
 async def test_listener_request_valid_song_starts_background_download(external_media_installed):
     app = _make_test_app()
-    app.state.config.allow_ytdlp = True  # song_request classification requires ytdlp enabled
+    app.state.config.allow_ytdlp = True
+    message = "puoi mettere Albachiara?"
+    expected_intent = parse_song_request(message)
+    assert expected_intent is not None
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
-    with patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock) as dl_mock:
+    with (
+        patch(
+            "mammamiradio.playlist.request_matching.parse_song_request",
+            return_value=expected_intent,
+        ) as parse_mock,
+        patch("mammamiradio.web.listener_requests._download_listener_song", new_callable=AsyncMock) as dl_mock,
+    ):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            resp = await client.post(
-                "/api/listener-request", json={"name": "Luca", "message": "puoi mettere Albachiara?"}
-            )
+            resp = await client.post("/api/listener-request", json={"name": "Luca", "message": message})
         await asyncio.sleep(0)
     assert resp.status_code == 200
-    assert resp.json()["type"] == "song_request"
-    assert dl_mock.await_count == 1
+    body = resp.json()
+    assert body["type"] == "song_request"
+    assert body["song_resolution"] == "searching"
+    assert body["public_token"] == app.state.station_state.pending_requests[0]["public_token"]
+    parse_mock.assert_called_once_with(message)
+    dl_mock.assert_awaited_once()
+    worker_args = dl_mock.await_args.args
+    assert worker_args[:3] == (
+        app.state.station_state.pending_requests[0],
+        app.state,
+        app.state.station_state.source_revision,
+    )
+    assert worker_args[3] is expected_intent
 
 
 @pytest.mark.asyncio
@@ -2068,7 +2657,7 @@ async def test_listener_request_invalid_payload_types():
 
 
 @pytest.mark.asyncio
-async def test_listener_request_song_keyword_treated_as_shoutout_when_ytdlp_disabled():
+async def test_listener_request_song_reports_lookup_unavailable_when_ytdlp_disabled():
     app = _make_test_app()
     app.state.config.allow_ytdlp = False
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -2077,10 +2666,21 @@ async def test_listener_request_song_keyword_treated_as_shoutout_when_ytdlp_disa
             resp = await client.post(
                 "/api/listener-request", json={"name": "Luca", "message": "puoi mettere Albachiara?"}
             )
+            receipt = await client.get(f"/public-listener-requests/{resp.json()['public_token']}")
         await asyncio.sleep(0)
     assert resp.status_code == 200
-    assert resp.json()["type"] == "shoutout"
+    body = resp.json()
+    assert body["type"] == "song_request"
+    # This terminal result is available in the POST response itself; the
+    # listener UI must not manufacture a searching phase before displaying it.
+    assert body["song_resolution"] == "failed"
+    request_record = app.state.station_state.pending_requests[0]
+    assert body["public_token"] == request_record["public_token"]
+    assert request_record["song_error"] is True
+    assert request_record["song_error_reason"] == "downloads_disabled"
     assert dl_mock.await_count == 0
+    assert receipt.json()["song_resolution"] == "failed"
+    assert receipt.json()["outcome_reason"] == "temporarily_unavailable"
 
 
 @pytest.mark.asyncio
@@ -2141,6 +2741,7 @@ async def test_get_listener_requests_prunes_expired_recently_consumed():
     recent = body["recently_consumed"][0]
     assert recent["id"] == "fresh"
     assert recent["name"] == "Luca"
+    assert recent["song_resolution"] == "not_matched"
     assert recent["message"] == "Metti Volare"
     assert recent["song_track"] is None
     assert recent["type"] == "song_request"
@@ -2271,6 +2872,175 @@ async def test_phase2_internal_fields_not_in_public_response():
     assert "request_id" not in public_record
     assert "submitter_ip_hash" not in public_record
     assert "evict_after" not in public_record
+
+
+@pytest.mark.asyncio
+async def test_public_listener_request_token_tracks_search_match_and_safe_failure():
+    app = _make_test_app()
+    state = app.state.station_state
+    token = "11111111-1111-4111-8111-111111111111"
+    record = {
+        "type": "song_request",
+        "public_token": token,
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": None,
+        "ts": time.time(),
+    }
+    state.pending_requests.append(record)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        searching = await client.get(f"/public-listener-requests/{token}")
+        record["song_found"] = True
+        record["song_track"] = "Lucio Battisti – Emozioni"
+        matched = await client.get(f"/public-listener-requests/{token}")
+        record["song_found"] = False
+        record["song_error"] = True
+        record["song_error_reason"] = "low_confidence"
+        not_matched = await client.get(f"/public-listener-requests/{token}")
+
+    assert searching.json() == {
+        "ok": True,
+        "type": "song_request",
+        "song_resolution": "searching",
+        "song_track": None,
+        "outcome_reason": None,
+    }
+    assert matched.json()["song_resolution"] == "matched"
+    assert matched.json()["song_track"] == "Lucio Battisti – Emozioni"
+    assert not_matched.json()["song_resolution"] == "not_matched"
+    assert not_matched.json()["song_track"] is None
+    assert not_matched.json()["outcome_reason"] == "no_verified_match"
+    assert "song_error_reason" not in not_matched.json()
+    assert searching.headers["cache-control"] == "no-store"
+    assert matched.headers["cache-control"] == "no-store"
+    assert not_matched.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_public_listener_request_token_survives_consumption_and_expires():
+    app = _make_test_app()
+    state = app.state.station_state
+    token = "22222222-2222-4222-8222-222222222222"
+    request_record = {
+        "request_id": "private-request-id",
+        "public_token": token,
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": "Lucio Battisti – Emozioni",
+        "ts": time.time(),
+    }
+    state.pending_requests.append(request_record)
+    state.archive_listener_request(request_record, status="sent_to_hosts")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        retained = await client.get(f"/public-listener-requests/{token}")
+        invalid = await client.get("/public-listener-requests/not-a-token")
+        state.recently_consumed_requests[0]["consumed_at"] = time.time() - 301
+        expired = await client.get(f"/public-listener-requests/{token}")
+
+    assert retained.status_code == 200
+    assert retained.json()["song_resolution"] == "matched"
+    assert "id" not in retained.json()
+    assert invalid.status_code == 404
+    assert expired.status_code == 404
+    assert invalid.headers["cache-control"] == "no-store"
+    assert expired.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_public_listener_request_token_projects_legacy_terminal_receipt():
+    app = _make_test_app()
+    token = "99999999-9999-4999-8999-999999999999"
+    app.state.station_state.recently_consumed_requests = [
+        {
+            "id": "legacy",
+            "public_token": token,
+            "type": "song_request",
+            "song_track": None,
+            "status": "song_not_found",
+            "song_error_reason": "longform_audio",
+            "consumed_at": time.time(),
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(f"/public-listener-requests/{token}")
+
+    assert response.status_code == 200
+    assert response.json()["song_resolution"] == "not_matched"
+    assert response.json()["outcome_reason"] == "not_playable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("token", "status", "reason"),
+    [
+        ("31111111-1111-4111-8111-111111111111", "dismissed", "dismissed"),
+        ("32222222-2222-4222-8222-222222222222", "source_changed", "source_changed"),
+        ("33333333-3333-4333-8333-333333333333", "song_not_found", "download_cancelled"),
+        ("34444444-4444-4444-8444-444444444444", "song_not_found", "lookup_failed"),
+    ],
+)
+async def test_public_listener_request_operational_failures_are_safe_and_retryable(token, status, reason):
+    app = _make_test_app()
+    app.state.station_state.recently_consumed_requests = [
+        {
+            "id": "private-request-id",
+            "public_token": token,
+            "type": "song_request",
+            "song_track": None,
+            "status": status,
+            "song_error": True,
+            "song_error_reason": reason,
+            "consumed_at": time.time(),
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(f"/public-listener-requests/{token}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "type": "song_request",
+        "song_resolution": "failed",
+        "song_track": None,
+        "outcome_reason": "temporarily_unavailable",
+    }
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_public_listener_request_token_projects_legacy_reasonless_miss_after_nonmatch():
+    app = _make_test_app()
+    token = "66666666-6666-4666-8666-666666666666"
+    now = time.time()
+    app.state.station_state.pending_requests = [
+        {"type": "song_request", "public_token": "55555555-5555-4555-8555-555555555555", "ts": now}
+    ]
+    app.state.station_state.recently_consumed_requests = [
+        {
+            "id": "legacy",
+            "public_token": token,
+            "type": "song_request",
+            "song_track": None,
+            "status": "song_not_found",
+            "song_error_reason": "",
+            "consumed_at": now,
+        }
+    ]
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(f"/public-listener-requests/{token}")
+
+    assert response.status_code == 200
+    assert response.json()["song_resolution"] == "not_matched"
+    assert response.json()["outcome_reason"] == "no_verified_match"
 
 
 @pytest.mark.asyncio
@@ -2674,6 +3444,46 @@ async def test_dismiss_listener_request_null_id_returns_400():
 
 
 @pytest.mark.asyncio
+async def test_dismiss_listener_request_rejects_non_dismiss_actions():
+    app = _make_test_app()
+    state = app.state.station_state
+    req = {
+        "request_id": "12121212-1212-4212-8212-121212121212",
+        "type": "song_request",
+        "song_found": False,
+        "ts": time.time(),
+    }
+    state.pending_requests.append(req)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        invalid = await client.post(
+            "/api/listener-requests/dismiss",
+            json={"id": req["request_id"], "action": "archive"},
+        )
+        handled = await client.post(
+            "/api/listener-requests/dismiss",
+            json={"id": req["request_id"], "action": "handled"},
+        )
+
+    assert invalid.status_code == 400
+    assert invalid.json()["error"] == "invalid action"
+    assert handled.status_code == 400
+    assert handled.json()["error"] == "invalid action"
+    assert req in state.pending_requests
+
+
+@pytest.mark.asyncio
+async def test_listener_request_rejects_message_removed_entirely_by_sanitizer():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/listener-request", json={"name": "Luca", "message": "\u0000"})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "message required"
+
+
+@pytest.mark.asyncio
 async def test_dismiss_listener_request_unknown_id_is_noop():
     """Dismissing a non-existent id returns ok=True with removed=0 (idempotent)."""
     app = _make_test_app()
@@ -2721,7 +3531,6 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
         "name": "Luca",
         "message": "metti albachiara",
         "type": "song_request",
-        "song_query": "albachiara",
         "song_found": False,
         "song_error": False,
         "request_id": "33333333-3333-4333-8333-333333333333",
@@ -2730,10 +3539,10 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[
-                {"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}
-            ],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [{"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -2761,6 +3570,125 @@ async def test_dismiss_listener_request_removes_downloaded_track(tmp_path):
     assert state.force_next is None
     assert state.continuity_epoch == 1
     assert app.state.queue.qsize() > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cleanup_action",
+    ["dismiss", "playlist_remove"],
+    ids=["dismiss", "playlist-remove-ban"],
+)
+async def test_listener_pin_cleanup_preserves_newer_panic_music_force(tmp_path, cleanup_action):
+    """Request cleanup owns its download force, never a later same-valued Panic force."""
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "name": "Luca",
+        "message": "Play Albachiara by Vasco Rossi",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "request_id": f"panic-{cleanup_action}",
+        "ts": time.time(),
+    }
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Albachiara",
+                        "artist": "Vasco Rossi",
+                        "duration_ms": 120_000,
+                        "youtube_id": f"yt-{cleanup_action}",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / f"{cleanup_action}.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    track = req["song_track_obj"]
+    assert state.pinned_track is track
+    assert state.force_next is SegmentType.MUSIC
+    listener_force_revision = state.force_next_revision
+    state.now_streaming = {"type": "music", "label": "Current song", "started": time.time()}
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        panic = await client.post("/api/panic")
+        panic_force_revision = state.force_next_revision
+        if cleanup_action == "dismiss":
+            cleanup = await client.post("/api/listener-requests/dismiss", json={"id": req["request_id"]})
+        else:
+            cleanup = await client.post(
+                "/api/playlist/remove",
+                json=_row_target(app, state.playlist.index(track)),
+            )
+
+    assert panic.status_code == 200
+    assert panic.json()["ok"] is True
+    assert panic_force_revision > listener_force_revision
+    assert cleanup.status_code == 200
+    assert cleanup.json()["ok"] is True
+    assert track not in state.playlist
+    assert state.pinned_track is None
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision == panic_force_revision
+    if cleanup_action == "dismiss":
+        assert req not in state.pending_requests
+    else:
+        assert req in state.pending_requests
+        assert req["song_found"] is False
+        assert req["song_error_reason"] == "banned"
+        assert req["song_track_obj"] is None
+
+
+@pytest.mark.asyncio
+async def test_ready_listener_song_cannot_bypass_dedication_with_handled_action():
+    app = _make_test_app()
+    state = app.state.station_state
+    track = Track(title="Albachiara", artist="Vasco Rossi", duration_ms=120000, youtube_id="handled-yt")
+    state.playlist.append(track)
+    state.pinned_track = track
+    state.force_next = SegmentType.MUSIC
+    token = "88888888-8888-4888-8888-888888888888"
+    req = {
+        "name": "Luca",
+        "message": "metti albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": track.display,
+        "song_track_obj": track,
+        "request_id": "77777777-7777-4777-8777-777777777777",
+        "public_token": token,
+        "ts": time.time(),
+    }
+    state.pending_requests.append(req)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        handled = await client.post(
+            "/api/listener-requests/dismiss",
+            json={"id": req["request_id"], "action": "handled"},
+        )
+
+    assert handled.status_code == 400
+    assert handled.json()["error"] == "invalid action"
+    assert req in state.pending_requests
+    assert track in state.playlist
+    assert state.pinned_track is track
+    assert state.force_next == SegmentType.MUSIC
+    assert state.recently_consumed_requests == []
 
 
 @pytest.mark.asyncio
@@ -3223,26 +4151,189 @@ async def test_add_external_track_rejected_when_ytdlp_disabled():
 
 
 @pytest.mark.asyncio
+async def test_download_listener_song_open_artist_skips_unrelated_first_result(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "type": "song_request",
+        "message": "Please play something by Lucio Battisti for my mother",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(req)
+    results = [
+        {
+            "title": "Phoebe Cates - Theme From Paradise LIVE SD (with lyrics) 1982",
+            "artist": "Shane Mercury",
+            "duration_ms": 240_000,
+            "youtube_id": "unrelated01",
+        },
+        {
+            "title": "Lucio Battisti - Emozioni (Official Audio) [HD]",
+            "artist": "LucioBattistiVEVO",
+            "duration_ms": 270_000,
+            "youtube_id": "battisti001",
+        },
+    ]
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(results),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "battisti.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    assert req["song_found"] is True
+    assert req["song_error"] is False
+    assert req["song_track"] == "Lucio Battisti – Emozioni"
+    assert req["song_track_obj"].youtube_id == "battisti001"
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_explicit_request_cleans_video_metadata(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "type": "song_request",
+        "message": "Play Il mio canto libero by Lucio Battisti",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Lucio Battisti - Il mio canto libero (Official Video) [4K]",
+                        "artist": "LucioBattistiVEVO",
+                        "duration_ms": 310_000,
+                        "youtube_id": "battisti002",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "canto-libero.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    assert req["song_found"] is True
+    assert req["song_track"] == "Lucio Battisti – Il mio canto libero"
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_all_unrelated_results_report_low_confidence(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "type": "song_request",
+        "message": "Please play something by Lucio Battisti for my mother",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Phoebe Cates - Theme From Paradise LIVE SD (with lyrics) 1982",
+                        "artist": "Shane Mercury",
+                        "duration_ms": 240_000,
+                        "youtube_id": "unrelated01",
+                    }
+                ]
+            ),
+        ),
+        patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock,
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert req["song_error_reason"] == "low_confidence"
+    assert state.pinned_track is None
+    download_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_listener_song_relevant_longform_never_falls_through_to_unrelated_short(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "type": "song_request",
+        "message": "Play Il mio canto libero by Lucio Battisti",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(req)
+    results = [
+        {
+            "title": "Lucio Battisti - Il mio canto libero (Full Concert)",
+            "artist": "LucioBattistiVEVO",
+            "duration_ms": 7_200_000,
+            "youtube_id": "battisti003",
+        },
+        {
+            "title": "Il mio canto libero",
+            "artist": "Unrelated Karaoke",
+            "duration_ms": 240_000,
+            "youtube_id": "unrelated02",
+        },
+    ]
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(results),
+        ),
+        patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock,
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    assert req["song_found"] is False
+    assert req["song_error"] is True
+    assert req["song_error_reason"] == "longform_audio"
+    download_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_success(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     starting_revision = state.playlist_revision
     original_len = len(state.playlist)
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[
-                {
-                    "title": "Albachiara",
-                    "artist": "Vasco Rossi",
-                    "duration_ms": 120000,
-                    "youtube_id": "yt123",
-                    "album_art": "https://img.example/albachiara.jpg",
-                }
-            ],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Albachiara",
+                        "artist": "Vasco Rossi",
+                        "duration_ms": 120000,
+                        "youtube_id": "yt123",
+                        "album_art": "https://img.example/albachiara.jpg",
+                    }
+                ]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -3274,20 +4365,22 @@ async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
     state = app.state.station_state
     state.blocklist = {("vasco rossi", "albachiara"): {"display": "Vasco Rossi - Albachiara"}}
     original_len = len(state.playlist)
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[
-                {
-                    "title": "Albachiara",
-                    "artist": "Vasco Rossi",
-                    "duration_ms": 120000,
-                    "youtube_id": "yt123",
-                    "album_art": "",
-                }
-            ],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Albachiara",
+                        "artist": "Vasco Rossi",
+                        "duration_ms": 120000,
+                        "youtube_id": "yt123",
+                        "album_art": "",
+                    }
+                ]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -3305,25 +4398,215 @@ async def test_download_listener_song_banned_marks_error_not_found(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "metadata", "blocked_key"),
+    [
+        (
+            "Play something by Lucio Battisti",
+            {"title": "Emozioni", "artist": "LucioBattistiVEVO", "youtube_id": "compact-ban"},
+            ("lucio battisti", "emozioni"),
+        ),
+        (
+            "Play Albachiara by V\u00e1sco Rossi",
+            {
+                "title": "Vasco Rossi - Albachiara (Live)",
+                "artist": "Vasco Rossi",
+                "youtube_id": "variant-ban",
+            },
+            ("vasco rossi", "albachiara"),
+        ),
+        (
+            "Play Imagine",
+            {
+                "title": "John Lennon - Imagine",
+                "track_title": "Imagine",
+                "track_artist": "Generic Distributor",
+                "artist": "Generic Distributor",
+                "uploader": "Generic Distributor",
+                "youtube_id": "generic-metadata-ban",
+            },
+            ("john lennon", "imagine"),
+        ),
+        (
+            "Play Shallow by Lady Gaga",
+            {
+                "title": "Lady Gaga feat. Bradley Cooper - Shallow",
+                "artist": "Generic Channel",
+                "youtube_id": "featured-ban",
+            },
+            ("lady gaga", "shallow"),
+        ),
+        (
+            "Play Shallow by Bradley Cooper",
+            {
+                "title": "Lady Gaga feat. Bradley Cooper - Shallow",
+                "artist": "Generic Channel",
+                "youtube_id": "sibling-featured-ban",
+            },
+            ("lady gaga", "shallow"),
+        ),
+    ],
+)
+async def test_download_listener_song_equivalent_identity_cannot_bypass_blocklist(
+    tmp_path,
+    message,
+    metadata,
+    blocked_key,
+):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    state.blocklist = {blocked_key: {"display": "blocked"}}
+    original_playlist = list(state.playlist)
+    metadata = {"duration_ms": 120000, "album_art": "", **metadata}
+    req = {"message": message, "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok([metadata]),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    assert req["song_error"] is True
+    assert req["song_error_reason"] == "banned"
+    assert req["song_found"] is False
+    assert state.playlist == original_playlist
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_layout", "first_receipt", "second_layout"),
+    [
+        (
+            "Lady Gaga feat. Bradley Cooper - Shallow",
+            "Lady Gaga feat. Bradley Cooper – Shallow",
+            "Lady Gaga - Shallow (feat. Bradley Cooper)",
+        ),
+        (
+            "Lady Gaga - Shallow (feat. Bradley Cooper)",
+            "Lady Gaga – Shallow (feat. Bradley Cooper)",
+            "Lady Gaga feat. Bradley Cooper - Shallow",
+        ),
+    ],
+)
+async def test_listener_feature_credit_ban_survives_restart_and_blocks_alternate_layout(
+    tmp_path,
+    first_layout,
+    first_receipt,
+    second_layout,
+):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    first_request = {
+        "type": "song_request",
+        "message": "Play Shallow by Lady Gaga",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(first_request)
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": first_layout,
+                        "artist": "Generic Channel",
+                        "duration_ms": 180_000,
+                        "youtube_id": "shallow-first-layout",
+                        "album_art": "",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "shallow-first.mp3",
+        ),
+    ):
+        await _download_listener_song(first_request, app.state, state.source_revision)
+
+    accepted_track = first_request["song_track_obj"]
+    assert normalized_track_key(accepted_track) == ("lady gaga", "shallow")
+    assert first_request["song_track"] == first_receipt
+
+    ban_result = _apply_ban(state, app.state.config, [accepted_track], queue=app.state.queue)
+
+    assert ban_result["persisted"] is True
+    state.blocklist = load_blocklist(tmp_path)
+    assert ("lady gaga", "shallow") in state.blocklist
+    state.pending_requests.remove(first_request)
+
+    second_request = {
+        "type": "song_request",
+        "message": "Play Shallow by Lady Gaga",
+        "song_found": False,
+        "song_error": False,
+    }
+    state.pending_requests.append(second_request)
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": second_layout,
+                        "artist": "Generic Channel",
+                        "duration_ms": 180_000,
+                        "youtube_id": "shallow-second-layout",
+                        "album_art": "",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "shallow-second.mp3",
+        ),
+    ):
+        await _download_listener_song(second_request, app.state, state.source_revision)
+
+    assert second_request["song_found"] is False
+    assert second_request["song_error"] is True
+    assert second_request["song_error_reason"] == "banned"
+    assert all(normalized_track_key(track) != ("lady gaga", "shallow") for track in state.playlist)
+    assert state.pinned_track is None
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_sanitizes_invalid_album_art(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     starting_revision = state.playlist_revision
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[
-                {
-                    "title": "Albachiara",
-                    "artist": "Vasco Rossi",
-                    "duration_ms": 120000,
-                    "youtube_id": "yt123",
-                    "album_art": "javascript:alert(1)",
-                }
-            ],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Albachiara",
+                        "artist": "Vasco Rossi",
+                        "duration_ms": 120000,
+                        "youtube_id": "yt123",
+                        "album_art": "javascript:alert(1)",
+                    }
+                ]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -3353,14 +4636,21 @@ async def test_download_listener_song_preserves_operator_pin(tmp_path):
     operator_pick = Track(title="Operator", artist="Op", duration_ms=1000, youtube_id="operator001")
     state.pinned_track = operator_pick
     original_len = len(state.playlist)
-    req = {"song_query": "albachiara", "message": "metti albachiara", "song_found": False, "song_error": False}
+    req = {"message": "metti albachiara", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[
-                {"title": "Albachiara", "artist": "Vasco Rossi", "duration_ms": 120000, "youtube_id": "yt123"}
-            ],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Albachiara",
+                        "artist": "Vasco Rossi",
+                        "duration_ms": 120000,
+                        "youtube_id": "yt123",
+                    }
+                ]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -3381,14 +4671,260 @@ async def test_download_listener_song_preserves_operator_pin(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_downloaded_listener_pin_waits_for_dedication_after_music_force_is_consumed(tmp_path):
+    """A freshly pinned request cannot become anonymous ordinary music.
+
+    This follows the real handoff order: download claims the pin and forces
+    MUSIC; the producer consumes that force before selecting; selection holds
+    the recording and forces the dedication; only the accepted dedication
+    archives the request and releases its pin to the following MUSIC turn.
+    """
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {
+        "request_id": "direct-pinned-listener-request",
+        "public_token": "direct-pinned-listener-token",
+        "name": "Giulia",
+        "message": "Play Albachiara by Vasco Rossi",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+    }
+    state.pending_requests.append(req)
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Albachiara",
+                        "artist": "Vasco Rossi",
+                        "duration_ms": 240_000,
+                        "youtube_id": "direct-pinned-listener-song",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "direct-pinned-listener-song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    requested = req["song_track_obj"]
+    assert req["song_found"] is True
+    assert req["song_pinned"] is True
+    assert state.pinned_track is requested
+    assert state.force_next is SegmentType.MUSIC
+
+    # run_producer consumes a force before entering its MUSIC selection branch.
+    state.force_next = None
+    selected = _select_accepted_music_track(state, app.state.config, app.state.queue)
+    assert selected is not requested
+    assert state.pinned_track is requested
+    assert state.force_next is SegmentType.BANTER
+    assert req in state.pending_requests
+
+    # The next forced cycle likewise consumes BANTER before planning its copy.
+    state.force_next = None
+    announcement, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in announcement
+    assert commit is not None
+    assert state.pinned_track is requested
+    commit.apply(state)
+
+    assert req not in state.pending_requests
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is requested
+
+
+@pytest.mark.asyncio
+async def test_queued_listener_song_waits_for_fifo_pin_before_entering_rotation(tmp_path):
+    """Operator A must air before requested B, and B must have one pin/play handoff."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    operator_pick = state.playlist[0]
+    state.pinned_track = operator_pick
+    req = {
+        "request_id": "listener-fifo-request",
+        "public_token": "listener-fifo-token",
+        "name": "Luca",
+        "message": "Play Requested Song by Listener Artist",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+    }
+    state.pending_requests.append(req)
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Requested Song",
+                        "artist": "Listener Artist",
+                        "duration_ms": 180_000,
+                        "youtube_id": "listener-fifo-song",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "mammamiradio.playlist.downloader.download_external_track",
+            new_callable=AsyncMock,
+            return_value=tmp_path / "listener-fifo-song.mp3",
+        ),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    requested_track = req["song_track_obj"]
+    assert state.pinned_track is operator_pick
+    assert req["song_found"] is True
+    assert req["song_pinned"] is False
+    assert requested_track in state.playlist
+
+    # The explicit operator pin is authoritative and airs first.
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is operator_pick
+    state.after_music(operator_pick)
+
+    # Even if weighted rotation tries to choose the freshly downloaded song,
+    # the pending FIFO request keeps it outside the candidate pool.
+    def _prefer_requested(candidates, *, weights, k):
+        assert requested_track not in candidates
+        return [candidates[0]]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_prefer_requested):
+        assert _select_accepted_music_track(state, app.state.config, app.state.queue) is not requested_track
+
+    announcement, commit = _plan_listener_request_block(state)
+    assert "LISTENER REQUEST:" in announcement
+    assert commit is not None
+    assert state.pinned_track is requested_track
+    assert req["song_pinned"] is True
+    commit.apply(state)
+
+    # The host handoff consumes the sole pin and archives an honest matched
+    # receipt; it is not followed by an accidental ordinary-rotation duplicate.
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is requested_track
+    _admit_listener_song_handoff(state, requested_track)
+    state.after_music(requested_track)
+    with patch("mammamiradio.core.models.random.choices", side_effect=_prefer_requested):
+        assert _select_accepted_music_track(state, app.state.config, app.state.queue) is not requested_track
+
+    assert req not in state.pending_requests
+    receipt = state.recently_consumed_requests[-1]
+    assert receipt["status"] == "sent_to_hosts"
+    assert receipt["song_found"] is True
+    assert receipt["song_error"] is False
+    assert receipt["public_token"] == "listener-fifo-token"
+
+
+@pytest.mark.parametrize("distinct_same_recording_pin", [False, True], ids=["exact-object", "same-cache-key"])
+def test_same_recording_operator_pin_waits_for_single_announced_listener_handoff(distinct_same_recording_pin):
+    """An operator pin for the requested recording is adopted, never aired then replayed."""
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+
+    app = _make_test_app()
+    state = app.state.station_state
+    requested_track = Track(
+        title="Requested Song",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="listener-shared-recording",
+    )
+    state.playlist.append(requested_track)
+    operator_pin = (
+        Track(
+            title="Requested Song (operator row)",
+            artist="Listener Artist",
+            duration_ms=180_000,
+            youtube_id="listener-shared-recording",
+        )
+        if distinct_same_recording_pin
+        else requested_track
+    )
+    req = {
+        "request_id": "same-recording-request",
+        "public_token": "same-recording-token",
+        "name": "Luca",
+        "message": "Play Requested Song by Listener Artist",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+    }
+    state.pending_requests.append(req)
+    operator_pin_revision = state.set_pinned_track(operator_pin)
+
+    def _choose_ordinary(candidates, *, weights, k):
+        assert all(track.cache_key != requested_track.cache_key for track in candidates)
+        return [candidates[0]]
+
+    # The producer must preserve the operator's same-recording intent while
+    # keeping it off air until the dedication planner can adopt it.
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose_ordinary):
+        first_track = _select_accepted_music_track(state, app.state.config, app.state.queue)
+    assert first_track.cache_key != requested_track.cache_key
+    assert state.pinned_track is operator_pin
+    assert state.force_next == SegmentType.BANTER
+    assert req["song_pinned"] is False
+
+    # Model the forced banter cycle consuming its force before prompt planning.
+    state.force_next = None
+    announcement, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in announcement
+    assert commit is not None
+    assert state.pinned_track is operator_pin
+    assert state.pinned_track_revision == operator_pin_revision
+    assert state.force_next is None
+    assert req["song_pinned"] is True
+    commit.apply(state)
+
+    # The announced handoff consumes exactly one pin. The same recording cannot
+    # immediately re-enter ordinary rotation after the request is archived.
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is operator_pin
+    _admit_listener_song_handoff(state, operator_pin)
+    state.after_music(operator_pin)
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose_ordinary):
+        assert (
+            _select_accepted_music_track(state, app.state.config, app.state.queue).cache_key
+            != requested_track.cache_key
+        )
+    assert req not in state.pending_requests
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_no_results_marks_error(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "missing", "message": "missing", "song_found": False, "song_error": False}
+    req = {"message": "play missing", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
-    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", return_value=[]):
+    with patch(
+        "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+        return_value=_listener_search_ok([]),
+    ):
         await _download_listener_song(req, app.state, state.playlist_revision)
     assert req["song_found"] is False
     assert req["song_error"] is True
@@ -3403,20 +4939,26 @@ async def test_download_listener_song_longform_result_marks_error_without_downlo
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "two hour set", "message": "two hour set", "song_found": False, "song_error": False}
+    req = {
+        "message": "play Two Hour DJ Set",
+        "song_found": False,
+        "song_error": False,
+    }
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[
-                {
-                    "title": "Two Hour DJ Set",
-                    "artist": "The Selector",
-                    "duration_ms": 7_200_000,
-                    "youtube_id": "set00000001",
-                    "album_art": "",
-                }
-            ],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Two Hour DJ Set",
+                        "artist": "The Selector",
+                        "duration_ms": 7_200_000,
+                        "youtube_id": "set00000001",
+                        "album_art": "",
+                    }
+                ]
+            ),
         ),
         patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock,
     ):
@@ -3436,20 +4978,26 @@ async def test_download_listener_song_non_music_result_marks_specific_error_with
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "podcast episode", "message": "podcast episode", "song_found": False, "song_error": False}
+    req = {
+        "message": "play Morning Podcast Episode",
+        "song_found": False,
+        "song_error": False,
+    }
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[
-                {
-                    "title": "Morning Podcast Episode",
-                    "artist": "The Talker",
-                    "duration_ms": 180_000,
-                    "youtube_id": "episode0001",
-                    "album_art": "",
-                }
-            ],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [
+                    {
+                        "title": "Morning Podcast Episode",
+                        "artist": "The Talker",
+                        "duration_ms": 180_000,
+                        "youtube_id": "episode0001",
+                        "album_art": "",
+                    }
+                ]
+            ),
         ),
         patch("mammamiradio.playlist.downloader.download_external_track", new_callable=AsyncMock) as download_mock,
     ):
@@ -3469,7 +5017,7 @@ async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    req = {"message": "play track", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
 
     async def _download_with_source_switch(*_args, **_kwargs):
@@ -3478,8 +5026,10 @@ async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
 
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -3489,7 +5039,8 @@ async def test_download_listener_song_drops_track_on_revision_change(tmp_path):
     ):
         await _download_listener_song(req, app.state, state.source_revision)
     assert req["song_found"] is False
-    assert req["song_error"] is False
+    assert req["song_error"] is True
+    assert req["song_error_reason"] == "source_changed"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 
@@ -3500,12 +5051,14 @@ async def test_download_listener_song_download_exception_marks_error(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    req = {"message": "play track", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [{"title": "Track", "artist": "Artist", "duration_ms": 120000, "youtube_id": "yt987"}]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",
@@ -3527,15 +5080,18 @@ async def test_download_listener_song_search_exception_marks_error(tmp_path):
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     original_len = len(state.playlist)
-    req = {"song_query": "track", "message": "track", "song_found": False, "song_error": False}
+    req = {"message": "play track", "song_found": False, "song_error": False}
     state.pending_requests.append(req)
 
-    with patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", side_effect=RuntimeError("search failed")):
+    with patch(
+        "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+        return_value=YtdlpSearchOutcome(status="failed", results=[]),
+    ):
         await _download_listener_song(req, app.state, state.playlist_revision)
 
     assert req["song_found"] is False
     assert req["song_error"] is True
-    assert req["song_error_reason"] == "download_failed"
+    assert req["song_error_reason"] == "lookup_failed"
     assert len(state.playlist) == original_len
     assert state.pinned_track is None
 
@@ -3546,8 +5102,7 @@ async def test_download_listener_song_cancelled_marks_error_and_removes_pending(
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
     req = {
-        "song_query": "track",
-        "message": "track",
+        "message": "play track",
         "song_found": False,
         "song_error": False,
         "request_id": "cancelled-request",
@@ -3555,7 +5110,10 @@ async def test_download_listener_song_cancelled_marks_error_and_removes_pending(
     state.pending_requests.append(req)
 
     with (
-        patch("mammamiradio.playlist.downloader.search_ytdlp_metadata", side_effect=asyncio.CancelledError),
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            side_effect=asyncio.CancelledError,
+        ),
         pytest.raises(asyncio.CancelledError),
     ):
         await _download_listener_song(req, app.state, state.playlist_revision)
@@ -3565,18 +5123,45 @@ async def test_download_listener_song_cancelled_marks_error_and_removes_pending(
 
 
 @pytest.mark.asyncio
+async def test_download_listener_song_cancelled_after_request_removed_does_not_archive(tmp_path):
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    state = app.state.station_state
+    req = {"message": "play Track", "song_found": False, "song_error": False}
+    state.pending_requests.append(req)
+
+    def _cancel_after_remove(*_args, **_kwargs):
+        state.pending_requests.remove(req)
+        raise asyncio.CancelledError
+
+    with (
+        patch(
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            side_effect=_cancel_after_remove,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _download_listener_song(req, app.state, state.source_revision)
+
+    assert req["song_error_reason"] == "download_cancelled"
+    assert state.recently_consumed_requests == []
+
+
+@pytest.mark.asyncio
 async def test_download_listener_song_non_head_request_does_not_pin_out_of_order(tmp_path):
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path
     state = app.state.station_state
-    first_req = {"song_query": "first", "message": "metti first", "song_found": False, "song_error": False}
-    second_req = {"song_query": "second", "message": "metti second", "song_found": False, "song_error": False}
+    first_req = {"message": "metti first", "song_found": False, "song_error": False}
+    second_req = {"message": "metti second", "song_found": False, "song_error": False}
     state.pending_requests.extend([first_req, second_req])
 
     with (
         patch(
-            "mammamiradio.playlist.downloader.search_ytdlp_metadata",
-            return_value=[{"title": "Second", "artist": "Artist 2", "duration_ms": 120000, "youtube_id": "yt2"}],
+            "mammamiradio.playlist.downloader.search_ytdlp_metadata_outcome",
+            return_value=_listener_search_ok(
+                [{"title": "Second", "artist": "Artist 2", "duration_ms": 120000, "youtube_id": "yt2"}]
+            ),
         ),
         patch(
             "mammamiradio.playlist.downloader.download_external_track",

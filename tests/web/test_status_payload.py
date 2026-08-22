@@ -9,7 +9,12 @@ from typing import Literal
 import pytest
 
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
+    URGENT_INTERRUPT_PRIORITY_KEY,
     Heading,
     MediaAttribution,
     PlaylistSource,
@@ -298,6 +303,19 @@ def test_public_segment_metadata_redacts_transition_track_ref():
     payload = status_payload._public_segment_metadata(metadata)
 
     assert payload == {"source": "banter"}
+
+
+def test_public_segment_metadata_redacts_listener_request_handoff():
+    metadata = {
+        "title": "Song",
+        LISTENER_REQUEST_HANDOFF_TOKEN_KEY: "private-request-token",
+        LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True,
+        LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY: "private-queue-id",
+        LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY: True,
+        URGENT_INTERRUPT_PRIORITY_KEY: True,
+    }
+
+    assert status_payload._public_segment_metadata(metadata) == {"title": "Song"}
 
 
 def test_public_segment_metadata_redacts_render_bound_playlist_source():

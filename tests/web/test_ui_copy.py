@@ -32,12 +32,71 @@ def test_every_listener_copy_reference_exists_in_both_modes():
         assert not missing, f"listener copy references missing from {lang}: {sorted(missing)}"
 
 
+def test_listener_js_fallback_strings_match_the_english_copy():
+    """A listener must read the same words whether or not the payload loaded.
+
+    Every `_t('key', 'literal')` call carries an inline English fallback used
+    when `/public-status` copy has not arrived. Nothing kept those literals in
+    step with `COPY["en"]`, so a copy edit on one side silently forked the two
+    surfaces — which is exactly what a hand-edit across both files invites.
+    """
+    js = _LISTENER_JS.read_text(encoding="utf-8")
+    # Both quote styles: matching only single-quoted literals silently skipped
+    # four calls, one of which had forked into a different licensing statement.
+    # A fallback built from concatenation or a template literal is still skipped
+    # rather than guessed at.
+    pairs = [
+        (match.group(2), match.group(4))
+        for match in re.finditer(
+            r"""_t\(\s*(['"])([^'"]+?)\1\s*,\s*(['"])((?:(?!\3)[^\\]|\\.)*)\3\s*[,)]""",
+            js,
+        )
+    ]
+    assert pairs, "no inline copy fallbacks found — the extraction pattern has drifted"
+    drift = {}
+    for key, literal in pairs:
+        fallback = literal.replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n").replace("\\\\", "\\")
+        expected = COPY["en"].get(key)
+        if expected is not None and fallback != expected:
+            drift[key] = (fallback, expected)
+    # These forked before the guard existed. Each is a listener-visible wording
+    # decision, not a mechanical fix, so they are named rather than silently
+    # skipped — and the assertion below fails if one is repaired without being
+    # removed here, so the list can only shrink. A listener reads whichever
+    # version wins the race between the page and its /public-status payload.
+    known_drift = {
+        "credits_catalog_unavailable",
+        "credits_licensed_under",
+        "credits_no_current_music",
+        "credits_provided_by_jamendo",
+        # Deliberate, not an oversight: the inline fallback is the explicit
+        # fail-closed licensing disclaimer pinned by
+        # tests/web/test_media_ui.py::test_listener_credit_data_has_no_html_sink_and_links_fail_closed,
+        # while the served string is the softer "rights remain their
+        # responsibility". Reconciling them is a copy decision, not a rename.
+        "local_credit",
+        "normalized_notice",
+        "np_on_air",
+        "np_paused",
+        "provider_reported_notice",
+        "source_unavailable",
+    }
+    new_drift = sorted(set(drift) - known_drift)
+    assert not new_drift, f"listener.js fallback copy has drifted from COPY['en']: {new_drift}"
+    repaired = sorted(known_drift - set(drift))
+    assert not repaired, (
+        f"these keys no longer drift (repaired, or their _t call was removed) — drop them from known_drift: {repaired}"
+    )
+
+
 def test_default_off_returns_english():
     assert get_copy(False, "listen_now") == "Listen Now"
     assert get_copy(False, "listen_pause_aria") == "Pause station"
     assert get_copy(False, "stat_tracks") == "Tracks in Rotation"
     assert get_copy(False, "form_message_placeholder").startswith("Dear Radio")
     assert get_copy(False, "form_message_required").startswith("Write a message")
+    assert get_copy(False, "form_success_song").startswith("Request received")
+    assert "checking the catalogue" in get_copy(False, "form_song_searching")
     assert get_copy(False, "form_success_shoutout").startswith("Dedication received")
     assert "{s}" in get_copy(False, "form_rate_limited")
     assert get_copy(False, "form_network_error").startswith("We lost the connection")
@@ -49,6 +108,8 @@ def test_super_italian_on_returns_italian():
     assert get_copy(True, "stat_tracks") == "Tracce in playlist"
     assert get_copy(True, "form_message_placeholder").startswith("Cara Radio")
     assert get_copy(True, "form_message_required").startswith("Scrivi prima")
+    assert get_copy(True, "form_success_song").startswith("Richiesta ricevuta")
+    assert "Cerchiamo in catalogo" in get_copy(True, "form_song_searching")
     assert get_copy(True, "form_success_shoutout").startswith("Dedica ricevuta")
     assert "{s}" in get_copy(True, "form_rate_limited")
     assert get_copy(True, "form_network_error").startswith("Abbiamo perso la connessione")
@@ -58,6 +119,14 @@ def test_request_outcome_copy_is_complete_in_both_modes():
     outcome_keys = (
         "form_success_song",
         "form_success_shoutout",
+        "form_song_searching",
+        "form_song_matched",
+        "form_song_matched_generic",
+        "form_song_no_verified_match",
+        "form_song_not_playable",
+        "form_song_temporarily_unavailable",
+        "form_song_tracking_expired",
+        "form_song_tracking_lost",
         "form_rate_limited",
         "form_queue_full",
         "form_declined",
@@ -67,6 +136,7 @@ def test_request_outcome_copy_is_complete_in_both_modes():
         for key in outcome_keys:
             assert COPY[lang].get(key), f"missing request outcome {key} in {lang}"
         assert "{s}" in COPY[lang]["form_rate_limited"]
+        assert "{track}" in COPY[lang]["form_song_matched"]
 
     text = _LISTENER_JS.read_text(encoding="utf-8")
     for key in outcome_keys:
@@ -79,6 +149,29 @@ def test_request_outcome_copy_is_complete_in_both_modes():
         "Invio non riuscito",
     )
     assert not any(receipt in text for receipt in hardcoded_italian_receipts)
+
+    premature_promises = (
+        "The hosts will cue it soon",
+        "metteranno presto la canzone in scaletta",
+        "queued behind the audio",
+        "in coda dopo l’audio",
+    )
+    listener_copy = "\n".join((*COPY["en"].values(), *COPY["it"].values()))
+    assert not any(promise in text or promise in listener_copy for promise in premature_promises)
+    assert "hosts to introduce" in COPY["en"]["form_song_matched"]
+    assert "conduttori" in COPY["it"]["form_song_matched"]
+
+    infrastructure_claims = (
+        "catalogue isn’t reachable",
+        "catalogo musicale non è raggiungibile",
+    )
+    assert not any(
+        claim in COPY[lang]["form_song_temporarily_unavailable"]
+        for lang in ("en", "it")
+        for claim in infrastructure_claims
+    )
+    assert "dedication" in COPY["en"]["form_song_temporarily_unavailable"]
+    assert "dedica" in COPY["it"]["form_song_temporarily_unavailable"]
 
 
 def test_missing_key_returns_default():
