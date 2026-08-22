@@ -1,31 +1,32 @@
 Test, lint and build evidence — explainer link previews + publish guards
-Captured 2026-08-22T00:37:09Z
-Code under test: 90c5eb32e37404e01df162854cd81e3d20e57e71
-Base:            7e2bec291fe5884bc113bb1515653a9ecb4a0251
+Captured 2026-08-22T01:38:44Z
+Code under test: f75549448b5a764fa1664979e064113070a23e62 (merge of origin/main, which brought #1008)
+Base:            1467adb9a5ca0e26c765cdd9739be718e568390c
 
 This file is committed after the code it describes, so it can never name
 its own commit. It names the last commit that changed code. Every commit
 after this one on the branch touches proof/ only, which is checkable:
-  git diff --name-only 90c5eb32e37404e01df162854cd81e3d20e57e71..HEAD | grep -v '^proof/'
+  git diff --name-only f75549448b5a764fa1664979e064113070a23e62..HEAD | grep -v '^proof/'
 must print nothing.
 
-== tests: full Python suite ==
+== tests: full Python suite, on the merged state ==
 FAILED tests/core/test_spoken_assets.py::test_symlink_loop_fails_closed_instead_of_raising
 FAILED tests/web/test_streamer_routes.py::test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next
-2 failed, 7450 passed, 3 skipped, 47 deselected, 1 warning in 991.02s (0:16:31)
+2 failed, 7477 passed, 3 skipped, 47 deselected, 1 warning in 412.02s (0:06:52)
    Both failures reproduce on pristine origin/main (7e2bec29) in a clean
    worktree with none of this branch applied. This branch changes no Python
-   outside tests/repo/.
+   outside tests/repo/. Passing count rose from 7450 to 7477 because the
+   merge brought in the tests that landed with #1008.
 
 == tests: repo guards ==
-313 passed in 55.83s
+313 passed in 35.01s
 
 == tests: publish-boundary guard, itemised ==
    tests/repo/test_explainer_pages_workflow.py::test_the_publish_workflow_triggers_on_its_own_path PASSED [ 20%]
-   tests/repo/test_explainer_pages_workflow.py::test_operations_doc_states_the_gate_the_workflow_carries PASSED [ 40%]
-   tests/repo/test_explainer_pages_workflow.py::test_publish_permissions_stay_on_the_deploy_job PASSED [ 60%]
-   tests/repo/test_explainer_pages_workflow.py::test_changing_the_publish_workflow_runs_the_explainer_suite PASSED [ 80%]
-   tests/repo/test_explainer_pages_workflow.py::test_only_the_deploy_job_is_scoped_to_main PASSED [100%]
+   tests/repo/test_explainer_pages_workflow.py::test_publish_permissions_stay_on_the_deploy_job PASSED [ 40%]
+   tests/repo/test_explainer_pages_workflow.py::test_operations_doc_states_the_gate_the_workflow_carries PASSED [ 60%]
+   tests/repo/test_explainer_pages_workflow.py::test_only_the_deploy_job_is_scoped_to_main PASSED [ 80%]
+   tests/repo/test_explainer_pages_workflow.py::test_changing_the_publish_workflow_runs_the_explainer_suite PASSED [100%]
 
 == tests: explainer suite ==
    ℹ tests 31
