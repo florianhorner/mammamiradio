@@ -2106,3 +2106,90 @@ async def test_error_that_ends_the_attempt_outranks_earlier_rejections(tmp_path)
     finally:
         await provider.stop()
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_check_again_clears_the_previous_attempt_reason(tmp_path):
+    """Pressing Check again must stop the row explaining the run it replaced.
+
+    The card prefers the per-attempt dominant code over ``last_failure_code``, so
+    clearing only the latter left the old sentence on screen at exactly the
+    moment the operator asked for a fresh try.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_payload([]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+        assert provider.status()["dominant_failure_code_this_attempt"] == "empty_results"
+
+        provider.retry()
+        status = provider.status()
+        assert status["last_failure_code"] is None
+        assert status["dominant_failure_code_this_attempt"] is None
+        assert status["attempt_rejections"] == {}
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_changing_settings_clears_the_previous_attempt_reason(tmp_path):
+    """A settings change replaces the run, so its reason must not survive it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_payload([]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+        assert provider.status()["attempt_rejections"] == {"empty_results": 1}
+
+        await provider.apply_config(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True, tags="rock")
+        status = provider.status()
+        assert status["last_failure_code"] is None
+        assert status["dominant_failure_code_this_attempt"] is None
+        assert status["attempt_rejections"] == {}
+    finally:
+        await provider.stop()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_timeout_that_ends_the_attempt_is_the_reason_shown(tmp_path, monkeypatch):
+    """A pass killed by the shared deadline must report the timeout.
+
+    The budget used to wrap this call from the outside, so a timeout arrived as
+    CancelledError with no terminal code and was only named afterwards. The card
+    then reported an earlier candidate rejection while the retry schedule acted
+    on the timeout.
+    """
+    monkeypatch.setattr(jt, "_NETWORK_DEADLINE_SEC", 0.15)
+    release = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("id") is None:
+            return httpx.Response(200, json=_payload([{"id": "aaa"}, {"id": "bbb"}, _item()]), request=request)
+        await release.wait()
+        return httpx.Response(200, json=_payload([_item()]), request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = jt.JamendoStreamProvider(tmp_path, lambda: 0, http_client=client)
+    try:
+        await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
+        await _wait_for_state(provider, "degraded")
+        status = provider.status()
+        assert status["last_failure_code"] == "network_timeout"
+        assert status["dominant_failure_code_this_attempt"] == "network_timeout"
+        # The earlier rejections stay visible without becoming the headline.
+        assert status["attempt_rejections"].get("identity_mismatch") == 2
+    finally:
+        release.set()
+        await provider.stop()
+        await client.aclose()

@@ -807,6 +807,7 @@ class JamendoStreamProvider:
             self._retry_index = 0
             self._pending_delay = None
             self._last_failure_code = None
+            self._clear_attempt_reasons_unlocked()
             if self._lease is not None and self._state != JamendoProviderState.PLAYING:
                 self._release_current_unlocked("config_changed")
             playing = self._lease is not None and self._state == JamendoProviderState.PLAYING
@@ -877,6 +878,7 @@ class JamendoStreamProvider:
                     return False
                 self._retry_index = 0
                 self._last_failure_code = None
+                self._clear_attempt_reasons_unlocked()
                 self._state = JamendoProviderState.IDLE
                 self._pending_delay = 0.0
                 self._retry_sleeping = False
@@ -884,6 +886,7 @@ class JamendoStreamProvider:
                 return True
             self._retry_index = 0
             self._last_failure_code = None
+            self._clear_attempt_reasons_unlocked()
             self._state = JamendoProviderState.IDLE
             self._pending_delay = 0.0
             self._ensure_scheduled_unlocked()
@@ -1116,13 +1119,10 @@ class JamendoStreamProvider:
                 epoch, fingerprint, source_revision = self._snapshot_current_unlocked()
                 self._state = JamendoProviderState.DISCOVERING
             logger.info("Jamendo provider preparation started")
-            try:
-                # Discovery and every serial exact-ID revalidation share this
-                # one wall-clock budget; no candidate can reset the deadline.
-                async with asyncio.timeout(_NETWORK_DEADLINE_SEC):
-                    candidate = await self._discover_candidate(epoch, fingerprint, source_revision)
-            except TimeoutError as exc:
-                raise _TransientError("network_timeout") from exc
+            # The shared wall-clock budget lives inside _discover_candidate so
+            # a timeout is already named when the per-attempt breakdown
+            # publishes; it surfaces here as _TransientError("network_timeout").
+            candidate = await self._discover_candidate(epoch, fingerprint, source_revision)
             with self._lock:
                 if not self._still_current_unlocked(epoch, fingerprint, source_revision):
                     raise _StaleOperationError
@@ -1254,6 +1254,18 @@ class JamendoStreamProvider:
             if operation_dir is not None:
                 _cleanup_operation(operation_dir, self._jamendo_root)
 
+    def _clear_attempt_reasons_unlocked(self) -> None:
+        """Drop the per-attempt reason alongside ``_last_failure_code``.
+
+        The card prefers the dominant code over ``last_failure_code``, so a site
+        that clears only the latter leaves the previous attempt's sentence on
+        screen. That is what an operator sees right after changing settings or
+        pressing Check again, which is exactly when the row must stop explaining
+        the run they just replaced.
+        """
+        self._attempt_rejections = {}
+        self._attempt_dominant = None
+
     def _publish_attempt_rejections(
         self,
         rejections: Mapping[str, int],
@@ -1300,7 +1312,10 @@ class JamendoStreamProvider:
             else:
                 self._attempt_rejections = dict(rejections)
                 self._attempt_dominant = dominant
-        if rejections:
+        # or terminal_code: an attempt whose very first call fails rejects no
+        # candidate, so gating on the breakdown alone left the diagnosis channel
+        # silent exactly when the provider is fully down.
+        if rejections or terminal_code:
             logger.info(
                 "Jamendo attempt %s after rejecting %d candidate(s) breakdown=%s dominant=%s",
                 "succeeded" if succeeded else "failed",
@@ -1329,24 +1344,44 @@ class JamendoStreamProvider:
             """
             attempt_rejections[code] += 1
 
-        try:
-            candidate = await self._discover_candidate_inner(
-                epoch, fingerprint, source_revision, record_rejection, note_attempt_reason
-            )
-        except _ProviderError as exc:
+        def publish(succeeded: bool, terminal_code: str | None = None) -> None:
             self._publish_attempt_rejections(
                 attempt_rejections,
                 epoch,
                 fingerprint,
                 source_revision,
-                succeeded=False,
-                terminal_code=exc.code,
+                succeeded=succeeded,
+                terminal_code=terminal_code,
             )
+
+        try:
+            # Discovery and every serial exact-ID revalidation share this one
+            # wall-clock budget; no candidate can reset the deadline. The budget
+            # lives here rather than in the caller so that the code which ended
+            # the attempt is already known when the breakdown publishes. Wrapped
+            # from outside, a timeout arrived as CancelledError with no terminal
+            # code and was only named afterwards, so the card kept reporting an
+            # earlier candidate rejection while the retry acted on the timeout.
+            async with asyncio.timeout(_NETWORK_DEADLINE_SEC):
+                candidate = await self._discover_candidate_inner(
+                    epoch, fingerprint, source_revision, record_rejection, note_attempt_reason
+                )
+        except TimeoutError as exc:
+            # Must precede OSError: builtin TimeoutError subclasses it.
+            publish(False, "network_timeout")
+            raise _TransientError("network_timeout") from exc
+        except _ProviderError as exc:
+            publish(False, exc.code)
+            raise
+        except (httpx.HTTPError, OSError):
+            # _prepare_once reports these as api_failed; say the same thing here
+            # so the card and the retry schedule cannot disagree.
+            publish(False, "api_failed")
             raise
         except BaseException:
-            self._publish_attempt_rejections(attempt_rejections, epoch, fingerprint, source_revision, succeeded=False)
+            publish(False)
             raise
-        self._publish_attempt_rejections(attempt_rejections, epoch, fingerprint, source_revision, succeeded=True)
+        publish(True)
         return candidate
 
     async def _discover_candidate_inner(

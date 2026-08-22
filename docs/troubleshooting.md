@@ -159,16 +159,21 @@ Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
   configuration or turn Jamendo off.
 
 Every reason line either says the station is retrying, states explicitly that no
-action is needed, or names a step to take. Exactly two carry a real operator
-lever: a client ID Jamendo will not accept, and a working folder the station
-cannot use. Both are reported as blocking failures, so they appear on the
-**Jamendo track could not be used** row.
+action is needed, or names a step to take. Two carry a real operator lever: a
+client ID Jamendo will not accept, and a working folder the station cannot use.
+Both are reported as blocking failures, so they appear on the **Jamendo track
+could not be used** row, which never claims a retry is coming because a blocked
+provider schedules none.
 
 `rejected_this_attempt`, `dominant_failure_code_this_attempt` and
 `attempt_rejections` on the admin `/status` payload describe the most recently
-completed discovery pass; they are cleared when a pass succeeds, so a prepared
-track never airs under a failure reason, and they still hold the previous pass's
-values while a new one is running. The lifetime `rejected_count` remains for
+completed discovery pass; they are cleared when a pass succeeds, when settings
+change, and when Check again is pressed, so a prepared track never airs under a
+failure reason and a replaced run stops being explained. They still hold the
+previous pass's values while a new one is running. The dominant code names the
+error that ended the pass, which may be a timeout or a provider failure that
+appears in no candidate breakdown, so it can be set while the rejection count is
+zero. The lifetime `rejected_count` remains for
 support and is deliberately never rendered as a bare number. Each pass logs its
 breakdown once, carrying codes and counts only — never client IDs, private audio
 URLs, or provider response text.

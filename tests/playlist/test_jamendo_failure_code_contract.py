@@ -149,13 +149,28 @@ def test_blocked_row_never_promises_a_retry() -> None:
     Jamendo's non-retryable contract rejections surface as ``api_failed``, whose
     normal copy says "retrying automatically" — on the blocked row that tells the
     operator to wait for something that will never happen.
+
+    Grepping the branch for the phrases it screens proves nothing: inverting the
+    comparison makes the branch pass through exactly the wrong sentences and the
+    grep still matches. This asserts the property instead, by running the real
+    branch condition over every sentence a blocked row can carry.
     """
     body = _ADMIN_TEMPLATE.read_text(encoding="utf-8")
-    presentation = re.search(r"function jamendoPresentation\(status\)\{(.*?)\n\}", body, re.DOTALL)
-    assert presentation is not None
-    blocked = presentation.group(1)[presentation.group(1).rindex("blockedReason") - 400 :]
-    assert "retrying automatically" in blocked, "blocked branch must screen the retry wording"
-    assert "isn't trying again" in blocked, "blocked needs a no-retry fallback sentence"
+    condition = re.search(r"^\s*if\(!blockedReason\|\|(.+)\)\{\s*$", body, re.MULTILINE)
+    assert condition is not None, "blocked screen not found — did the branch change?"
+    screened = set(re.findall(r"indexOf\('([^']+)'\)!==-1", condition.group(1)))
+    assert screened, "the blocked branch screens nothing"
+    for code, sentence in _hint_table().items():
+        would_render = not any(phrase in sentence for phrase in screened)
+        if not would_render:
+            continue
+        assert "retrying automatically" not in sentence, (
+            f"blocked row would promise a retry it never schedules for {code!r}"
+        )
+        assert "no action needed" not in sentence, (
+            f"blocked row would tell the operator to do nothing about {code!r}, "
+            "on a state that does not recover on its own"
+        )
 
 
 def test_operator_copy_is_deployment_neutral() -> None:
@@ -164,8 +179,15 @@ def test_operator_copy_is_deployment_neutral() -> None:
     Telling a standalone operator to check "the add-on's storage" names a place
     that does not exist on their install.
     """
-    table = _hint_table()
-    for code, sentence in table.items():
+    body = _ADMIN_TEMPLATE.read_text(encoding="utf-8")
+    # Both operator-facing Jamendo copy tables, not just the failure hints. The
+    # error table sat 15 lines above the sentence this rule was written for and
+    # broke it, because the test only looked at jamendoFailureHint.
+    errors = re.search(r"const JAMENDO_ERROR_COPY=\{(.*?)\n\};", body, re.DOTALL)
+    assert errors is not None, "JAMENDO_ERROR_COPY not found"
+    surfaces = dict(_hint_table())
+    surfaces.update({m.group("code"): m.group("text") for m in _HINT_ENTRY_RE.finditer(errors.group(1))})
+    for code, sentence in surfaces.items():
         lowered = sentence.lower()
         for addon_word in ("add-on", "addon", "supervisor", "home assistant"):
             assert addon_word not in lowered, f"{code!r} copy assumes a deployment: {sentence!r}"

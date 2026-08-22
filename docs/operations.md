@@ -394,7 +394,10 @@ the detailed provider `state`, `client_id_configured`, current
 rejected count, and three fields describing the most recently completed
 discovery pass: `rejected_this_attempt`, `dominant_failure_code_this_attempt`,
 and an `attempt_rejections` breakdown keyed by code. The per-pass fields clear
-on success, so a prepared track never carries a failure reason. Every code is
+on success, on a settings change, and on Check again, so a prepared track never
+carries a failure reason and a replaced run stops being explained. The dominant
+code names whatever ended the pass, so it can name a timeout or provider failure
+that appears in no breakdown key, and can be set while the count is zero. Every code is
 checked against the provider's own `JAMENDO_FAILURE_CODES` set; an unrecognized
 one degrades to `api_failed` rather than passing through. It never contains the
 client ID, private stream URL, or raw exception.

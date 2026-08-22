@@ -4397,15 +4397,17 @@ const JAMENDO_ERROR_COPY={
   jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
   jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
   jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
-  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check add-on storage and try again.',
+  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check that the station storage has free space and is writable, then try again.',
 };
 // Covers every code in JAMENDO_FAILURE_CODES (playlist/jamendo_transient.py).
 // test_jamendo_failure_code_contract.py fails if the provider gains a code that
 // has no sentence here. Each line says what happened AND whether the operator
 // must act — a bare reason fragment is a log line, not product copy.
-// Exactly two codes carry a real operator lever: api_auth_failed (their client
-// ID) and temp_root_invalid (their storage). Everything else ends in "no action
+// Two codes here carry a real operator lever: api_auth_failed (their client ID)
+// and temp_root_invalid (their storage). Everything else ends in "no action
 // needed" or says the station is retrying, so the operator can stop looking.
+// The blocked row adds a third lever of its own, because a state that never
+// recovers unaided cannot be described by any sentence in this table.
 // There is deliberately no "try different music tags" line: jamendo_tags is a
 // radio.toml key with no env override, no add-on option and no admin field, so
 // on the add-on that advice would name a step the reader cannot take.
@@ -4479,7 +4481,10 @@ function jamendoPresentation(status){
   // normal copy says "retrying automatically" — that would tell the operator to
   // wait for something that will never happen.
   let blockedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
-  if(!blockedReason||blockedReason.indexOf('retrying automatically')!==-1){
+  // Screens BOTH wrong-on-blocked shapes. source_revision_invalid is raised
+  // as a blocking error and its copy says 'no action needed', which on a row
+  // that will never recover unaided is just as misleading as promising a retry.
+  if(!blockedReason||blockedReason.indexOf('retrying automatically')!==-1||blockedReason.indexOf('no action needed')!==-1){
     blockedReason="Jamendo turned the station away and isn't trying again — check the Jamendo settings, or turn it off.";
   }
   return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:blockedReason+' Starter and local music continue.',actions:['retry','off'],announcement:blockedReason};
