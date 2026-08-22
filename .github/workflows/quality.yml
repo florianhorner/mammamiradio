@@ -97,6 +97,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          # The audio-pack validator reads generator inputs at the exact Git
+          # revision pinned in the provenance manifest. That revision can be
+          # older than HEAD~1, so a shallow checkout cannot prove the hashes.
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-python-ci
         with:

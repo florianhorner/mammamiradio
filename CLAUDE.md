@@ -345,6 +345,9 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
   - On PRs: `check` mode — fails if any module dropped below its floor.
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
+  - The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
+    pack provenance test reads generator inputs at the revision pinned in the
+    manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.
 - **Pi aarch64 smoke**: `.github/workflows/pi-smoke.yml` is an arm64 FFmpeg
   7.x/8.x compatibility canary, not exact add-on package parity. It uses JVS as
   primary and verifies the supported BtbN fallback against GitHub's digest.

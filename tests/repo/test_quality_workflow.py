@@ -77,9 +77,11 @@ def test_quality_workflow_fetches_history_for_pinned_audio_provenance() -> None:
         checkout = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@"))
         return checkout.get("with", {}).get("fetch-depth")
 
+    tests_block = _job_block(_workflow_text(), "tests")
     assert checkout_fetch_depth("media-report") == 0
     assert checkout_fetch_depth("invariants") == 0
-    assert checkout_fetch_depth("tests") is None
+    assert checkout_fetch_depth("tests") == 0
+    assert "pinned in the provenance manifest" in tests_block
 
 
 def test_quality_workflow_scopes_write_to_main_ratchet_job() -> None:
