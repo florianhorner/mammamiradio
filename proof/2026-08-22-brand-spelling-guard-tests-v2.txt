@@ -1,0 +1,27 @@
+# Pre-merge evidence — brand-spelling guard (post pre-landing-review fixes)
+# branch: florianhorner/chore/execute-pasted-plan
+# commit: f1a7dac07212617edb886c1fd7d7f06cdfb1183a
+# date:   2026-08-22T18:19:48Z
+# python: Python 3.14.3  (CI pins 3.11)
+
+$ pytest tests/web/test_ui_copy.py tests/web/test_admin_first_listen.py tests/scripts/test_validate_audio_asset_pack.py -q
+........................................................................ [ 44%]
+........................................................................ [ 88%]
+..................                                                       [100%]
+162 passed, 6 deselected in 74.51s (0:01:14)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+392 files already formatted
+
+$ mypy mammamiradio/ tests/
+tests/web/test_public_status_contract.py:711: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_main.py:337: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_main.py:506: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/web/test_main.py:1980: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+Success: no issues found in 348 source files
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
