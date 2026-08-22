@@ -3,9 +3,25 @@ async (page) => {
   const markerIndex = markerUrl.indexOf('#');
   const baseUrl = markerIndex >= 0 ? markerUrl.slice(markerIndex + 1).replace(/\/+$/, '') : '';
   const requestPosts = [];
+  const receiptPolls = [];
   const streamRequests = [];
   const statusPolls = [];
   const streamFixture = 'mammamiradio/assets/demo/recovery/continuity_1.mp3';
+  const songReceiptStorageKey = 'mmr.listener.songReceipt.v1';
+  const receiptTokens = {
+    reloadMatched: 'smoke-reload-matched',
+    reloadNotMatched: 'smoke-reload-not-matched',
+    expired404: 'smoke-expired-404',
+    expired410: 'smoke-expired-410',
+    transient: 'smoke-transient',
+    immediate: 'smoke-immediate-terminal',
+    staleFrame: 'smoke-stale-frame',
+    lateLift: 'smoke-late-lift',
+    notPlayable: 'smoke-not-playable',
+    temporarilyUnavailable: 'smoke-temporarily-unavailable',
+    trackingDeadline: 'smoke-tracking-deadline',
+  };
+  const receiptPlans = new Map();
   let requestScenario = 'success_shoutout';
   let streamScenario = 'audio';
   let sessionStopped = false;
@@ -68,6 +84,36 @@ async (page) => {
 
   function assert(condition, message) {
     if (!condition) throw new Error(`player-smoke: ${message}`);
+  }
+
+  function setReceiptPlan(token, plan) {
+    receiptPlans.set(token, { index: 0, ...plan });
+  }
+
+  function searchingReceipt() {
+    return { ok: true, type: 'song_request', song_resolution: 'searching' };
+  }
+
+  function matchedReceipt(track) {
+    return { ok: true, type: 'song_request', song_resolution: 'matched', song_track: track };
+  }
+
+  function notMatchedReceipt() {
+    return {
+      ok: true,
+      type: 'song_request',
+      song_resolution: 'not_matched',
+      outcome_reason: 'no_verified_match',
+    };
+  }
+
+  function failedReceipt(songResolution, outcomeReason) {
+    return {
+      ok: true,
+      type: 'song_request',
+      song_resolution: songResolution,
+      outcome_reason: outcomeReason,
+    };
   }
 
   async function waitForRouteCount(getCount, expected, timeoutMs, message) {
@@ -147,6 +193,34 @@ async (page) => {
   await page.route('**/public-listener-requests', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{"requests":[]}' });
   });
+  await page.route('**/public-listener-requests/*', async (route) => {
+    const token = decodeURIComponent(route.request().url().split('?', 1)[0].split('/').at(-1));
+    const plan = receiptPlans.get(token);
+    const step = plan
+      ? (typeof plan.next === 'function' ? plan.next() : plan.steps[plan.index++])
+      : null;
+    receiptPolls.push({ token, step: plan ? plan.index : -1 });
+    if (!step) {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: '{"ok":false,"error":"unexpected player-smoke receipt poll"}',
+      });
+      return;
+    }
+    if (step.hold) {
+      await new Promise((resolve) => { step.release = resolve; });
+    }
+    if (step.abort) {
+      await route.abort('failed');
+      return;
+    }
+    await route.fulfill({
+      status: step.status || 200,
+      contentType: 'application/json',
+      body: JSON.stringify(step.body || { ok: false, error: 'request_not_found' }),
+    });
+  });
   await page.route('**/api/listener-request', async (route) => {
     requestPosts.push({ scenario: requestScenario, body: route.request().postDataJSON() });
     if (requestScenario === 'network') {
@@ -156,6 +230,57 @@ async (page) => {
     const responses = {
       success_shoutout: [200, { ok: true, type: 'shoutout' }],
       success_song: [200, { ok: true, type: 'song_request' }],
+      song_reload_matched: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.reloadMatched, song_resolution: 'searching' },
+      ],
+      song_reload_not_matched: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.reloadNotMatched, song_resolution: 'searching' },
+      ],
+      song_expired_404: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.expired404, song_resolution: 'searching' },
+      ],
+      song_expired_410: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.expired410, song_resolution: 'searching' },
+      ],
+      song_transient: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.transient, song_resolution: 'searching' },
+      ],
+      song_immediate_terminal: [
+        200,
+        {
+          ok: true,
+          type: 'song_request',
+          public_token: receiptTokens.immediate,
+          song_resolution: 'not_matched',
+          outcome_reason: 'no_verified_match',
+        },
+      ],
+      song_stale_frame: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.staleFrame, song_resolution: 'searching' },
+      ],
+      song_late_lift: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.lateLift, song_resolution: 'searching' },
+      ],
+      song_not_playable: [
+        200,
+        { ok: true, type: 'song_request', public_token: receiptTokens.notPlayable, song_resolution: 'searching' },
+      ],
+      song_temporarily_unavailable: [
+        200,
+        {
+          ok: true,
+          type: 'song_request',
+          public_token: receiptTokens.temporarilyUnavailable,
+          song_resolution: 'searching',
+        },
+      ],
       rate_limited: [429, { ok: false, retry_after: 12 }],
       queue_full: [429, { ok: false, error: 'queue_full' }],
       declined: [400, { ok: false, error: 'request not accepted' }],
@@ -179,6 +304,37 @@ async (page) => {
   });
 
   await page.addInitScript(() => {
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (callback, delay, ...args) => nativeSetTimeout(
+      callback,
+      delay === 3000 ? 40 : delay,
+      ...args,
+    );
+
+    const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+    const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
+    let nextHeldFrameId = -1;
+    let heldRequestFrames = [];
+    window.__playerSmokeHoldRequestFrames = false;
+    window.__playerSmokeHeldRequestFrameCount = () => heldRequestFrames.length;
+    window.__playerSmokeFlushRequestFrames = () => {
+      const frames = heldRequestFrames;
+      heldRequestFrames = [];
+      frames.forEach(({ callback }) => callback(performance.now()));
+    };
+    window.requestAnimationFrame = (callback) => {
+      if (!window.__playerSmokeHoldRequestFrames) return nativeRequestAnimationFrame(callback);
+      const id = nextHeldFrameId--;
+      heldRequestFrames.push({ id, callback });
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      if (id >= 0) {
+        nativeCancelAnimationFrame(id);
+        return;
+      }
+      heldRequestFrames = heldRequestFrames.filter((frame) => frame.id !== id);
+    };
     try { localStorage.setItem('stationName', '__stale_station_identity__'); } catch (_) {}
 
     const nativeSetInterval = window.setInterval;
@@ -214,6 +370,11 @@ async (page) => {
 
   async function loadFreshPage() {
     await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    await waitForLivePage();
+  }
+
+  async function reloadPage() {
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
     await waitForLivePage();
   }
 
@@ -298,6 +459,374 @@ async (page) => {
     const el = document.getElementById('mmr-copy-bootstrap');
     return el ? JSON.parse(el.textContent) : {};
   });
+
+  async function waitForReceiptText(expected, timeout = 3000) {
+    await page.waitForFunction(
+      (text) => {
+        const receipt = document.getElementById('request-sent');
+        return receipt && receipt.offsetParent !== null && receipt.textContent.trim() === text;
+      },
+      expected,
+      { timeout, polling: 20 },
+    );
+  }
+
+  async function receiptUiState() {
+    return page.evaluate((storageKey) => {
+      const form = document.getElementById('request-form');
+      const name = document.getElementById('req-name');
+      const message = document.getElementById('req-msg');
+      const receipt = document.getElementById('request-sent');
+      const submit = form && form.querySelector('button[type="submit"]');
+      return {
+        name: name ? name.value : '',
+        message: message ? message.value : '',
+        messageVisible: Boolean(message && message.offsetParent !== null),
+        receipt: receipt ? receipt.textContent.trim() : '',
+        receiptVisible: Boolean(receipt && receipt.offsetParent !== null),
+        submitDisabled: Boolean(submit && submit.disabled),
+        submitting: form ? form.dataset.submitting || '' : '',
+        stored: sessionStorage.getItem(storageKey),
+      };
+    }, songReceiptStorageKey);
+  }
+
+  async function startTrackedSong(scenario, message, name = 'Anna', expectedReceipt = copy.form_song_searching) {
+    requestScenario = scenario;
+    await page.evaluate((storageKey) => sessionStorage.removeItem(storageKey), songReceiptStorageKey);
+    await loadFreshPage();
+    const pollsBefore = receiptPolls.length;
+    await page.locator('#req-name').fill(name);
+    await page.locator('#req-msg').fill(message);
+    await page.locator('#request-form button[type="submit"]').click();
+    await waitForReceiptText(expectedReceipt);
+    return { pollsBefore, message, name };
+  }
+
+  async function exerciseSongReceiptScenarios() {
+    let stage = 'reload terminal outcomes';
+
+    async function exerciseReloadedReceipt({ scenario, token, terminalBody, expectedText, label }) {
+      stage = `${label} receipt reload`;
+      let reloaded = false;
+      const terminalStep = { hold: true, body: terminalBody };
+      setReceiptPlan(token, {
+        next: () => (reloaded ? terminalStep : { body: searchingReceipt() }),
+      });
+      const started = await startTrackedSong(scenario, `Smoke ${label} request`);
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        started.pollsBefore + 1,
+        2000,
+        `${label} searching receipt was never polled before reload`,
+      );
+      await reloadPage();
+      await waitForReceiptText(copy.form_song_searching);
+      const restored = await receiptUiState();
+      assert(restored.message === started.message, `${label} searching receipt lost its message across reload`);
+      assert(restored.submitDisabled, `${label} searching receipt enabled duplicate submission after reload`);
+      assert(
+        restored.stored && JSON.parse(restored.stored).public_token === token,
+        `${label} receipt token did not survive reload`,
+      );
+
+      reloaded = true;
+      const pollsAfterReload = receiptPolls.length;
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        pollsAfterReload + 1,
+        2000,
+        `${label} receipt did not resume polling after reload`,
+      );
+      assert(typeof terminalStep.release === 'function', `${label} terminal poll was not held`);
+      terminalStep.release();
+      await waitForReceiptText(expectedText);
+      const terminal = await receiptUiState();
+      assert(terminal.stored === null, `${label} terminal receipt remained in session storage`);
+    }
+
+    async function exerciseRetryableTerminalReceipt({ scenario, token, terminalBody, expectedText, label }) {
+      stage = `${label} retryable terminal receipt`;
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      const terminalStep = { hold: true, body: terminalBody };
+      setReceiptPlan(token, { steps: [{ body: searchingReceipt() }, terminalStep] });
+      const started = await startTrackedSong(scenario, `Smoke ${label} retry`, 'Lucia');
+      await waitForRouteCount(
+        () => receiptPolls.filter((poll) => poll.token === token).length,
+        2,
+        2000,
+        `${label} terminal receipt was never polled`,
+      );
+      assert(typeof terminalStep.release === 'function', `${label} terminal receipt was not held`);
+      terminalStep.release();
+      await waitForReceiptText(expectedText);
+
+      const terminal = await receiptUiState();
+      assert(terminal.receipt === expectedText, `${label} did not use localized terminal copy`);
+      assert(terminal.name === started.name, `${label} did not restore the original name`);
+      assert(terminal.message === started.message, `${label} did not restore the original message`);
+      assert(terminal.messageVisible, `${label} left the retry input hidden`);
+      assert(!terminal.submitDisabled && !terminal.submitting, `${label} did not enable retry submit`);
+      assert(terminal.stored === null, `${label} retained a terminal tracking token`);
+
+      const pollsAtTerminal = receiptPolls.filter((poll) => poll.token === token).length;
+      await page.waitForTimeout(120);
+      assert(
+        receiptPolls.filter((poll) => poll.token === token).length === pollsAtTerminal,
+        `${label} continued polling after its terminal receipt`,
+      );
+    }
+
+    async function exerciseTerminalAnimationRace({ scenario, token, deferFrame }) {
+      stage = `${scenario} animation race`;
+      const terminalStep = { hold: true, body: matchedReceipt('Franco Battiato – Centro di gravità permanente') };
+      setReceiptPlan(token, { steps: [terminalStep] });
+      requestScenario = scenario;
+      await page.evaluate((storageKey) => sessionStorage.removeItem(storageKey), songReceiptStorageKey);
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await loadFreshPage();
+      assert(
+        !(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)),
+        `${scenario} could not enable the animated receipt path`,
+      );
+      await page.addStyleTag({
+        content: '.mmr-dedica-form.is-sending { animation-play-state: paused !important; }',
+      });
+      const pollsBefore = receiptPolls.length;
+      const postsBefore = requestPosts.length;
+      await page.locator('#req-msg').fill(`Smoke ${scenario}`);
+      await page.locator('#request-form button[type="submit"]').click();
+      await waitForRouteCount(
+        () => requestPosts.length,
+        postsBefore + 1,
+        2000,
+        `${scenario} POST was never requested`,
+      );
+
+      stage = `${scenario} animation start`;
+      try {
+        await page.waitForFunction(
+          () => document.getElementById('request-form').classList.contains('is-sending'),
+          null,
+          { timeout: 2000 },
+        );
+      } catch (error) {
+        const formState = await page.evaluate(() => {
+          const form = document.getElementById('request-form');
+          const receipt = document.getElementById('request-sent');
+          return {
+            className: form ? form.className : '',
+            submitting: form ? form.dataset.submitting || '' : '',
+            receipt: receipt ? receipt.textContent.trim() : '',
+          };
+        });
+        throw new Error(`${error.message}; form=${JSON.stringify(formState)}`);
+      }
+      await page.evaluate(() => { window.__playerSmokeHoldRequestFrames = true; });
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        pollsBefore + 1,
+        2000,
+        `${scenario} terminal poll was never requested`,
+      );
+
+      if (deferFrame) {
+        await page.locator('#request-form').evaluate((form) => {
+          form.dispatchEvent(new AnimationEvent('animationend', { animationName: 'tt-card-lift', bubbles: true }));
+        });
+        stage = `${scenario} deferred searching frame`;
+        await page.waitForFunction(
+          () => window.__playerSmokeHeldRequestFrameCount() === 1,
+          null,
+          { timeout: 2000, polling: 20 },
+        );
+      }
+
+      terminalStep.release();
+      stage = `${scenario} terminal completion`;
+      await page.waitForFunction(
+        (storageKey) => sessionStorage.getItem(storageKey) === null,
+        songReceiptStorageKey,
+        { timeout: 2000, polling: 20 },
+      );
+
+      if (!deferFrame) {
+        stage = `${scenario} terminal frame`;
+        await page.waitForFunction(
+          () => window.__playerSmokeHeldRequestFrameCount() === 1,
+          null,
+          { timeout: 2000, polling: 20 },
+        );
+        await page.locator('#request-form').evaluate((form) => {
+          form.dispatchEvent(new AnimationEvent('animationend', { animationName: 'tt-card-lift', bubbles: true }));
+        });
+        assert(
+          await page.evaluate(() => window.__playerSmokeHeldRequestFrameCount()) === 1,
+          'late lift callback queued a stale searching frame',
+        );
+      } else {
+        stage = `${scenario} terminal frame after stale frame`;
+        await page.waitForFunction(
+          () => window.__playerSmokeHeldRequestFrameCount() === 2,
+          null,
+          { timeout: 2000, polling: 20 },
+        );
+      }
+
+      await page.evaluate(() => window.__playerSmokeFlushRequestFrames());
+      const expected = copy.form_song_matched.replace(
+        '{track}',
+        'Franco Battiato – Centro di gravità permanente',
+      );
+      await waitForReceiptText(expected);
+      await page.waitForTimeout(80);
+      assert((await receiptUiState()).receipt === expected, `${scenario} stale animation overwrote terminal outcome`);
+      await page.evaluate(() => { window.__playerSmokeHoldRequestFrames = false; });
+    }
+
+    try {
+      const matchedTrack = 'Mina – Città vuota';
+      await exerciseReloadedReceipt({
+        scenario: 'song_reload_matched',
+        token: receiptTokens.reloadMatched,
+        terminalBody: matchedReceipt(matchedTrack),
+        expectedText: copy.form_song_matched.replace('{track}', matchedTrack),
+        label: 'matched',
+      });
+      await exerciseReloadedReceipt({
+        scenario: 'song_reload_not_matched',
+        token: receiptTokens.reloadNotMatched,
+        terminalBody: notMatchedReceipt(),
+        expectedText: copy.form_song_no_verified_match,
+        label: 'not-matched',
+      });
+
+      for (const expiryStatus of [404, 410]) {
+        stage = `${expiryStatus} expired receipt`;
+        const token = expiryStatus === 404 ? receiptTokens.expired404 : receiptTokens.expired410;
+        const scenario = expiryStatus === 404 ? 'song_expired_404' : 'song_expired_410';
+        const expiryStep = { hold: true, status: expiryStatus };
+        setReceiptPlan(token, { steps: [expiryStep] });
+        const started = await startTrackedSong(scenario, `Smoke expiry ${expiryStatus}`, 'Lucia');
+        await waitForRouteCount(
+          () => receiptPolls.length,
+          started.pollsBefore + 1,
+          2000,
+          `${expiryStatus} expiry was never polled`,
+        );
+        expiryStep.release();
+        // A pruned record is gone; only the client deadline can claim the hosts
+        // still hold the message. The two branches carry different copy.
+        await waitForReceiptText(copy.form_song_tracking_lost);
+        const expired = await receiptUiState();
+        assert(expired.name === started.name, `${expiryStatus} expiry did not restore the original name`);
+        assert(expired.message === started.message, `${expiryStatus} expiry did not restore the original input`);
+        assert(expired.messageVisible, `${expiryStatus} expiry left the retry input hidden`);
+        assert(!expired.submitDisabled && !expired.submitting, `${expiryStatus} expiry did not enable retry submit`);
+        assert(expired.stored === null, `${expiryStatus} expiry retained a dead tracking token`);
+      }
+
+      stage = 'transient receipt retry';
+      const transientRetry = { hold: true, body: matchedReceipt('Lucio Dalla – Anna e Marco') };
+      setReceiptPlan(receiptTokens.transient, {
+        steps: [{ abort: true }, transientRetry],
+      });
+      const transientStart = await startTrackedSong('song_transient', 'Smoke transient retry');
+      // The retry after a transport failure backs off to 6s, and the init
+      // script only compresses the 3s cadence, so this wait is real time.
+      await waitForRouteCount(
+        () => receiptPolls.length,
+        transientStart.pollsBefore + 2,
+        9000,
+        'transient receipt failure did not retry',
+      );
+      const retrying = await receiptUiState();
+      assert(retrying.receipt === copy.form_song_searching, 'transient poll failure replaced the searching receipt');
+      assert(retrying.stored !== null, 'transient poll failure erased the resumable receipt');
+      transientRetry.release();
+      await waitForReceiptText(copy.form_song_matched.replace('{track}', 'Lucio Dalla – Anna e Marco'));
+
+      stage = 'immediate terminal POST';
+      const immediatePollCount = receiptPolls.length;
+      await startTrackedSong(
+        'song_immediate_terminal',
+        'Smoke immediate terminal',
+        'Anna',
+        copy.form_song_no_verified_match,
+      );
+      await page.waitForTimeout(120);
+      assert(receiptPolls.length === immediatePollCount, 'immediate terminal POST scheduled a receipt poll');
+      const immediate = await receiptUiState();
+      assert(immediate.stored === null, 'immediate terminal POST stored a tracking token');
+      assert(!immediate.submitDisabled, 'immediate terminal POST left retry submit disabled');
+
+      await exerciseRetryableTerminalReceipt({
+        scenario: 'song_not_playable',
+        token: receiptTokens.notPlayable,
+        terminalBody: failedReceipt('not_matched', 'not_playable'),
+        expectedText: copy.form_song_not_playable,
+        label: 'not-playable',
+      });
+      await exerciseRetryableTerminalReceipt({
+        scenario: 'song_temporarily_unavailable',
+        token: receiptTokens.temporarilyUnavailable,
+        terminalBody: failedReceipt('failed', 'temporarily_unavailable'),
+        expectedText: copy.form_song_temporarily_unavailable,
+        label: 'temporarily-unavailable',
+      });
+
+      await exerciseTerminalAnimationRace({
+        scenario: 'song_stale_frame',
+        token: receiptTokens.staleFrame,
+        deferFrame: true,
+      });
+      await exerciseTerminalAnimationRace({
+        scenario: 'song_late_lift',
+        token: receiptTokens.lateLift,
+        deferFrame: false,
+      });
+      // A stored receipt older than the tracking deadline must stop the loop on
+      // sight — before any request goes out — and hand the form back. The
+      // source-level guard in tests/web/ can only see that the constants exist;
+      // this is what proves the deadline is enforced and that an expired
+      // receipt costs the station zero further polls.
+      stage = 'tracking deadline on resume';
+      setReceiptPlan(receiptTokens.trackingDeadline, { steps: [{ body: searchingReceipt() }] });
+      await page.evaluate(
+        ([storageKey, token]) => sessionStorage.setItem(storageKey, JSON.stringify({
+          public_token: token,
+          name: 'Anna',
+          message: 'Smoke tracking deadline',
+          started_at: Date.now() - 700000,
+        })),
+        [songReceiptStorageKey, receiptTokens.trackingDeadline],
+      );
+      const deadlinePollsBefore = receiptPolls.length;
+      await loadFreshPage();
+      await waitForReceiptText(copy.form_song_tracking_expired);
+      const deadline = await receiptUiState();
+      assert(deadline.message === 'Smoke tracking deadline', 'tracking deadline lost the listener input');
+      assert(deadline.messageVisible, 'tracking deadline left the retry input hidden');
+      assert(
+        !deadline.submitDisabled && !deadline.submitting,
+        'tracking deadline left the request form locked',
+      );
+      assert(deadline.stored === null, 'tracking deadline retained a dead tracking token');
+      await page.waitForTimeout(200);
+      assert(
+        receiptPolls.length === deadlinePollsBefore,
+        'an already-expired receipt still polled the station',
+      );
+
+      stage = 'receipt scenario reset';
+      await page.evaluate((storageKey) => sessionStorage.removeItem(storageKey), songReceiptStorageKey);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await loadFreshPage();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`player-smoke: ${stage}: ${detail}`);
+    }
+  }
 
   async function waitForStatusRender(predicate, argument, message) {
     const before = statusPolls.length;
@@ -619,6 +1148,8 @@ async (page) => {
   await submitScenario('declined', copy.form_declined);
   await submitScenario('network', copy.form_network_error, { verifyReset: true });
 
+  await exerciseSongReceiptScenarios();
+
   // A second click while play() is pending cancels the one in-flight request;
   // it must not create a duplicate request or leave an active playback intent.
   streamScenario = 'delayed';
@@ -793,6 +1324,7 @@ async (page) => {
     stream_intent_ms: streamIntentMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),
+    receipt_polls: receiptPolls.length,
     blocked_off_origin_requests: [...new Set(blockedOffOriginRequests)],
   };
 }

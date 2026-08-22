@@ -364,9 +364,9 @@ def test_listener_request_receipt_does_not_hide_its_form_ancestor() -> None:
 
 def test_listener_request_outcomes_are_localized_and_failure_reset_preserves_input() -> None:
     js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("const SONG_RECEIPT_STORAGE_KEY") : js.index("/* ── Wire everything")]
     submit = js[js.index("async function submitRequest") : js.index("/* ── Wire everything")]
     for key in (
-        "form_success_song",
         "form_success_shoutout",
         "form_rate_limited",
         "form_queue_full",
@@ -375,13 +375,66 @@ def test_listener_request_outcomes_are_localized_and_failure_reset_preserves_inp
     ):
         assert re.search(rf"_t\(\s*'{key}'", submit), f"request outcome bypasses localized {key} copy"
 
+    for key in (
+        "form_success_song",
+        "form_song_searching",
+        "form_song_matched",
+        "form_song_matched_generic",
+        "form_song_no_verified_match",
+        "form_song_not_playable",
+        "form_song_temporarily_unavailable",
+        "form_song_tracking_expired",
+    ):
+        assert re.search(rf"_t\(\s*'{key}'", request_flow), f"song receipt bypasses localized {key} copy"
+
     assert "if (r.ok && d.ok)" in submit, "an HTTP error body must never pose as a successful request."
+    assert "_scheduleRequestFormReset" in submit
     assert "}, isSuccess ? 15000 : 6000)" in submit
     clear_block = submit[submit.index("_resetRequestForm(formEl, sentEl);") : submit.index("} catch (e)")]
     assert "if (isSuccess)" in clear_block
     assert "msgInput.value = ''" in clear_block
     catch_block = submit[submit.index("} catch (e)") :]
     assert "msgInput.value = ''" not in catch_block, "network recovery must preserve the listener's retry text."
+
+
+def test_song_receipt_polling_is_bounded_and_backs_off() -> None:
+    """A pending request has no server-side deadline, so the client needs one.
+
+    Without it the 3s poll runs for the life of the tab (~1,200 requests/hour)
+    with the form locked, and a reload resumes the same loop. Retryable answers
+    must also back off so an unreachable station is not hammered at full rate.
+    """
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("const SONG_RECEIPT_STORAGE_KEY") : js.index("/* ── Wire everything")]
+
+    assert "SONG_RECEIPT_MAX_TRACKING_MS" in request_flow, "receipt polling must carry a total tracking deadline"
+    assert "started_at: Date.now()" in js, "a receipt with no start time cannot be expired"
+    assert "_songReceiptExpired" in request_flow
+
+    scheduler = request_flow[
+        request_flow.index("function _scheduleSongReceiptPoll") : request_flow.index("async function _pollSongReceipt")
+    ]
+    assert "_songReceiptExpired(receipt)" in scheduler, "the deadline must gate scheduling, not just the first poll"
+    assert "'deadline'" in scheduler, "an expired receipt must show the honest tracking-stopped copy"
+    assert "SONG_RECEIPT_MAX_BACKOFF_MS" in scheduler
+
+    poll = request_flow[request_flow.index("async function _pollSongReceipt") :]
+    poll = poll[: poll.index("function _resumeSongReceipt")]
+    # A request we merely stopped watching is still queued; an archived-and-pruned
+    # one is not. Sharing one string would let the page claim the hosts still hold
+    # a message they have already finished with.
+    assert "'gone'" in poll, "the 404/410 answer needs its own copy, not the deadline copy"
+    searching_branch = poll[poll.index("payload.song_resolution === 'searching'") :]
+    searching_branch = searching_branch[: searching_branch.index("if (_isTerminalSongResolution")]
+    assert "backoff" not in searching_branch, (
+        "a station that answers 'still searching' is healthy; keep the responsive cadence."
+    )
+    # Every other reschedule is a retry after a failure and must back off.
+    retryable = poll.replace(searching_branch, "")
+    assert retryable.count("_scheduleSongReceiptPoll(receipt)") == 0, (
+        "non-searching reschedules must pass { backoff: true }"
+    )
+    assert retryable.count("{ backoff: true }") >= 4
 
 
 def test_listener_playback_is_scoped_to_explicit_play_controls() -> None:

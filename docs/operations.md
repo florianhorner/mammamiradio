@@ -352,6 +352,7 @@ Public:
   expire after 24 hours, and kept moments, which do not expire at all
 - `GET /clips/{id}` (share landing page for the same two)
 - `POST /api/listener-request`, `GET /public-listener-requests` (sanitized feed for the on-page sidebar)
+- `GET /public-listener-requests/{public_token}` (one sanitized, read-only song-request receipt)
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 

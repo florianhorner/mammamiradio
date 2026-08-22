@@ -15,7 +15,13 @@ import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
-from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
+from mammamiradio.core.models import (
+    URGENT_INTERRUPT_PRIORITY_KEY,
+    GenerationWasteReason,
+    Segment,
+    SegmentType,
+    StationState,
+)
 from mammamiradio.scheduling import producer
 from mammamiradio.scheduling.producer import _front_insert_queue_and_shadow
 
@@ -200,6 +206,38 @@ def test_front_insert_rejects_newcomer_when_every_slot_is_already_air_next():
     assert list(q._queue) == [existing_air_next]
     assert state.queued_segments == [_shadow("existing-air-next")]
     assert state.operator_force_pending is None
+    assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
+
+
+def test_urgent_front_insert_supersedes_full_non_urgent_air_next_queue():
+    """An urgent warning outranks queued operator picks without consuming the
+    newer operator force that still owns a later production turn."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    state = StationState(operator_force_pending=SegmentType.AD)
+    nearer = _seg("nearer-air-next", seg_type=SegmentType.BANTER)
+    farther = _seg("farther-air-next", seg_type=SegmentType.AD)
+    for item in (nearer, farther):
+        item.metadata["air_next"] = True
+        q.put_nowait(item)
+    state.queued_segments = [_shadow("nearer-air-next"), _shadow("farther-air-next", "ad")]
+
+    urgent = _seg("urgent-warning", seg_type=SegmentType.BANTER)
+    urgent.metadata[URGENT_INTERRUPT_PRIORITY_KEY] = True
+
+    assert (
+        _front_insert_queue_and_shadow(
+            q,
+            state,
+            urgent,
+            _shadow("urgent-warning"),
+            settle_operator_force=False,
+        )
+        is True
+    )
+
+    assert list(q._queue) == [urgent, nearer]
+    assert [row["id"] for row in state.queued_segments] == ["urgent-warning", "nearer-air-next"]
+    assert state.operator_force_pending is SegmentType.AD
     assert state.discard_by_reason == {GenerationWasteReason.AIR_NEXT_OVERFLOW: 1}
 
 

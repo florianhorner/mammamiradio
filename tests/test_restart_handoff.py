@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import mammamiradio.restart_handoff as restart_handoff
-from mammamiradio.core.models import Segment, SegmentType
+from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_ADMITTED_KEY, Segment, SegmentType
 from mammamiradio.restart_handoff import (
     RestartHandoffCandidate,
     RestartHandoffEntry,
@@ -638,6 +638,13 @@ def test_write_spool_skips_ephemeral_dynamic_temp_outside_and_non_music_candidat
     candidates = [
         RestartHandoffCandidate(good, 180.0, "Artist", "Ephemeral", ephemeral=True),
         RestartHandoffCandidate(good, 180.0, "Artist", "Overlay", metadata={"dynamic_overlay": True}),
+        RestartHandoffCandidate(
+            good,
+            180.0,
+            "Artist",
+            "Listener handoff",
+            metadata={LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True},
+        ),
         RestartHandoffCandidate(good, 180.0, "", "Missing Artist"),
         RestartHandoffCandidate(good, 180.0, "Artist", "Blocked"),
         RestartHandoffCandidate(temp, 180.0, "Artist", "Temp"),
@@ -998,6 +1005,21 @@ def test_admission_rejects_blocklisted_artist_title(tmp_path):
         tmp_path,
         RestartHandoffManifest(entries=(entry,), created_at=100.0),
         blocklist={("artist", "song"): {"display": "Artist - Song"}},
+        now=120.0,
+        duration_probe=_duration,
+    )
+
+    assert [rejection.reason for rejection in admission.rejected] == ["blocklisted"]
+
+
+def test_admission_rejects_exact_equivalent_blocklisted_identity(tmp_path):
+    path = _write_spooled_file(tmp_path)
+    entry = _entry_for_path(tmp_path, path, artist="TotoCutugno", title="LItaliano")
+
+    admission = admit_restart_handoff_manifest(
+        tmp_path,
+        RestartHandoffManifest(entries=(entry,), created_at=100.0),
+        blocklist={("toto cutugno", "l'italiano"): {"display": "Toto Cutugno - L'Italiano"}},
         now=120.0,
         duration_probe=_duration,
     )
