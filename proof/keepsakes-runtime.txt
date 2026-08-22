@@ -1,0 +1,57 @@
+keepsakes — live runtime evidence
+generated: 2026-08-22T21:00Z
+station:   local, scripts/conductor-run.sh on 127.0.0.1:55330, real LLM keys, no Home Assistant
+
+=== the rights boundary, against real audio ===
+
+A banter aired and was kept. An ad aired immediately after and was kept early, while the
+banter's chunks were still sitting in the share ring. That is the exact condition the old
+wall-clock window would have cut across.
+
+  banter  c1630d08da35  678000 B = 28.2s  "Marco & Giulia"
+  ad      89569d58af0c  426000 B = 17.8s  "Ad: Mausoleo del Presidentissimo +1 more"
+
+  banter 4 KB windows found inside the ad keepsake: 0
+  ad head == banter tail:                           False
+
+=== the kept file ===
+
+  $ ffprobe -show_entries format=duration,bit_rate -show_entries stream=...
+  codec_name=mp3  sample_rate=48000  channels=2  duration=28.250000  bit_rate=192000
+
+  decoded PCM length: 28.27s  (matches the container; no truncation)
+
+  One "invalid new backstep -1" warning at the first frame. A deliberately mid-frame
+  control cut of the same stream produces the identical single warning, so this is the
+  inherent MP3 bit-reservoir artifact of cutting out of a ring, not something this
+  change introduces.
+
+=== routes ===
+
+  GET  /clips/c1630d08da35        200, title rendered, not "expired"   (no auth)
+  GET  /clips/c1630d08da35.mp3    200 audio/mpeg 678000 B              (no auth)
+  GET  /clips/deadbeef1234.mp3    404
+  GET  /api/clip/keep             200, both keepsakes listed with title/type/created_at
+  DELETE /api/clip/keep/89569d58af0c  200 — mp3 and .json both gone, URL now 404
+
+=== refusals (all 409 unless noted, all with a next step, no lingo) ===
+
+  music on air     reason=music        "A song can't be kept, because that recording
+                                        isn't ours to hand out. Wait for the hosts..."
+  station stopped  reason=not_on_air   "The station isn't on air right now. Press Start..."
+
+=== console gating (updateNow state machine, seven transitions) ===
+
+  voice on air ......................... Keep shown, Ban hidden
+  music right after voice (grace) ...... Keep shown
+  stopped .............................. Keep hidden
+  music after stop ..................... Keep hidden  (grace cleared)
+  voice again .......................... Keep shown
+  skipping ............................. Keep hidden
+  music after skip ..................... Keep hidden  (grace cleared)
+
+=== player, checked for regressions ===
+
+  playback starts from the console play button: paused=false, readyState=4, src=/stream
+  no console errors on the listener page
+  share clip mid-track: 403 with the warm listener message, no lingo
