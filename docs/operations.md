@@ -390,8 +390,14 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 `GET /status` includes a redacted top-level `jamendo` object with `enabled`,
 the detailed provider `state`, `client_id_configured`, current
 `noncommercial_acknowledged`, `terms_scope`, `provider_confirmation`,
-`ready`, `in_flight`, last-success age, a coarse last-failure code, and rejected
-count. It never contains the client ID, private stream URL, or raw exception.
+`ready`, `in_flight`, last-success age, a coarse last-failure code, the lifetime
+rejected count, and three fields describing the most recently completed
+discovery pass: `rejected_this_attempt`, `dominant_failure_code_this_attempt`,
+and an `attempt_rejections` breakdown keyed by code. The per-pass fields clear
+on success, so a prepared track never carries a failure reason. Every code is
+checked against the provider's own `JAMENDO_FAILURE_CODES` set; an unrecognized
+one degrades to `api_failed` rather than passing through. It never contains the
+client ID, private stream URL, or raw exception.
 The source row maps that detail to the five operational UI states documented in
 [music-sources.md](music-sources.md#admin-states).
 
