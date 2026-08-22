@@ -26,23 +26,22 @@ def tool():
     return module
 
 
-def test_quick_gate_is_strict_and_actionable_while_auditions_are_pending(tool) -> None:
+def test_quick_gate_is_green_for_the_completed_crate(tool) -> None:
+    """Twelve audited derivatives ship, so every quick group passes."""
     report = tool.run_quick()
 
-    assert report["exit_code"] == 1
-    assert report["ok"] is False
+    assert report["exit_code"] == 0, report
+    assert report["ok"] is True
     assert tuple(report["groups"]) == tool.GROUPS_QUICK
-    assert report["groups"]["MEDIA-EVIDENCE"]["status"] == "FAIL"
-    assert report["groups"]["MEDIA-BYTES"]["status"] == "FAIL"
-    assert report["groups"]["MEDIA-AUDIO"]["status"] == "FAIL"
-    assert report["groups"]["MEDIA-PACKAGE"]["status"] == "PASS"
+    assert all(group["status"] == "PASS" for group in report["groups"].values()), report["groups"]
+    # Still pinned to the canonical manifest — a green report about some other
+    # catalog would prove nothing. The actual/expected counter is deliberately
+    # not asserted: it is only populated on the failing shape.
     evidence = report["groups"]["MEDIA-EVIDENCE"]["checks"][0]
     assert evidence["manifest"] == {
         "catalog_id": "starter-v1",
         "path": "mammamiradio/assets/starter/catalog.json",
     }
-    assert (evidence["actual"], evidence["expected"]) == (0, 12)
-    assert evidence["next_command"].startswith("python scripts/starter-catalog.py acquire --isrc ")
 
 
 def test_quick_json_mode_has_same_stable_diagnostics_and_exit_code(tmp_path: Path) -> None:
@@ -56,11 +55,13 @@ def test_quick_json_mode_has_same_stable_diagnostics_and_exit_code(tmp_path: Pat
     )
 
     report = json.loads(result.stdout)
-    assert result.returncode == report["exit_code"] == 1
+    assert result.returncode == report["exit_code"] == 0, result.stdout
     assert json.loads(output.read_text(encoding="utf-8")) == report
     assert tuple(sorted(report["groups"])) == tuple(
         sorted(("MEDIA-EVIDENCE", "MEDIA-BYTES", "MEDIA-AUDIO", "MEDIA-PACKAGE"))
     )
+    # Acquisition now needs a Jamendo credential, so this leak guard matters more
+    # than it did when every source was keyless.
     assert "client_id" not in result.stdout.casefold()
 
 

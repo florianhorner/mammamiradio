@@ -156,6 +156,7 @@ class ScoredEntity:
     label_it: str
     label_en: str
 
+
 @dataclass
 class HomeContext:
     # existing fields untouched
