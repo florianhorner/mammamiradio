@@ -397,6 +397,42 @@ def test_listener_request_outcomes_are_localized_and_failure_reset_preserves_inp
     assert "msgInput.value = ''" not in catch_block, "network recovery must preserve the listener's retry text."
 
 
+def test_song_receipt_polling_is_bounded_and_backs_off() -> None:
+    """A pending request has no server-side deadline, so the client needs one.
+
+    Without it the 3s poll runs for the life of the tab (~1,200 requests/hour)
+    with the form locked, and a reload resumes the same loop. Retryable answers
+    must also back off so an unreachable station is not hammered at full rate.
+    """
+    js = LISTENER_JS.read_text(encoding="utf-8")
+    request_flow = js[js.index("const SONG_RECEIPT_STORAGE_KEY") : js.index("/* ── Wire everything")]
+
+    assert "SONG_RECEIPT_MAX_TRACKING_MS" in request_flow, "receipt polling must carry a total tracking deadline"
+    assert "started_at: Date.now()" in js, "a receipt with no start time cannot be expired"
+    assert "_songReceiptExpired" in request_flow
+
+    scheduler = request_flow[
+        request_flow.index("function _scheduleSongReceiptPoll") : request_flow.index("async function _pollSongReceipt")
+    ]
+    assert "_songReceiptExpired(receipt)" in scheduler, "the deadline must gate scheduling, not just the first poll"
+    assert "'failed' }, true)" in scheduler, "an expired receipt must show the honest tracking-stopped copy"
+    assert "SONG_RECEIPT_MAX_BACKOFF_MS" in scheduler
+
+    poll = request_flow[request_flow.index("async function _pollSongReceipt") :]
+    poll = poll[: poll.index("function _resumeSongReceipt")]
+    searching_branch = poll[poll.index("payload.song_resolution === 'searching'") :]
+    searching_branch = searching_branch[: searching_branch.index("if (_isTerminalSongResolution")]
+    assert "backoff" not in searching_branch, (
+        "a station that answers 'still searching' is healthy; keep the responsive cadence."
+    )
+    # Every other reschedule is a retry after a failure and must back off.
+    retryable = poll.replace(searching_branch, "")
+    assert retryable.count("_scheduleSongReceiptPoll(receipt)") == 0, (
+        "non-searching reschedules must pass { backoff: true }"
+    )
+    assert retryable.count("{ backoff: true }") >= 4
+
+
 def test_listener_playback_is_scoped_to_explicit_play_controls() -> None:
     js = LISTENER_JS.read_text(encoding="utf-8")
     assert "autoStartOnce" not in js

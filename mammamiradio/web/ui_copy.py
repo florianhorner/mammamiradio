@@ -80,7 +80,8 @@ COPY: dict[str, dict[str, str]] = {
             "try again later or rewrite it as a dedication instead."
         ),
         "form_song_tracking_expired": (
-            "We can’t track that request any longer. Your message is still here — send it again to restart the search."
+            "We’ve stopped watching this one for now — the hosts still have your message. "
+            "Keep listening, and send it again if it doesn’t turn up."
         ),
         "form_rate_limited": "Give the DJ {s}s before sending another dedication.",
         "form_queue_full": "The dedication queue is full — wait a moment and try again.",
@@ -196,8 +197,8 @@ COPY: dict[str, dict[str, str]] = {
             "riprova più tardi oppure riscrivilo come dedica."
         ),
         "form_song_tracking_expired": (
-            "Non possiamo più seguire questa richiesta. Il messaggio è ancora qui — "
-            "invialo di nuovo per ricominciare la ricerca."
+            "Per ora smettiamo di seguirla — i conduttori hanno ancora il tuo messaggio. "
+            "Resta in ascolto e rimandala se non arriva."
         ),
         "form_rate_limited": "Aspetta {s}s prima di mandare un'altra dedica.",
         "form_queue_full": "La coda delle dediche è piena — aspetta un attimo e riprova.",

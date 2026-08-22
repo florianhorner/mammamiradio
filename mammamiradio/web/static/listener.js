@@ -1259,6 +1259,15 @@
    * separate JS gate). */
   const SONG_RECEIPT_STORAGE_KEY = 'mmr.listener.songReceipt.v1';
   const SONG_RECEIPT_POLL_MS = 3000;
+  // A pending request has no server-side deadline: it sits in the queue until a
+  // host consumes it or an admin dismisses it, so `searching` can be the honest
+  // answer for hours. Without a client bound this poll is forever — ~1,200
+  // requests an hour per open tab, with the form locked the whole time.
+  const SONG_RECEIPT_MAX_TRACKING_MS = 600000;
+  // Only the retryable answers back off: a station that is up and still
+  // searching keeps the responsive 3s cadence.
+  const SONG_RECEIPT_MAX_BACKOFF_MS = 30000;
+  let songReceiptBackoffMs = SONG_RECEIPT_POLL_MS;
   let songReceiptPollTimer = null;
   let activeSongReceiptToken = null;
   let requestFormResetTimer = null;
@@ -1375,6 +1384,21 @@
     );
   }
 
+  function _songReceiptStartedAt(receipt) {
+    // A receipt stored before tracking was bounded (or by a browser that lost
+    // the field) has no start. Stamp it now rather than expiring a request the
+    // listener is still waiting on: the bound applies from here forward.
+    if (!Number.isFinite(receipt.started_at)) {
+      receipt.started_at = Date.now();
+      _storeSongReceipt(receipt);
+    }
+    return receipt.started_at;
+  }
+
+  function _songReceiptExpired(receipt) {
+    return Date.now() - _songReceiptStartedAt(receipt) >= SONG_RECEIPT_MAX_TRACKING_MS;
+  }
+
   function _readStoredSongReceipt() {
     try {
       const raw = sessionStorage.getItem(SONG_RECEIPT_STORAGE_KEY);
@@ -1437,7 +1461,7 @@
     if (expired) {
       return _t(
         'form_song_tracking_expired',
-        'We can’t track that request any longer. Your message is still here — send it again to restart the search.',
+        'We’ve stopped watching this one for now — the hosts still have your message. Keep listening, and send it again if it doesn’t turn up.',
       );
     }
     if (payload.song_resolution === 'matched') {
@@ -1504,14 +1528,25 @@
     _scheduleRequestFormReset(() => _resetRequestForm(formEl, sentEl), 15000);
   }
 
-  function _scheduleSongReceiptPoll(receipt) {
+  function _scheduleSongReceiptPoll(receipt, { backoff = false } = {}) {
     if (!_validSongReceipt(receipt)) return;
+    if (_songReceiptExpired(receipt)) {
+      // Stop watching and hand the form back. The request itself may still be
+      // in the queue, so the copy must not promise it is gone.
+      _showTerminalSongReceipt(receipt, { song_resolution: 'failed' }, true);
+      return;
+    }
+    if (backoff) {
+      songReceiptBackoffMs = Math.min(songReceiptBackoffMs * 2, SONG_RECEIPT_MAX_BACKOFF_MS);
+    } else {
+      songReceiptBackoffMs = SONG_RECEIPT_POLL_MS;
+    }
     if (songReceiptPollTimer !== null) clearTimeout(songReceiptPollTimer);
     activeSongReceiptToken = receipt.public_token;
     songReceiptPollTimer = setTimeout(() => {
       songReceiptPollTimer = null;
       _pollSongReceipt(receipt);
-    }, SONG_RECEIPT_POLL_MS);
+    }, songReceiptBackoffMs);
   }
 
   async function _pollSongReceipt(receipt) {
@@ -1529,13 +1564,13 @@
         return;
       }
       if (!r.ok) {
-        _scheduleSongReceiptPoll(receipt);
+        _scheduleSongReceiptPoll(receipt, { backoff: true });
         return;
       }
       const payload = await r.json();
       if (activeSongReceiptToken !== receipt.public_token) return;
       if (!payload || payload.ok !== true || payload.type !== 'song_request') {
-        _scheduleSongReceiptPoll(receipt);
+        _scheduleSongReceiptPoll(receipt, { backoff: true });
         return;
       }
       if (payload.song_resolution === 'searching') {
@@ -1546,11 +1581,13 @@
         _showTerminalSongReceipt(receipt, payload);
         return;
       }
-      _scheduleSongReceiptPoll(receipt);
+      _scheduleSongReceiptPoll(receipt, { backoff: true });
     } catch (_) {
       // Wi-Fi can blink while the server is still resolving the request. Keep
       // the honest searching receipt and try again instead of inventing failure.
-      if (activeSongReceiptToken === receipt.public_token) _scheduleSongReceiptPoll(receipt);
+      if (activeSongReceiptToken === receipt.public_token) {
+        _scheduleSongReceiptPoll(receipt, { backoff: true });
+      }
     } finally {
       // Keep the bound through r.json(): response headers can arrive while a
       // broken connection leaves the body unreadable indefinitely.
@@ -1635,6 +1672,7 @@
             public_token: d.public_token,
             name,
             message: msg,
+            started_at: Date.now(),
           };
           if (!immediateSongTerminal) _storeSongReceipt(songReceipt);
         }
