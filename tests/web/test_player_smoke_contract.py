@@ -194,6 +194,35 @@ def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
         assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
 
 
+def test_player_smoke_wires_listener_song_receipt_scenarios() -> None:
+    """The runner must install receipt mocks and invoke the executable scenario helper."""
+    code = RUN_CODE.read_text(encoding="utf-8")
+    route = "page.route('**/public-listener-requests/*'"
+    helper = "async function exerciseSongReceiptScenarios()"
+    invocation = "await exerciseSongReceiptScenarios();"
+
+    assert route in code
+    assert helper in code
+    assert invocation in code
+    assert code.index(helper) < code.index(invocation)
+    for retryable_outcome in (
+        "async function exerciseRetryableTerminalReceipt",
+        "song_not_playable",
+        "form_song_not_playable",
+        "song_temporarily_unavailable",
+        "form_song_temporarily_unavailable",
+        "continued polling after its terminal receipt",
+        # A pruned record and a request we merely stopped watching are
+        # different situations and must not share one string.
+        "form_song_tracking_lost",
+        # The tracking deadline is only really covered by the browser: the
+        # source-level guard can see the constants but not that they are obeyed.
+        "tracking deadline on resume",
+        "an already-expired receipt still polled the station",
+    ):
+        assert retryable_outcome in code
+
+
 def test_player_smoke_executes_ad_receipt_contract() -> None:
     """Exercise receipt rendering and Media Session updates in the listener."""
     code = RUN_CODE.read_text(encoding="utf-8")

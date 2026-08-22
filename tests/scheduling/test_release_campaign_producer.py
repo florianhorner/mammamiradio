@@ -11,7 +11,7 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import SegmentType, StationState, Track
 from mammamiradio.hosts.memory_extractor import MemoryExtractionCommit
 from mammamiradio.scheduling.producer import (
-    _abandon_release_beat_commit,
+    _abandon_banter_commit,
     _memory_extraction_metadata_from_commit,
     _release_beat_metadata_from_commit,
     _release_campaign_should_force_first_banter,
@@ -87,7 +87,7 @@ def test_release_beat_metadata_and_abandon_helpers():
         "release_beat_attempt_id": "attempt-1",
     }
 
-    _abandon_release_beat_commit(state, commit)
+    _abandon_banter_commit(state, commit)
     assert state.release_campaign.abandoned == ["attempt-1"]
 
 

@@ -55,6 +55,14 @@ if run_check 2>"$TMP/err"; then fail "malformed JSON must fail"; fi
 grep -q "not valid JSON" "$TMP/err" || fail "malformed-JSON message wrong"
 pass "malformed JSON rejected"
 
+# 2b. Multiple top-level JSON documents fail — the evidence file must be one document,
+# not repeated copies of the same object.
+evidence "$HEAD_SHA"
+printf '%s\n' "$(cat "$FIX/proof/preship-review.json")" >> "$FIX/proof/preship-review.json"
+if run_check 2>"$TMP/err"; then fail "multiple JSON documents must fail"; fi
+grep -q "contains 2 JSON documents" "$TMP/err" || fail "multiple-document message wrong"
+pass "multiple top-level JSON documents rejected"
+
 # 3. Wrong skill fails — a design-review-lite entry is not squad evidence.
 evidence "$HEAD_SHA" "design-review-lite"
 if run_check 2>"$TMP/err"; then fail "non-squad skill must fail"; fi

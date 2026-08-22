@@ -218,6 +218,52 @@ def test_run_playback_loop_strips_per_segment_metadata():
         raise AssertionError("run_playback_loop not found")
 
 
+def test_run_playback_loop_settles_a_denied_admission_before_moving_on():
+    """A denied admission is a pre-air drop and must settle like every other one.
+
+    Without it the segment vanishes holding its listener-request reservation, so
+    the promised recording stays excluded from ordinary rotation for the rest of
+    the session with no retry and no waste trail. The reason must be its own:
+    the usual cause is the segment's provider withdrawing it, and
+    ``operator_purge`` renders to the operator as "queue cleared".
+    """
+    import ast
+
+    src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
+    tree = ast.parse(src)
+    loop = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_playback_loop"),
+        None,
+    )
+    assert loop is not None, "run_playback_loop not found"
+
+    denied_branch = next(
+        (
+            n
+            for n in ast.walk(loop)
+            if isinstance(n, ast.If) and "mark_playback_started" in (ast.get_source_segment(src, n.test) or "")
+        ),
+        None,
+    )
+    assert denied_branch is not None, "admission-denied branch not found"
+    body = ast.get_source_segment(src, denied_branch) or ""
+
+    discard_calls = [
+        c
+        for c in ast.walk(denied_branch)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "record_discard"
+    ]
+    assert len(discard_calls) == 1, "expected exactly one record_discard in the admission-denied branch"
+    kwargs = {k.arg: ast.unparse(k.value) for k in discard_calls[0].keywords}
+    assert kwargs.get("reason") == "GenerationWasteReason.PLAYBACK_ADMISSION_DENIED"
+    assert kwargs.get("already_counted_in_produced") == "pulled_from_queue"
+    assert "_settle_discarded_selection_handoff" in body, (
+        "a denied promised segment must settle its handoff, or the listener gets no retry"
+    )
+    assert "_drop_segment_moment_receipts" in body
+    assert "OPERATOR_PURGE" not in body, "a provider withdrawing a segment is not an operator action"
+
+
 def test_run_playback_loop_records_session_stop_discard_before_airing():
     """A stop landing after queue pull but before on_stream_segment must count as
     waste (a record_discard call with the right keywords) AND clean up the temp via
