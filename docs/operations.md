@@ -135,6 +135,10 @@ even when a receipt fails. Use unit tests—not a paid run—as CI enforcement.
 
 - `tmp/` rendered segments and temp assets
 - `cache/` downloaded track assets
+- `cache/keepsakes/` moments the operator kept. Nothing reclaims this
+  directory and `_disk_safe_cache_ceiling_mb` does not count it as
+  reclaimable, so budget for it separately: `KEEPSAKE_MAX_SAVED` (200) at
+  roughly 4 MB each is about 800 MB on the same volume as the norm cache
 
 ### Music cache sizing
 
@@ -346,6 +350,7 @@ Public:
   complete single bundled-track window)
 - `GET /clips/{id}.mp3` (no auth, for sharing). Serves shared clips, which
   expire after 24 hours, and kept moments, which do not expire at all
+- `GET /clips/{id}` (share landing page for the same two)
 - `POST /api/listener-request`, `GET /public-listener-requests` (sanitized feed for the on-page sidebar)
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
@@ -373,7 +378,9 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `GET /admin`, `GET /dashboard`
 - `GET /status`, `GET /api/capabilities`
-- `POST /api/clip/keep` (keep the airing voice segment durably; voice-only)
+- `POST /api/clip/keep` (keep the airing voice segment durably; voice-only),
+  `GET /api/clip/keep` (list what is kept), `DELETE /api/clip/keep/{id}`
+  (remove one kept moment)
 - `PUT /api/media-sources/jamendo`, `POST /api/media-sources/jamendo/retry`
 - `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`

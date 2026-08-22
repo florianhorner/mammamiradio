@@ -1327,6 +1327,213 @@ async def test_run_playback_loop_snapshots_banter_segment_for_lookback(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_run_playback_loop_snapshots_every_keepable_voice_type(tmp_path):
+    """The console offers Keep for all six voice types. Snapshotting only two of
+    them meant that after a sweeper or a time check the visible button either
+    refused or saved a stale ad — a press the operator was invited to make and
+    could not have known was pointing somewhere else."""
+    from collections import deque
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.clip_ring_buffer = deque(maxlen=2000)
+    app.state.last_shareworthy_clip = None
+
+    audio_path = tmp_path / "sweeper.mp3"
+    audio_path.write_bytes(b"\x55" * 4096)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.SWEEPER,
+            path=audio_path,
+            metadata={"title": "Station sweeper"},
+        )
+    )
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        for _ in range(50):
+            if app.state.last_shareworthy_clip is not None:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    snap = app.state.last_shareworthy_clip
+    assert snap is not None
+    assert snap["type"] == "sweeper"
+    assert snap["title"] == "Station sweeper"
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_snapshot_holds_only_the_ending_segment(tmp_path):
+    """The share ring holds every voice segment back to back, because music
+    never enters it. A snapshot sized from a duration — floored at 30s — would
+    prepend the previous break to a short one and then record only this
+    segment's provenance, so the rights check would be reading the wrong
+    segment's music-tail flag. Marker bytes, so this is about which audio, not
+    how much."""
+    from collections import deque
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.clip_ring_buffer = deque(maxlen=4000)
+    app.state.last_shareworthy_clip = None
+
+    tailed = tmp_path / "tailed.mp3"
+    tailed.write_bytes(b"\x11" * 4096)
+    clean = tmp_path / "clean.mp3"
+    clean.write_bytes(b"\x22" * 512)
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=tailed,
+            metadata={"title": "opened over the outro", "has_music_tail": True},
+        )
+    )
+    app.state.queue.put_nowait(
+        Segment(
+            type=SegmentType.BANTER,
+            path=clean,
+            metadata={"title": "the clean one"},
+        )
+    )
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        for _ in range(200):
+            snap = app.state.last_shareworthy_clip
+            if snap is not None and snap.get("title") == "the clean one":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    snap = app.state.last_shareworthy_clip
+    assert snap is not None
+    assert snap["title"] == "the clean one"
+    assert snap["has_music_tail"] is False
+    assert b"\x11" not in snap["bytes"], "the snapshot reached back into the tailed segment"
+    assert snap["bytes"] == b"\x22" * 512
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_survives_clip_segment_being_cleared_mid_segment(tmp_path):
+    """Stop clears `app.state.clip_segment`, and the send loop writes a chunk
+    count into it on every chunk. That write is the one place this feature
+    touches shared mutable state from the hot path: unguarded, a clear landing
+    between two chunks raises TypeError, which escapes `run_playback_loop` — dead
+    air until restart (leadership principle #1)."""
+    from collections import deque
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.clip_ring_buffer = deque(maxlen=4000)
+    app.state.last_shareworthy_clip = None
+
+    first = tmp_path / "first.mp3"
+    first.write_bytes(b"\x11" * 8192)
+    second = tmp_path / "second.mp3"
+    second.write_bytes(b"\x22" * 512)
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=first, metadata={"title": "interrupted"}))
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=second, metadata={"title": "still airing"}))
+
+    task = asyncio.create_task(run_playback_loop(app))
+    try:
+        for _ in range(200):
+            seg = getattr(app.state, "clip_segment", None)
+            if isinstance(seg, dict) and seg.get("chunks", 0) > 0:
+                break
+            await asyncio.sleep(0.005)
+        app.state.clip_segment = None  # what stop_session does
+        for _ in range(300):
+            snap = app.state.last_shareworthy_clip
+            if snap is not None and snap.get("title") == "still airing":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.last_shareworthy_clip is not None
+    assert app.state.last_shareworthy_clip["title"] == "still airing", "the playback loop died on the cleared record"
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_survives_a_failing_lookback_snapshot(tmp_path):
+    """Snapshotting is a nice-to-have. An extraction failure at the segment edge
+    (a MemoryError joining a long segment on a Pi) must never escape into the
+    playback coroutine and drop the stream. Worst case: no lookback for that
+    bit."""
+    from collections import deque
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.clip_ring_buffer = deque(maxlen=4000)
+    app.state.last_shareworthy_clip = None
+
+    doomed = tmp_path / "doomed.mp3"
+    doomed.write_bytes(b"\x11" * 2048)
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=doomed, metadata={"title": "no snapshot"}))
+
+    with patch("mammamiradio.scheduling.clip.extract_segment_audio", side_effect=MemoryError("boom")):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(200):
+                if app.state.queue.empty() and app.state.clip_ring_buffer:
+                    break
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.05)
+            assert not task.done(), "the playback loop died on a failed lookback snapshot"
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert app.state.last_shareworthy_clip is None
+
+
+@pytest.mark.asyncio
+async def test_run_playback_loop_keeps_going_when_a_voice_segment_file_is_gone(tmp_path):
+    """Empty-fallback shape: the queued file has been evicted or never written,
+    so the segment airs nothing. The per-segment bookkeeping must not turn that
+    into a stalled loop, and the next segment must still air."""
+    from collections import deque
+
+    app = _make_test_app()
+    app.state.config.audio.bitrate = 3200
+    app.state.stream_hub.subscribe()
+    app.state.clip_ring_buffer = deque(maxlen=4000)
+    app.state.last_shareworthy_clip = None
+
+    missing = tmp_path / "never-written.mp3"
+    survivor = tmp_path / "survivor.mp3"
+    survivor.write_bytes(b"\x22" * 512)
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=missing, metadata={"title": "gone"}))
+    app.state.queue.put_nowait(Segment(type=SegmentType.BANTER, path=survivor, metadata={"title": "the next one"}))
+
+    with patch("mammamiradio.scheduling.producer._pick_canned_clip", return_value=None):
+        task = asyncio.create_task(run_playback_loop(app))
+        try:
+            for _ in range(300):
+                snap = app.state.last_shareworthy_clip
+                if snap is not None and snap.get("title") == "the next one":
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    snap = app.state.last_shareworthy_clip
+    assert snap is not None and snap["title"] == "the next one"
+    assert b"\x22" in snap["bytes"]
+
+
+@pytest.mark.asyncio
 async def test_run_playback_loop_partial_banter_send_does_not_schedule_memory(tmp_path):
     app = _make_test_app()
     app.state.config.audio.bitrate = 3200

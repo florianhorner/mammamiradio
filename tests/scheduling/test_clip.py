@@ -204,18 +204,115 @@ def test_cache_eviction_never_reaches_into_keepsakes(tmp_path):
     """Durability rests on four other modules globbing cache_dir non-recursively.
     That is a property of their call sites, not of this data, so it needs a guard
     here: changing one of them to rglob would otherwise delete every keepsake
-    and no test would notice."""
+    and no test would notice.
+
+    The budget has to be one eviction actually runs under. ``max_size_mb=0``
+    returns before the walk, so the keepsake survived a function that never
+    looked at anything — the assertion would have held just as well against a
+    version that deletes every keepsake it finds.
+    """
     import os
 
     from mammamiradio.playlist.downloader import evict_cache_lru
     from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME, save_keepsake
 
-    (tmp_path / "norm_song.mp3").write_bytes(b"\xff\xfb" + b"x" * 5000)
+    doomed = tmp_path / "norm_song.mp3"
+    doomed.write_bytes(b"\xff\xfb" + b"x" * (2 * 1024 * 1024))
     keepsake_id = save_keepsake(b"\xff\xfbkept", tmp_path / KEEPSAKES_DIRNAME)
     kept = tmp_path / KEEPSAKES_DIRNAME / f"{keepsake_id}.mp3"
+    # Oldest by atime, so an evictor that could see it would take it first.
     ancient = 1_000_000.0
     os.utime(kept, (ancient, ancient))
 
-    evict_cache_lru(tmp_path, max_size_mb=0)
+    evict_cache_lru(tmp_path, max_size_mb=1)
 
+    assert not doomed.exists(), "eviction did not run, so the guard proved nothing"
     assert kept.exists(), "the cache evictor reached into keepsakes"
+
+
+def test_extract_segment_audio_returns_only_the_requested_chunks():
+    from mammamiradio.scheduling.clip import extract_segment_audio
+
+    buf: deque[bytes] = deque(maxlen=10)
+    for marker in (b"\x11", b"\x22", b"\x33"):
+        buf.append(marker * 100)
+
+    assert extract_segment_audio(buf, 2) == b"\x22" * 100 + b"\x33" * 100
+    assert extract_segment_audio(buf, 0) is None
+    assert extract_segment_audio(buf, -5) is None
+    assert extract_segment_audio(deque(), 4) is None
+
+
+def test_extract_segment_audio_clamps_to_what_the_ring_still_holds():
+    """A segment longer than the buffer has aged out of its own head. What is
+    left is still wholly its own audio, so the count is clamped rather than
+    refused."""
+    from mammamiradio.scheduling.clip import extract_segment_audio
+
+    buf: deque[bytes] = deque(maxlen=3)
+    for _ in range(3):
+        buf.append(b"\x44" * 100)
+
+    assert extract_segment_audio(buf, 9_000) == b"\x44" * 300
+
+
+def test_stale_keepsake_scratch_is_pruned_but_a_write_in_flight_is_not(tmp_path):
+    """save_keepsake publishes atomically, so a kill between mkstemp and replace
+    leaves scratch rather than a half-published keepsake. Nothing else collects
+    it: every cache pruner globs one level, and both API routes glob *.mp3."""
+    import os
+    import time
+
+    from mammamiradio.scheduling.clip import prune_stale_keepsake_tmp_files
+
+    keepsakes = tmp_path / "keepsakes"
+    keepsakes.mkdir()
+    orphan = keepsakes / ".keepsake-abc.tmp"
+    orphan.write_bytes(b"\xff\xfbhalf")
+    ancient = time.time() - 90 * 24 * 3600
+    os.utime(orphan, (ancient, ancient))
+    in_flight = keepsakes / ".keepsake-xyz.tmp"
+    in_flight.write_bytes(b"\xff\xfbwriting")
+    kept = keepsakes / "abc123def456.mp3"
+    kept.write_bytes(b"\xff\xfbkept")
+    os.utime(kept, (ancient, ancient))
+
+    assert prune_stale_keepsake_tmp_files(keepsakes) == 1
+    assert not orphan.exists()
+    assert in_flight.exists(), "a write in flight was pruned"
+    assert kept.exists(), "the pruner reached a published keepsake"
+
+
+def test_keepsake_scratch_pruning_is_a_no_op_without_a_positive_age(tmp_path):
+    """A zero or negative age would prune a write in flight along with the
+    orphans. Prune nothing rather than everything."""
+    from mammamiradio.scheduling.clip import prune_stale_keepsake_tmp_files
+
+    keepsakes = tmp_path / "keepsakes"
+    keepsakes.mkdir()
+    (keepsakes / ".keepsake-abc.tmp").write_bytes(b"x")
+
+    assert prune_stale_keepsake_tmp_files(keepsakes, max_age_hours=0) == 0
+    assert prune_stale_keepsake_tmp_files(tmp_path / "nope") == 0
+    assert (keepsakes / ".keepsake-abc.tmp").exists()
+
+
+def test_keepsake_scratch_pruning_survives_an_unremovable_file(tmp_path):
+    """Best-effort: a read-only mount or a permission problem leaves the scratch
+    in place and is logged, rather than raising into startup."""
+    import os
+    import time
+    from unittest.mock import patch
+
+    from mammamiradio.scheduling.clip import prune_stale_keepsake_tmp_files
+
+    keepsakes = tmp_path / "keepsakes"
+    keepsakes.mkdir()
+    stubborn = keepsakes / ".keepsake-abc.tmp"
+    stubborn.write_bytes(b"x")
+    ancient = time.time() - 90 * 24 * 3600
+    os.utime(stubborn, (ancient, ancient))
+
+    with patch("pathlib.Path.unlink", side_effect=OSError("EROFS")):
+        assert prune_stale_keepsake_tmp_files(keepsakes) == 0
+    assert stubborn.exists()
