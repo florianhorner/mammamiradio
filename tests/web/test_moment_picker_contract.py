@@ -16,6 +16,7 @@ LISTENER_HTML = ROOT / "mammamiradio" / "web" / "templates" / "listener.html"
 LISTENER_JS = ROOT / "mammamiradio" / "web" / "static" / "listener.js"
 LISTENER_CSS = ROOT / "mammamiradio" / "web" / "static" / "listener.css"
 SERVICE_WORKER = ROOT / "mammamiradio" / "web" / "static" / "sw.js"
+STREAMER = ROOT / "mammamiradio" / "web" / "streamer.py"
 
 
 def _picker_markup() -> str:
@@ -107,6 +108,18 @@ def test_service_worker_never_caches_temporary_capture_audio() -> None:
     capture_bypass = worker.index("path.includes('/captures/')")
     assert capture_bypass < worker.index("const isFreshAsset")
     assert capture_bypass < worker.index("Catch-all for any other same-origin GET")
+
+
+def test_playback_feeds_capture_and_keepsake_ledgers_once_per_chunk() -> None:
+    source = STREAMER.read_text(encoding="utf-8")
+    start = source.index("# Feed only non-music into the generic share/capture ring.")
+    end = source.index("pacing = pacer.after_send", start)
+    hot_path = source[start:end]
+
+    assert hot_path.count("_append_clip_chunk(app, chunk)") == 1
+    assert "clip_buf.append(chunk)" not in hot_path
+    assert "clip_segment_chunks += 1" in hot_path
+    assert '_seg_record["chunks"] = clip_segment_chunks' in hot_path
 
 
 def test_moment_picker_copy_is_complete_in_both_listener_languages() -> None:

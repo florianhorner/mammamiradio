@@ -2089,6 +2089,7 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         patch(f"{MODULE}.purge_suspect_cache_files", return_value=3) as mock_purge,
         patch(f"{MODULE}.prune_stale_tmp_files", return_value=2) as mock_prune_tmp,
         patch(f"{MODULE}.prune_stale_handoff_tmp_files", return_value=4) as mock_prune_handoff_tmp,
+        patch(f"{MODULE}.prune_stale_keepsake_tmp_files", return_value=1) as mock_prune_keepsake_tmp,
         patch(f"{MODULE}.prewarm_first_segment", new_callable=AsyncMock),
     ):
         from mammamiradio.main import startup
@@ -2098,6 +2099,9 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         # Stale temp render scratch is pruned once at startup (#407).
         mock_prune_tmp.assert_called_once_with(mock_config.tmp_dir)
         mock_prune_handoff_tmp.assert_called_once_with(mock_config.cache_dir)
+        # Keepsake scratch has no other collector: no cache pruner recurses into
+        # the directory and both API routes glob *.mp3.
+        mock_prune_keepsake_tmp.assert_called_once_with(mock_config.cache_dir / "keepsakes")
 
         # Verify clip ring buffer was created
         from mammamiradio.main import app
@@ -2115,6 +2119,7 @@ async def test_startup_boot_summary_and_purge(tmp_path: Path):
         assert app.state.clip_marks == []
         assert expected_max_bytes > 240 * 4096
         assert app.state.last_shareworthy_clip is None
+        assert app.state.clip_segment is None
         assert app.state.station_state.immediate_audio_index == {warm_norm: 180.0}
 
 

@@ -78,6 +78,7 @@ from mammamiradio.playlist.playlist import (
 from mammamiradio.playlist.preferences import load_preferences
 from mammamiradio.release_campaign import ReleaseBeatManifest, ReleaseCampaign, ReleaseCampaignLedger
 from mammamiradio.restart_handoff import admit_restart_handoff_entries, prune_stale_handoff_tmp_files
+from mammamiradio.scheduling.clip import KEEPSAKES_DIRNAME, prune_stale_keepsake_tmp_files
 from mammamiradio.scheduling.producer import _queue_shadow_entry, prewarm_first_segment, run_producer
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.media_sources import router as media_sources_router
@@ -398,6 +399,9 @@ async def startup():
     pruned_handoff_tmp = prune_stale_handoff_tmp_files(config.cache_dir)
     if pruned_handoff_tmp:
         logger.info("Restart handoff cleanup: pruned %d stale scratch file(s)", pruned_handoff_tmp)
+    pruned_keepsake_tmp = prune_stale_keepsake_tmp_files(config.cache_dir / KEEPSAKES_DIRNAME)
+    if pruned_keepsake_tmp:
+        logger.info("Keepsake cleanup: pruned %d stale scratch file(s)", pruned_keepsake_tmp)
 
     # Purge suspect cache files (likely failed downloads) before serving
     purged = purge_suspect_cache_files(config.cache_dir)
@@ -791,6 +795,11 @@ async def startup():
     app.state.clip_generation = 0
     app.state.clip_marks = []
     app.state.last_shareworthy_clip = None
+    # Written by the playback loop at each segment boundary: which segment is
+    # airing and how many of its chunks are in the ring. "Keep this" cuts from
+    # this rather than from wall-clock elapsed, so it can never reach past the
+    # boundary into the previous segment. None until the first segment airs.
+    app.state.clip_segment = None
     app.state.last_shareworthy_starter = None
 
     # Set app.state for streamer access

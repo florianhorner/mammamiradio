@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 from mammamiradio.web.ui_copy import COPY, copy_strings, get_copy
@@ -11,6 +14,159 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ADMIN_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "admin.html"
 _LISTENER_HTML = _REPO_ROOT / "mammamiradio" / "web" / "templates" / "listener.html"
 _LISTENER_JS = _REPO_ROOT / "mammamiradio" / "web" / "static" / "listener.js"
+
+_MISSPELLED_BRAND = "Mammami Radio"
+_MISSPELLED_BRAND_CASEFOLD = _MISSPELLED_BRAND.casefold()
+
+# Matches "mammami" joined to "radio" by a space, hyphen, or underscore — every
+# separator except none. Zero separator ("mammamiradio") is the correct slug
+# for URLs, paths, package names, env vars, entity IDs, and container names,
+# and must never be flagged.
+_MISSPELLED_BRAND_PATTERN = re.compile(r"mammami[-_ ]radio", re.IGNORECASE)
+
+# The zero-separator form is only correct as a technical identifier: all
+# lowercase ("mammamiradio") or shouting case in an env var/entity id
+# ("MAMMAMIRADIO"). Title Case ("Mammamiradio") only happens when someone
+# typed the brand as one word in prose. Case-SENSITIVE on purpose — matching
+# this case-insensitively would also flag every legitimate slug occurrence.
+_SQUASHED_TITLECASE_PATTERN = re.compile(r"\bMammamiradio\b")
+
+
+def _brand_violation(text: str) -> bool:
+    return bool(_MISSPELLED_BRAND_PATTERN.search(text) or _SQUASHED_TITLECASE_PATTERN.search(text))
+
+
+# Exclude this file by path because it defines the rejected spelling. Splitting
+# the literal is fragile: Ruff can join adjacent string literals during
+# formatting. A path-based exclusion survives formatter and lint changes.
+_BRAND_GUARD_SELF = Path(__file__).resolve().relative_to(_REPO_ROOT).as_posix()
+
+# Four files retain the joined spelling until the audio pack is regenerated:
+#   - assets/imaging/{manifest.json,ATTRIBUTION.md} contain the same 47
+#     committed creator records.
+#   - scripts/complete_audio_pack_gate.py generates those rows.
+#   - tests/audio/test_sonic_asset_pack.py pins their hashes.
+#   - ATTRIBUTION.md ships as package data through pyproject.toml.
+# Whole-file exclusions can hide new occurrences in these paths. Regenerate the
+# pack and remove the exclusions in a separate change.
+_FROZEN_BRAND_PROVENANCE = frozenset(
+    {
+        "mammamiradio/assets/imaging/manifest.json",
+        "mammamiradio/assets/imaging/ATTRIBUTION.md",
+        "scripts/complete_audio_pack_gate.py",
+        "tests/audio/test_sonic_asset_pack.py",
+    }
+)
+
+# Keep pre-existing copy fixes out of unrelated plan and proposal PRs. Each
+# entry permits one legacy line at its current line number, not a whole file, so
+# any new occurrence in the same document still fails. Remove an entry when its
+# docs-only correction lands.
+_LEGACY_BRAND_LINES = frozenset(
+    {
+        (
+            "docs/2026-07-27-admitted-audio-queue-refactor.md",
+            12,
+            "Mammami Radio will preserve its current listener, operator, HTTP, and Home",
+        ),
+        (
+            "docs/integrations/ha-privacy-and-upstream-proposals.md",
+            38,
+            "Mammamiradio local behavior: the add-on pushes a compatibility media-player",
+        ),
+        (
+            "docs/integrations/ha-privacy-and-upstream-proposals.md",
+            55,
+            "Mammamiradio local behavior: sensitive domains and attributes are filtered",
+        ),
+    }
+)
+
+# Skip known binary suffixes. This keeps extensionless text, Dockerfiles, macOS
+# launchers, and SVGs in scope.
+_BRAND_BINARY_SUFFIXES = frozenset(
+    {
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".m4a",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".ico",
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tar",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".pyc",
+    }
+)
+
+# The repository scan covered 831 files when this guard was added. An empty or
+# narrowed candidate list falls below this floor.
+_MIN_BRAND_SCAN_FILES = 500
+
+# Require representative surfaces so a moved root or narrowed scan fails.
+_REQUIRED_BRAND_SCAN_FILES = (
+    "mammamiradio/web/templates/admin.html",
+    "mammamiradio/web/templates/listener.html",
+    "mammamiradio/web/static/listener.js",
+    "ha-addon/mammamiradio/config.yaml",
+    "CHANGELOG.md",
+    "README.md",
+)
+
+
+def _tracked_files(root: Path) -> list[str]:
+    """Return repository-relative paths tracked by Git under `root`.
+
+    Untracked files enter the scan after `git add`. The guard requires Git
+    because a filesystem walk includes ignored paths and produces a different
+    candidate set.
+    """
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    listing = subprocess.run(
+        ["git", "-C", str(root), "--no-optional-locks", "ls-files", "-z"],
+        capture_output=True,
+        check=True,
+        timeout=30,
+        env=env,
+    )
+    # Git emits raw path bytes with -z. os.fsdecode preserves platform filename
+    # handling; UTF-8 replacement could change a path before resolution.
+    return [os.fsdecode(entry) for entry in listing.stdout.split(b"\0") if entry]
+
+
+def _scan_brand(root: Path, relpaths: Iterable[str]) -> tuple[list[str], list[str], list[str]]:
+    """Return (offenders, unreadable, scanned) for `relpaths` under `root`."""
+    offenders: list[str] = []
+    unreadable: list[str] = []
+    scanned: list[str] = []
+    for rel in relpaths:
+        if rel in _FROZEN_BRAND_PROVENANCE or rel == _BRAND_GUARD_SELF:
+            continue
+        path = root / rel
+        if path.suffix.lower() in _BRAND_BINARY_SUFFIXES or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            unreadable.append(f"{rel} ({type(exc).__name__})")
+            continue
+        scanned.append(rel)
+        if not _brand_violation(text):
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if _brand_violation(line) and (rel, lineno, line) not in _LEGACY_BRAND_LINES:
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    return offenders, unreadable, scanned
 
 
 def test_key_parity_between_languages():
@@ -344,6 +500,136 @@ def test_admin_toasts_have_no_raw_error_dead_ends():
         "admin.html has a toast() that shows a machine phrase or a raw error "
         "field — use wayOut()/offlineMsg() instead (principle #5):\n  " + "\n  ".join(pattern_hits)
     )
+
+
+def test_station_brand_name_is_never_misspelled():
+    """Reject the joined station name in tracked text files.
+
+    The original typo shipped in a First Listen error. Scanning docs and
+    changelogs also prevents new references from repeating it.
+    """
+    offenders, unreadable, scanned = _scan_brand(_REPO_ROOT, _tracked_files(_REPO_ROOT))
+
+    assert not offenders, f'use "Mamma Mi Radio"; found invalid name "{_MISSPELLED_BRAND}":\n  ' + "\n  ".join(
+        offenders
+    )
+    assert not unreadable, (
+        "the brand guard could not read these tracked files; classify expected "
+        "binary suffixes in _BRAND_BINARY_SUFFIXES:\n  " + "\n  ".join(unreadable)
+    )
+    assert len(scanned) >= _MIN_BRAND_SCAN_FILES, (
+        f"brand scan covered {len(scanned)} files; minimum is {_MIN_BRAND_SCAN_FILES}"
+    )
+    missing = [rel for rel in _REQUIRED_BRAND_SCAN_FILES if rel not in set(scanned)]
+    assert not missing, f"brand scan missed required surfaces: {missing}"
+
+
+def test_brand_guard_flags_a_synthetic_offender(tmp_path):
+    """Exercise detection, case folding, separator variants, and path exclusions."""
+    uppercase_misspelling = _MISSPELLED_BRAND.upper()
+    (tmp_path / "page.html").write_text(f"<p>{_MISSPELLED_BRAND} is on air</p>", encoding="utf-8")
+    (tmp_path / "uppercase.html").write_text(f"<p>{uppercase_misspelling} is on air</p>", encoding="utf-8")
+    (tmp_path / "hyphenated.json").write_text('{"name": "mammami-radio-explainer"}', encoding="utf-8")
+    (tmp_path / "underscored.py").write_text("PACKAGE = 'mammami_radio_tools'\n", encoding="utf-8")
+    (tmp_path / "squashed.md").write_text("Mammamiradio local behavior: does X.\n", encoding="utf-8")
+    (tmp_path / "clean.html").write_text("<p>Mamma Mi Radio is on air</p>", encoding="utf-8")
+    (tmp_path / "song.mp3").write_bytes(_MISSPELLED_BRAND.encode("utf-8"))
+    frozen = tmp_path / "mammamiradio" / "assets" / "imaging"
+    frozen.mkdir(parents=True)
+    (frozen / "ATTRIBUTION.md").write_text(_MISSPELLED_BRAND, encoding="utf-8")
+    legacy_rel, legacy_lineno, legacy_line = sorted(_LEGACY_BRAND_LINES)[0]
+    legacy = tmp_path / legacy_rel
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        ("\n" * (legacy_lineno - 1)) + f"{legacy_line}\n{_MISSPELLED_BRAND} appears again.\n",
+        encoding="utf-8",
+    )
+
+    offenders, unreadable, scanned = _scan_brand(
+        tmp_path,
+        [
+            "page.html",
+            "uppercase.html",
+            "hyphenated.json",
+            "underscored.py",
+            "squashed.md",
+            "clean.html",
+            "song.mp3",
+            "mammamiradio/assets/imaging/ATTRIBUTION.md",
+            legacy_rel,
+        ],
+    )
+
+    assert offenders == [
+        f"page.html:1: <p>{_MISSPELLED_BRAND} is on air</p>",
+        f"uppercase.html:1: <p>{uppercase_misspelling} is on air</p>",
+        'hyphenated.json:1: {"name": "mammami-radio-explainer"}',
+        "underscored.py:1: PACKAGE = 'mammami_radio_tools'",
+        "squashed.md:1: Mammamiradio local behavior: does X.",
+        f"{legacy_rel}:{legacy_lineno + 1}: {_MISSPELLED_BRAND} appears again.",
+    ]
+    assert not unreadable
+    assert set(scanned) == {
+        "page.html",
+        "uppercase.html",
+        "hyphenated.json",
+        "underscored.py",
+        "squashed.md",
+        "clean.html",
+        legacy_rel,
+    }
+
+
+def test_brand_guard_ignores_the_correct_joined_slug(tmp_path):
+    """The zero-separator slug is correct in lowercase or shouting case; only Title Case is a violation."""
+    (tmp_path / "urls.py").write_text(
+        "ENTITY_ID = 'media_player.mammamiradio'\nCONTAINER = 'mammamiradio'\nENV_VAR = 'MAMMAMIRADIO_BIND_HOST'\n",
+        encoding="utf-8",
+    )
+
+    offenders, unreadable, scanned = _scan_brand(tmp_path, ["urls.py"])
+
+    assert not offenders
+    assert not unreadable
+    assert scanned == ["urls.py"]
+
+
+def test_brand_guard_reports_undecodable_files_as_unreadable(tmp_path):
+    """A non-UTF-8 text file must surface in `unreadable`, not vanish silently."""
+    (tmp_path / "latin1.txt").write_bytes("café".encode("latin-1"))
+
+    offenders, unreadable, scanned = _scan_brand(tmp_path, ["latin1.txt"])
+
+    assert not offenders
+    assert unreadable == ["latin1.txt (UnicodeDecodeError)"]
+    assert not scanned
+
+
+def test_frozen_brand_provenance_allowlist_has_no_dead_entries():
+    """Limit the allowlist to files that still contain the joined spelling."""
+    stale = []
+    for rel in sorted(_FROZEN_BRAND_PROVENANCE):
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            stale.append(f"{rel} (missing)")
+        elif _MISSPELLED_BRAND not in path.read_text(encoding="utf-8"):
+            stale.append(f"{rel} (already correct)")
+    assert not stale, "remove stale paths from _FROZEN_BRAND_PROVENANCE:\n  " + "\n  ".join(stale)
+
+
+def test_legacy_brand_line_allowlist_has_no_dead_entries():
+    """Require each scoped legacy allowance to match one exact tracked line."""
+    stale = []
+    for rel, allowed_lineno, allowed_line in sorted(_LEGACY_BRAND_LINES):
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            stale.append(f"{rel} (missing)")
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        actual_line = lines[allowed_lineno - 1] if allowed_lineno <= len(lines) else None
+        if actual_line != allowed_line or not _brand_violation(allowed_line):
+            stale.append(f"{rel}:{allowed_lineno} (legacy line moved or changed)")
+    assert not stale, "remove or update stale entries in _LEGACY_BRAND_LINES:\n  " + "\n  ".join(stale)
 
 
 def test_listener_never_shows_raw_server_error():

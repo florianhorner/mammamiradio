@@ -6,14 +6,42 @@ on:
   pull_request:
     branches: [main, "train/**"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  pi-smoke:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      audio: ${{ steps.filter.outputs.audio }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify expensive lanes
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci-changed-lanes.sh
+
+  pi-smoke-run:
+    needs: [changes]
+    if: needs.changes.outputs.audio == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
       - name: Install static ffmpeg compatibility build (arm64)
         env:
@@ -74,15 +102,7 @@ jobs:
           ffmpeg -version | head -1
           ffmpeg -version | head -1 | grep -E 'ffmpeg version (7|n7|8|n8)'
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          pip install -e .
-          pip install -r requirements-dev.txt
+      - uses: ./.github/actions/setup-python-ci
 
       - name: Run normalizer smoke tests (mocked)
         run: pytest tests/audio/test_normalizer_unit.py tests/audio/test_normalizer_extended.py -v
@@ -105,3 +125,25 @@ jobs:
         # Invoke the script directly: this job installs into the system Python,
         # so `make launch-smoke` (which uses .venv/bin/python) would not resolve.
         run: python scripts/ha-green-launch-smoke.py
+
+  pi-smoke:
+    if: ${{ always() && !cancelled() }}
+    needs: [changes, pi-smoke-run]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: ARM smoke passed or correctly skipped
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUN: ${{ needs.pi-smoke-run.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES" != "success" ]; then
+            echo "changes lane was $CHANGES" >&2
+            exit 1
+          fi
+          if [ "$RUN" = "success" ] || [ "$RUN" = "skipped" ]; then
+            exit 0
+          fi
+          echo "pi-smoke-run was $RUN" >&2
+          exit 1

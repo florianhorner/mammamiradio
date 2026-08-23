@@ -781,9 +781,25 @@ Two features create the illusion of a live radio studio:
 
 ### Clip sharing
 
-`POST /api/clip` can publish only one complete bundled starter track whose path, hash, identity, and attribution still match the canonical manifest. The playback loop records that snapshot only after a clean full-track send; the endpoint revalidates the package file before copying it into `{cache_dir}/clips/`. Jamendo, local, mixed, partial, unknown, ad, and banter windows fail closed with `403 music_share_unavailable`; none of their bytes can enter the public clip store. Eligible clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back when no eligible starter window exists) and a 50-clip disk cap prevent abuse. The listener maps the structured failure code to actionable copy.
+`POST /api/clip` can publish only one complete bundled starter track whose path, hash, identity, and attribution still match the canonical manifest. The playback loop records that snapshot only after a clean full-track send; the endpoint revalidates the package file before copying it into `{cache_dir}/clips/`. Jamendo, local, mixed, partial, unknown, ad, and banter windows fail closed with `403 music_share_unavailable`; none of their bytes can enter the public clip store through this route. Eligible clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back when no eligible starter window exists) and a 50-clip disk cap prevent abuse. The listener maps the structured failure code to actionable copy. Those exclusions are specific to the legacy `/api/clip` route. Two separately bounded flows can also publish audio: the listener Moment Picker commits one server-frozen, frame-aligned choice into the normal 24-hour clip lifecycle, while an operator-initiated keepsake writes an eligible voice segment to a separate durable directory, rejects music-tailed segments, and carries no TTL.
 
-The Moment Picker is a **listener-private browser protocol**, not a third-party capture API. The egress loop owns a byte-capped raw-MP3 ledger and immutable segment marks; producers stamp `clip_audio_class` as `speech`, `station_bed`, `commercial_music`, or fail-closed `unknown`. A capture worker indexes complete MPEG-1 Layer III frames (including VBR), writes only a cap-clean temporary source, and freezes the available named choices. No browser cut points, byte offsets, or metadata are accepted.
+### Keepsakes
+
+A clip expires after 24 hours and the provenance ledger prunes after `MAMMAMIRADIO_LEDGER_RETENTION_DAYS`, so a moment worth keeping is deleted twice over by default. `POST /api/clip/keep` (admin auth) exports the airing voice segment to `{cache_dir}/keepsakes/{id}.mp3` with a `{id}.json` sidecar, and nothing in the system expires it.
+
+Durability is structural rather than a flag: `cleanup_old_clips` and the `CLIP_MAX_SAVED` cap operate on `clips/` alone, every cache pruner globs `cache_dir/*.mp3` without recursing, and `cleanup_old_clips` refuses outright when handed a directory named `keepsakes`. The add-on backup contract includes the directory, so a kept moment survives a restore.
+
+**Two eligibility gates, both failing closed** (`is_keepsake_eligible` in `scheduling/clip.py`): the segment type must be in `KEEPSAKE_SEGMENT_TYPES` (banter, ad, news_flash, station_id, sweeper, time_check), and the segment must not carry `has_music_tail`. `commit_music_handoff` crossfades the outgoing song's real master under the opening seconds of the next voice segment, so type alone is not proof of provenance; a tailed segment is refused rather than trimmed, because a keepsake never expires and is served without auth.
+
+**Provenance and byte ownership share one boundary.** The playback loop writes `app.state.clip_segment` (`{type, chunks, title, has_music_tail}`) at every segment boundary and counts the chunks that segment puts into the share ring; the route cuts exactly those chunks (`extract_segment_audio`) rather than deriving a byte length from wall-clock elapsed. The ring holds every voice segment back to back, since music never enters it, so a window one chunk too long would be the previous segment's audio labelled with this one's title and rights check. The same count sizes the `last_shareworthy_clip` lookback snapshot, written for all six keepable types, which lets an operator catch a break that has just ended; the lookback is consulted only when the airing segment is not a keepable type, so `too_early` and `music_tail` stay honest refusals about what is on air now.
+
+Bounds: `KEEPSAKE_MAX_SAVED` (200) and a `KEEPSAKE_MIN_FREE_MB` (256) free-space preflight, run together with the file publication under `_keepsake_write_lock` so two presses cannot both pass at the ceiling. At roughly 4 MB for a long segment a full shelf is about 800 MB on the same volume as the norm cache, and no evictor reclaims it. The write is `mkstemp` + `fsync` + `os.replace`, so a kill mid-write can never publish a truncated keepsake. The scratch such a kill leaves behind is swept at the next startup by `prune_stale_keepsake_tmp_files`, since nothing else in the cache recurses into this directory.
+
+Keepsakes reuse the `/clips/{id}.mp3` and `/clips/{id}` URLs and are checked after `clips/`, so an id can never resolve to a keepsake while a live clip of that id exists. `GET /api/clip/keep` and `DELETE /api/clip/keep/{id}` list and revoke them, surfaced as **Kept moments** in the admin Archivio tab; deleting the file is the whole revocation, since both public routes read from disk per request.
+
+### Moment Picker
+
+The Moment Picker is a **listener-facing, capability-scoped browser protocol**, not an authenticated admin API or a browser-defined range-cutting API. The egress loop owns a byte-capped raw-MP3 ledger and segment marks that close at segment boundaries; the capture route copies them into one immutable, no-await snapshot. Producers stamp `clip_audio_class` as `speech`, `station_bed`, `commercial_music`, or fail-closed `unknown`. A capture worker indexes complete MPEG-1 Layer III frames (including VBR), writes only a cap-clean temporary source, and freezes the available named choices. No browser cut points, byte offsets, or metadata are accepted.
 
 | Route | Purpose | Success | Failure boundary |
 | --- | --- | --- | --- |
@@ -791,7 +807,7 @@ The Moment Picker is a **listener-private browser protocol**, not a third-party 
 | `GET /captures/{id}.mp3` | Native-audio audition source | `audio/mpeg`, `Cache-Control: no-store` | Expired/claimed captures are not replayable; active readers hold a lease |
 | `POST /api/clip/commit` | Persist one already-frozen `choice_id` | `201` final clip; same-choice retry is `200 idempotent:true` | Raw ranges, alternate choices after claim, and expired captures are refused |
 
-Temporary captures live for ten minutes, have a 20-record in-memory capacity, use `.part` plus atomic rename, and are excluded from the service worker cache. Spoken/station-bed context is bounded to 120 seconds; commercial or unknown material is capped at 60 seconds and has only the generic `Il momento` option. The listener prefixes `audio_path` with its ingress base, auditions after metadata/seek confirmation, and unlocks sharing after 0.5 seconds of selected-range playback.
+Temporary captures live for ten minutes, have a 20-record in-memory capacity, use `.part` plus atomic rename, and are excluded from the service worker cache. A continuous `banter`/`news_flash` run classified as `speech` or `station_bed` is bounded to 120 seconds and may offer named context choices; all other material, including commercial or unknown audio, is capped at 60 seconds and has only the generic `Il momento` choice. The listener prefixes `audio_path` with its ingress base, starts auditions only after metadata and seek confirmation, and unlocks its Share control after 0.5 seconds of selected-range playback.
 
 ### Optional standalone chart refresh
 
@@ -1341,10 +1357,14 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 | `/api/clip` | POST | Public | Capture eligible material; music requires a complete bundled-starter-only window, otherwise `403 music_share_unavailable` |
-| `/api/clip/capture` | POST | Listener-private | Freeze a temporary, frame-aligned Moment Picker audition |
-| `/api/clip/commit` | POST | Listener-private | Commit one frozen audition choice to a normal share link |
-| `/captures/{id}.mp3` | GET | Listener-private | Serve a no-store temporary audition asset |
-| `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing) |
+| `/api/clip/capture` | POST | Public | Freeze a temporary, frame-aligned Moment Picker audition and return a short-lived capture capability |
+| `/api/clip/commit` | POST | Public (capture capability) | Commit one server-frozen audition choice to a normal 24-hour share link |
+| `/captures/{id}.mp3` | GET | Public (capture capability) | Serve a no-store temporary audition asset under a reader lease |
+| `/api/clip/keep` | POST | Admin | Keep the airing voice segment (or the one just ended) durably in `cache_dir/keepsakes/`. Refusal reasons: `music`, `music_tail`, `not_on_air`, `too_early`, `not_keepable`, `archive_full`, `no_room`, `write_failed` |
+| `/api/clip/keep` | GET | Admin | List kept moments, newest first (`keepsake_id`, title, segment type, created_at, size, share URL) |
+| `/api/clip/keep/{id}` | DELETE | Admin | Remove one kept moment, audio and sidecar together; the supported way to revoke audio that never expires |
+| `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing). Falls back to `keepsakes/` when the clip is missing or expired, and keepsakes carry no TTL |
+| `/clips/{id}` | GET | Public | Share landing page (OG card + player). Falls back to `keepsakes/` when the clip is missing or expired; an expired clip renders a "this moment has passed" state rather than a 404 |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout; successful responses add `public_token` and the current `song_resolution` for listener-side follow-up |
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, `song_resolution`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |
@@ -1516,7 +1536,7 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/playlist/track_rules.py` | Per-track personality rules flagged by admin via `/api/track-rules` |
 | `mammamiradio/scheduling/scheduler.py` | pacing rules and upcoming preview |
 | `mammamiradio/scheduling/producer.py` | segment generation pipeline |
-| `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup |
+| `mammamiradio/scheduling/clip.py` | WTF clip extraction from ring buffer, save, cleanup; keepsake eligibility gates, exact-segment extraction, durable keepsake save |
 | `mammamiradio/release_campaign.py` | Packaged release-beat manifest loading and bounded on-air campaign state (`cache/release_campaign_ledger.json`) |
 | `mammamiradio/restart_handoff.py` | Post-restart music continuity spool: producer writes safe recent segments, startup admits them into the queue (`cache/restart_handoff/`) |
 | `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
