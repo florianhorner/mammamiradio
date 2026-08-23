@@ -121,15 +121,15 @@ class TestPersonalityModifier:
         result = _personality_modifier("Marco", axes)
         assert "slowly" in result.lower() or "calm" in result.lower()
 
-    def test_high_chaos(self):
+    def test_high_chaos_does_not_add_cached_structure(self):
         axes = PersonalityAxes(chaos=90)
         result = _personality_modifier("Giulia", axes)
-        assert "tangent" in result.lower()
+        assert result == ""
 
-    def test_low_chaos(self):
+    def test_low_chaos_does_not_add_cached_structure(self):
         axes = PersonalityAxes(chaos=10)
         result = _personality_modifier("Giulia", axes)
-        assert "topic" in result.lower() or "structured" in result.lower()
+        assert result == ""
 
     def test_high_warmth(self):
         axes = PersonalityAxes(warmth=85)
@@ -164,10 +164,10 @@ class TestPersonalityModifier:
     def test_multiple_axes_combined(self):
         axes = PersonalityAxes(energy=90, chaos=90, warmth=10)
         result = _personality_modifier("Marco", axes)
-        # Should include guidance for all three deviating axes
+        # Energy and warmth remain tonal; chaos structure is selected per break.
         assert "fast" in result.lower() or "manic" in result.lower()
-        assert "tangent" in result.lower()
         assert "sarcastic" in result.lower() or "dry" in result.lower()
+        assert "tangent" not in result.lower()
 
     def test_borderline_values_produce_no_modifier(self):
         """Values within threshold (35-65) of neutral should produce nothing."""
