@@ -33,8 +33,13 @@ if [ -n "${CHANGED_FILES:-}" ]; then
   changed="$CHANGED_FILES"
 else
   if [ -z "$BASE_SHA" ]; then
-    echo "ci-changed-lanes: BASE_SHA required unless EVENT_NAME=push or CHANGED_FILES is set" >&2
-    exit 1
+    if [ "$EVENT_NAME" = "pull_request" ]; then
+      echo "ci-changed-lanes: BASE_SHA required for pull_request events" >&2
+      exit 1
+    fi
+    echo "ci-changed-lanes: no BASE_SHA for $EVENT_NAME; enabling every lane" >&2
+    emit_all true
+    exit 0
   fi
   if ! changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"; then
     echo "ci-changed-lanes: git diff failed; enabling every lane" >&2

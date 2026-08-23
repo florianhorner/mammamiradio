@@ -53,7 +53,9 @@ def xdist_args() -> list[str]:
     raw = os.environ.get("COVERAGE_RATCHET_XDIST", "").strip()
     if not raw or raw.lower() in {"0", "false", "no", "off"}:
         return []
-    if raw == "auto" or (raw.isdigit() and int(raw) > 0):
+    if raw.lower() == "auto":
+        return ["-n", "auto"]
+    if raw.isascii() and raw.isdigit() and int(raw) > 0:
         return ["-n", raw]
     print(
         f"WARNING: ignoring invalid COVERAGE_RATCHET_XDIST={raw!r}; use 'auto' or a positive integer.",

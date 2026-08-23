@@ -58,11 +58,11 @@ do
 done
 pass "browser install inputs enable browser smoke"
 
-for lane_name in browser media audio
+for lane_name in browser media workflows audio
 do
   assert_path_enables "$lane_name" scripts/ci-changed-lanes.sh
 done
-pass "classifier changes fail open every optional lane"
+pass "classifier changes fail open every lane"
 
 audio_out="$(EVENT_NAME=pull_request CHANGED_FILES=$'mammamiradio/audio/normalizer.py' run_lanes)"
 printf '%s\n' "$audio_out" | grep -qx 'audio=true' || fail "normalizer.py must enable ARM"
@@ -124,5 +124,15 @@ else
 fi
 [ "$missing_base_status" -ne 0 ] || fail "pull requests without BASE_SHA must fail the required changes lane"
 pass "missing BASE_SHA fails the required changes lane"
+
+for event_name in workflow_dispatch schedule merge_group
+do
+  non_pr_out="$(EVENT_NAME="$event_name" run_lanes 2>/dev/null)"
+  for lane_name in browser media workflows audio
+  do
+    printf '%s\n' "$non_pr_out" | grep -qx "$lane_name=true" || fail "$event_name without BASE_SHA must enable $lane_name"
+  done
+done
+pass "non-PR events without BASE_SHA fail open every lane"
 
 echo "ci-changed-lanes: all cases passed."
