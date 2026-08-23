@@ -27,6 +27,7 @@ async (page) => {
   let failNextGuideKey = '';
   let failNextResume = false;
   let nextResumeResponse = '';
+  let nextForceResponse = '';
   let discardNextConfirmResponse = false;
   let nextVerifyResponse = '';
   let nextPreviewResponse = '';
@@ -413,9 +414,17 @@ async (page) => {
       return;
     }
     if (route.request().url().includes('force=true')) {
-      // Mirror the real force-recovery reply. Onboarding checks this as
-      // strictly as the producer desk does, so an {ok:true} without the
-      // recovery evidence is refused rather than treated as a start.
+      const forceMode = nextForceResponse;
+      nextForceResponse = '';
+      if (forceMode === 'running') {
+        await fulfillJson(route, { ok: true, recovering: false });
+        return;
+      }
+      if (forceMode === 'failure') {
+        await fulfillJson(route, { ok: false, error: 'The station is still paused.' }, RECEIPT_FAILURE_STATUS);
+        return;
+      }
+      // Mirror the real force-recovery reply for the rebuild form.
       await fulfillJson(route, { ok: true, recovering: true, runway_source: 'none' });
       return;
     }
@@ -1076,6 +1085,33 @@ async (page) => {
     await page.waitForFunction(() => _firstListenUi.dispatch === 'accepted' && !_firstListenUi.busy);
     assert(resumeRequests.length === failedResumeBaseline + 3, 'force-available resume did not retry once');
     await assertUnfinished('firstListenVerifyStep', 'firstListenHeardBtn');
+
+    await resetUi(setupProjection());
+    nextResumeResponse = 'force_available';
+    nextForceResponse = 'running';
+    const runningForceBaseline = resumeRequests.length;
+    await page.locator('#firstListenPlayBtn').click();
+    await page.waitForFunction(() => _firstListenUi.dispatch === 'accepted' && !_firstListenUi.busy);
+    assert(resumeRequests.length === runningForceBaseline + 2, 'running-station force start did not retry once');
+    await assertUnfinished('firstListenVerifyStep', 'firstListenHeardBtn');
+
+    await resetUi(setupProjection());
+    nextResumeResponse = 'force_available';
+    nextForceResponse = 'failure';
+    const failedForceBaseline = resumeRequests.length;
+    const forceFailureAudioSrc = await page.locator('#firstListenStationAudio').getAttribute('src');
+    await page.locator('#firstListenPlayBtn').click();
+    await page.waitForFunction(() => _firstListenUi.dispatch === 'idle' && !_firstListenUi.busy);
+    assert(resumeRequests.length === failedForceBaseline + 2, 'force-start failure did not retry once');
+    assert(
+      (await page.locator('#firstListenSpeakerStatus').innerText()).includes('The station is still paused.'),
+      'force-start failure lost the server-authored error',
+    );
+    assert(
+      await page.locator('#firstListenStationAudio').getAttribute('src') === forceFailureAudioSrc,
+      'force-start failure opened or replaced the stream',
+    );
+    await assertUnfinished('firstListenSpeakerStep', 'firstListenPlayBtn');
 
     await resetUi(setupProjection());
     await page.locator('#setupAdvancedDetails > summary').click();
