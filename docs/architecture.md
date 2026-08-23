@@ -1246,17 +1246,22 @@ In standalone mode, a non-loopback bind without a credential is rejected during 
 
 Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients are exempt.
 
-First Listen, setup credential actions, and Home entity privacy controls use an
-additional DNS-rebinding boundary. Their setup-status read and active routes
-always require the injected CSRF token, plus one of: verified HTTP Basic admin
-credentials (the supported browser path when `ADMIN_PASSWORD` is configured,
-including on a custom hostname, because a credential is a secret a rebound page
-cannot manufacture), a literal local/private IP Host, genuine HA ingress, or
-`X-Radio-Admin-Token`. A custom hostname with no configured password is refused
-with a structured `403` (`{"code": "active_setup_host_untrusted", "title",
-"message", "action"}`) that names the fix. This stricter rule is implemented by
-`_require_active_setup_access` and does not change the legacy admin matrix for
-unrelated endpoints. `docs/operations.md` "Admin access model" is the SSOT; the
+First Listen, setup credential actions, speaker playback, and Home entity
+privacy controls use an additional DNS-rebinding boundary. Their setup-status
+read and active routes accept, checked in this order: `X-Radio-Admin-Token`
+alone (automation; returns before the CSRF token is even read, since a
+caller-supplied secret is not what CSRF defends); verified HTTP Basic admin
+credentials plus the injected CSRF token (the supported browser path when
+`ADMIN_PASSWORD` is configured, including on a custom hostname, because a
+credential is a secret a rebound page cannot manufacture); or a literal
+local/private IP Host or genuine HA ingress plus the CSRF token. A custom
+hostname with no configured password and no admin token is refused with a
+structured `403` (`{"code": "active_setup_host_untrusted", "title", "message",
+"action"}`) that names the fix; a missing or stale CSRF token on the other two
+paths gets the same shape under `active_setup_csrf_stale`. This stricter rule
+is implemented by `_require_active_setup_access` and does not change the
+legacy admin matrix for unrelated endpoints. `docs/operations.md` "Admin
+access model" is the SSOT; the
 two must change together.
 
 ### Source switch concurrency

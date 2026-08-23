@@ -5282,7 +5282,7 @@ async def test_active_setup_named_loopback_peer_still_requires_dashboard_csrf():
         )
 
     assert blocked.status_code == 403
-    assert blocked.json()["detail"] == "Active setup request blocked. Reload the dashboard and retry."
+    assert blocked.json()["detail"]["code"] == "active_setup_csrf_stale"
     assert accepted.status_code == 200
 
 

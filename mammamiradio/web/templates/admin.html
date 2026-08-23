@@ -2041,7 +2041,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
       <header class="mmr-panel-head">
         <div>
           <div class="ttl-eyebrow">First Listen</div>
-          <h2>Put Mamma Mi Radio in the room.</h2>
+          <h2>Hear Mamma Mi Radio, right here.</h2>
           <div class="sub">Start with a real opening show. Then decide how much more personal the station should become.</div>
         </div>
       </header>
@@ -2400,7 +2400,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 </div>
                 <div class="guide-audio" data-guide="welcome">
                   <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Hear Marco and Giulia</button>
-                    <p class="guide-audio-copy" id="guideWelcomeNote"><strong>12 seconds on this device</strong><span>This does not confirm sound on your selected speaker.</span></p>
+                    <p class="guide-audio-copy" id="guideWelcomeNote"><strong>12 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
                   <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti. Five small steps, and Mamma Mi Radio is in your room. <strong>Giulia:</strong> He means your speaker. Nothing personal and nothing automatic. You stay in charge.</p></details>
                 </div>
                 <p class="progress-line" id="firstListenProgressLine">Step 1 of 5. Next: play it on this device.</p>
@@ -2800,6 +2800,7 @@ const _firstListenUi={
   showSuccess:false,
   guideKey:'',
   guideButton:null,
+  stationPausedForGuide:false,
   firstUnresolvedRenderedAt:0,
   activationStartedAt:0,
   activationMs:null,
@@ -2850,6 +2851,16 @@ function stopFirstListenGuide({reset=true}={}){
   if(container)container.dataset.state='idle';
   _firstListenUi.guideKey='';
   _firstListenUi.guideButton=null;
+  // Every guide-narration exit (switch clip, tab hide, leave step) funnels
+  // through here, so this is the one place a station pause taken to avoid
+  // layering audio gets undone. Leaving the step also calls
+  // stopFirstListenStationAudio(), which clears the flag itself — so a
+  // resume attempted here is immediately superseded there, never left racing.
+  if(_firstListenUi.stationPausedForGuide){
+    _firstListenUi.stationPausedForGuide=false;
+    const stationAudio=firstListenStationAudio();
+    if(stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
+  }
 }
 async function toggleFirstListenGuide(key,button){
   const guide=FIRST_LISTEN_GUIDES[key];
@@ -2866,8 +2877,14 @@ async function toggleFirstListenGuide(key,button){
     return;
   }
   if(_firstListenUi.guideButton!==button)stopFirstListenGuide();
-  // Host narration must not layer on top of the live station.
-  stopFirstListenStationAudio();
+  // Host narration must not layer on top of the live station, but a hard
+  // teardown left steps 4-5 (no Play control) with no way back to audio.
+  // Pause instead, and let stopFirstListenGuide() resume it on every exit.
+  const stationAudio=firstListenStationAudio();
+  if(stationAudio&&!stationAudio.paused){
+    stationAudio.pause();
+    _firstListenUi.stationPausedForGuide=true;
+  }
   const attempt=++_firstListenGuideAttempt;
   _firstListenUi.guideKey=key;
   _firstListenUi.guideButton=button;
@@ -3227,7 +3244,15 @@ function showAdminTab(name,{render=true,persist=true}={}){
   if(name==='setup'){
     const details=document.getElementById('setupGroup');
     if(details)details.open=true;
-  }else stopFirstListenGuide();
+  }else{
+    stopFirstListenGuide();
+    // The hidden First Listen element holds its own hub subscription. Any
+    // tab away from Setup must release it, or it plays on indefinitely as a
+    // phantom listener with no visible control (nav clicks, the repair-music
+    // shortcut, and every other showAdminTab caller, not just the two exits
+    // that already call this explicitly).
+    stopFirstListenStationAudio();
+  }
   if(persist){try{sessionStorage.setItem('adminTab',name);}catch(_){}}
   // Render the newly-shown panel immediately from cached state so switching
   // tabs doesn't wait up to 3s for the next poll.
@@ -5369,6 +5394,9 @@ function renderHomeContextPreview(data,targetId='haContextPreview'){
 }
 function firstListenStationAudio(){return document.getElementById('firstListenStationAudio')}
 function stopFirstListenStationAudio(){
+  // A hard teardown leaves nothing to resume, so cancel any pending
+  // guide-narration resume rather than let it race this with a stray .play().
+  _firstListenUi.stationPausedForGuide=false;
   const audio=firstListenStationAudio();
   if(!audio)return;
   audio.pause();
@@ -5427,16 +5455,14 @@ async function startFirstListen(el){
       // Force Start rebuilds the station with no playable runway. The producer
       // desk confirms before doing this; onboarding must not do it silently.
       if(!window.confirm(FORCE_RESUME_CONFIRM_COPY)){
-        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Play the station again.','warn');
+        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Play the station again.','degraded');
         _firstListenUi.dispatch='idle';
-        renderFirstListen(_setup);
         return;
       }
-      const {response:forceResponse}=await apiResponse('POST','/api/resume?force=true',undefined,FIRST_LISTEN_TIMEOUTS.play);
-      if(!forceResponse.ok){
-        firstListenSetStatus('firstListenSpeakerStatus','The studio could not rebuild the station just now. Give it a few seconds, then tap Play the station again.','warn');
+      const {response:forceResponse,payload:forcePayload}=await apiResponse('POST','/api/resume?force=true',undefined,FIRST_LISTEN_TIMEOUTS.play);
+      if(!(forceResponse.ok&&forcePayload?.ok===true&&forcePayload?.recovering===true)){
+        firstListenSetStatus('firstListenSpeakerStatus','The studio could not rebuild the station just now. Give it a few seconds, then tap Play the station again.','degraded');
         _firstListenUi.dispatch='idle';
-        renderFirstListen(_setup);
         return;
       }
     }

@@ -1006,9 +1006,11 @@ def test_leaving_first_listen_releases_the_station_audio_element() -> None:
     assert "stopFirstListenStationAudio()" in open_station
     assert open_station.index("stopFirstListenStationAudio()") < open_station.index("showAdminTab(")
 
-    # Host narration must not layer on top of the live station either.
-    toggle_guide = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
-    assert "stopFirstListenStationAudio()" in toggle_guide
+    # Every other tab switch (direct clicks, "Repair music source", any future
+    # caller of showAdminTab) is covered separately -- see
+    # test_leaving_the_setup_tab_by_any_route_stops_the_station_audio.
+    # Guide narration pauses rather than tearing down -- see
+    # test_guide_narration_pauses_the_station_instead_of_tearing_it_down.
 
 
 def test_first_listen_force_start_is_confirmed_not_silent() -> None:
@@ -1054,3 +1056,69 @@ def test_first_listen_step_copy_names_this_device_not_a_speaker_or_room() -> Non
         "Choose one room, then play the opening there",
     ):
         assert stale not in html, f"stale speaker/room copy still rendered: {stale!r}"
+
+
+def test_first_listen_force_start_decline_never_calls_undefined_setup() -> None:
+    """Regression: the decline path called renderFirstListen(_setup), an
+
+    identifier defined nowhere in the page. The ReferenceError was swallowed
+    by startFirstListen's own catch block, which overwrote the authored
+    "give the tape decks a few seconds" message with a generic error and
+    the wrong dispatch state.
+    """
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    assert "_setup" not in start
+    assert "renderFirstListen(" not in start
+
+
+def test_first_listen_force_start_matches_producer_desk_success_check() -> None:
+    """Force Start must confirm success as strictly as the producer desk does,
+    not just an HTTP 200 with no payload check."""
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    assert "forcePayload?.ok===true" in start
+    assert "forcePayload?.recovering===true" in start
+
+
+def test_guide_narration_pauses_the_station_instead_of_tearing_it_down() -> None:
+    """A hard teardown left steps 4-5 (no Play control) with no way back to
+
+    audio once a guide clip was played. Pausing is reversible; a full
+    pause/removeAttribute('src')/load() teardown is not.
+    """
+    toggle_guide = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    assert "stopFirstListenStationAudio()" not in toggle_guide
+    assert "stationAudio.pause()" in toggle_guide
+    assert "stationPausedForGuide=true" in toggle_guide
+
+    stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
+    assert "stationPausedForGuide" in stop_guide
+    assert "stationAudio.play()" in stop_guide
+
+    stop_station = _function("stopFirstListenStationAudio", "firstListenStationPlaying")
+    assert "stationPausedForGuide=false" in stop_station
+
+
+def test_leaving_the_setup_tab_by_any_route_stops_the_station_audio() -> None:
+    """The hidden station element must release its hub subscription on every
+
+    tab switch away from Setup, not only the two exits that call it
+    explicitly (openListener, openFirstListenStation) -- direct tab-bar
+    clicks and the "Repair music source" shortcut both route through
+    showAdminTab and left it playing as a phantom listener.
+    """
+    show_tab = _function("showAdminTab", "initFirstListenPanelMount")
+    assert "stopFirstListenStationAudio()" in show_tab
+    assert show_tab.index("stopFirstListenGuide()") < show_tab.index("stopFirstListenStationAudio()")
+
+
+def test_active_setup_csrf_stale_403_is_structured_not_a_bare_string() -> None:
+    """The two CSRF-failure 403s must carry the same {code,title,message,action}
+
+    shape as the untrusted-host 403, or firstListenErrorCopy falls back to
+    the generic message and the authored "reload the dashboard" fix never
+    reaches the screen.
+    """
+    src = STREAMER_PY.read_text(encoding="utf-8")
+    assert src.count("detail=_active_setup_csrf_stale_detail()") == 2
+    assert '"code": "active_setup_csrf_stale"' in src
+    assert '"action": "Reload /admin, then continue First Listen."' in src

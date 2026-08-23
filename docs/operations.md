@@ -846,24 +846,31 @@ the Supervisor network. To require a credential on the add-on, set `admin_token`
 in the add-on options; a configured token is then enforced even on the LAN.
 
 The active First Listen/setup surface is stricter than the general matrix:
-`GET /api/setup/status` plus setup recheck, listener confirmation, privacy
-preview, privacy choice, entity privacy controls, provider check, and key-save
-actions all require the injected CSRF token. On top of that they need one of
-three proofs of origin:
+`GET /api/setup/status` plus setup recheck, listener confirmation, speaker
+playback, privacy preview, privacy choice, entity privacy controls, provider
+check, and key-save actions accept one of three proofs of origin, checked in
+this order:
 
-1. **Verified HTTP Basic admin credentials** (`ADMIN_PASSWORD` configured). A
-   credential is an unguessable secret a rebound page cannot manufacture, so
-   this is the supported browser path for a custom hostname. The CSRF token is
-   still required as a second proof that the write came from this dashboard.
-2. **A literal local/private IP host, or genuine Home Assistant ingress.** This
-   is the credential-less path, and it is host-restricted precisely because a
-   per-process CSRF secret is no defense once an attacker can fetch a page from
-   the rebound host and read the embedded token.
-3. **`X-Radio-Admin-Token`** for automation.
+1. **`X-Radio-Admin-Token`**, for automation. Checked first and returns
+   immediately on a match — no CSRF token is read or required on this path,
+   because it is a caller-supplied secret, not a browser mechanism CSRF
+   defends.
+2. **Verified HTTP Basic admin credentials** (`ADMIN_PASSWORD` configured),
+   **plus** the injected CSRF token. A credential is an unguessable secret a
+   rebound page cannot manufacture, so this is the supported browser path for
+   a custom hostname; CSRF is still required as a second proof the write came
+   from this dashboard.
+3. **A literal local/private IP host, or genuine Home Assistant ingress,
+   plus** the injected CSRF token. This is the credential-less path, and it is
+   host-restricted precisely because a per-process CSRF secret is no defense
+   once an attacker can fetch a page from the rebound host and read the
+   embedded token.
 
-A custom hostname with no `ADMIN_PASSWORD` is refused with a `403` whose body is
-a structured object (`{"code": "active_setup_host_untrusted", "title",
-"message", "action"}`) naming the fix, rather than a bare string.
+A custom hostname with no `ADMIN_PASSWORD` and no admin token is refused with a
+`403` whose body is a structured object (`{"code":
+"active_setup_host_untrusted", "title", "message", "action"}`) naming the fix,
+rather than a bare string. A missing or stale CSRF token on paths 2-3 gets the
+same structured shape under `active_setup_csrf_stale`.
 
 ## Docker
 

@@ -571,6 +571,21 @@ def _home_access_fingerprint(config) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
+def _active_setup_csrf_stale_detail() -> dict[str, str]:
+    """The structured 403 body for a missing or stale active-setup CSRF token.
+
+    Shares the {code,title,message,action} shape the client's
+    firstListenErrorCopy reads directly from HTTPException.detail, so its
+    authored next step reaches the screen instead of the generic fallback.
+    """
+    return {
+        "code": "active_setup_csrf_stale",
+        "title": "Reload the dashboard",
+        "message": "This setup page's security check has expired.",
+        "action": "Reload /admin, then continue First Listen.",
+    }
+
+
 def _require_active_setup_access(request: Request, credentials=Depends(security)) -> None:
     """Authorize active setup writes and require an unguessable browser token.
 
@@ -593,10 +608,7 @@ def _require_active_setup_access(request: Request, credentials=Depends(security)
     if has_valid_admin_basic_credentials(credentials, config):
         if csrf_valid:
             return
-        raise HTTPException(
-            status_code=403,
-            detail="Active setup request blocked. Reload the dashboard and retry.",
-        )
+        raise HTTPException(status_code=403, detail=_active_setup_csrf_stale_detail())
     # A per-process CSRF secret is not a DNS-rebinding defense when an attacker
     # can first fetch a page from the rebound host and read the embedded token.
     # Active setup therefore accepts browser-token auth only on a literal local
@@ -641,10 +653,7 @@ def _require_active_setup_access(request: Request, credentials=Depends(security)
         )
     if csrf_valid:
         return
-    raise HTTPException(
-        status_code=403,
-        detail="Active setup request blocked. Reload the dashboard and retry.",
-    )
+    raise HTTPException(status_code=403, detail=_active_setup_csrf_stale_detail())
 
 
 def _admin_target_error() -> JSONResponse:
