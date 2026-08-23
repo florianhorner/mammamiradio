@@ -743,8 +743,6 @@ else
     # Both channels draw the same brand in the catalog. Nothing copies these
     # files (cut-edge-release.sh only rewrites `version:`), so without a parity
     # check a stable-only icon refresh silently leaves Edge on the old artwork.
-    # README.md is deliberately NOT compared: the two listings say different
-    # things on purpose.
     for img in icon.png logo.png; do
         if cmp -s "ha-addon/mammamiradio/$img" "ha-addon/mammamiradio-edge/$img"; then
             pass "edge $img matches stable"
@@ -752,6 +750,19 @@ else
             fail "edge $img drifted from stable (copy ha-addon/mammamiradio/$img)"
         fi
     done
+
+    # The two listings read the same except for the Edge warning, which sits
+    # above the shared marker. Same reasoning as the artwork: nothing copies
+    # these files, so the equivalence only holds if something checks it.
+    STABLE_BODY=$(sed -n '/<!-- shared-listing-body/,$p' ha-addon/mammamiradio/README.md)
+    EDGE_BODY=$(sed -n '/<!-- shared-listing-body/,$p' ha-addon/mammamiradio-edge/README.md)
+    if [ -z "$STABLE_BODY" ] || [ -z "$EDGE_BODY" ]; then
+        fail "both listing READMEs need the <!-- shared-listing-body --> marker"
+    elif [ "$STABLE_BODY" = "$EDGE_BODY" ]; then
+        pass "edge listing body matches stable"
+    else
+        fail "edge listing body drifted from stable (text below shared-listing-body)"
+    fi
 
     # ingress / network consistency with stable
     if grep -q 'host_network: true' "$EDGE_CONFIG"; then

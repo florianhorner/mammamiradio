@@ -207,4 +207,23 @@ stage_file "ha-addon/mammamiradio-edge/logo.png"
 cp "ha-addon/mammamiradio/icon.png" "ha-addon/mammamiradio-edge/logo.png"
 assert_rejects "edge logo.png drift" "edge logo.png drifted from stable"
 
+# The listings must stay equivalent below the shared marker; only the Edge
+# warning above it may differ.
+stage_file "ha-addon/mammamiradio-edge/README.md"
+printf '%s\n' "$(sed 's/^- A continuous music stream.*/- Something else entirely/' ha-addon/mammamiradio-edge/README.md)" \
+  > "ha-addon/mammamiradio-edge/README.md"
+assert_rejects "edge listing body drift" "edge listing body drifted from stable"
+
+# A missing marker must fail loudly rather than silently comparing empty to empty.
+stage_file "ha-addon/mammamiradio-edge/README.md"
+printf '%s\n' "$(grep -v 'shared-listing-body' ha-addon/mammamiradio-edge/README.md)" \
+  > "ha-addon/mammamiradio-edge/README.md"
+assert_rejects "edge listing marker removed" "shared-listing-body"
+
+# Editing only the Edge warning, above the marker, stays valid.
+stage_file "ha-addon/mammamiradio-edge/README.md"
+printf '%s\n' "$(sed 's/^> \*\*The development channel.*/> **Testing channel.**/' ha-addon/mammamiradio-edge/README.md)" \
+  > "ha-addon/mammamiradio-edge/README.md"
+assert_accepts "edge warning reworded above the marker"
+
 echo "All validate-addon edge-block scenarios passed."

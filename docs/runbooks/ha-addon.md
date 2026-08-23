@@ -265,7 +265,7 @@ Three things that are easy to get wrong:
 
 - **The per-app `README.md` is not `ha-addon/README.md`.** Supervisor reads `README.md` from inside the app folder and returns it as the listing's long description; when the file is absent the field is simply null and the page shows nothing. `ha-addon/README.md` is the *repository* landing page and is never read for this. Both are now required by `scripts/validate-addon.sh`.
 - **Links and images in those READMEs must be absolute URLs.** They render inside the Home Assistant frontend, which has no repo-relative base, so `../../docs/...` resolves to nothing. Use `https://raw.githubusercontent.com/...` for images and full `https://github.com/...` links.
-- **Nothing copies artwork between channels.** `cut-edge-release.sh` only rewrites `version:`. `validate-addon.sh` compares `icon.png` and `logo.png` byte-for-byte across stable and Edge, so refresh both or the check fails. The two `README.md` files are deliberately *not* compared — the listings say different things.
+- **Nothing copies anything between channels.** `cut-edge-release.sh` only rewrites `version:`. `validate-addon.sh` therefore compares `icon.png` and `logo.png` byte-for-byte, and compares the two `README.md` files from the `<!-- shared-listing-body -->` marker to end of file. The listings read the same; only the Edge warning, which sits *above* that marker, may differ. Edit the shared text in both files or the check fails.
 
 `description` copy is additionally pinned by `tests/addon/test_addon_metadata_contract.py`, which asserts the stable blurb still names the music sources that actually ship. Changing which sources are advertised is a product decision, not a copy edit — update the test in the same commit and say why.
 

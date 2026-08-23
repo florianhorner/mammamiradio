@@ -1,15 +1,15 @@
 # Mamma Mi Radio
 
+<!-- shared-listing-body: byte-identical across Stable and Edge, enforced by scripts/validate-addon.sh -->
+
 ![The Mamma Mi Radio listener page](https://raw.githubusercontent.com/florianhorner/mammamiradio/main/docs/screenshots/listener.png)
 
-An Italian radio station that runs in your house. Two hosts, Marco and Giulia,
-introduce the songs, talk over each other, and cut to gloriously fake ads for
-products that do not exist. It sounds like a real station because it behaves
-like one — the music keeps moving, and there is never a silent gap while
-something loads.
+Turn your Home Assistant home into a living radio show. Marco and Giulia
+introduce the music, talk over each other, and cut to gloriously fake ads. If
+you choose, selected moments from your home join the programme.
 
-Press start and you hear sound within a couple of seconds. No account, no
-subscription, and no provider key needed for the first song.
+Press start and hear the authored opening on a real speaker without a provider
+key or Home context. Add generated hosts and a filtered Home preview later.
 
 ## What you get
 
@@ -30,5 +30,6 @@ the stream still plays directly.
 
 ## Everything else
 
-The **Documentation** tab covers configuration, the guided first run, speaker
-setup, and what to do when something sounds wrong.
+Configuration, the guided first run, speaker setup, and what to do when
+something sounds wrong are covered in [the
+documentation](https://github.com/florianhorner/mammamiradio/blob/main/ha-addon/mammamiradio/DOCS.md).
