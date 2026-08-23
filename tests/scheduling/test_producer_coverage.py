@@ -2454,12 +2454,14 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
     async def _write_voice(_text, _voice, output_path, **_kwargs):
         Path(output_path).write_bytes(b"voice")
 
-    def _write_tone(output_path, *_args, **_kwargs):
-        time.sleep(0.05)
-        Path(output_path).write_bytes(b"tone")
-        return output_path
-
     def _write_concat(_parts, output_path, *_args, **_kwargs):
+        # The delay belongs here, not on generate_tone: producer.py imports that
+        # name only as a patch seam for the recovery tests and never calls it on
+        # the time-check path, so the sleep never ran and "mix > tts" was
+        # comparing two sub-millisecond durations that both round to the same
+        # integer. concat_files runs inside `_timed_render_stage(state, "mix")`,
+        # so delaying it actually attributes measurable work to the mix stage.
+        time.sleep(0.05)
         Path(output_path).write_bytes(b"mixed")
         return output_path
 
@@ -2467,7 +2469,6 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
         patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 0),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_write_tone),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
         patch(
@@ -2481,6 +2482,9 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
     timing = next(item for item in state.render_timings if item["kind"] == SegmentType.TIME_CHECK.value)
     assert timing["outcome"] == "produced"
     assert set(timing["stages_ms"]) >= {"tts", "mix"}
+    # Pins the injected 50ms to the stage that did the work, rather than relying
+    # on mix happening to out-measure tts by scheduler noise.
+    assert timing["stages_ms"]["mix"] >= 50
     assert timing["stages_ms"]["mix"] > timing["stages_ms"]["tts"]
 
 
