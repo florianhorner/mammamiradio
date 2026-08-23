@@ -677,11 +677,14 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     assert "audio.load()" in guide_code
     toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
     # A failed load/play must not strand a station audio paused for this guide --
-    # see test_every_guide_narration_exit_can_resume_the_station.
-    assert "stopFirstListenGuide()" in toggle.split("}catch(error){", 1)[1]
+    # see test_every_guide_narration_exit_can_resume_the_station. Anchored on
+    # the trailing ';' so an explanatory comment mentioning the same function
+    # name cannot satisfy this on its own -- a prior version of this fix was
+    # UNTESTED by exactly that gap (mutation-verified against admin.html).
+    assert "stopFirstListenGuide();" in toggle.split("}catch(error){", 1)[1]
     init = _function("initFirstListenGuideAudio", "initFirstListenTechnicalDetails")
-    error_handler = init.split("audio.addEventListener('error',()=>{", 1)[1]
-    assert "stopFirstListenGuide()" in error_handler
+    error_handler = init.split("audio.addEventListener('error',()=>{", 1)[1].split("});", 1)[0]
+    assert "stopFirstListenGuide();" in error_handler
     assert "document.addEventListener('visibilitychange'" in guide_code
     assert "if(!document.hidden)return" in guide_code
     assert "stopFirstListenGuide()" in guide_code
@@ -1135,12 +1138,15 @@ def test_every_guide_narration_exit_can_resume_the_station() -> None:
     recovery at steps 4-5 (no Play control there).
     """
     init_guide_audio = _function("initFirstListenGuideAudio", "initFirstListenTechnicalDetails")
+    # Anchored on ';' -- see the comment on the sibling assertion in
+    # test_guide_audio_is_click_only_local_and_cannot_advance_first_listen for
+    # why a bare-name check is not enough.
     ended_handler = init_guide_audio.split("addEventListener('ended',()=>{", 1)[1]
-    assert "stopFirstListenGuide()" in ended_handler.split("});", 1)[0]
+    assert "stopFirstListenGuide();" in ended_handler.split("});", 1)[0]
     error_handler = init_guide_audio.split("addEventListener('error',()=>{", 1)[1]
-    assert "stopFirstListenGuide()" in error_handler.split("});", 1)[0]
+    assert "stopFirstListenGuide();" in error_handler.split("});", 1)[0]
 
     toggle_guide = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
     assert "}catch(error){" in toggle_guide
     catch_body = toggle_guide[toggle_guide.index("}catch(error){") :]
-    assert "stopFirstListenGuide()" in catch_body
+    assert "stopFirstListenGuide();" in catch_body
