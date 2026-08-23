@@ -1354,7 +1354,7 @@ def test_nonblocking_writer_uses_earliest_deadline_with_transfer_winning_ties(
         jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline)
 
 
-def test_worker_starts_duration_budget_after_background_admission(tmp_path):
+def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
     operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
     operation_dir.mkdir(parents=True)
     candidate = jt._candidate_from_exact_result(_item(), "12345")
@@ -1377,7 +1377,7 @@ def test_worker_starts_duration_budget_after_background_admission(tmp_path):
     def delayed_slot(*, background: bool):
         assert background is True
         events.append("slot.enter")
-        now[0] = 100.0
+        now[0] = 201.0
         try:
             yield
         finally:
@@ -1419,11 +1419,12 @@ def test_worker_starts_duration_budget_after_background_admission(tmp_path):
 
     assert artifact.path == operation_dir / "normalized.mp3"
     assert bytes(processes[0].stdin.data) == b"audio-bytes"
-    assert events.index("slot.enter") < events.index("client.build_request")
+    assert events.index("client.build_request") < events.index("slot.enter")
+    assert events.index("response.close") < events.index("slot.enter")
     assert events.index("response.close") < events.index("stdin.close")
     assert events.index("stdin.close") < events.index("process.wait")
     assert events.index("process.wait") < events.index("probe")
-    assert events.index("probe") < events.index("slot.exit")
+    assert events.index("probe") < events.index("slot.exit", events.index("probe"))
     assert events.index("slot.exit") < events.index("hash") < events.index("publish")
 
 
@@ -1584,7 +1585,7 @@ def test_worker_maps_slot_release_failure_after_success_to_ffmpeg_failed(tmp_pat
     assert not operation_dir.exists()
 
 
-def test_worker_cleanup_errors_do_not_mask_active_transfer_timeout(tmp_path):
+def test_worker_network_cleanup_errors_do_not_mask_active_transfer_timeout(tmp_path):
     operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
     operation_dir.mkdir(parents=True)
     candidate = jt._candidate_from_exact_result(_item(), "12345")
@@ -1597,30 +1598,15 @@ def test_worker_cleanup_errors_do_not_mask_active_transfer_timeout(tmp_path):
 
     response = LateResponse(close_error=OSError("response cleanup failed"))
     client = _SyncClient(response, close_error=OSError("client cleanup failed"))
-    process = _FakeProcess(
-        ["ffmpeg", str(operation_dir / "normalized.part")],
-        kill_error=OSError("kill failed"),
-    )
-
-    @contextmanager
-    def broken_release_slot(*, background: bool):
-        assert background is True
-        yield
-        raise RuntimeError("release failed")
-
     with (
         patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
-        patch.object(jt, "ffmpeg_slot", new=broken_release_slot),
         patch.object(jt.httpx, "Client", return_value=client),
-        patch.object(jt.subprocess, "Popen", return_value=process),
-        patch.object(jt.os, "set_blocking"),
         pytest.raises(jt._TransientError, match="network_timeout"),
     ):
         jt._stream_and_normalize(candidate, operation_dir, lambda: None)
 
     assert response.closed is True
     assert client.closed is True
-    assert process.kill_calls == 1
     assert not operation_dir.exists()
 
 
@@ -1717,7 +1703,7 @@ def test_default_worker_enforces_active_transfer_deadline(tmp_path):
         jt._stream_and_normalize(candidate, operation_dir, lambda: None)
     assert response.closed is True
     assert client.closed is True
-    assert processes[0].kill_calls == 1
+    assert processes == []
     assert not operation_dir.exists()
 
 

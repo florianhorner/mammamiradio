@@ -25,6 +25,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from io import BytesIO
 from pathlib import Path
 from threading import RLock
 from typing import Protocol, TypedDict
@@ -458,14 +459,20 @@ def _raise_if_active_transfer_expired(deadline: float) -> None:
         raise _TransientError("network_timeout")
 
 
-def _raise_if_write_expired(now: float, active_deadline: float, pipe_deadline: float) -> None:
+def _raise_if_write_expired(
+    now: float,
+    active_deadline: float,
+    pipe_deadline: float,
+    *,
+    deadline_code: str = "network_timeout",
+) -> None:
     """Choose the earliest expired deadline; an exact tie belongs to transfer."""
     if now >= active_deadline and active_deadline <= pipe_deadline:
-        raise _TransientError("network_timeout")
+        raise _TransientError(deadline_code)
     if now >= pipe_deadline:
         raise _TransientError("ffmpeg_timeout")
     if now >= active_deadline:
-        raise _TransientError("network_timeout")
+        raise _TransientError(deadline_code)
 
 
 def _write_all_nonblocking(
@@ -473,6 +480,8 @@ def _write_all_nonblocking(
     file_descriptor: int,
     chunk: bytes,
     active_deadline: float,
+    *,
+    deadline_code: str = "network_timeout",
 ) -> None:
     """Write one complete chunk while bounding both transfer and pipe progress."""
     view = memoryview(chunk)
@@ -480,7 +489,7 @@ def _write_all_nonblocking(
     pipe_deadline = _monotonic() + _PIPE_PROGRESS_TIMEOUT_SEC
     while offset < len(view):
         now = _monotonic()
-        _raise_if_write_expired(now, active_deadline, pipe_deadline)
+        _raise_if_write_expired(now, active_deadline, pipe_deadline, deadline_code=deadline_code)
         if process.poll() is not None:
             raise _TransientError("ffmpeg_failed")
         wait_sec = max(
@@ -493,7 +502,7 @@ def _write_all_nonblocking(
         except InterruptedError:
             continue
         now = _monotonic()
-        _raise_if_write_expired(now, active_deadline, pipe_deadline)
+        _raise_if_write_expired(now, active_deadline, pipe_deadline, deadline_code=deadline_code)
         if process.poll() is not None:
             raise _TransientError("ffmpeg_failed")
         try:
@@ -600,6 +609,7 @@ def _stream_and_normalize(
     """Stream one provider response into FFmpeg and publish one normalized file."""
     partial = operation_dir / "normalized.part"
     final = operation_dir / "normalized.mp3"
+    audio_buffer = BytesIO()
     client: httpx.Client | None = None
     response: httpx.Response | None = None
     process: subprocess.Popen[bytes] | None = None
@@ -650,21 +660,55 @@ def _stream_and_normalize(
             str(partial),
         ]
         try:
+            active_deadline = _monotonic() + _active_transfer_timeout_sec(candidate["duration_sec"])
+            client = httpx.Client(timeout=timeout, follow_redirects=False)
+            request = client.build_request("GET", candidate["audio_url"])
+            response = client.send(request, stream=True)
+            _raise_if_active_transfer_expired(active_deadline)
+            if response.status_code != 200:
+                raise _TransientError("audio_fetch_failed")
+            try:
+                content_length = int(response.headers.get("content-length", "0") or "0")
+            except ValueError as exc:
+                raise _CandidateRejectedError("audio_size_invalid") from exc
+            if content_length < 0 or content_length > _MAX_AUDIO_BYTES:
+                raise _CandidateRejectedError("audio_oversize")
+
+            # Keep the bounded response in memory so a paced provider transfer
+            # never occupies shared FFmpeg admission, and never stage raw audio
+            # as a file outside the single normalized artifact.
+            for chunk in response.iter_bytes(64 * 1024):
+                _raise_if_active_transfer_expired(active_deadline)
+                byte_count += len(chunk)
+                if byte_count > _MAX_AUDIO_BYTES:
+                    raise _CandidateRejectedError("audio_oversize")
+                audio_buffer.write(chunk)
+            _raise_if_active_transfer_expired(active_deadline)
+            if byte_count == 0:
+                raise _CandidateRejectedError("audio_empty")
+            audio_buffer.seek(0)
+        except BaseException as exc:
+            primary_error = _classify_worker_error(exc)
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                    response = None
+                except Exception as exc:
+                    remember_cleanup_failure("response_close", exc, "audio_fetch_failed")
+            if client is not None:
+                try:
+                    client.close()
+                    client = None
+                except Exception as exc:
+                    remember_cleanup_failure("client_close", exc, "audio_fetch_failed")
+        if primary_error is not None:
+            raise primary_error
+
+        try:
             with ffmpeg_slot(background=True):
                 try:
-                    active_deadline = _monotonic() + _active_transfer_timeout_sec(candidate["duration_sec"])
-                    client = httpx.Client(timeout=timeout, follow_redirects=False)
-                    request = client.build_request("GET", candidate["audio_url"])
-                    response = client.send(request, stream=True)
                     _raise_if_active_transfer_expired(active_deadline)
-                    if response.status_code != 200:
-                        raise _TransientError("audio_fetch_failed")
-                    try:
-                        content_length = int(response.headers.get("content-length", "0") or "0")
-                    except ValueError as exc:
-                        raise _CandidateRejectedError("audio_size_invalid") from exc
-                    if content_length < 0 or content_length > _MAX_AUDIO_BYTES:
-                        raise _CandidateRejectedError("audio_oversize")
                     process = subprocess.Popen(
                         command,
                         stdin=subprocess.PIPE,
@@ -677,19 +721,17 @@ def _stream_and_normalize(
                     stdin_open = True
                     file_descriptor = process.stdin.fileno()
                     os.set_blocking(file_descriptor, False)
-                    for chunk in response.iter_bytes(64 * 1024):
-                        _raise_if_active_transfer_expired(active_deadline)
-                        byte_count += len(chunk)
-                        if byte_count > _MAX_AUDIO_BYTES:
-                            raise _CandidateRejectedError("audio_oversize")
-                        _write_all_nonblocking(process, file_descriptor, chunk, active_deadline)
-                    _raise_if_active_transfer_expired(active_deadline)
-                    if byte_count == 0:
-                        raise _CandidateRejectedError("audio_empty")
-                    _close_http_resource(response)
-                    response = None
-                    _close_http_resource(client)
-                    client = None
+                    ffmpeg_deadline = _monotonic() + _FFMPEG_FINALIZE_TIMEOUT_SEC
+                    write_deadline = min(active_deadline, ffmpeg_deadline)
+                    write_deadline_code = "network_timeout" if active_deadline <= ffmpeg_deadline else "ffmpeg_timeout"
+                    while chunk := audio_buffer.read(64 * 1024):
+                        _write_all_nonblocking(
+                            process,
+                            file_descriptor,
+                            chunk,
+                            write_deadline,
+                            deadline_code=write_deadline_code,
+                        )
                     process.stdin.close()
                     stdin_open = False
                     on_normalizing()
@@ -743,18 +785,6 @@ def _stream_and_normalize(
                                 process.wait(timeout=_PROCESS_CLEANUP_TIMEOUT_SEC)
                             except Exception as exc:
                                 remember_cleanup_failure("process_reap", exc, "ffmpeg_failed")
-                    if response is not None:
-                        try:
-                            response.close()
-                            response = None
-                        except Exception as exc:
-                            remember_cleanup_failure("response_close", exc, "audio_fetch_failed")
-                    if client is not None:
-                        try:
-                            client.close()
-                            client = None
-                        except Exception as exc:
-                            remember_cleanup_failure("client_close", exc, "audio_fetch_failed")
         except Exception as exc:
             if primary_error is None:
                 failure = _TransientError("ffmpeg_failed")
@@ -777,6 +807,26 @@ def _stream_and_normalize(
             raise
         raise classified from exc
     finally:
+        if stdin_open and process is not None and process.stdin is not None:
+            try:
+                process.stdin.close()
+            except Exception as exc:
+                _debug_cleanup_failure("stdin_close", exc)
+        if process is not None:
+            try:
+                running = process.poll() is None
+            except Exception as exc:
+                _debug_cleanup_failure("process_poll", exc)
+                running = True
+            if running:
+                try:
+                    process.kill()
+                except Exception as exc:
+                    _debug_cleanup_failure("process_kill", exc)
+                try:
+                    process.wait(timeout=_PROCESS_CLEANUP_TIMEOUT_SEC)
+                except Exception as exc:
+                    _debug_cleanup_failure("process_reap", exc)
         if not published:
             try:
                 partial.unlink(missing_ok=True)
