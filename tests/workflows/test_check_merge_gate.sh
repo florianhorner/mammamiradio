@@ -77,7 +77,7 @@ pass "allow_auto_merge=false fails"
 # Case 5b: conversation resolution disabled => FAIL
 run_gate GH_MOCK_PROT_FULL='{"required_conversation_resolution":{"enabled":false}}'
 [ "$RUN_RC" -ne 0 ] || fail "conversation resolution disabled must fail"
-printf '%s' "$RUN_OUT" | grep -q "conversation resolution" || fail "failure should name conversation resolution"
+printf '%s' "$RUN_OUT" | grep -q "required_conversation_resolution" || fail "failure should name conversation resolution"
 pass "required_conversation_resolution=false fails"
 
 # Case 6: required check context missing => FAIL naming it
