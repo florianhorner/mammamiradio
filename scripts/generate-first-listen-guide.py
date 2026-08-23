@@ -56,51 +56,49 @@ GUIDE_CLIPS = (
     GuideClip(
         "welcome",
         (
-            GuideLine("Marco", "Benvenuti. Five small steps, and Mamma Mi Radio is in your room."),
+            GuideLine(
+                "Marco",
+                "Benvenuti! Sono Marco, and this is Mamma Mi Radio, "
+                "your new favourite station, live from that device right there.",
+            ),
             GuideLine(
                 "Giulia",
-                "He means your speaker. Nothing personal and nothing automatic. You stay in charge.",
+                "Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.",
             ),
         ),
         station_sting=True,
     ),
     GuideClip(
-        "speaker",
-        (
-            GuideLine("Marco", "Pick the room. Kitchen, living room, wherever radio belongs."),
-            GuideLine(
-                "Giulia",
-                "We only show speakers Home Assistant already knows. We never choose one or touch the volume.",
-            ),
-        ),
-    ),
-    GuideClip(
         "sound-check",
         (
-            GuideLine("Marco", "We sent the station. If you can hear us, say yes."),
+            GuideLine(
+                "Marco",
+                "We are on! Right now, out of that little speaker in your hand. "
+                "If you can hear me, and you should, say yes.",
+            ),
             GuideLine(
                 "Giulia",
-                "Home Assistant can confirm the request, not the sound in your room. That part is yours.",
+                "The machine knows it pressed play. It cannot hear your room. That part is yours, not his.",
             ),
         ),
     ),
     GuideClip(
         "not-yet",
         (
-            GuideLine("Marco", "No sound? Va bene. We are not blaming the speaker."),
+            GuideLine("Marco", "Niente? Va bene. Nobody is blaming anybody. Certainly not me."),
             GuideLine(
                 "Giulia",
-                "Check mute and volume, then try the same room again. We saved your place.",
+                "Check the mute switch and the volume, then play it again here. We saved your place. Take your time.",
             ),
         ),
     ),
     GuideClip(
         "receipt-recovery",
         (
-            GuideLine("Giulia", "Home Assistant already sent the station."),
+            GuideLine("Giulia", "You already heard us. The station just forgot to write it down. Embarrassing."),
             GuideLine(
                 "Marco",
-                "This only restores the listening check. It will not play us again.",
+                "This only saves the sound check. It does not put me back on air. Tragico.",
             ),
         ),
     ),
@@ -127,10 +125,10 @@ GUIDE_CLIPS = (
     GuideClip(
         "success",
         (
-            GuideLine("Marco", "Siamo in onda! Your first broadcast is live."),
+            GuideLine("Marco", "Siamo in onda! Your first broadcast is live and I was magnificent."),
             GuideLine(
                 "Giulia",
-                "Speaker checked, privacy saved. Mamma Mi Radio is yours now.",
+                "Sound checked, privacy saved. Mamma Mi Radio is yours now. He was adequate.",
             ),
         ),
         station_sting=True,

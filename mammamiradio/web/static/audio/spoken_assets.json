@@ -37,23 +37,11 @@
   "assets": [
     {
       "path": "first_listen/welcome.mp3",
-      "sha256": "b184b5d50c6edf618ae05db60ad5f7cb1e7a60647bfe523b760aef14055147db",
+      "sha256": "1971b4d1bc724bdccb82b90785aea119099003a3c3a5b33188a1edfabd3426a6",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: Benvenuti. Five small steps, and Mamma Mi Radio is in your room. Giulia: He means your speaker. Nothing personal and nothing automatic. You stay in charge.",
-      "duration_seconds": 11.856,
-      "speakers": [
-        "Marco",
-        "Giulia"
-      ]
-    },
-    {
-      "path": "first_listen/speaker.mp3",
-      "sha256": "7d609a45835163b766cb79d83040e3a92a02d060a9f318f8ccad5b43c9a360b3",
-      "kind": "speech",
-      "language": "en",
-      "transcript": "Marco: Pick the room. Kitchen, living room, wherever radio belongs. Giulia: We only show speakers Home Assistant already knows. We never choose one or touch the volume.",
-      "duration_seconds": 10.68,
+      "transcript": "Marco: Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. Giulia: Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.",
+      "duration_seconds": 16.464,
       "speakers": [
         "Marco",
         "Giulia"
@@ -61,11 +49,11 @@
     },
     {
       "path": "first_listen/sound-check.mp3",
-      "sha256": "bbbff207124bee942b8e7a0b511f358e82601607f85888cb7ebae4d5b21cd7d6",
+      "sha256": "c536e915090d28116abe8a8e4773c68af1c71a716902bef3901aac94e18d3696",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: We sent the station. If you can hear us, say yes. Giulia: Home Assistant can confirm the request, not the sound in your room. That part is yours.",
-      "duration_seconds": 9.336,
+      "transcript": "Marco: We are on! Right now, out of that little speaker in your hand. If you can hear me, and you should, say yes. Giulia: The machine knows it pressed play. It cannot hear your room. That part is yours, not his.",
+      "duration_seconds": 13.536,
       "speakers": [
         "Marco",
         "Giulia"
@@ -73,11 +61,11 @@
     },
     {
       "path": "first_listen/not-yet.mp3",
-      "sha256": "a2560cf4a4ad7ed252b33add034de4083fba2145d9c5a0fc93977b4501be17c5",
+      "sha256": "4b1dd8838a00c6a2f38374bcf2df9ebf7d261082a4ca3a6c08aa81b1199995fa",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: No sound? Va bene. We are not blaming the speaker. Giulia: Check mute and volume, then try the same room again. We saved your place.",
-      "duration_seconds": 9.24,
+      "transcript": "Marco: Niente? Va bene. Nobody is blaming anybody. Certainly not me. Giulia: Check the mute switch and the volume, then play it again here. We saved your place. Take your time.",
+      "duration_seconds": 11.592,
       "speakers": [
         "Marco",
         "Giulia"
@@ -85,11 +73,11 @@
     },
     {
       "path": "first_listen/receipt-recovery.mp3",
-      "sha256": "5a3f7b1fa35825acb151b93fd708536792172350f2c1ac1a7f3246b0c9e407f0",
+      "sha256": "7c5baaceebb8c855daec6a00a81bf3469aef6d3283970185387b94179f9b3474",
       "kind": "speech",
       "language": "en",
-      "transcript": "Giulia: Home Assistant already sent the station. Marco: This only restores the listening check. It will not play us again.",
-      "duration_seconds": 6.624,
+      "transcript": "Giulia: You already heard us. The station just forgot to write it down. Embarrassing. Marco: This only saves the sound check. It does not put me back on air. Tragico.",
+      "duration_seconds": 9.84,
       "speakers": [
         "Giulia",
         "Marco"
@@ -97,11 +85,11 @@
     },
     {
       "path": "first_listen/privacy.mp3",
-      "sha256": "224f4452eeda24d382f0c99d3466c8d9ed16db7865b9343fd4843711f85437f7",
+      "sha256": "3565eea7e6138e58cdfc57dc00af52d441991eebc797f657439d4070d3d04004",
       "kind": "speech",
       "language": "en",
       "transcript": "Marco: Give me the weather and I will make it radio. Giulia: Only after you preview the exact details. Keep Home private and we read nothing.",
-      "duration_seconds": 8.664,
+      "duration_seconds": 8.448,
       "speakers": [
         "Marco",
         "Giulia"
@@ -109,11 +97,11 @@
     },
     {
       "path": "first_listen/ai.mp3",
-      "sha256": "3342f2aafbe583693ef814b556ed93dd470299c04ec645a3080c340cd0ebe578",
+      "sha256": "9a0975774b35e5ca14e3532d4746b75ba24f0a68f487363656caec3953aebb4b",
       "kind": "speech",
       "language": "en",
       "transcript": "Marco: Connect an AI provider and the conversations keep changing. Giulia: Optional. The station already works. Saved keys stay hidden, and an empty field changes nothing.",
-      "duration_seconds": 12.336,
+      "duration_seconds": 12.432,
       "speakers": [
         "Marco",
         "Giulia"
@@ -121,11 +109,11 @@
     },
     {
       "path": "first_listen/success.mp3",
-      "sha256": "00ff13f5a7757d67f876a71a2be1231786081de3c403594692efb14f5dcdbf8c",
+      "sha256": "17b85458739898a016a690d51da368eb0b8cf8be66b9dc96b30315c1bc332f55",
       "kind": "speech",
       "language": "en",
-      "transcript": "Marco: Siamo in onda! Your first broadcast is live. Giulia: Speaker checked, privacy saved. Mamma Mi Radio is yours now.",
-      "duration_seconds": 9.024,
+      "transcript": "Marco: Siamo in onda! Your first broadcast is live and I was magnificent. Giulia: Sound checked, privacy saved. Mamma Mi Radio is yours now. He was adequate.",
+      "duration_seconds": 10.68,
       "speakers": [
         "Marco",
         "Giulia"
