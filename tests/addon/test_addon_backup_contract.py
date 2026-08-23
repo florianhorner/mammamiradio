@@ -110,6 +110,14 @@ def test_generated_or_incomplete_artifacts_are_excluded(relative_path: str) -> N
         "cache/downloads/current.part.ready",
         "cache/downloads/current.ytdl.lock",
         "cache/ledger/provenance-2026-07-25.jsonl.tmp.ready",
+        # A kept moment. "Keep this" promises a link that never expires, so
+        # the file behind it has to survive a restore. `cache/*.mp3` does not
+        # match a nested path, so this is included today; pinning it here
+        # keeps the product's strongest durability promise from resting on an
+        # incidental glob. The sidecar carries the title the restored share
+        # page renders, so it is pinned alongside the audio.
+        "cache/keepsakes/abc123def456.mp3",
+        "cache/keepsakes/abc123def456.json",
     ],
 )
 def test_durable_state_and_near_misses_are_included(relative_path: str) -> None:
