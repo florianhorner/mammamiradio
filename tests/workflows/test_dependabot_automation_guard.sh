@@ -12,7 +12,22 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
 contains_dependabot_command() {
-  grep -R -E '@dependabot[[:space:]]+(rebase|recreate)' "$@" >/dev/null 2>&1
+  # Catch both a contiguous command and shell composition such as
+  # `body="@dependabot"; action=rebase; gh pr comment ... --body "$body $action"`.
+  grep -R -E '@dependabot[[:space:]]+(rebase|recreate)' "$@" >/dev/null 2>&1 \
+    && return 0
+
+  while IFS= read -r -d '' file; do
+    grep -Iq . "$file" || continue
+    grep -q '@dependabot' "$file" || continue
+    grep -Eq '(^|[^[:alnum:]_])(rebase|recreate)([^[:alnum:]_]|$)' "$file" \
+      || continue
+    grep -Eq 'gh[[:space:]]+pr[[:space:]]+comment|gh[[:space:]]+api' "$file" \
+      || continue
+    return 0
+  done < <(find "$@" -type f -print0)
+
+  return 1
 }
 
 [ ! -e "$WORKFLOWS_DIR/dependabot-nudge.yml" ] \
@@ -25,8 +40,9 @@ mkdir -p "$TMPDIR_T/.github/workflows" "$TMPDIR_T/scripts"
 printf '%s\n' 'run: bash scripts/renamed-helper.sh' \
   > "$TMPDIR_T/.github/workflows/renamed.yml"
 # shellcheck disable=SC2016  # Fixture must preserve literal runtime variables.
-printf '%s\n' 'NUDGE_BODY="@dependabot rebase"' \
-  'gh pr comment "$pr" --body "$NUDGE_BODY"' \
+printf '%s\n' 'body="@dependabot"' \
+  'action=rebase' \
+  'gh pr comment "$pr" --body "$body $action"' \
   > "$TMPDIR_T/scripts/renamed-helper.sh"
 contains_dependabot_command \
   "$TMPDIR_T/.github/workflows" "$TMPDIR_T/scripts" \
