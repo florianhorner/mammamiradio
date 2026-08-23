@@ -14,10 +14,7 @@ name: preship-evidence
 # own copy of the checker would let a PR doctor the checker and approve itself in the
 # same commit — precisely the class of bypass a server-side gate exists to prevent.
 #
-# Report-only on purpose: it annotates instead of failing, so the baseline of real
-# behavior is observable before anything blocks. Flipping to blocking = fail instead of
-# warn below, plus adding this check to the main ruleset's required contexts — an
-# explicit phase-2 decision, not a default.
+# Report-only on purpose during phase 1 soak — blocking mode fails the job below.
 #
 # Dependabot is skipped: bot PRs have no squad and never will; annotating them weekly
 # is noise with no decision attached.
@@ -31,7 +28,7 @@ permissions:
 
 jobs:
   evidence:
-    name: pre-ship evidence (report-only)
+    name: pre-ship evidence
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -62,11 +59,12 @@ jobs:
           elif git show "$HEAD_SHA:$LEGACY_PATH" > /tmp/preship-evidence.json 2>/dev/null; then
             echo "::warning::Using legacy $LEGACY_PATH — migrate to $V2_PATH via scripts/emit-review-evidence.sh"
           else
-            echo "::warning::No pre-ship evidence on this PR (expected $V2_PATH). Run the review squad, then scripts/emit-review-evidence.sh, and commit the artifact. (Report-only — not blocking yet.)"
-            exit 0
+            echo "::error::No pre-ship evidence on this PR (expected $V2_PATH). Run the review squad, then scripts/emit-review-evidence.sh, and commit the artifact."
+            exit 1
           fi
           if bash scripts/check-preship-evidence.sh /tmp/preship-evidence.json "$HEAD_SHA"; then
             echo "::notice::pre-ship review evidence verified for this PR head."
           else
-            echo "::warning::pre-ship review evidence INVALID for this PR (see log above). Re-run the squad on this branch and re-emit. (Report-only — not blocking yet.)"
+            echo "::error::pre-ship review evidence INVALID for this PR (see log above). Re-run the squad on this branch and re-emit."
+            exit 1
           fi
