@@ -119,8 +119,9 @@ The transient boundary is deliberately narrow:
   Creative Commons URLs are admitted;
 - one provider operation and one app-owned audio artifact may exist across
   fetching, normalization, ready, queued, and playing states;
-- HTTP bytes stream directly into FFmpeg; there is no raw input file or
-  persistent metadata sidecar;
+- HTTP response bytes are bounded in memory before FFmpeg admission and then
+  written through a nonblocking pipe; there is no raw input file or persistent
+  metadata sidecar;
 - the normalized artifact authorizes one playback attempt in the current
   process and is deleted after play, cancellation, disablement, a source
   change, validation failure, shutdown, or startup pruning;
