@@ -2172,7 +2172,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
             </div>
             <div class="library-tools-danger">
-              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
+              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation. Your own music files stay where they are and come back on their own — delete them from the music folder to stop that.">Clear pool</button>
             </div>
           </section>
         </div>
@@ -4541,16 +4541,45 @@ const JAMENDO_ERROR_COPY={
   jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
   jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
   jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
-  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check add-on storage and try again.',
+  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check that the station storage has free space and is writable, then try again.',
 };
+// Covers every code in JAMENDO_FAILURE_CODES (playlist/jamendo_transient.py).
+// test_jamendo_failure_code_contract.py fails if the provider gains a code that
+// has no sentence here. Each line says what happened AND whether the operator
+// must act — a bare reason fragment is a log line, not product copy.
+// Two codes here carry a real operator lever: api_auth_failed (their client ID)
+// and temp_root_invalid (their storage). Everything else ends in "no action
+// needed" or says the station is retrying, so the operator can stop looking.
+// The blocked row adds a third lever of its own, because a state that never
+// recovers unaided cannot be described by any sentence in this table.
+// There is deliberately no "try different music tags" line: jamendo_tags is a
+// radio.toml key with no env override, no add-on option and no admin field, so
+// on the add-on that advice would name a step the reader cannot take.
 function jamendoFailureHint(code){
   return {
-    api_failed:'provider response unavailable',
-    license_rejected:'license did not match the accepted CC BY policy',
-    invalid_url:'provider returned an unusable link',
-    lease_invalid:'prepared audio did not pass admission',
-    late:'preparation finished after its slot',
-    cancelled:'preparation was cancelled after a newer choice',
+    api_auth_failed:"Jamendo isn't accepting the client ID — check it in your Jamendo account and enter it again.",
+    temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
+    api_failed:"Jamendo didn't respond — retrying automatically.",
+    api_malformed:"Jamendo sent a reply the station couldn't read — retrying automatically.",
+    network_timeout:'Jamendo took too long to answer — retrying automatically.',
+    metadata_oversize:"Jamendo's reply was too large to read — retrying automatically.",
+    metadata_invalid:"Jamendo sent song details the station couldn't read — retrying automatically.",
+    metadata_changed:"A song's details changed between checks — this resolves on its own, no action needed.",
+    identity_mismatch:'Jamendo sent back a different song than expected — retrying automatically.',
+    empty_results:"Jamendo isn't returning any usable songs right now — retrying automatically.",
+    license_rejected:"That song's license doesn't qualify — skipping it, no action needed.",
+    duration_rejected:'That song is too short or too long for a break — skipping it, no action needed.',
+    invalid_url:'Jamendo sent a broken link — skipping it, no action needed.',
+    audio_fetch_failed:"The song wouldn't download — retrying automatically.",
+    audio_empty:'The downloaded song was empty — skipping it, no action needed.',
+    audio_oversize:'That song is too large to prepare — skipping it, no action needed.',
+    audio_size_invalid:"The song's download size didn't add up — skipping it, no action needed.",
+    ffmpeg_failed:"That song couldn't be prepared for air — skipping it, no action needed.",
+    ffmpeg_timeout:'Preparing that song took too long — skipping it, no action needed.',
+    ffprobe_failed:"The station couldn't inspect that song's audio — skipping it, no action needed.",
+    lease_invalid:'The prepared track failed a safety check — skipping it, no action needed.',
+    source_revision_invalid:'The music source changed while a song was being prepared — no action needed.',
+    internal_error:'Something went wrong inside the station while preparing a song — retrying automatically.',
   }[code]||'';
 }
 function jamendoPresentation(status){
@@ -4560,27 +4589,73 @@ function jamendoPresentation(status){
   if(!s.enabled||internal==='disabled')return{state:'idle',shape:'○',label:'Jamendo off',detail:'Starter and local music continue.',actions:['setup'],announcement:''};
   if(internal==='needs_config')return{state:'blocked',shape:'✗',label:'Finish Jamendo setup',detail:'Add a client ID and confirm non-commercial use.',actions:['setup'],announcement:'Jamendo setup needed'};
   if(['idle','discovering','fetching','normalizing','queued','playing','consumed'].includes(internal)){
+    // No candidate count here by design. A lifetime total ("823 candidates
+    // skipped") reads as catastrophic, says nothing about whether the attempt
+    // running right now is healthy, and gives the operator nothing to do. The
+    // sentence for THIS attempt's dominant failure does all three jobs.
     let detail='Starter and local music continue.';
-    const rejected=Number(s.rejected_count||0);
-    if(rejected>0){
-      const reason=jamendoFailureHint(s.last_failure_code);
-      detail+=` ${rejected} candidate${rejected===1?'':'s'} skipped${reason?' — '+reason:''}.`;
+    let announcement='Preparing one Jamendo track';
+    const dominantCode=s.dominant_failure_code_this_attempt||s.last_failure_code;
+    if(Number(s.rejected_this_attempt||0)>0&&dominantCode){
+      const reason=jamendoFailureHint(dominantCode);
+      if(reason){
+        detail=reason+' Starter and local music continue.';
+        // The announcement has to change as well, and the dedup key it feeds
+        // must include it — see renderJamendoStatus. Keying on state and label
+        // alone made this line dead: both are constants in this branch.
+        announcement=reason;
+      }
     }
-    return{state:'working',shape:'●',label:'Preparing one Jamendo track',detail,actions:[],announcement:'Preparing one Jamendo track'};
+    return{state:'working',shape:'●',label:'Preparing one Jamendo track',detail,actions:[],announcement};
   }
   if(internal==='ready')return{state:'ready',shape:'✓',label:'One Jamendo track ready',detail:'Single use; deleted after play.',actions:[],announcement:'One Jamendo track ready'};
-  if(internal==='degraded')return{state:'degraded',shape:'△',label:'Jamendo temporarily unavailable',detail:'Starter and local music continue.',actions:['retry'],announcement:'Jamendo temporarily unavailable'};
-  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:'Starter and local music continue.',actions:['retry','off'],announcement:''};
+  if(internal==='degraded'){
+    // Between retries is exactly when the operator reads the card, so this is
+    // the most valuable place to name the reason rather than repeat "temporarily
+    // unavailable" — which says nothing they can act on.
+    const degradedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
+    return{state:'degraded',shape:'△',label:'Jamendo temporarily unavailable',detail:degradedReason?degradedReason+' Starter and local music continue.':'Starter and local music continue.',actions:['retry'],announcement:degradedReason||'Jamendo temporarily unavailable'};
+  }
+  // Blocked is where the two codes an operator can actually fix land:
+  // api_auth_failed and temp_root_invalid are raised as blocking errors, so a
+  // branch that never called jamendoFailureHint left their wording as dead code
+  // and told the operator nothing on the one failure that is theirs to fix.
+  // Blocked schedules no retry, so any sentence promising one is wrong here.
+  // Jamendo's non-retryable contract rejections surface as api_failed, whose
+  // normal copy says "retrying automatically" — that would tell the operator to
+  // wait for something that will never happen.
+  let blockedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
+  // Screens BOTH wrong-on-blocked shapes. source_revision_invalid is raised
+  // as a blocking error and its copy says 'no action needed', which on a row
+  // that will never recover unaided is just as misleading as promising a retry.
+  if(!blockedReason||blockedReason.indexOf('retrying automatically')!==-1||blockedReason.indexOf('no action needed')!==-1){
+    blockedReason="Jamendo turned the station away and isn't trying again — check the Jamendo settings, or turn it off.";
+  }
+  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:blockedReason+' Starter and local music continue.',actions:['retry','off'],announcement:blockedReason};
+}
+// The chip's CSS class stays the machine state; the visible and spoken text
+// does not. "working" / "degraded" / "blocked" are enum values — they tell an
+// operator nothing, which is the same defect as the raw candidate count.
+const MEDIA_SOURCE_STATE_WORDS={
+  ready:'ready',
+  working:'starting up',
+  degraded:'having trouble',
+  blocked:'needs you',
+  idle:'off',
+};
+function mediaSourceStateWord(state){
+  return MEDIA_SOURCE_STATE_WORDS[state]||state;
 }
 function mediaSourceStatusChip(state,shape){
   const chip=document.createElement('span');
+  const word=mediaSourceStateWord(state);
   chip.className='status-chip '+state;
-  chip.setAttribute('aria-label','status: '+state);
+  chip.setAttribute('aria-label','status: '+word);
   const mark=document.createElement('span');
   mark.className='shape';
   mark.setAttribute('aria-hidden','true');
   mark.textContent=shape;
-  chip.append(mark,document.createTextNode(state));
+  chip.append(mark,document.createTextNode(word));
   return chip;
 }
 function renderStarterCatalogStatus(status){
@@ -4611,13 +4686,17 @@ function renderStarterCatalogStatus(status){
 }
 function jamendoStatusChip(presentation){
   const chip=document.createElement('span');
+  // Class keeps the machine state for styling; text and aria-label do not.
+  // This is the chip the Jamendo row actually renders — mediaSourceStatusChip
+  // serves the starter row only, so a fix applied there alone never lands here.
+  const word=mediaSourceStateWord(presentation.state);
   chip.className='status-chip '+presentation.state;
-  chip.setAttribute('aria-label','status: '+presentation.state);
+  chip.setAttribute('aria-label','status: '+word);
   const shape=document.createElement('span');
   shape.className='shape';
   shape.setAttribute('aria-hidden','true');
   shape.textContent=presentation.shape;
-  chip.append(shape,document.createTextNode(presentation.state));
+  chip.append(shape,document.createTextNode(word));
   return chip;
 }
 function jamendoAction(label,handler){
@@ -4647,7 +4726,11 @@ function renderJamendoStatus(status){
     else if(action==='retry')actions.appendChild(jamendoAction('Check again',retryJamendo));
     else if(action==='off')actions.appendChild(jamendoAction('Turn off',turnOffJamendo));
   });
-  const announcementKey=presentation.state+':'+presentation.label;
+  // The reason belongs in the key. State and label are both constant across the
+  // whole working branch, so keying on them alone meant a provider that started
+  // failing mid-attempt never re-announced, and a degraded row kept speaking the
+  // previous retry's reason while showing the current one.
+  const announcementKey=presentation.state+':'+presentation.label+':'+(presentation.announcement||'');
   if(_lastJamendoAnnouncementKey&&announcementKey!==_lastJamendoAnnouncementKey&&presentation.announcement){
     const live=document.getElementById('jamendoStateAnnouncement');
     if(live)live.textContent=presentation.announcement;
@@ -6517,10 +6600,14 @@ async function shufflePlaylist(el){
   await refreshFast();
 }
 async function purgePool(el){
-  if(!confirm('Clear the rotation pool? Every track will be removed from rotation.\nMusic resumes as soon as you add a source.'))return;
+  // Say plainly that this does not touch files on disk. Clearing the pool empties
+  // the rotation in memory; the station then reloads any MP3s it finds in the
+  // music folder on its next pass, so an operator who wants those songs gone was
+  // left thinking the button was broken.
+  if(!confirm('Clear the rotation pool? Every track will be removed from rotation.\nMusic resumes as soon as you add a source.\n\nYour own music files are not deleted. Songs in the music folder come back into rotation on their own — remove the files from that folder if you want them gone for good.'))return;
   flash(el);
   const r=await api('POST','/api/playlist/purge',{});
-  if(r&&r.ok){toast(r.persisted===false?'Rotation pool cleared for now — I could not save that, so it may come back after a restart':'Rotation pool cleared');await refreshFast();}
+  if(r&&r.ok){toast(r.persisted===false?'Rotation pool cleared for now — I could not save that, so it may come back after a restart':'Rotation pool cleared. Your own music files stay put and can return on their own.');await refreshFast();}
   else toast(r?.error||wayOut('empty the rotation'));
 }
 async function enrichPlaylistSource(kind,el){
