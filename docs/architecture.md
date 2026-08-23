@@ -90,20 +90,30 @@ First Listen keeps setup progress separate from runtime authorization and from
 the shared audio queue:
 
 - `core/first_listen.py` stores policy-free facts in
-  `cache/state/first_listen_receipt_v1.json`: the selected speaker, one opaque
-  Home Assistant-accepted attempt, the human audible confirmation bound to that
-  attempt, and completion of the privacy review. The privacy choice itself is
-  stored by the normal configuration path, never in this receipt.
-- Speaker acceptance is compare-and-swap state. Verification must present the
-  current attempt id; a newer playback supersedes older proof. If acceptance
-  reached Home Assistant but the receipt write failed, the app keeps only a
-  process-local recovery handle so **Save this listening check** can retry the
+  `cache/state/first_listen_receipt_v1.json`: the human audible confirmation,
+  the attempt it is bound to, and completion of the privacy review. The privacy
+  choice itself is stored by the normal configuration path, never in this
+  receipt.
+- The receipt carries two proof kinds in one unchanged v1 shape. Required proof
+  is **browser-local**: `record_listener_heard` writes a `listener_*` attempt
+  with no selected entity, where acceptance and hearing are the same moment.
+  The **Home Assistant** kind remains readable for installs that completed
+  onboarding before browser-local proof existed: a selected speaker plus an
+  opaque HA-accepted attempt, with the human confirmation bound to it.
+- Home Assistant acceptance is compare-and-swap state: verification must
+  present the current attempt id, and a newer playback supersedes older proof.
+  A completed listener proof is terminal and is never superseded, so a later
+  Home Assistant playback cannot overwrite it
+  (`record_accepted_playback` returns early on `is_complete_listener_proof`).
+  Browser-local confirmation presents no attempt id at all.
+- If the audible moment happened but the receipt write failed, the app keeps
+  only a process-local recovery handle so **Restore sound check** can retry the
   same fact without replaying audio.
 - Feature-era install origin uses two agreeing witnesses: the owner-only
   `cache/state/first_listen_install_origin_v1.json` sidecar and the private
   `_mammamiradio_first_listen_install_origin_v1` SQLite table. Missing, corrupt,
   or disagreeing evidence projects to `unknown`; only a proven pre-feature
-  install bypasses the speaker/privacy onboarding.
+  install bypasses the listening/privacy onboarding.
 - Origin migration and receipt loading run as background tasks after the
   producer and playback tasks are scheduled. Filesystem work runs off the event
   loop, and a failure leaves setup incomplete/narrow without delaying audio.

@@ -1092,6 +1092,36 @@ def test_first_listen_force_start_decline_never_calls_undefined_setup() -> None:
     assert "renderFirstListen(" not in start
 
 
+def test_first_listen_non_ok_resume_fails_closed_before_opening_the_stream() -> None:
+    """A resume failure other than the force-available 503 must not fall through
+
+    to playback. apiResponse does not throw for 401/403/500, so without an
+    explicit return the stream opens anyway and the server's authored recovery
+    copy is replaced by whatever the audio element reports.
+    """
+    start = _function("startFirstListen", "saveFirstListenAttempt")
+    guard = """      if(document.body.dataset.stopped==='true'){
+        _firstListenUi.dispatch='rejected';
+        firstListenSetStatus('firstListenSpeakerStatus',detail,'blocked');
+        return;
+      }"""
+    # The return is the whole guard. Asserting the branch as one block keeps a
+    # later edit from deleting it while the surrounding lines still match.
+    assert guard in start
+    assert start.index(guard) < start.index("audio.src=`${_base}${FIRST_LISTEN_STREAM}`")
+
+    # /api/resume reports failures as {ok:false, error:"<sentence>"}.
+    # firstListenErrorMessage only reads {detail:{...}} or {error:{code}}, so
+    # using it here silently replaces the server's wording with the generic
+    # fallback. transportFailureCopy is the reader for this endpoint.
+    assert "transportFailureCopy(payload,FIRST_LISTEN_RESUME_FAILURE_COPY)" in start
+    assert "firstListenErrorMessage(payload)" not in start
+
+    # A running station whose marker write failed still has audio on air.
+    # Failing closed there would cost real playback over a bookkeeping error.
+    assert "firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');" in start
+
+
 def test_first_listen_force_start_matches_producer_desk_success_check() -> None:
     """Force Start must confirm success as strictly as the producer desk does,
     not just an HTTP 200 with no payload check."""
@@ -1128,11 +1158,32 @@ def test_guide_resume_playing_event_does_not_replay_a_confirmed_sound_check() ->
     the privacy or success step on every guide clip played afterward.
     """
     playing = _function("firstListenStationPlaying", "initFirstListenStationAudio")
-    assert "const freshStart=_firstListenUi.dispatch==='starting';" in playing
-    guard = playing.index("const freshStart=_firstListenUi.dispatch==='starting';")
-    assert guard < playing.index("_firstListenUi.dispatch='accepted';")
-    assert "if(freshStart)_firstListenUi.verification='awaiting';" in playing
-    assert "if(freshStart)document.getElementById('firstListenVerifyHeading')?.focus();" in playing
+    # The whole body is gated, not individual effects. A resume must not touch
+    # dispatch or repairOpen either: both repair panels host their own guide
+    # clip, so clearing repairOpen when that clip ends hides the only control
+    # that can still persist a failed sound check.
+    assert "if(_firstListenUi.dispatch!=='starting')return;" in playing
+    early_return = playing.index("if(_firstListenUi.dispatch!=='starting')return;")
+    for effect in (
+        "_firstListenUi.selectionDirty=false;",
+        "_firstListenUi.dispatch='accepted';",
+        "_firstListenUi.verification='awaiting';",
+        "_firstListenUi.repairOpen=false;",
+        "firstListenVerifyHeading",
+    ):
+        assert effect in playing, effect
+        # Presence alone does not prevent the regression: a copy of any effect
+        # placed above the gate satisfies a plain `in` check while the ungated
+        # write still wins at runtime.
+        assert playing.count(effect) == 1, effect
+        assert early_return < playing.index(effect), effect
+
+    # The gate only holds because the guide-resume path reaches play() without
+    # claiming a fresh start. If that ever sets dispatch='starting', this
+    # function can no longer tell a resume from a real start.
+    stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
+    assert "stationAudio.play()" in stop_guide
+    assert "dispatch='starting'" not in stop_guide
 
 
 def test_leaving_the_setup_tab_by_any_route_stops_the_station_audio() -> None:

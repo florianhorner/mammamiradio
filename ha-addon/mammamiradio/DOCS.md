@@ -66,9 +66,10 @@ See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen
 ### 5. Make the privacy choice; add AI later
 
 On a fresh install, **Host home context** is omitted from saved add-on options
-and remains off. After the speaker is confirmed, select **Keep private and
-continue** without reading Home state, or select **Show filtered preview**
-before **Let future hosts use this**. The preview is a fresh, detached Home
+and remains off. After you confirm you heard the station on this device,
+select **Keep Home private** without reading Home state, or select **See what
+the hosts would receive** before **Let Marco and Giulia use these details**.
+The preview is a fresh, detached Home
 Assistant read: it is not published into host scripts and is not sent to an AI
 provider. A preview containing only generic daylight is disclosed as
 ambient-only and not meaningful personalization; keeping it private is the

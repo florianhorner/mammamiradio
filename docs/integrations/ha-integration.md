@@ -119,9 +119,11 @@ Assistant. The media-player ownership choice above does not change this route.
 Home Assistant media-source route (`media-source://mammamiradio/live`), not
 browser playback.
 
-After confirming audio, First Listen unlocks the privacy decision. Select
-**Keep private and continue** without reading Home state, or select **Show
-filtered preview** before **Let future hosts use this**. The preview is a fresh,
+The privacy decision is unlocked by the sound check on the current device, not
+by this optional route: playing to a speaker here writes no First Listen
+receipt. In First Listen, select **Keep Home private** without reading Home
+state, or select **See what the hosts would receive** before **Let Marco and
+Giulia use these details**. The preview is a fresh,
 detached read: it does not make the result available to host scripts or send it
 to an AI provider. If Home Assistant offers only generic daylight, First Listen
 discloses it as ambient-only and not meaningful personalization, and recommends

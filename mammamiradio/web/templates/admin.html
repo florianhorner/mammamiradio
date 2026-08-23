@@ -2452,7 +2452,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 <div class="first-listen-head">
                   <span class="first-listen-number" aria-hidden="true">2</span>
                   <h3 class="first-listen-heading" id="firstListenSpeakerHeading" tabindex="-1">Play it on this device</h3>
-                  <span class="status-chip idle" id="firstListenSpeakerChip" aria-label="Speaker status: waiting" hidden>Waiting</span>
+                  <span class="status-chip idle" id="firstListenSpeakerChip" aria-label="Playback status: waiting" hidden>Waiting</span>
                   <div class="first-listen-summary" id="firstListenSpeakerSummary">The station plays right here, on whatever you are reading this on.</div>
                   <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review</button>
                 </div>
@@ -2479,7 +2479,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 <div class="first-listen-body" id="firstListenVerifyBody" role="region" aria-labelledby="firstListenVerifyHeading" hidden aria-hidden="true" inert>
                   <div class="first-listen-current-meta"><strong>Step 3 of 5</strong><span>Next: choose whether the hosts can use Home details</span></div>
                   <h4 class="benefit-heading">Can you hear Marco and Giulia?</h4>
-                  <div class="semantic-visual evidence-line" aria-label="Speaker request and human sound check">
+                  <div class="semantic-visual evidence-line" aria-label="Station playback and human sound check">
                     <div class="evidence-stage"><span class="evidence-icon" aria-hidden="true">✓</span><strong>Sent</strong><span id="firstListenEvidenceSpeaker">This device</span></div>
                     <span class="evidence-arrow" aria-hidden="true">›</span>
                     <div class="evidence-stage pending"><span class="evidence-icon" aria-hidden="true">?</span><strong>Heard?</strong><span>Only you can confirm</span></div>
@@ -3648,6 +3648,7 @@ async function doPurge(el){
 const STOP_FAILURE_COPY="We couldn't pause the station. Give the studio a few seconds, then press Stop again.";
 const RESUME_FAILURE_COPY="We couldn't resume the station. Give the studio a few seconds, then press Start again.";
 const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? The station may be quiet briefly while the studio rebuilds.";
+const FIRST_LISTEN_RESUME_FAILURE_COPY="The station could not start just now. Give it a few seconds, then tap Play the station again.";
 // Stop and Resume answer with the precise reason they refused. Prefer it over
 // the generic line because it names the way out. An assetless Resume may also
 // offer the separately confirmed force-start below; it is never sent implicitly.
@@ -5388,10 +5389,10 @@ function renderFirstListenProgress(){
   if(evidenceSpeaker)evidenceSpeaker.textContent=_firstListenUi.selectedName||'This device';
   if(existingProof){
     firstListenSetChip('firstListenSpeakerChip','ready','Existing setup');
-    if(speakerSummary)speakerSummary.textContent='Your saved speaker stays as it is. You do not need to play the station again.';
+    if(speakerSummary)speakerSummary.textContent='Your saved sound check stays as it is. You do not need to play the station again.';
   }else if(projection.heard){
     firstListenSetChip('firstListenSpeakerChip','ready','Played');
-    if(speakerSummary)speakerSummary.textContent=`${_firstListenUi.selectedName||'Your saved speaker'} is ready for Mamma Mi Radio.`;
+    if(speakerSummary)speakerSummary.textContent=`${_firstListenUi.selectedName||'This device'} is ready for Mamma Mi Radio.`;
   }else if(projection.accepted){
     firstListenSetChip('firstListenSpeakerChip','ready','Sent');
     if(speakerSummary)speakerSummary.textContent='The station is playing on this device. Listen now.';
@@ -5657,20 +5658,21 @@ function stopFirstListenStationAudio(){
   audio.load();
 }
 function firstListenStationPlaying(){
-  // stopFirstListenGuide() resumes this element with play() on every guide
-  // exit, firing this same 'playing' event. Only a genuine start/retest sets
-  // dispatch to 'starting' first, so that alone tells a fresh attempt apart
-  // from a background resume — otherwise an already-confirmed listener gets
-  // knocked back to the sound check and loses focus to its heading.
-  const freshStart=_firstListenUi.dispatch==='starting';
+  // This fires far more often than a new listening attempt. stopFirstListenGuide()
+  // resumes the element with play() on every guide exit, and a live stream re-fires
+  // 'playing' after each rebuffer. Only a genuine start or retest sets dispatch to
+  // 'starting' first, so anything else is a resume and must change nothing: both
+  // repair panels host their own guide clip, and clearing repairOpen when one ends
+  // hides the only control that can still persist a failed sound check.
+  if(_firstListenUi.dispatch!=='starting')return;
   _firstListenUi.selectionDirty=false;
   _firstListenUi.dispatch='accepted';
-  if(freshStart)_firstListenUi.verification='awaiting';
+  _firstListenUi.verification='awaiting';
   _firstListenUi.repairOpen=false;
   _firstListenUi.selectedName=_firstListenUi.selectedName||'this device';
   firstListenSetStatus('firstListenSpeakerStatus','The station is playing on this device. Say whether you hear it.','ready');
   renderFirstListenProgress();
-  if(freshStart)document.getElementById('firstListenVerifyHeading')?.focus();
+  document.getElementById('firstListenVerifyHeading')?.focus();
 }
 function initFirstListenStationAudio(){
   const audio=firstListenStationAudio();
@@ -5725,9 +5727,22 @@ async function startFirstListen(el){
         return;
       }
     }else if(!response.ok){
-      _firstListenUi.dispatch='rejected';
-      firstListenSetStatus('firstListenSpeakerStatus',firstListenErrorMessage(payload),'blocked');
-      return;
+      // /api/resume reports failures as {ok:false, error:"<sentence>"}, not the
+      // {error:{code}} envelope firstListenErrorMessage reads, so that helper
+      // would drop the server's wording and print the generic fallback. Use the
+      // same reader the producer desk uses on this endpoint.
+      const detail=transportFailureCopy(payload,FIRST_LISTEN_RESUME_FAILURE_COPY);
+      // A running station whose marker write failed answers 503 while its audio
+      // is still on air. Refusing there would trade real playback for a
+      // bookkeeping error, so only a station that is genuinely stopped fails
+      // closed; opening the stream for one of those just waits, then yields
+      // silence (#2 INSTANT AUDIO).
+      if(document.body.dataset.stopped==='true'){
+        _firstListenUi.dispatch='rejected';
+        firstListenSetStatus('firstListenSpeakerStatus',detail,'blocked');
+        return;
+      }
+      firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');
     }
     stopFirstListenStationAudio();
     audio.src=`${_base}${FIRST_LISTEN_STREAM}`;
