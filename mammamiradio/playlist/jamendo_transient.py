@@ -521,14 +521,6 @@ def _write_all_nonblocking(
         pipe_deadline = _monotonic() + _PIPE_PROGRESS_TIMEOUT_SEC
 
 
-def _close_http_resource(resource: httpx.Client | httpx.Response) -> None:
-    """Close one explicitly-owned HTTP resource with a stable fetch failure."""
-    try:
-        resource.close()
-    except Exception as exc:
-        raise _TransientError("audio_fetch_failed") from exc
-
-
 def _debug_cleanup_failure(phase: str, error: BaseException) -> None:
     logger.debug("Jamendo worker cleanup failed phase=%s error=%s", phase, type(error).__name__)
 
