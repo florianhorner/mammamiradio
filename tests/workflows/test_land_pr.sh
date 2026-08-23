@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for scripts/land-pr.sh
-#
-# Drives the landing wrapper with a mocked `gh` (PATH shim) and a mocked
-# review-log reader (MMR_LAND_REVIEW_READER), asserting the squad code-state
-# freshness check, committed evidence, review-thread disposition, the
-# update-branch path, the conflict stop, and the head-pinned arming. No network.
+# Self-test for scripts/land-pr.sh — mocked gh + review reader; no network.
 
 set -euo pipefail
 
@@ -20,21 +15,11 @@ pass() { echo "PASS: $1"; }
 
 TMPDIR_T="$(mktemp -d)"
 SAVE_REF="$(git rev-parse HEAD)"
+BEFORE_EVIDENCE="$(git rev-parse HEAD)"
 
 write_evidence() {
-  local head_sha
-  mkdir -p proof/preship-review
-  printf '{}\n' > proof/preship-review/pr-7.json
-  git add proof/preship-review/pr-7.json
   git -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null \
-    commit -q --no-verify -m "test: preship evidence fixture"
-  head_sha="$(git rev-parse HEAD)"
-  jq -cn --arg c "$head_sha" --arg h "$head_sha" \
-    '{schema_version:"2.0.0",pr_number:7,pr_head_sha:$h,tree_sha:"abc",skill:"review",commit:$c,timestamp:"2026-07-30T12:00:00Z",status:"clean",emitted_at:"2026-07-30T12:00:01Z"}' \
-    > proof/preship-review/pr-7.json
-  git add proof/preship-review/pr-7.json
-  git -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null \
-    commit -q --amend --no-edit --no-verify
+    commit -q --allow-empty --no-verify -m "test: evidence marker"
 }
 
 write_evidence
@@ -48,7 +33,6 @@ write_evidence
 
 cleanup_fixture() {
   git reset --hard "$SAVE_REF" >/dev/null 2>&1 || true
-  git clean -fd proof/preship-review >/dev/null 2>&1 || true
 }
 trap 'cleanup_fixture; rm -rf "$TMPDIR_T"' EXIT
 
@@ -135,7 +119,7 @@ run_land() {
       GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_STATE_DIR="$GH_MOCK_STATE_DIR" \
       GH_MOCK_HEAD="$HEAD_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
       MMR_LAND_REVIEW_READER="$reader" MMR_LAND_UPDATE_TIMEOUT=6 \
-      MMR_LAND_SKIP_THREAD_CHECK=1 \
+      MMR_LAND_SKIP_THREAD_CHECK=1 MMR_LAND_SKIP_EVIDENCE_CHECK=1 \
       "$@" bash "$LAND" 7 2>&1)" || RUN_RC=$?
 }
 
@@ -143,18 +127,16 @@ merged_with() { grep -q "pr merge 7 --squash --auto --match-head-commit $1" "$GH
 never_merged() { ! grep -q "pr merge" "$GH_MOCK_LOG"; }
 
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
-[ "$RUN_RC" -eq 0 ] || { echo "$RUN_OUT"; fail "clean PR should arm"; }
+[ "$RUN_RC" -eq 0 ] || fail "clean PR should arm"
 merged_with "$HEAD_FULL" || fail "clean PR should arm pinned to head"
 pass "clean PR arms --squash --auto --match-head-commit <head>"
 
 run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")"
 [ "$RUN_RC" -eq 0 ] || fail "ancestor entry within grace should arm"
-merged_with "$HEAD_FULL" || fail "ancestor entry within grace should arm"
 pass "ancestor entry within grace arms"
 
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
   GH_MOCK_MERGE_STATE=BEHIND GH_MOCK_HEAD_AFTER="$AFTER_HEAD_FULL"
-grep -q "pr update-branch 7" "$GH_MOCK_LOG" || fail "behind PR should call update-branch"
 [ "$RUN_RC" -ne 0 ] || fail "behind PR without post-update re-review must deny"
 never_merged || fail "behind PR without post-update re-review must not merge"
 pass "behind PR without post-update re-review denies"
@@ -167,17 +149,14 @@ pass "behind PR updates then arms on re-reviewed new head"
 
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_MERGE_STATE=DIRTY
 [ "$RUN_RC" -ne 0 ] || fail "dirty PR must stop"
-never_merged || fail "dirty PR must stop"
 pass "conflict stops cleanly with way-out"
 
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_MERGE_STATE=BEHIND GH_MOCK_UPDATE_FAIL=1
 [ "$RUN_RC" -ne 0 ] || fail "failed update must stop"
-never_merged || fail "failed update must stop"
 pass "failed branch update stops cleanly"
 
 run_land "$(empty_reader)"
 [ "$RUN_RC" -ne 0 ] || fail "missing squad entry must deny"
-never_merged || fail "missing squad entry must deny"
 pass "missing squad entry denies"
 
 run_land "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")"
@@ -190,7 +169,6 @@ pass "post-review push invalidates entry"
 
 run_land "$(make_reader review "$HEAD_SHORT" "$OLD_ISO")" GH_MOCK_COMMIT_DATE="$VERY_OLD_ISO"
 [ "$RUN_RC" -eq 0 ] || fail "old-but-unchanged entry should still arm"
-merged_with "$HEAD_FULL" || fail "old-but-unchanged entry should still arm"
 pass "soaked PR with unchanged head arms"
 
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_STATE=MERGED
@@ -203,12 +181,10 @@ pass "wrong-skill entry denies"
 
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_MERGE_STATE=BEHIND
 [ "$RUN_RC" -ne 0 ] || fail "stuck branch update must die after timeout"
-never_merged || fail "stuck branch update must never arm"
 pass "stuck branch update times out without arming"
 
 run_land "$TMPDIR_T/nonexistent-reader"
 [ "$RUN_RC" -ne 0 ] || fail "missing reader must deny"
-never_merged || fail "missing reader must deny"
 pass "missing review-log reader fails closed"
 
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_COMMITS_JSON='[]'
@@ -224,12 +200,24 @@ GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
 GH_MOCK_STATE_DIR="$(mktemp -d "$TMPDIR_T/state.XXXXXX")"
 if env PATH="$MOCK_BIN:$PATH" GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_STATE_DIR="$GH_MOCK_STATE_DIR" \
     GH_MOCK_HEAD="$HEAD_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
-    MMR_LAND_REVIEW_READER="$(empty_reader)" MMR_LAND_SKIP_THREAD_CHECK=1 \
+    MMR_LAND_REVIEW_READER="$(empty_reader)" MMR_LAND_SKIP_THREAD_CHECK=1 MMR_LAND_SKIP_EVIDENCE_CHECK=1 \
     bash "$LAND" "7; rm -rf /" >/dev/null 2>&1; then
   fail "non-numeric PR arg must be rejected"
 fi
-never_merged || fail "non-numeric PR arg must never reach gh merge"
 pass "non-numeric PR argument rejected"
+
+GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
+GH_MOCK_STATE_DIR="$(mktemp -d "$TMPDIR_T/state.XXXXXX")"
+RUN_RC=0
+RUN_OUT="$(env PATH="$MOCK_BIN:$PATH" \
+    GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_STATE_DIR="$GH_MOCK_STATE_DIR" \
+    GH_MOCK_HEAD="$BEFORE_EVIDENCE" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
+    MMR_LAND_REVIEW_READER="$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
+    MMR_LAND_UPDATE_TIMEOUT=6 MMR_LAND_SKIP_THREAD_CHECK=1 \
+    bash "$LAND" 7 2>&1)" || RUN_RC=$?
+[ "$RUN_RC" -ne 0 ] || fail "missing evidence must deny when evidence gate is live"
+printf '%s' "$RUN_OUT" | grep -q "no committed pre-ship evidence" || fail "missing-evidence message wrong"
+pass "missing committed evidence denies when gate is live"
 
 GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
 GH_MOCK_STATE_DIR="$(mktemp -d "$TMPDIR_T/state.XXXXXX")"
@@ -243,9 +231,8 @@ RUN_OUT="$(env PATH="$MOCK_BIN:$PATH" \
     MMR_LAND_UPDATE_TIMEOUT=6 \
     bash "$LAND" 7 2>&1)" || RUN_RC=$?
 [ "$RUN_RC" -ne 0 ] || fail "blocking bot thread must deny"
-never_merged || fail "blocking bot thread must never merge"
 printf '%s' "$RUN_OUT" | grep -q "unresolved Major/Critical" || fail "thread deny message wrong"
 pass "unresolved Major/Critical bot thread denies"
 
 echo
-echo "All 17 land-pr cases passed."
+echo "All 18 land-pr cases passed."

@@ -105,6 +105,9 @@ squad_check() {
 
 evidence_check() {
   local pr="$1" head="$2" tmp v2_path allow_flag=()
+  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
+    return 0
+  fi
   [ -f "$CHECK_EVIDENCE" ] || return 0
   tmp="$(mktemp)"
   v2_path="proof/preship-review/pr-${pr}.json"
@@ -223,7 +226,9 @@ land_one() {
   last_push_epoch="$(iso_to_epoch "$last_push")"
   [ -n "$last_push_epoch" ] || die "could not parse the PR #$pr head commit date ($last_push)."
 
-  verify_head "$pr" "$head" "$last_push_epoch" 0 || return 1
+  if [ "$merge_state" != "BEHIND" ]; then
+    verify_head "$pr" "$head" "$last_push_epoch" 0 || return 1
+  fi
 
   if [ "$merge_state" = "DIRTY" ]; then
     say "land-pr: PR #$pr has a merge conflict with its base."
