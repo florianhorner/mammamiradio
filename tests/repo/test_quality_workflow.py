@@ -27,9 +27,9 @@ def _workflow() -> dict:
     return document
 
 
-def test_quality_workflow_cancels_superseded_pr_runs_only() -> None:
+def test_quality_workflow_cancels_superseded_pr_runs_and_serializes_main() -> None:
     concurrency = _workflow()["concurrency"]
-    assert concurrency["group"] == "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}"
+    assert concurrency["group"] == "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
     assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
 
 

@@ -379,8 +379,10 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   7.x/8.x compatibility canary, not exact add-on package parity. It uses JVS as
   primary and verifies the supported BtbN fallback against GitHub's digest.
   The required `pi-smoke` check always reports; the ARM job itself runs on
-  every `main` push and on PRs that touch audio, scheduling, streamer, or
-  launch-smoke paths.
+  every `main` push and on PRs that touch audio, scheduling, streamer,
+  startup/core configuration, launch-smoke, Python package/runtime/development
+  dependencies, radio/model configuration, the changed-lanes classifier, or
+  the shared Python CI setup.
 - **Explainer guards**: `.github/workflows/explainer.yml` runs the
   `docs/explainer/` test suite (`npm test`), the production build
   (`npm run build`), and the four-scenario funnel end-to-end in real Chromium

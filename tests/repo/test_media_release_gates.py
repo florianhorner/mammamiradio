@@ -83,7 +83,7 @@ def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
 
 
 def test_addon_publish_and_stable_promotion_require_both_image_proof() -> None:
-    """SHA publish happens in build; smoke still waits for the both-image proof.
+    """Publish waits for the full both-image proof before either push.
 
     The job is report-only on missing starter content — see the lane split
     above — and the stable promotion proof in addon-release.yml stays strict:
@@ -92,19 +92,21 @@ def test_addon_publish_and_stable_promotion_require_both_image_proof() -> None:
     build = _read(".github/workflows/addon-build.yml")
     build_image = _job(build, "build")
     build_proof = _job(build, "media-proof")
-    smoke = _job(build, "smoke")
+    publish = _job(build, "push")
     release = _read(".github/workflows/addon-release.yml")
     release_proof = _job(release, "media-proof")
     promote = _job(release, "promote")
 
-    assert "push: true" in build_image
-    assert "docker save --output" not in build_image
+    assert "push: false" in build_image
+    assert "docker save --output" in build_image
     assert "needs: [validate, build]" in build_proof
     assert "--amd64-image" in build_proof and "--aarch64-image" in build_proof
-    assert 'docker pull --platform linux/amd64 "$AMD64_IMAGE"' in build_proof
-    assert "needs: media-proof" in smoke
+    assert "needs: [validate, media-proof]" in publish
+    assert "packages: write" in publish
+    assert 'docker push "$SHA_REF"' in publish
+    assert 'docker push "$SHORT_REF"' in publish
     assert "docker push" not in build_image
-
+    assert "push: true" not in build_image
     assert 'docker pull --platform linux/amd64 "$AMD64_IMAGE"' in release_proof
     assert 'docker pull --platform linux/arm64 "$AARCH64_IMAGE"' in release_proof
     assert "--amd64-image" in release_proof and "--aarch64-image" in release_proof

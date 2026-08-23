@@ -10,7 +10,7 @@ Code change
   → soak on edge
   → chore(release): cut X.Y.Z: bump all three version files, fold both changelogs
   → push/merge to main                                        [cut window opens]
-  → addon-build.yml CI validates, pushes :sha and :<short-sha> from the build job, proves those registry images, then smokes them (NO :X.Y.Z or :latest)
+  → addon-build.yml CI validates + builds :sha and :<short-sha> without publishing, proves both images, then publishes and smokes them (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
   → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, 20-run HA Green evidence, and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs both per-arch :sha images and proves their host-published ports before stable tags exist
@@ -706,7 +706,8 @@ Before merging ANY change that touches addon files:
    absence, and Jamendo transience. While the starter content is absent by
    design, the PR quality lane's direct step, the release-invariants media
    section, the add-on build validate job, the add-on build full media-proof
-   job (so image publish and the edge channel keep flowing), the edge cut, and
+   job (so the proof remains visible while image publish and the edge channel
+   keep flowing), the edge cut, and
    local `make media-check` run their proof report-only (verdict plus a
    missing-content notice, exit 0); the stable promotion media-proof job in
    `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the

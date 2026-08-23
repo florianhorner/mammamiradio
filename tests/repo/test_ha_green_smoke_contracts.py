@@ -48,11 +48,17 @@ def test_pi_smoke_keeps_required_check_name_when_arm_work_is_path_gated() -> Non
     assert jobs["pi-smoke-run"]["runs-on"] == "ubuntu-24.04-arm"
 
 
-def test_pi_smoke_cancels_superseded_pr_runs_only() -> None:
+def test_pi_smoke_cancels_superseded_pr_runs_and_serializes_main() -> None:
     document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
     concurrency = document["concurrency"]
-    assert concurrency["group"] == "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}"
+    assert concurrency["group"] == "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
     assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+
+
+def test_pi_smoke_limits_github_token_to_read_only_contents() -> None:
+    document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+
+    assert document["permissions"] == {"contents": "read"}
 
 
 def test_pi_smoke_btbn_fallback_tracks_supported_assets_and_verifies_digest() -> None:

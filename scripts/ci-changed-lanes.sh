@@ -52,10 +52,13 @@ lane() {
   fi
 }
 
-browser="$(lane '^(mammamiradio/web/|tests/web/test_admin_browser_smoke\.py|tests/web/test_first_listen_browser_smoke\.py|tests/web/test_player_smoke_contract\.py|scripts/player-smoke\.|\.playwright-cli-version$|\.github/workflows/quality\.yml$|\.github/actions/)')"
-media="$(lane '^(mammamiradio/assets/|proof/media/|scripts/media-proof\.py|tests/media/)')"
-workflows="$(lane '^(\.github/|scripts/|tests/workflows/)')"
-audio="$(lane '^(mammamiradio/audio/|tests/audio/|scripts/ha-green-launch-smoke\.py|mammamiradio/scheduling/|mammamiradio/web/streamer\.py|\.github/workflows/pi-smoke\.yml$)')"
+# Optional lanes must include their own workflow plus every input whose changes
+# can invalidate the lane-specific proof. The required aggregators accept a
+# skipped optional job, so an omitted dependency would otherwise false-green.
+browser="$(lane '^(mammamiradio/web/|tests/web/test_admin_browser_smoke\.py|tests/web/test_first_listen_browser_smoke\.py|tests/web/test_player_smoke_contract\.py|scripts/player-smoke\.|scripts/ci-changed-lanes\.sh$|\.playwright-cli-version$|pyproject\.toml$|requirements\.txt$|requirements-dev\.txt$|\.github/workflows/quality\.yml$|\.github/actions/setup-python-ci/)')"
+media="$(lane '^(mammamiradio/assets/|mammamiradio/media/|proof/media/|pyproject\.toml$|requirements\.txt$|requirements-dev\.txt$|scripts/media-proof\.py$|scripts/starter-catalog\.py$|scripts/validate-starter-media\.py$|tests/media/|ha-addon/mammamiradio/Dockerfile$|scripts/ci-changed-lanes\.sh$|\.github/workflows/quality\.yml$|\.github/actions/setup-python-ci/)')"
+workflows="$(lane '^(\.github/|ha-addon/|scripts/|tests/workflows/)')"
+audio="$(lane '^(mammamiradio/audio/|tests/audio/|scripts/ha-green-launch-smoke\.py|mammamiradio/scheduling/|mammamiradio/web/streamer\.py|mammamiradio/main\.py$|mammamiradio/core/|pyproject\.toml$|requirements\.txt$|requirements-dev\.txt$|radio\.toml$|model_registry\.toml$|scripts/ci-changed-lanes\.sh$|\.github/workflows/pi-smoke\.yml$|\.github/actions/setup-python-ci/)')"
 
 {
   echo "browser=$browser"
