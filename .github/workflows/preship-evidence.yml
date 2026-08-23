@@ -5,8 +5,9 @@ name: preship-evidence
 # The local enforcement (scripts/hooks/require-preship-squad.sh) is a Claude Code
 # PreToolUse hook — Codex has no hook layer, so ~60% of sessions could open PRs with no
 # squad check at all. This workflow closes that gap server-side by verifying the
-# committed evidence artifact (proof/preship-review.json, written by
-# scripts/emit-review-evidence.sh).
+# committed evidence artifact (proof/preship-review/pr-<n>.json for schema v2, or the
+# legacy proof/preship-review.json during migration), written by
+# scripts/emit-review-evidence.sh.
 #
 # Anti-neutering (same pattern as pr-body-lint.yml): the CHECKER runs from the BASE ref,
 # and only the evidence FILE is read from the PR head via `git show`. Running the head's
@@ -45,6 +46,7 @@ jobs:
       - name: Check pre-ship review evidence
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ ! -f scripts/check-preship-evidence.sh ]; then
             echo "scripts/check-preship-evidence.sh not present on base ref — skipping (activates once merged to base)."
@@ -53,8 +55,14 @@ jobs:
           # Bring the PR head's objects into this base-ref clone, then read ONLY the
           # evidence file from it. The head's scripts are never executed.
           git fetch --no-tags origin "$HEAD_SHA"
-          if ! git show "$HEAD_SHA:proof/preship-review.json" > /tmp/preship-evidence.json 2>/dev/null; then
-            echo "::warning::No proof/preship-review.json on this PR. Run the review squad, then scripts/emit-review-evidence.sh, and commit the artifact. (Report-only — not blocking yet.)"
+          V2_PATH="proof/preship-review/pr-${PR_NUMBER}.json"
+          LEGACY_PATH="proof/preship-review.json"
+          if git show "$HEAD_SHA:$V2_PATH" > /tmp/preship-evidence.json 2>/dev/null; then
+            echo "Using schema v2 evidence at $V2_PATH"
+          elif git show "$HEAD_SHA:$LEGACY_PATH" > /tmp/preship-evidence.json 2>/dev/null; then
+            echo "::warning::Using legacy $LEGACY_PATH — migrate to $V2_PATH via scripts/emit-review-evidence.sh"
+          else
+            echo "::warning::No pre-ship evidence on this PR (expected $V2_PATH). Run the review squad, then scripts/emit-review-evidence.sh, and commit the artifact. (Report-only — not blocking yet.)"
             exit 0
           fi
           if bash scripts/check-preship-evidence.sh /tmp/preship-evidence.json "$HEAD_SHA"; then

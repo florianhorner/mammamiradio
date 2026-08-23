@@ -22,9 +22,10 @@ This file supplements the global instructions for the `mammamiradio` repository.
   `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
 - Before opening any PR (ANY runtime — Claude, Codex, Cursor): run the pre-ship
   review squad, then `scripts/emit-review-evidence.sh`, and commit
-  `proof/preship-review.json`. CI (`preship-evidence.yml`) verifies it against the
-  PR head, report-only. The Claude-side hook cannot fire in other runtimes; the
-  committed artifact is what makes the squad auditable everywhere.
+  `proof/preship-review/pr-<number>.json` (schema v2). CI (`preship-evidence.yml`)
+  verifies it against the PR head, report-only. Legacy `proof/preship-review.json`
+  is accepted with a migration warning. Invalidity on `main` after squash is
+  expected — enforcement is at the PR boundary, not post-merge ancestry.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, present real alternatives and their trade-offs, then

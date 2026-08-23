@@ -33,11 +33,22 @@ git -C "$FIX" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commi
 HEAD_SHA="$(git -C "$FIX" rev-parse --short=7 HEAD)"
 ANC_SHA="$(git -C "$FIX" rev-parse --short=7 HEAD~1)"
 
-evidence() { # <commit> [skill] — write a syntactically valid artifact into the fixture
+evidence() { # <commit> [skill] — write a syntactically valid v1 artifact into the fixture
   mkdir -p "$FIX/proof"
   jq -cn --arg c "$1" --arg s "${2:-review}" \
     '{schema_version:"1.0.0",skill:$s,commit:$c,timestamp:"2026-07-30T12:00:00Z",status:"clean",emitted_at:"2026-07-30T12:00:01Z"}' \
     > "$FIX/proof/preship-review.json"
+}
+
+evidence_v2() { # <commit> [status] [skill] — schema v2 per-PR artifact
+  local head_sha status skill
+  head_sha="$(git -C "$FIX" rev-parse HEAD)"
+  status="${2:-clean}"
+  skill="${3:-review}"
+  mkdir -p "$FIX/proof/preship-review"
+  jq -cn --arg c "$1" --arg h "$head_sha" --arg s "$skill" --arg st "$status" \
+    '{schema_version:"2.0.0",pr_number:42,pr_head_sha:$h,tree_sha:"abc",skill:$s,commit:$c,timestamp:"2026-07-30T12:00:00Z",status:$st,emitted_at:"2026-07-30T12:00:01Z"}' \
+    > "$FIX/proof/preship-review/pr-42.json"
 }
 
 run_check() { (cd "$FIX" && bash "$CHECK" proof/preship-review.json HEAD); }
@@ -115,6 +126,41 @@ evidence "$HEAD_SHA" "adversarial-review"
 run_check >/dev/null || fail "adversarial-review evidence must pass"
 pass "adversarial-review skill accepted"
 
+# 8e. issues_open status fails — landing must not proceed with open findings.
+evidence_v2 "$HEAD_SHA" "issues_open"
+if (cd "$FIX" && bash "$CHECK" proof/preship-review/pr-42.json HEAD 2>"$TMP/err"); then
+  fail "issues_open status must fail"
+fi
+grep -q "issues_open" "$TMP/err" || fail "issues_open message wrong"
+pass "issues_open status rejected"
+
+# 8f. issues_found fails unless explicitly allowed.
+evidence_v2 "$HEAD_SHA" "issues_found"
+if (cd "$FIX" && bash "$CHECK" proof/preship-review/pr-42.json HEAD 2>"$TMP/err"); then
+  fail "issues_found must fail without --allow-issues-found"
+fi
+grep -q "issues_found" "$TMP/err" || fail "issues_found message wrong"
+(cd "$FIX" && bash "$CHECK" --allow-issues-found proof/preship-review/pr-42.json HEAD) >/dev/null \
+  || fail "issues_found must pass with --allow-issues-found"
+pass "issues_found gated; --allow-issues-found accepts"
+
+# 8g. Schema v2 happy path: pr_head_sha matches HEAD.
+evidence_v2 "$HEAD_SHA" "clean"
+(cd "$FIX" && bash "$CHECK" proof/preship-review/pr-42.json HEAD) >/dev/null \
+  || fail "v2 evidence at HEAD must pass"
+pass "schema v2 evidence at HEAD accepted"
+
+# 8h. Schema v2 rejects pr_head_sha mismatch.
+evidence_v2 "$HEAD_SHA" "clean"
+jq '.pr_head_sha = "0000000000000000000000000000000000000001"' \
+  "$FIX/proof/preship-review/pr-42.json" > "$TMP/v2.json"
+mv "$TMP/v2.json" "$FIX/proof/preship-review/pr-42.json"
+if (cd "$FIX" && bash "$CHECK" proof/preship-review/pr-42.json HEAD 2>"$TMP/err"); then
+  fail "v2 pr_head_sha mismatch must fail"
+fi
+grep -q "does not match target" "$TMP/err" || fail "pr_head mismatch message wrong"
+pass "schema v2 pr_head_sha mismatch rejected"
+
 # 8d. Empty target must fail loud, not silently mis-scope to HEAD.
 evidence "$HEAD_SHA"
 if (cd "$FIX" && bash "$CHECK" proof/preship-review.json "" 2>"$TMP/err"); then
@@ -138,7 +184,7 @@ mkdir -p "$LEDGER" "$OTHER"
 
 # 9. Emitter refuses when the ledger root is missing entirely (the most likely real-world
 #    path: a machine or CI runner with no ~/.gstack at all).
-if (cd "$FIX" && GSTACK_HOME="$TMP/nonexistent" bash "$EMIT" 2>"$TMP/err"); then
+if (cd "$FIX" && GSTACK_HOME="$TMP/nonexistent" PR_NUMBER=42 bash "$EMIT" 2>"$TMP/err"); then
   fail "emitter must refuse when the ledger root is missing"
 fi
 grep -q "no gstack ledger found" "$TMP/err" || fail "missing-ledger-root message wrong"
@@ -147,7 +193,7 @@ pass "missing ledger root rejected with problem/cause/fix"
 # 9b. Emitter refuses when no qualifying entry exists (wrong skill + sentinel commit only).
 jq -cn '{skill:"ship",commit:"'"$HEAD_SHA"'"}' > "$LEDGER/b-reviews.jsonl"
 jq -cn '{skill:"review",commit:"uncommitted"}' >> "$LEDGER/b-reviews.jsonl"
-if (cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" 2>"$TMP/err"); then
+if (cd "$FIX" && GSTACK_HOME="$TMP/gstack" PR_NUMBER=42 bash "$EMIT" 2>"$TMP/err"); then
   fail "emitter must refuse with no qualifying entry"
 fi
 grep -q "no review evidence in the ledger" "$TMP/err" || fail "emitter no-entry message wrong"
@@ -160,11 +206,11 @@ LONG_HEAD="$(git -C "$FIX" rev-parse HEAD)"
 jq -cn --arg c "$LONG_HEAD" \
   '{skill:"review",commit:$c,timestamp:"2026-07-30T12:00:00Z",status:"clean"}' \
   > "$OTHER/b-reviews.jsonl"
-rm -f "$FIX/proof/preship-review.json"
-if (cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" 2>"$TMP/err"); then
+rm -f "$FIX/proof/preship-review/pr-42.json"
+if (cd "$FIX" && GSTACK_HOME="$TMP/gstack" PR_NUMBER=42 bash "$EMIT" 2>"$TMP/err"); then
   fail "another project's review must not satisfy this repo's gate"
 fi
-[ ! -f "$FIX/proof/preship-review.json" ] || fail "cross-project entry must not produce an artifact"
+[ ! -f "$FIX/proof/preship-review/pr-42.json" ] || fail "cross-project entry must not produce an artifact"
 pass "cross-project ledger entries are ignored (scoped to *-repo)"
 
 # 10b. Emitter picks the NEWEST qualifying entry (both are ancestors — sort order is the
@@ -181,11 +227,13 @@ LONG_ANC="$(git -C "$FIX" rev-parse HEAD~1)"
   jq -cn --arg c "$SIDE_SHA" \
     '{skill:"review",commit:$c,timestamp:"2026-07-30T13:00:00Z",status:"clean"}'
 } >> "$LEDGER/b-reviews.jsonl"
-rm -f "$FIX/proof/preship-review.json"
-(cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" >/dev/null) || fail "emitter happy path failed"
-got="$(jq -r '.commit' "$FIX/proof/preship-review.json")"
+rm -f "$FIX/proof/preship-review/pr-42.json"
+(cd "$FIX" && GSTACK_HOME="$TMP/gstack" PR_NUMBER=42 bash "$EMIT" >/dev/null) || fail "emitter happy path failed"
+got="$(jq -r '.commit' "$FIX/proof/preship-review/pr-42.json")"
 [ "$got" = "$LONG_HEAD" ] || fail "emitter must pick the newest ancestor and pin the FULL resolved SHA (got '$got', want '$LONG_HEAD')"
-run_check >/dev/null || fail "checker must accept the emitter's own output"
+schema="$(jq -r '.schema_version' "$FIX/proof/preship-review/pr-42.json")"
+[ "$schema" = "2.0.0" ] || fail "emitter must write schema v2 (got '$schema')"
+(cd "$FIX" && bash "$CHECK" proof/preship-review/pr-42.json HEAD) >/dev/null || fail "checker must accept the emitter's own output"
 pass "newest qualifying entry wins, full SHA pinned, non-ancestors skipped, checker round-trip"
 
 # 11. Corrupt ledger lines — single-line torn JSON AND the legacy multi-line
@@ -194,9 +242,9 @@ pass "newest qualifying entry wins, full SHA pinned, non-ancestors skipped, chec
 printf '{"torn": tru\n' >> "$LEDGER/b-reviews.jsonl"
 printf '{\n  "skill": "review",\n  "commit": "%s",\n  "timestamp": "2026-07-30T23:00:00Z"\n}\n' \
   "$LONG_ANC" >> "$LEDGER/b-reviews.jsonl"
-rm -f "$FIX/proof/preship-review.json"
-(cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" >/dev/null) || fail "corrupt ledger lines must not be fatal"
-got="$(jq -r '.commit' "$FIX/proof/preship-review.json")"
+rm -f "$FIX/proof/preship-review/pr-42.json"
+(cd "$FIX" && GSTACK_HOME="$TMP/gstack" PR_NUMBER=42 bash "$EMIT" >/dev/null) || fail "corrupt ledger lines must not be fatal"
+got="$(jq -r '.commit' "$FIX/proof/preship-review/pr-42.json")"
 [ "$got" = "$LONG_HEAD" ] || fail "corrupt lines must not change the selected commit (got '$got')"
 pass "torn and pretty-printed ledger lines skipped without changing selection"
 

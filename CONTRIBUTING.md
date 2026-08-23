@@ -290,10 +290,12 @@ chosen receipt; use it only to correct the same review, never to start a new
 audit history.
 
 Two proof/ conventions coexist, on purpose: append-only dated receipts like the
-one above (audit history — never overwritten), and fixed-name current-state
-files that ARE overwritten each run (`proof/preship-review.json`,
-`proof/checks.txt`, `proof/review-findings.json`) where git history is the
-audit trail. New proof artifacts should say which convention they follow.
+one above (audit history — never overwritten), and per-PR or fixed-name current-state
+files (`proof/preship-review/pr-<n>.json` for pre-ship squad evidence; legacy
+`proof/preship-review.json` during migration; `proof/checks.txt`,
+`proof/review-findings.json`) where git history is the audit trail. Pre-ship evidence
+is validated at the PR head — it is not required to remain ancestry-valid on `main`
+after squash merge. New proof artifacts should say which convention they follow.
 
 The redacted tracked proof stores the candidate ID and name, selected profile,
 text and audio hashes, provider result, duration, approval status, and human

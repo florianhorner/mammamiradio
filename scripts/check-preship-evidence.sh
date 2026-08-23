@@ -6,25 +6,41 @@
 # there), so CI verifies proof/preship-review.json instead — written by
 # scripts/emit-review-evidence.sh after the squad runs.
 #
-# Checks: file exists, parses, skill is review/adversarial-review, and the pinned commit
-# is the target head or an ancestor of it (walking ancestry is what survives
-# rebase/amend/squash — the reason the artifact has a fixed name and an internal commit
-# field instead of a SHA-named filename).
+# Schema v1 (legacy): proof/preship-review.json — commit must be ancestor of target.
+# Schema v2 (current): proof/preship-review/pr-<n>.json — pr_head_sha must equal target;
+#   commit must still be ancestor of pr_head_sha (reviewed state contained in head).
 #
 # NO freshness window here, deliberately: the local hook's ±2h window exists because it
 # reads a mutable laptop ledger. A committed artifact is immutable at a commit; wall-clock
 # age is meaningless for it, and a window would fail every PR reviewed more than two
 # hours before opening.
 #
-# Honest scope, same words as land-pr.sh: this is a guard for tired humans and parallel
-# agents, not a security boundary. The agent that would skip the squad also writes the
-# evidence. What this changes: skipping the squad from ANY runtime now requires
-# fabricating a diffable, commit-pinned artifact instead of being silently invisible.
-#
-# Usage: scripts/check-preship-evidence.sh [evidence-file] [target-head]
-#   evidence-file  default proof/preship-review.json
-#   target-head    default HEAD (CI passes the PR head SHA)
+# Usage: scripts/check-preship-evidence.sh [--allow-issues-found] [evidence-file] [target-head]
+#   --allow-issues-found  accept status=issues_found (land-pr uses this only with opt-in)
+#   evidence-file         default proof/preship-review.json
+#   target-head           default HEAD (CI passes the PR head SHA)
 set -euo pipefail
+
+ALLOW_ISSUES_FOUND=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --allow-issues-found)
+      ALLOW_ISSUES_FOUND=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "check-preship-evidence: unknown option: $1" >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 FILE="${1:-proof/preship-review.json}"
 TARGET="${2-HEAD}"
@@ -41,7 +57,7 @@ command -v jq >/dev/null 2>&1 || fail "jq not found" "install jq"
   "pass an explicit head SHA (an empty second argument would silently mis-scope to HEAD)"
 
 [ -f "$FILE" ] || fail "no evidence artifact at $FILE" \
-  "run the pre-ship review squad, then scripts/emit-review-evidence.sh, and commit the file"
+  "run the pre-ship review squad, then scripts/emit-review-evidence.sh, and commit the artifact"
 
 jq empty "$FILE" 2>/dev/null || fail "$FILE is not valid JSON" \
   "re-run scripts/emit-review-evidence.sh — do not hand-edit the artifact"
@@ -64,9 +80,6 @@ case "$commit" in
       "the squad must run on committed work; commit first, review, then emit" ;;
 esac
 
-# Hex object ids only. Without this, a symbolic rev like HEAD, @, a branch or a tag in
-# the artifact resolves fresh on EVERY pr head and passes forever — defeating the
-# commit-pinned guarantee the whole design rests on (adversarial-review finding).
 printf '%s' "$commit" | grep -Eq '^[0-9a-fA-F]{7,40}$' \
   || fail "evidence commit '$commit' is not a commit SHA" \
     "the artifact must pin a hex object id; re-run scripts/emit-review-evidence.sh"
@@ -75,9 +88,52 @@ git rev-parse --verify --quiet "${commit}^{commit}" >/dev/null \
   || fail "commit $commit is not in this repository's history" \
     "CI needs full history (fetch-depth: 0); locally, fetch before checking"
 
-# --is-ancestor is true for equality too, so head == reviewed commit passes.
-git merge-base --is-ancestor "$commit" "$TARGET" \
-  || fail "reviewed commit $commit is not an ancestor of $(git rev-parse --short "$TARGET")" \
-    "the evidence is from another branch or a superseded state — re-run the squad on this branch and re-emit"
+schema_version="$(jq -r '.schema_version // "1.0.0"' "$FILE")"
+target_full="$(git rev-parse "$TARGET")"
 
-echo "check-preship-evidence: OK — $skill @ $commit is an ancestor of $(git rev-parse --short "$TARGET")"
+case "$schema_version" in
+  2.0.0)
+    pr_head="$(jq -r '.pr_head_sha // ""' "$FILE")"
+    pr_number="$(jq -r '.pr_number // ""' "$FILE")"
+    printf '%s' "$pr_head" | grep -Eq '^[0-9a-fA-F]{40}$' \
+      || fail "pr_head_sha '$pr_head' is not a full commit SHA" \
+        "re-run scripts/emit-review-evidence.sh on the PR branch"
+    case "$pr_number" in
+      '' | null | *[!0-9]*)
+        fail "pr_number '$pr_number' is not a positive integer" \
+          "re-run scripts/emit-review-evidence.sh with an open PR"
+        ;;
+    esac
+    [ "$pr_head" = "$target_full" ] \
+      || fail "pr_head_sha $(git rev-parse --short "$pr_head") does not match target $(git rev-parse --short "$target_full")" \
+        "re-run the squad on this PR head and re-emit evidence"
+    git merge-base --is-ancestor "$commit" "$pr_head" \
+      || fail "reviewed commit $commit is not an ancestor of pinned pr_head_sha" \
+        "re-run the squad on this branch and re-emit"
+    ;;
+  *)
+    git merge-base --is-ancestor "$commit" "$TARGET" \
+      || fail "reviewed commit $commit is not an ancestor of $(git rev-parse --short "$TARGET")" \
+        "the evidence is from another branch or a superseded state — re-run the squad on this branch and re-emit"
+    ;;
+esac
+
+review_status="$(jq -r '.status // ""' "$FILE")"
+case "$review_status" in
+  issues_open)
+    fail "evidence status is issues_open" \
+      "resolve open review findings, re-run the squad, and re-emit before landing"
+    ;;
+  issues_found)
+    [ "$ALLOW_ISSUES_FOUND" -eq 1 ] || fail "evidence status is issues_found" \
+      "re-run the squad until clean, or land with explicit operator acknowledgment (MMR_LAND_ALLOW_ISSUES_FOUND=1)"
+    ;;
+  clean | "")
+    ;;
+  *)
+    fail "evidence status '$review_status' is not recognized" \
+      "re-run scripts/emit-review-evidence.sh after a squad review"
+    ;;
+esac
+
+echo "check-preship-evidence: OK — $skill @ $commit for $(git rev-parse --short "$target_full") (schema $schema_version, status=${review_status:-clean})"

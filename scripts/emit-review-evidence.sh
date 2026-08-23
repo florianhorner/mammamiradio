@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# emit-review-evidence.sh — write proof/preship-review.json from the local gstack ledger.
+# emit-review-evidence.sh — write per-PR pre-ship review evidence from the gstack ledger.
 #
 # Runtime-independent half of the pre-ship evidence gate. The Claude PreToolUse hook
 # (scripts/hooks/require-preship-squad.sh) cannot fire in Codex — ~/.codex/config.toml has
 # no hook layer at all — so CI needs evidence that travels WITH the PR. This script finds
 # the newest review/adversarial-review ledger entry FOR THIS REPO whose commit is HEAD or
-# an ancestor of HEAD and pins it into a committed, fixed-name artifact.
+# an ancestor of HEAD and pins it into proof/preship-review/pr-<number>.json (schema v2).
 #
-# Fixed name on purpose: naming the file after HEAD cannot work, because committing the
-# file changes HEAD (and rebase/amend/squash move it again). The reviewed commit is an
-# internal field instead, and the CI checker walks ancestry. Fixed-name + overwrite also
-# matches the existing proof/ scratch convention (proof/checks.txt, review-findings.json)
-# rather than the append-only receipt convention (see CONTRIBUTING.md).
+# Per-PR paths avoid merge conflicts when parallel branches each run /ship. The reviewed
+# commit and PR head are internal fields; CI checks pr_head_sha against the PR head at
+# land time. Invalidity on main after squash is expected — enforcement is at the PR boundary.
+#
+# Legacy proof/preship-review.json (schema v1) is no longer written. CI still accepts it
+# with a migration warning during the transition window.
 #
 # Two deliberate hardenings, both from adversarial review:
 #   - The ledger scan is SCOPED to this repo's project dirs. An unscoped scan across all
@@ -25,7 +26,8 @@
 # unversioned third-party binary (see retro/docs/gate-design-comparison.md).
 #
 # Usage: scripts/emit-review-evidence.sh          (run after the pre-ship review squad)
-# Honors $GSTACK_HOME (default ~/.gstack). Exits 1 with problem/cause/fix if no
+# Honors $GSTACK_HOME (default ~/.gstack) and optional $PR_NUMBER (else gh pr view).
+# Requires an open PR for the current branch. Exits 1 with problem/cause/fix if no
 # qualifying entry exists.
 set -euo pipefail
 
@@ -43,12 +45,17 @@ from datetime import datetime, timezone
 ALLOWED_SKILLS = {"review", "adversarial-review"}
 COMMIT_SENTINELS = {"uncommitted", "unknown", "pending"}
 LEDGER_ROOT = os.path.join(os.environ.get("GSTACK_HOME", os.path.expanduser("~/.gstack")), "projects")
-OUT = os.path.join("proof", "preship-review.json")
+OUT_DIR = os.path.join("proof", "preship-review")
 
 
 def die(problem, cause, fix):
     print(f"emit-review-evidence: {problem}\n  cause: {cause}\n  fix:   {fix}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def gh(*args):
+    res = subprocess.run(["gh", *args], capture_output=True, text=True)
+    return res.returncode, res.stdout.strip()
 
 
 def git(*args):
@@ -71,6 +78,27 @@ def parse_ts(value):
 rc, head = git("rev-parse", "HEAD")
 if rc != 0:
     die("not a git repository", "git rev-parse HEAD failed", "run from inside the repo")
+
+pr_number = os.environ.get("PR_NUMBER", "").strip()
+if not pr_number:
+    rc, pr_json = gh("pr", "view", "--json", "number", "-q", ".number")
+    if rc != 0 or not pr_json:
+        die(
+            "no open PR for this branch",
+            "gh pr view returned no PR number (branch may not be pushed or PR not opened)",
+            "open a PR first, or set PR_NUMBER explicitly",
+        )
+    pr_number = pr_json.strip()
+if not pr_number.isdigit() or int(pr_number) < 1:
+    die(
+        f"invalid PR_NUMBER '{pr_number}'",
+        "PR_NUMBER must be a positive integer",
+        "export PR_NUMBER=<n> or open a PR on this branch",
+    )
+
+rc, tree_sha = git("rev-parse", "HEAD^{tree}")
+if rc != 0 or not tree_sha:
+    die("could not resolve HEAD tree", "git rev-parse HEAD^{tree} failed", "commit your work first")
 
 # Repo identity for ledger scoping: the remote URL's basename (else the toplevel dirname).
 # A qualifying project dir is exactly `<repo>` or `*-<repo>` (gstack slugs are
@@ -154,18 +182,25 @@ for when, commit, entry in candidates:
     rc, _ = git("merge-base", "--is-ancestor", resolved, "HEAD")
     if rc != 0:
         continue
-    os.makedirs("proof", exist_ok=True)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out_path = os.path.join(OUT_DIR, f"pr-{pr_number}.json")
     evidence = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
+        "pr_number": int(pr_number),
+        "pr_head_sha": head,
+        "tree_sha": tree_sha,
         "skill": entry.get("skill"),
         "commit": resolved,
         "timestamp": entry.get("timestamp"),
-        "status": entry.get("status"),
+        "status": entry.get("status") or "clean",
         "emitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    with open(OUT, "w") as handle:
+    with open(out_path, "w") as handle:
         handle.write(json.dumps(evidence, separators=(",", ":")) + "\n")
-    print(f"emit-review-evidence: wrote {OUT} (skill={evidence['skill']}, commit={resolved[:7]})")
+    print(
+        f"emit-review-evidence: wrote {out_path} "
+        f"(skill={evidence['skill']}, commit={resolved[:7]}, pr={pr_number})"
+    )
     raise SystemExit(0)
 
 die(
