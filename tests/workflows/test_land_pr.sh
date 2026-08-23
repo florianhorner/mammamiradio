@@ -238,7 +238,7 @@ RUN_OUT="$(env PATH="$MOCK_BIN:$PATH" \
     GH_MOCK_HEAD="$AFTER_HEAD_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
     GH_MOCK_THREADS_JSON="$BLOCKING_THREADS" \
     MMR_LAND_REVIEW_READER="$(make_reader review "$AFTER_HEAD_SHORT" "$NOW_ISO")" \
-    MMR_LAND_UPDATE_TIMEOUT=6 \
+    MMR_LAND_UPDATE_TIMEOUT=6 MMR_LAND_SKIP_EVIDENCE_CHECK=1 \
     bash "$LAND" 7 2>&1)" || RUN_RC=$?
 [ "$RUN_RC" -ne 0 ] || fail "blocking bot thread must deny"
 printf '%s' "$RUN_OUT" | grep -q "unresolved Major/Critical" || fail "thread deny message wrong"

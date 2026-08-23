@@ -117,7 +117,7 @@ def test_pr_queue_status_marks_clean_and_dirty_worktrees(tmp_path: Path) -> None
 
     assert result.returncode == 0
     assert "PR #10: clean branch" in result.stdout
-    assert "recommendation: land now" in result.stdout
+    assert "recommendation: inspect/evidence" in result.stdout
     assert "PR #11: dirty branch" in result.stdout
     assert "local: dirty (1 file(s): ?? scratch.txt); contains local origin/main" in result.stdout
     assert "recommendation: commit dirty work" in result.stdout
@@ -161,7 +161,7 @@ def test_pr_queue_status_resolves_renamed_local_branch_via_upstream(tmp_path: Pa
     assert result.returncode == 0
     assert f"worktree: {workspace}" in result.stdout
     assert "local: clean; contains local origin/main" in result.stdout
-    assert "recommendation: land now" in result.stdout
+    assert "recommendation: inspect/evidence" in result.stdout
 
 
 def test_pr_queue_status_reports_missing_local_worktree_as_advisory(tmp_path: Path) -> None:

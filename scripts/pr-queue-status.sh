@@ -113,9 +113,13 @@ local_base_summary() {
 }
 
 recommendation() {
-  local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4"
+  local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4" thread_debt="$5" evidence_status="$6"
   if [ "$is_draft" = "true" ]; then
     say "draft"
+  elif [ "${thread_debt:-0}" -gt 0 ] 2>/dev/null; then
+    say "resolve Major/Critical review threads"
+  elif [ "$evidence_status" = "missing" ] || [ "$evidence_status" = "invalid" ] || [ "$evidence_status" = "issues_open" ]; then
+    say "run squad + emit evidence"
   elif [ "$merge_state" = "DIRTY" ]; then
     say "conflict/manual"
   elif [ -n "$worktree" ] && [ "$dirty_status" = "dirty" ]; then
@@ -124,13 +128,78 @@ recommendation() {
     say "inspect/no local worktree"
   elif [ "$merge_state" = "BEHIND" ]; then
     say "update + test"
-  elif [ "$merge_state" = "CLEAN" ]; then
+  elif [ "$merge_state" = "CLEAN" ] && [ "$evidence_status" = "ok" ]; then
     say "land now"
+  elif [ "$merge_state" = "CLEAN" ]; then
+    say "inspect/evidence"
   elif [ "$merge_state" = "BLOCKED" ] || [ "$merge_state" = "UNSTABLE" ]; then
     say "wait/checks"
   else
     say "inspect ($merge_state)"
   fi
+}
+
+blocking_thread_count() {
+  local pr="$1" response
+  response="$(gh api graphql -f query='
+    query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              isResolved
+              isOutdated
+              comments(first: 1) {
+                nodes { author { login } body }
+              }
+            }
+          }
+        }
+      }
+    }' -f owner='{owner}' -f name='{repo}' -F number="$pr" 2>/dev/null)" || {
+    printf '%s\n' "unknown"
+    return 0
+  }
+  printf '%s' "$response" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+    | select(.isResolved == false and .isOutdated == false)
+    | .comments.nodes[0]
+    | select(
+        (.author.login == "coderabbitai")
+        or (.author.login == "copilot-pull-request-reviewer")
+        or (.author.login == "chatgpt-codex-connector")
+      )
+    | select((.body | test("Major|Critical|\\bP0\\b|\\bP1\\b")))] | length'
+}
+
+evidence_status_for_pr() {
+  local pr="$1" head="$2" tmp v2_path status
+  v2_path="proof/preship-review/pr-${pr}.json"
+  if [ -f "$root/scripts/check-preship-evidence.sh" ] && git cat-file -e "${head}^{commit}" 2>/dev/null; then
+    tmp="$(mktemp)"
+    if git show "${head}:${v2_path}" > "$tmp" 2>/dev/null; then
+      :
+    elif git show "${head}:proof/preship-review.json" > "$tmp" 2>/dev/null; then
+      :
+    else
+      rm -f "$tmp"
+      printf '%s\n' "missing"
+      return 0
+    fi
+    if bash "$root/scripts/check-preship-evidence.sh" "$tmp" "$head" >/dev/null 2>&1; then
+      status="$(jq -r '.status // "clean"' "$tmp")"
+      rm -f "$tmp"
+      case "$status" in
+        issues_open) printf '%s\n' "issues_open" ;;
+        issues_found) printf '%s\n' "issues_found" ;;
+        *) printf '%s\n' "ok" ;;
+      esac
+      return 0
+    fi
+    rm -f "$tmp"
+    printf '%s\n' "invalid"
+    return 0
+  fi
+  printf '%s\n' "unknown"
 }
 
 prs="$(gh pr list --state open --json number,title,headRefName,headRefOid,mergeStateStatus,isDraft,updatedAt,url 2>/dev/null)" \
@@ -165,7 +234,9 @@ printf '%s' "$prs" | jq -c 'sort_by(.number)[]' | while IFS= read -r pr; do
     IFS=$'\t' read -r dirty_status dirty <<<"$(dirty_summary "$wt")"
     local_base="$(local_base_summary "$wt")"
   fi
-  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty_status")"
+  thread_debt="$(blocking_thread_count "$number" 2>/dev/null || echo unknown)"
+  evidence_status="$(evidence_status_for_pr "$number" "$head" 2>/dev/null || echo unknown)"
+  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty_status" "$thread_debt" "$evidence_status")"
 
   say ""
   say "PR #$number: $title"
@@ -181,5 +252,11 @@ printf '%s' "$prs" | jq -c 'sort_by(.number)[]' | while IFS= read -r pr; do
   else
     say "  worktree: not found"
   fi
+  case "$thread_debt" in
+    unknown) say "  review threads: unknown (gh graphql unavailable)" ;;
+    0) say "  review threads: no blocking Major/Critical bot threads" ;;
+    *) say "  review threads: $thread_debt blocking Major/Critical bot thread(s)" ;;
+  esac
+  say "  evidence: $evidence_status"
   say "  recommendation: $rec"
 done
