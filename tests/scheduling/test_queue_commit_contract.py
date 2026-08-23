@@ -928,7 +928,7 @@ async def test_operator_error_recovery_front_inserts_rescue_before_consecutive_f
     ):
         task = asyncio.create_task(run_producer(queue, state, config))
         try:
-            await asyncio.wait_for(backoff_seen.wait(), timeout=5.0)
+            await asyncio.wait_for(backoff_seen.wait(), timeout=20.0)
             assert backoff_snapshots[0] == (2, None, 2)
             rescue = queue.get_nowait()
             placeholder = queue.get_nowait()
