@@ -1150,3 +1150,34 @@ def test_every_guide_narration_exit_can_resume_the_station() -> None:
     assert "}catch(error){" in toggle_guide
     catch_body = toggle_guide[toggle_guide.index("}catch(error){") :]
     assert "stopFirstListenGuide();" in catch_body
+
+
+def test_guide_playback_stall_is_recovered_by_a_watchdog() -> None:
+    """A live browser reproduced a real stall: sound-check.mp3 (9.336s) froze
+
+    at 8.595s and never fired 'ended'. Nothing else in the page notices a
+    started clip that silently stops delivering timeupdate/ended -- the app
+    UI kept reading "Pause example" and the station stayed paused forever,
+    because every recovery path this session built (see
+    test_every_guide_narration_exit_can_resume_the_station) depends on that
+    event firing at all. This pins the second-layer safety net: a timer keyed
+    to the clip's own duration that forces the same teardown regardless.
+    """
+    toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    assert "audio.duration>0" in toggle
+    assert "_firstListenGuideWatchdog=setTimeout(" in toggle
+    watchdog_body = toggle.split("_firstListenGuideWatchdog=setTimeout(()=>{", 1)[1].split("},audio.duration", 1)[0]
+    # Must not fire on a superseded attempt, a clip that legitimately ended,
+    # or a clip the operator deliberately paused mid-playback (that reads as
+    # dataset.state=='paused', not 'playing' -- see the manual pause-toggle
+    # branch earlier in this same function).
+    assert "attempt!==_firstListenGuideAttempt" in watchdog_body
+    assert "audio.ended" in watchdog_body
+    assert "dataset.state!=='playing'" in watchdog_body
+    assert "stopFirstListenGuide();" in watchdog_body
+
+    init_guide_audio = _function("initFirstListenGuideAudio", "initFirstListenTechnicalDetails")
+    assert "let _firstListenGuideWatchdog=null;" not in init_guide_audio  # declared once, near the attempt ticket
+
+    stop_guide = _function("stopFirstListenGuide", "toggleFirstListenGuide")
+    assert "clearTimeout(_firstListenGuideWatchdog)" in stop_guide

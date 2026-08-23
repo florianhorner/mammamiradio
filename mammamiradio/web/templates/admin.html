@@ -2822,6 +2822,14 @@ let _firstListenGuideAttempt=0;
 // A clip that never delivers bytes settles neither play() nor an error event,
 // so the load is time-boxed rather than left waiting on the network.
 const FIRST_LISTEN_GUIDE_LOAD_MS=8000;
+// Measured live: sound-check.mp3 stalls ~0.7s before its own reported duration
+// in some browsers and never fires 'ended' at all -- currentTime freezes,
+// paused flips true, and nothing else ever runs. Once playback has actually
+// started, arm a second time-box keyed to the clip's own duration so a stall
+// still recovers (and, critically, still resumes any station audio this
+// clip paused) instead of leaving First Listen silently stuck.
+const FIRST_LISTEN_GUIDE_STALL_BUFFER_MS=2500;
+let _firstListenGuideWatchdog=null;
 function firstListenGuideAudio(){return document.getElementById('firstListenGuideAudio')}
 function firstListenGuideContainer(button){return button?.closest('.guide-audio')||null}
 function firstListenGuideLocksRoomProof(){
@@ -2843,6 +2851,7 @@ function resetFirstListenGuideSource(audio){
   audio.load();
 }
 function stopFirstListenGuide({reset=true}={}){
+  if(_firstListenGuideWatchdog){clearTimeout(_firstListenGuideWatchdog);_firstListenGuideWatchdog=null;}
   const audio=firstListenGuideAudio();
   const button=_firstListenUi.guideButton;
   if(audio){if(reset)resetFirstListenGuideSource(audio);else audio.pause();}
@@ -2907,6 +2916,20 @@ async function toggleFirstListenGuide(key,button){
     if(container)container.dataset.state='playing';
     button.textContent='Pause example';
     renderFirstListenProgress();
+    if(Number.isFinite(audio.duration)&&audio.duration>0){
+      _firstListenGuideWatchdog=setTimeout(()=>{
+        // A deliberate manual pause (or a resumed play that re-armed a newer
+        // ticket) must never be mistaken for a stall -- only force a stop
+        // while the app still believes this exact attempt is actively
+        // playing. "Continue example" restarts play() and takes a fresh
+        // ticket, so this stays scoped to the one attempt that armed it.
+        if(attempt!==_firstListenGuideAttempt||audio.ended)return;
+        if(container?.dataset.state!=='playing')return;
+        console.warn('first_listen_guide_audio_stall',{key,currentTime:audio.currentTime,duration:audio.duration});
+        stopFirstListenGuide();
+        renderFirstListenProgress();
+      },audio.duration*1000+FIRST_LISTEN_GUIDE_STALL_BUFFER_MS);
+    }
   }catch(error){
     if(attempt!==_firstListenGuideAttempt)return;
     console.error('first_listen_guide_audio',error);
