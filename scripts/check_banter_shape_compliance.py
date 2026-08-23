@@ -31,6 +31,7 @@ _KNOWN_SKIP_REASONS = frozenset(
         "guest",
         "ineligible_roster",
         "listener_truth_repair",
+        "script_fallback",
         "single_host_result",
     }
 )

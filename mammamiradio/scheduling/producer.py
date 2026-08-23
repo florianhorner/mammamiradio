@@ -4426,6 +4426,11 @@ def _shape_fields_for_final_banter(
 
     if truth_changed:
         return None, "listener_truth_repair"
+    if commit is None:
+        # Normal shaped generations always return a commit carrying either the
+        # selected shape or an explicit exclusion.  A missing commit means the
+        # writer caught a generation failure and substituted stock dialogue.
+        return None, "script_fallback"
     return _shape_fields_from_commit(commit)
 
 
