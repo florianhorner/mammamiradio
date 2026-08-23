@@ -2480,8 +2480,19 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
 
     timing = next(item for item in state.render_timings if item["kind"] == SegmentType.TIME_CHECK.value)
     assert timing["outcome"] == "produced"
+    # Both stages recorded, separately: that is what "attributes voice generation
+    # and assembly separately" means, and the set check is the whole of it.
     assert set(timing["stages_ms"]) >= {"tts", "mix"}
-    assert timing["stages_ms"]["mix"] > timing["stages_ms"]["tts"]
+    assert timing["stages_ms"]["tts"] >= 0
+    assert timing["stages_ms"]["mix"] >= 0
+    # `mix > tts` used to sit here and flaked on loaded runners ("assert 1 > 1",
+    # "assert 1 > 2"). It read as an ordering guarantee but was comparing two
+    # sub-millisecond timings: the 50ms sleep meant to weight `mix` goes into
+    # `generate_tone`, which producer.py imports only as a test seam (its import
+    # is annotated as such) and never calls on this path. So the
+    # delay never ran and the comparison was pure scheduler noise. Weighting the
+    # stage for real needs the TIME_CHECK render path mocked differently; that is
+    # its own change, not a rider on an unrelated PR.
 
 
 @pytest.mark.asyncio
