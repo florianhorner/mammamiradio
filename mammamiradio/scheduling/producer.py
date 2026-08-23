@@ -4406,6 +4406,42 @@ def _best_effort_language_assessment(texts: list[str], config: StationConfig) ->
     return None
 
 
+def _shape_fields_from_commit(commit: object | None) -> tuple[str | None, str | None]:
+    if commit is None:
+        return None, None
+    shape_id = getattr(commit, "exchange_shape_id", None)
+    skip_reason = getattr(commit, "exchange_shape_skip_reason", None)
+    return (
+        shape_id if isinstance(shape_id, str) else None,
+        skip_reason if isinstance(skip_reason, str) else None,
+    )
+
+
+def _shape_fields_for_final_banter(
+    commit: object | None,
+    *,
+    truth_changed: bool,
+) -> tuple[str | None, str | None]:
+    """Expose shape intent only when the final dialogue used that directive."""
+
+    if truth_changed:
+        return None, "listener_truth_repair"
+    return _shape_fields_from_commit(commit)
+
+
+def _banter_ledger_segment_id(
+    attempt_id: str,
+    *,
+    canned: object | None,
+    impossible_tts: bool,
+) -> str | None:
+    """Join Tier 3 only to the generated dialogue that actually reached audio."""
+
+    if canned is not None or impossible_tts:
+        return None
+    return attempt_id or None
+
+
 def _emit_segment_prepared(
     state,
     *,
@@ -4413,8 +4449,11 @@ def _emit_segment_prepared(
     role: str,
     final_script: list[str],
     collector,
+    exchange_lines: list[dict[str, str]] | None = None,
     language_assessment: dict | None = None,
     line_accounting: dict | None = None,
+    exchange_shape_id: str | None = None,
+    exchange_shape_skip_reason: str | None = None,
 ) -> None:
     """Tier-2: record the FINAL spoken script (post-processing) for one segment.
 
@@ -4451,6 +4490,12 @@ def _emit_segment_prepared(
         # the survivors, never the authored count.
         if isinstance(line_accounting, dict):
             row["line_accounting"] = line_accounting
+        if exchange_lines is not None:
+            row["exchange_lines"] = [dict(line) for line in exchange_lines]
+        if exchange_shape_id is not None:
+            row["exchange_shape_id"] = exchange_shape_id
+        if exchange_shape_skip_reason is not None:
+            row["exchange_shape_skip_reason"] = exchange_shape_skip_reason
         led.record(row)
     except Exception as exc:  # pragma: no cover - provenance must never break audio
         logger.debug("Provenance Tier-2 emit failed: %s", exc)
@@ -6636,6 +6681,10 @@ async def _run_producer_inner(
                                 _release_campaign_abandon_in_flight(state)
                                 _drop_unqueued_banter_receipts("generation_failed", "listener-truth-repair")
                                 listener_request_commit = None
+                            shape_id, skip_reason = _shape_fields_for_final_banter(
+                                listener_request_commit,
+                                truth_changed=truth_changed,
+                            )
                             line_texts = [line.text for line in lines]
                             _emit_segment_prepared(
                                 state,
@@ -6643,7 +6692,10 @@ async def _run_producer_inner(
                                 role="banter",
                                 final_script=line_texts,
                                 collector=_banter_collector,
+                                exchange_lines=[{"host": line.host.name, "text": line.text} for line in lines],
                                 line_accounting=state.last_banter_line_loss,
+                                exchange_shape_id=shape_id,
+                                exchange_shape_skip_reason=skip_reason,
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
@@ -6724,6 +6776,10 @@ async def _run_producer_inner(
                                 _release_campaign_abandon_in_flight(state)
                                 _drop_unqueued_banter_receipts("generation_failed", "listener-truth-repair")
                                 listener_request_commit = None
+                            shape_id, skip_reason = _shape_fields_for_final_banter(
+                                listener_request_commit,
+                                truth_changed=truth_changed,
+                            )
                             if transition_replaced:
                                 trans_track_ref = None
                             line_texts = [trans_text] + [line.text for line in lines]
@@ -6733,7 +6789,10 @@ async def _run_producer_inner(
                                 role="banter",
                                 final_script=line_texts,
                                 collector=_banter_collector,
+                                exchange_lines=[{"host": line.host.name, "text": line.text} for line in lines],
                                 line_accounting=state.last_banter_line_loss,
+                                exchange_shape_id=shape_id,
+                                exchange_shape_skip_reason=skip_reason,
                             )
                             banter_expected_min_duration_sec = _expected_banter_duration_sec(line_texts)
                             banter_expected_line_count = len(line_texts) if len(line_texts) > 1 else None
@@ -7196,7 +7255,11 @@ async def _run_producer_inner(
                         # tail that a later control could invalidate.
                         "has_music_tail": False,
                         "transition_track_ref": trans_track_ref,
-                        "ledger_segment_id": _banter_attempt_id or None,
+                        "ledger_segment_id": _banter_ledger_segment_id(
+                            _banter_attempt_id,
+                            canned=canned,
+                            impossible_tts=impossible_tts,
+                        ),
                         # Moment Receipt ids (opaque; safe to cross public payload
                         # boundaries). Generated banter only — canned fallbacks and
                         # pre-rendered impossible-moment clips never carried the

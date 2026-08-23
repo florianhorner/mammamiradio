@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import cycle, pairwise
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import anthropic
 
@@ -91,6 +91,7 @@ from mammamiradio.hosts.prompt_world import (
     language_mode_directive,
     language_mode_rule,
 )
+from mammamiradio.hosts.relationship import select_exchange_shape
 from mammamiradio.hosts.station_name_guard import sanitize_spoken_station_name
 from mammamiradio.hosts.transitions import (
     _massage_transition_text,
@@ -479,10 +480,17 @@ class BanterCommit:
     companionship: CompanionshipBanterCommit | None = None
     persona_milestone: int | None = None
     pending_joke: dict[str, str | float | None] | None = None
+    exchange_shape_id: str | None = None
+    exchange_shape_skip_reason: str | None = None
+    exchange_lore_id: str | None = None
 
     def apply_queue_acceptance(self, state: StationState) -> None:
         """Apply synchronous mutations at the successful queue boundary."""
 
+        if self.exchange_shape_id is not None:
+            state.recent_shapes.append(self.exchange_shape_id)
+        if self.exchange_lore_id is not None:
+            state.recent_lore.append(self.exchange_lore_id)
         if self.pending_joke is not None:
             joke_text = str(self.pending_joke.get("text") or "").strip()
             if joke_text:
@@ -496,11 +504,13 @@ class BanterCommit:
         if self.persona_milestone is not None and persona_store is not None:
             await persona_store.consume_milestone()
 
-    def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
+    def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
         self.apply_queue_acceptance(state)
         if self.listener_request is not None:
             self.listener_request.apply(state, queue_id=queue_id)
         if self.heading_announcement is not None:
+            if config is None:
+                raise TypeError("heading announcement commit requires config")
             self.heading_announcement.apply(state, config)
         if self.release_beat is not None:
             self.release_beat.apply(state, config, queue_id=queue_id)
@@ -517,6 +527,9 @@ def _banter_commit(
     companionship: CompanionshipBanterCommit | None = None,
     persona_milestone: int | None = None,
     pending_joke: dict[str, str | float | None] | None = None,
+    exchange_shape_id: str | None = None,
+    exchange_shape_skip_reason: str | None = None,
+    exchange_lore_id: str | None = None,
 ) -> BanterCommit | ListenerRequestCommit | None:
     if (
         heading_announcement is None
@@ -526,6 +539,9 @@ def _banter_commit(
         and companionship is None
         and persona_milestone is None
         and pending_joke is None
+        and exchange_shape_id is None
+        and exchange_shape_skip_reason is None
+        and exchange_lore_id is None
     ):
         return listener_request
     return BanterCommit(
@@ -537,6 +553,9 @@ def _banter_commit(
         companionship=companionship,
         persona_milestone=persona_milestone,
         pending_joke=pending_joke,
+        exchange_shape_id=exchange_shape_id,
+        exchange_shape_skip_reason=exchange_shape_skip_reason,
+        exchange_lore_id=exchange_lore_id,
     )
 
 
@@ -2204,16 +2223,6 @@ _MOOD_EXAMPLES: dict[str, str] = {
 }
 
 
-def _is_high_chaos_pair_leader(name: str, axes: PersonalityAxes, other_host: HostPersonality) -> bool:
-    """Choose one deterministic leader for high-energy/high-chaos host pairs."""
-    other_axes = other_host.personality
-    if axes.energy > other_axes.energy:
-        return True
-    if axes.energy < other_axes.energy:
-        return False
-    return name.strip().casefold() <= other_host.name.strip().casefold()
-
-
 def _personality_modifier(
     name: str,
     axes: PersonalityAxes,
@@ -2224,54 +2233,19 @@ def _personality_modifier(
     Values near 50 produce no modifier (neutral).  Extremes produce strong
     directional instructions.  Only axes that deviate from neutral are included.
 
-    When ``other_host`` is provided, the energy+chaos combination is treated
-    relatively: if both hosts score above the high-energy threshold the one with
-    higher energy leads the chaos while the lower one provides surgical contrast.
-    Ties are broken deterministically by host name so both hosts don't get the
-    same manic instruction.
+    Conflict, interruption, and who-leads-whom live on the per-segment exchange
+    shape, not here. The chaos axis intentionally contributes no cached
+    structural instruction. ``other_host`` is accepted for call-site
+    compatibility.
     """
+    del other_host
     parts: list[str] = []
     threshold = 15  # distance from 50 before we emit guidance
 
-    # Energy + Chaos — treated as a coupled pair when both hosts are high
-    other_axes = other_host.personality if other_host else None
-    both_high_energy = other_axes is not None and axes.energy > 50 + threshold and other_axes.energy > 50 + threshold
-    both_high_chaos = other_axes is not None and axes.chaos > 50 + threshold and other_axes.chaos > 50 + threshold
-
-    if both_high_energy and both_high_chaos:
-        # Relative treatment: higher energy leads, lower one cuts with precision
-        if _is_high_chaos_pair_leader(name, axes, cast("HostPersonality", other_host)):
-            parts.append(
-                "You are the runaway train. Manic energy — talk fast, steamroll the conversation, "
-                "start three thoughts in quick succession, fill every silence. Lead the chaos."
-            )
-            parts.append(
-                "On chaos: interrupt constantly and collide mid-sentence, but every cut-in must get an "
-                "immediate answer or counter from the other host. Verbal pile-up energy, never a stranded ending."
-            )
-        else:
-            parts.append(
-                "Sharp and controlled — let him dig deeper into the hole, then cut him off at exactly the "
-                "wrong moment. You don't chase the chaos, you redirect it with one surgical line."
-            )
-            parts.append(
-                "On chaos: you choose WHEN to interrupt, not constantly. When you cut in, it lands. "
-                "One devastating correction beats ten overlapping complaints."
-            )
-    else:
-        # Standard independent treatment for energy and chaos
-        if axes.energy < 50 - threshold:
-            parts.append("Speak slowly and calmly. Long pauses. Laid-back, almost sleepy delivery.")
-        elif axes.energy > 50 + threshold:
-            parts.append("Manic energy! Talk fast, interrupt yourself, barely breathe between sentences.")
-
-        if axes.chaos < 50 - threshold:
-            parts.append("Stay on topic. Structured, logical flow. No random tangents.")
-        elif axes.chaos > 50 + threshold:
-            parts.append(
-                "Go on wild tangents. Cut people off, use false starts, verbal collisions, and abrupt pivots "
-                "like you're talking over the room — then let the next host answer or counter the interruption."
-            )
+    if axes.energy < 50 - threshold:
+        parts.append("Speak slowly and calmly. Long pauses. Laid-back, almost sleepy delivery.")
+    elif axes.energy > 50 + threshold:
+        parts.append("Manic energy! Talk fast and barely breathe between sentences, while finishing each thought.")
 
     # Warmth
     if axes.warmth < 50 - threshold:
@@ -2396,16 +2370,9 @@ def _guest_host_directive(config: StationConfig, *, super_italian: bool) -> str:
 def _build_system_prompt(config: StationConfig) -> str:
     """Build the shared station persona prompt used for every script request."""
     host_lines = []
-    regulars = _regular_hosts(config)
-    # Energy/chaos contrast is computed from the regular hosts only, so adding the
-    # guest as a third roster entry doesn't silently disable the two-host foil logic
-    # (one leads the chaos, the other cuts with surgical contrast). The guest gets
-    # no relative pairing — he is a guest, not half of the regular duo.
-    regular_foil = {h.name: regulars[1 - idx] for idx, h in enumerate(regulars)} if len(regulars) == 2 else {}
     for h in config.hosts:
         line = f"- {h.name}: {h.style} (voice: {h.voice})"
-        other = regular_foil.get(h.name)
-        modifier = _personality_modifier(h.name, h.personality, other_host=other)
+        modifier = _personality_modifier(h.name, h.personality, other_host=None)
         if modifier:
             line += modifier
         host_lines.append(line)
@@ -2447,16 +2414,20 @@ overhearing a world that exists with or without them."""
 
     return f"""You write scripts for a fake AI radio station called "{station_name}".
 {mode_directive}
-Theme: {config.station.theme}{geography}
+Theme (tone and setting only; any host-to-host dynamic described here is non-binding):
+{config.station.theme}{geography}
 {station_world}
 Hosts:
 {host_descriptions}
 
+These bios describe each host's default dynamic. The per-segment exchange-shape directive is the sole authority on host-to-host conflict, interruption, and leadership today — including segments with no conflict at all. Never infer mandatory conflict from the theme or bios.
+
 Rules:
 - Keep each line under 30 words for natural speech pacing.
 - Be EDGY. Over the top. Think Italian shock radio meets GTA radio. Push boundaries.
-  Roast listeners, roast each other, roast Italy. Controversial takes on food, fashion,
-  politics (fictional), sports. The hosts say things that make the producer nervous.
+  Roast listeners and Italy. Roast another host only when the exchange-shape directive
+  explicitly calls for conflict. Controversial takes on food, fashion, politics
+  (fictional), sports. The hosts say things that make the producer nervous.
 - Sound like REAL Italian radio. Each host has a distinct expression fingerprint — reach
   into YOUR character's vocabulary, not a generic Italian list.
 {host_expr_block}
@@ -2466,10 +2437,10 @@ Rules:
   character's full list before repeating. If you feel the urge to say "dunque" — stop.
   Reach one level deeper: "Senti un po'...", "Come dire...", "Vediamo..." are all richer.
   "oddio" is valid as genuine shock, not as a thinking pause.
-- Hosts interrupt each other and change topic mid-sentence. Real radio is messy, but every intentional
-  cut-in gets an immediate answer or counter from a different host.
-- When chaos is high, make the dialogue feel crowded: cut-offs, corrections, stepping on each
-  other's point, and sentences that restart halfway through — never leave the final line stranded.
+- Real radio is messy: hosts may change topic mid-sentence. Every intentional cut-in still
+  gets an immediate answer or counter from a different host, and the final line of every
+  exchange is a complete thought. Whether anyone interrupts today is decided by the
+  exchange-shape directive, not by these standing rules.
 - NEVER use each other's names more than ONCE per exchange. They know each other — they
   don't keep saying names. Use "tu", "eh", "senti", or just talk. Real people almost
   never address each other by name in conversation.
@@ -2482,11 +2453,6 @@ Rules:
   Kiss Kiss, not RDS, not RTL, not Radio Italia, not any variant. If you feel the urge
   to mention a station, use "{station_name}" or skip it entirely. Writing the wrong
   station name is the single most damaging thing you can do to the listener's experience.
-- CONFLICT IS MANDATORY. Hosts must disagree at least once per exchange. Not just
-  "beh, forse..." — actual opposition. "No, ma che stai dicendo?" levels. They never
-  just agree and move on. Even when one is right, the other defends the wrong take.
-- Giulia CUTS MARCO OFF at least once per exchange. Mid-sentence. He was wrong anyway.
-  Her next line answers or counters his point without mercy, then continues her own thought.
 - RUNNING BITS: hosts reference absurd recurring jokes without explaining them.
   "Come quella volta col risotto." / "Lasciamo perdere la storia del formaggio." /
   "Non ne parliamo, lo sai già." The listener is never told what happened. That's the joke.
@@ -2503,7 +2469,7 @@ Rules:
 - FOURTH WALL: at most once per hour, the host may say something subtly self-aware
   ("A volte sembra troppo preciso, no? Coincidenza. Probabilmente."). Deliver it
   calmly, never winking. Never reference it again in the same session.
-- START MID-CONVERSATION: sometimes begin in the middle of an ongoing host argument
+- START MID-CONVERSATION: sometimes begin in the middle of an ongoing host conversation
   or laugh. No setup and no claim about when anyone began listening. Just drop in.
 - ANSWERED INTERRUPTIONS: a host may cut off with "Lo so, ma comunque—" only when a different
   host immediately answers or counters it. The final line of every exchange is a complete thought.
@@ -2802,18 +2768,8 @@ specific person has arrived, returned, tuned in, or is being identified.
         except Exception:
             logger.warning("Failed to load persona for banter prompt", exc_info=True)
 
-    chaos_hosts = [h.name for h in _regular_hosts(config) if h.personality.chaos >= 80 or h.personality.energy >= 90]
     chaos_block = _chaos_prompt_block(state, chaos_subtype)
     festival_block = f"\n\n{FESTIVAL_MODE_BLOCK}" if config.party_mode == "festival" else ""
-    if not chaos_block and len(config.hosts) >= 2 and chaos_hosts:
-        chaos_block = f"""
-CHAOS DIRECTION:
-- This break should feel argumentative and unstable.
-- At least one host cuts the other off mid-thought.
-- Use interruptions, corrections, and "no, aspetta" energy; every cut-in gets an immediate
-  answer or counter from the other host, and the final line stays complete.
-- The most volatile hosts right now: {", ".join(chaos_hosts)}.
-"""
 
     # Phase 4: reactive directive — HIGH PRIORITY impossible moment from a home event
     reactive_block = ""
@@ -3004,6 +2960,27 @@ GUEST HOST GATE:
 - Do not return any line tagged "Hans Günther"; he is off-mic for this break.
 """
 
+    shape_selection = select_exchange_shape(
+        state,
+        host_names=[host.name for host in _regular_hosts(config)],
+        chaos_subtype=chaos_subtype,
+        festival=config.party_mode == "festival",
+        guest_invited=guest_host_invited,
+    )
+    logger.debug(
+        "banter shape: %s skip=%s lore=%s",
+        shape_selection.shape_id,
+        shape_selection.skip_reason,
+        shape_selection.lore_id,
+    )
+    shape_block = ""
+    if shape_selection.directive:
+        shape_block = f"\nEXCHANGE SHAPE ({shape_selection.shape_id}):\n{shape_selection.directive}\n"
+        if shape_selection.lore_text:
+            shape_block += (
+                f"SHARED HISTORY (optional, at most a passing nod, never a lecture): {shape_selection.lore_text}\n"
+            )
+
     # Stretch the break only when something warrants the extra airtime.
     warranted_long = bool(
         pending_directive
@@ -3054,7 +3031,7 @@ Running jokes to optionally callback: {jokes if jokes else "none yet, you may se
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{chaos_block}{festival_block}{guest_host_block}{listener_block}{listener_session_block}{arc_phase_block}{persona_block}{home_fact_instruction}{companionship_proof_instruction}{delivery_instruction}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{shape_block}{chaos_block}{festival_block}{guest_host_block}{listener_block}{listener_session_block}{arc_phase_block}{persona_block}{home_fact_instruction}{companionship_proof_instruction}{delivery_instruction}
 {_CLEAN_SPOKEN_TEXT_RULE}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"{delivery_schema}}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}{companionship_proof_schema}}}"""
@@ -3342,6 +3319,18 @@ Return JSON:
                     proof_fields_match,
                     copy_uses_context,
                 )
+        exchange_shape_id = shape_selection.shape_id
+        exchange_shape_skip_reason = shape_selection.skip_reason
+        exchange_lore_id = shape_selection.lore_id
+        if shape_selection.shape_id is not None:
+            realized_hosts = {_normalize_host_tag(line.host.name) for line in result}
+            if len(realized_hosts) < 2:
+                # Legacy one-speaker copy may still air, but it did not realize
+                # a two-host relational shape. Do not burn recency or claim the
+                # selected shape in Tier-2 provenance.
+                exchange_shape_id = None
+                exchange_shape_skip_reason = "single_host_result"
+                exchange_lore_id = None
         return result, _banter_commit(
             listener_request_commit,
             heading_announcement_commit,
@@ -3351,6 +3340,9 @@ Return JSON:
             companionship_commit,
             milestone,
             pending_joke,
+            exchange_shape_id=exchange_shape_id,
+            exchange_shape_skip_reason=exchange_shape_skip_reason,
+            exchange_lore_id=exchange_lore_id,
         )
 
     except asyncio.CancelledError:
