@@ -15,6 +15,11 @@ pass() { echo "PASS: $1"; }
 
 TMPDIR_T="$(mktemp -d)"
 SAVE_REF="$(git rev-parse HEAD)"
+if [ -f proof/preship-review.json ]; then
+  git rm -f proof/preship-review.json
+  git -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null \
+    commit -q --no-verify -m "test: strip legacy evidence for fixture"
+fi
 BEFORE_EVIDENCE="$(git rev-parse HEAD)"
 
 write_evidence() {
@@ -66,7 +71,11 @@ case "$1 $2" in
       head="${GH_MOCK_HEAD:?}"; merge_state="${GH_MOCK_MERGE_STATE:-CLEAN}"
     fi
     if [[ "$*" == *"--jq"* ]]; then
-      printf '%s\n' "$head"
+      if [[ "$*" == *"committedDate"* ]]; then
+        printf '%s\n' "${GH_MOCK_COMMIT_DATE:?}"
+      else
+        printf '%s\n' "$head"
+      fi
     else
       commits="${GH_MOCK_COMMITS_JSON:-}"
       if [ -z "$commits" ]; then
