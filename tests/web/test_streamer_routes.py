@@ -7396,6 +7396,33 @@ async def test_force_resume_marker_failure_is_total_live_state_noop(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_force_resume_on_running_station_returns_ok_without_recovering(tmp_path):
+    """Force Start while already on air is still a successful start (#1022).
+
+    First Listen must not treat recovering:false as failure — that shape is
+    the not-stopped branch, not a rebuild refusal. Pinning it here keeps the
+    client-facing API contract from drifting.
+    """
+    app = _make_test_app()
+    state = app.state.station_state
+    app.state.config.cache_dir = tmp_path
+    state.session_stopped = False
+    state.force_recovery_active = False
+    live = {"type": "music", "label": "On air", "started": time.time(), "metadata": {}}
+    state.now_streaming = live
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/resume?force=true")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "recovering": False}
+    assert state.session_stopped is False
+    assert state.force_recovery_active is False
+    assert state.now_streaming == live
+
+
+@pytest.mark.asyncio
 async def test_resume_clears_a_dead_queue_head_instead_of_refusing_forever(tmp_path):
     """A dead head in front of ready audio must not brick Start.
 
