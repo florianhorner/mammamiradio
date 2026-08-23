@@ -180,6 +180,13 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_preship_evidence.sh
 
+      - name: Landing policy full branch coverage
+        if: needs.changes.outputs.workflows == 'true'
+        run: >-
+          python -m pytest -q tests/repo/test_preship_evidence_v2.py
+          --cov=scripts.landing --cov-branch --cov-fail-under=100
+          --cov-report=term-missing:skip-covered
+
       - name: Landing wrapper self-test
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_land_pr.sh

@@ -96,8 +96,8 @@ evidence "$HEAD_SHA"
 run_check >/dev/null || fail "evidence at HEAD must pass"
 pass "evidence at HEAD accepted"
 
-# 8. Ancestor path: evidence from a prior commit on the branch passes (this is what
-#    survives a rebase/amend — the reviewed state is contained in the new head).
+# 8. Ancestor path: evidence from a prior commit on the unchanged branch history passes.
+#    Rebase, amend, and squash can break this legacy relationship; v2 covers that case.
 evidence "$ANC_SHA"
 run_check >/dev/null || fail "evidence at an ancestor must pass"
 pass "evidence at an ancestor accepted"
@@ -199,5 +199,33 @@ rm -f "$FIX/proof/preship-review.json"
 got="$(jq -r '.commit' "$FIX/proof/preship-review.json")"
 [ "$got" = "$LONG_HEAD" ] || fail "corrupt lines must not change the selected commit (got '$got')"
 pass "torn and pretty-printed ledger lines skipped without changing selection"
+
+# 12. The explicit --v2 compatibility switches dispatch into the trusted Python
+# package while the no-flag v1 behavior above remains unchanged. The fixture is dirty
+# from the final v1 emission, so v2 emit must reach its clean-tree guard. V2 verify has
+# no receipt and must reach its PR receipt gate.
+git -C "$FIX" remote add origin https://github.com/florianhorner/mammamiradio.git
+PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+[ -x "$PYTHON_BIN" ] || PYTHON_BIN="python3"
+V2_LEDGER="$TMP/gstack/projects/florianhorner-mammamiradio"
+mkdir -p "$V2_LEDGER"
+jq -cn --arg c "$LONG_HEAD" \
+  '{skill:"review",commit:$c,timestamp:"2026-07-30T14:00:00Z",status:"clean",findings:[]}' \
+  > "$V2_LEDGER/fixture-reviews.jsonl"
+if (cd "$FIX" && GSTACK_HOME="$TMP/gstack" MAMMAMIRADIO_PYTHON="$PYTHON_BIN" PYTHONPATH="$REPO_ROOT" \
+  bash "$EMIT" --v2 2>"$TMP/err"); then
+  fail "v2 emitter must reject the dirty compatibility fixture"
+fi
+grep -q "state is dirty" "$TMP/err" || fail "--v2 emitter did not dispatch to the Python clean-tree gate"
+pass "v2 emitter adapter dispatches without changing v1 default behavior"
+
+LONG_CURRENT="$(git -C "$FIX" rev-parse HEAD)"
+if (cd "$FIX" && MAMMAMIRADIO_PYTHON="$PYTHON_BIN" PYTHONPATH="$REPO_ROOT" \
+  bash "$CHECK" --v2 --target "$LONG_CURRENT" --base "$LONG_CURRENT" --mode pr 2>"$TMP/err"); then
+  fail "v2 checker must reject a PR with no v2 receipt"
+fi
+grep -q "PR adds no new v2 review receipt" "$TMP/err" \
+  || fail "--v2 checker did not dispatch to the Python receipt gate"
+pass "v2 checker adapter dispatches without changing v1 positional behavior"
 
 echo "test_preship_evidence: all assertions passed"

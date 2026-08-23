@@ -62,7 +62,7 @@ lane() {
 # skipped optional job, so an omitted dependency would otherwise false-green.
 browser="$(lane '^(mammamiradio/web/|tests/web/test_admin_browser_smoke\.py|tests/web/test_first_listen_browser_smoke\.py|tests/web/test_player_smoke_contract\.py|scripts/player-smoke\.|scripts/ci-changed-lanes\.sh$|\.playwright-cli-version$|pyproject\.toml$|requirements\.txt$|requirements-dev\.txt$|\.github/workflows/quality\.yml$|\.github/actions/setup-python-ci/)')"
 media="$(lane '^(mammamiradio/assets/|mammamiradio/media/|proof/media/|pyproject\.toml$|requirements\.txt$|requirements-dev\.txt$|scripts/media-proof\.py$|scripts/starter-catalog\.py$|scripts/validate-starter-media\.py$|tests/media/|ha-addon/mammamiradio/Dockerfile$|scripts/ci-changed-lanes\.sh$|\.github/workflows/quality\.yml$|\.github/actions/setup-python-ci/)')"
-workflows="$(lane '^(\.github/|ha-addon/|scripts/|tests/workflows/)')"
+workflows="$(lane '^(\.github/|ha-addon/|scripts/|tests/workflows/|tests/repo/test_preship_evidence_v2\.py$|(.*/)?conftest\.py$|(.*/)?(\.coveragerc(\.toml)?|\.?pytest\.(toml|ini)|pyproject\.toml|tox\.ini|setup\.cfg)$|requirements\.txt$|requirements-dev\.txt$)')"
 audio="$(lane '^(mammamiradio/audio/|tests/audio/|scripts/ha-green-launch-smoke\.py|mammamiradio/scheduling/|mammamiradio/web/streamer\.py|mammamiradio/main\.py$|mammamiradio/core/|pyproject\.toml$|requirements\.txt$|requirements-dev\.txt$|radio\.toml$|model_registry\.toml$|scripts/ci-changed-lanes\.sh$|\.github/workflows/pi-smoke\.yml$|\.github/actions/setup-python-ci/)')"
 
 {

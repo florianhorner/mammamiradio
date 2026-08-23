@@ -75,6 +75,32 @@ printf '%s\n' "$wf_out" | grep -qx 'media=true' || fail "quality.yml must re-run
 printf '%s\n' "$wf_out" | grep -qx 'workflows=true' || fail "quality.yml must re-run workflow self-tests"
 pass "quality.yml edits re-run browser, media, and workflow self-tests"
 
+for landing_coverage_input in \
+  tests/repo/test_preship_evidence_v2.py \
+  conftest.py \
+  tests/conftest.py \
+  tests/repo/conftest.py \
+  .coveragerc \
+  .coveragerc.toml \
+  pytest.toml \
+  .pytest.toml \
+  pytest.ini \
+  .pytest.ini \
+  tox.ini \
+  setup.cfg \
+  tests/pytest.toml \
+  tests/repo/pytest.ini \
+  tests/repo/pyproject.toml \
+  tests/repo/tox.ini \
+  tests/repo/setup.cfg \
+  pyproject.toml \
+  requirements.txt \
+  requirements-dev.txt
+do
+  assert_path_enables workflows "$landing_coverage_input"
+done
+pass "landing coverage inputs enable workflow self-tests"
+
 for media_input in \
   mammamiradio/media/starter.py \
   ha-addon/mammamiradio/Dockerfile \
