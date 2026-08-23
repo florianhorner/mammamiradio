@@ -27,7 +27,6 @@ GENERATOR_PATH = ROOT / "scripts" / "generate-first-listen-guide.py"
 SHIPPED_AUDIO_ROOT = ROOT / "mammamiradio" / "web" / "static" / "audio"
 EXPECTED_CLIPS = (
     "first_listen/welcome.mp3",
-    "first_listen/speaker.mp3",
     "first_listen/sound-check.mp3",
     "first_listen/not-yet.mp3",
     "first_listen/receipt-recovery.mp3",
@@ -336,8 +335,21 @@ def test_admin_guide_metadata_matches_shipped_manifest() -> None:
 def test_admin_guide_metadata_rejects_hash_and_transcript_drift(tmp_path: Path) -> None:
     manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
     source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    source = source.replace("version:'b184b5d50c6e'", "version:'000000000000'", 1)
-    source = source.replace("Five small steps, and Mamma Mi Radio is in your room.", "This copy drifted.", 1)
+
+    # Derive both mutations from the shipped manifest. Hardcoded literals here
+    # silently stop matching the moment the guide pack is regenerated, and a
+    # substitution that no-ops turns this drift guard into a test that passes
+    # against an unmutated template — so each one must be asserted to apply.
+    welcome = next(entry for entry in manifest["assets"] if entry["path"] == "first_listen/welcome.mp3")
+    real_version = f"version:'{welcome['sha256'][:12]}'"
+    # Marco's spoken line appears verbatim between the <strong> tags in the page.
+    marco_line = welcome["transcript"].split("Marco: ", 1)[1].split(" Giulia:", 1)[0]
+
+    assert source.count(real_version) == 1, "welcome version literal is not uniquely present in the template"
+    assert source.count(marco_line) == 1, "welcome transcript line is not uniquely present in the template"
+
+    source = source.replace(real_version, "version:'000000000000'", 1)
+    source = source.replace(marco_line, "This copy drifted.", 1)
     template_path = tmp_path / "admin.html"
     template_path.write_text(source, encoding="utf-8")
 
@@ -363,10 +375,10 @@ def test_admin_guide_metadata_rejects_container_inventory_drift(tmp_path: Path) 
 def test_admin_guide_metadata_rejects_button_key_and_onclick_mismatch(tmp_path: Path) -> None:
     manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
     source = VALIDATOR.ADMIN_TEMPLATE_PATH.read_text(encoding="utf-8")
-    source = source.replace('data-guide-key="welcome"', 'data-guide-key="speaker"', 1)
+    source = source.replace('data-guide-key="welcome"', 'data-guide-key="sound-check"', 1)
     source = source.replace(
         "onclick=\"toggleFirstListenGuide('welcome',this)\"",
-        "onclick=\"toggleFirstListenGuide('speaker',this)\"",
+        "onclick=\"toggleFirstListenGuide('sound-check',this)\"",
         1,
     )
     template_path = tmp_path / "admin.html"
@@ -374,7 +386,7 @@ def test_admin_guide_metadata_rejects_button_key_and_onclick_mismatch(tmp_path: 
 
     errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
 
-    assert "admin guide welcome play button data-guide-key 'speaker' does not match its container" in errors
+    assert "admin guide welcome play button data-guide-key 'sound-check' does not match its container" in errors
     assert any(
         "admin guide welcome play button onclick" in error and "toggleFirstListenGuide('welcome',this)" in error
         for error in errors
@@ -404,8 +416,8 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     assert source.count(welcome_button) == 1
     source = source.replace(welcome_button, f"{welcome_button}{welcome_button}", 1)
     source = source.replace(
-        'class="guide-audio-play" data-guide-key="speaker"',
-        'class="guide-audio-play-disabled" data-guide-key="speaker"',
+        'class="guide-audio-play" data-guide-key="sound-check"',
+        'class="guide-audio-play-disabled" data-guide-key="sound-check"',
         1,
     )
     template_path = tmp_path / "admin.html"
@@ -414,7 +426,7 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     errors = VALIDATOR._validate_admin_guide_metadata(manifest, admin_template_path=template_path)
 
     assert "admin guide welcome must contain exactly one guide-audio-play button; found 2" in errors
-    assert "admin guide speaker must contain exactly one guide-audio-play button; found 0" in errors
+    assert "admin guide sound-check must contain exactly one guide-audio-play button; found 0" in errors
 
 
 def test_default_validates_both_inventories_and_custom_root_stays_single(
@@ -519,7 +531,7 @@ def test_browser_narration_rejects_fallback_render(
 @pytest.mark.requires_ffmpeg
 def test_hash_approved_non_audio_still_fails_ffprobe(copied_pack: tuple[Path, Path]) -> None:
     static_root, audio_root = copied_pack
-    relative_path = "first_listen/speaker.mp3"
+    relative_path = "first_listen/sound-check.mp3"
     payload = b"not an audio stream" * 200
     (audio_root / relative_path).write_bytes(payload)
 
@@ -570,8 +582,12 @@ def test_browser_narration_enforces_media_format_and_duration(
     assert "first_listen/welcome.mp3 channel layout must be stereo; got 'mono'" in errors
     assert "first_listen/welcome.mp3 audio bitrate must be 192000 bps; got '128000'" in errors
     assert any("first_listen/welcome.mp3 duration 2.000s is outside" in error for error in errors)
+    manifest = json.loads((audio_root / "spoken_assets.json").read_text(encoding="utf-8"))
+    declared = next(entry for entry in manifest["assets"] if entry["path"] == "first_listen/welcome.mp3")
     assert any(
-        "first_listen/welcome.mp3 duration_seconds 11.856s does not match ffprobe 2.000s" in error for error in errors
+        f"first_listen/welcome.mp3 duration_seconds {declared['duration_seconds']:.3f}s "
+        "does not match ffprobe 2.000s" in error
+        for error in errors
     )
 
 

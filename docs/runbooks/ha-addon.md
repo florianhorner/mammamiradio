@@ -38,8 +38,7 @@ To check whether the window is open right now, run `scripts/check-advertised-ver
 
 ## First-listen operator check
 
-After installing the HACS integration and restarting Home Assistant once, open
-the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
 authored 27-second mini-show on deck: an original music bed and a privacy-aware
 Marco/Giulia opening, then a source-aware handoff to the live stream. It needs
 no AI key or Home context. Source readiness is supporting detail under that
@@ -48,12 +47,19 @@ recovery cover are described honestly. The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
 
-Select **Find my speakers**, choose one physical `media_player`, then select
-**Start Mamma Mi Radio**. The dispatch contract is always
-`media-source://mammamiradio/live`. An accepted Home Assistant service call is
-not audible proof: record **Yes — that’s Mamma Mi Radio** only after the opening
-reaches the room, or use the [first-listen repair
-steps](../integrations/ha-integration.md#first-listen-repair).
+Required First Listen proof is hearing the station on this device in the add-on
+Web UI. Select **Play the station**, then **Yes, I hear it** only after you hear
+the opening, or use the [this-device repair
+steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
+
+Home Assistant speakers remain optional and are no longer part of First Listen.
+The add-on has no speaker picker; the route is Home Assistant's own media
+browser after installing the HACS integration: **Media → Mamma Mi Radio → Mamma
+Mi Radio Live**, or **Developer tools → Actions → Play specified media** against
+the speaker with `media-source://mammamiradio/live` and content type `music`.
+An accepted Home Assistant service call is not audible proof; confirm the room
+yourself. See [Optional: play it on a Home Assistant
+speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After

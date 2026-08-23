@@ -30,19 +30,17 @@ station ready by themselves.
 
 ### 3. Install the HACS integration
 
-Install the [Mamma Mi Radio HACS
-integration](../../docs/integrations/ha-integration.md#install-the-hacs-integration-for-speaker-playback),
-then restart Home Assistant once. The integration registers the stable
-`media-source://mammamiradio/live` source used by the First Listen
-physical-speaker path. It is optional only for browser-only listening, which
-does not count as First Listen proof.
+The HACS integration is optional. First Listen proof is hearing the station on
+this device in the add-on Web UI. Install the [Mamma Mi Radio HACS
+integration](../../docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback)
+when you want Home Assistant speakers to play
+`media-source://mammamiradio/live`, then restart Home Assistant once.
 
-The setup strip's listener action and `/listen` remain available for a
-browser-only check, but that does not count as physical-speaker proof. Once any
-listener accepts the first audio bytes, `/readyz` returns HTTP `200` with
-`status: "ready"`.
+The setup strip's listener action and `/listen` remain available as the audience
+surface. Once any listener accepts the first audio bytes, `/readyz` returns HTTP
+`200` with `status: "ready"`.
 
-### 4. Follow First Listen to the room
+### 4. Follow First Listen on this device
 
 Click **Open Web UI** or use the ingress sidebar entry. A fresh unfinished
 install opens directly on **First Listen** before the control room. Follow its
@@ -57,22 +55,21 @@ repair an unfinished step:
    music, recovery cover, or a music repair follows the opening. Recovery audio
    can keep the stream audible, but it is not a music rotation; bundled demo
    music is not a promised song library.
-2. Select **Find my speakers**, choose one real Home Assistant speaker, then
-   select **Start Mamma Mi Radio**. The app asks Home Assistant to play
-   `media-source://mammamiradio/live`; it does not count browser playback.
-3. Home Assistant accepting the request is not audible proof. Select **Yes —
-   that’s Mamma Mi Radio** only when the opening reaches the room. **Not yet**
-   opens warm repair guidance for mute, volume, entity selection, HACS, and
-   media-source checks.
+2. Select **Play the station**. Confirm **Yes, I hear it** only after you hear
+   the opening, or **Not yet** for
+   [this-device repair](../../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
+   Home Assistant speakers remain an
+   [optional later route](../../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
 
-See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen-repair) if the room stays quiet.
+See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen-repair) if a later Home Assistant speaker stays quiet.
 
 ### 5. Make the privacy choice; add AI later
 
 On a fresh install, **Host home context** is omitted from saved add-on options
-and remains off. After the speaker is confirmed, select **Keep private and
-continue** without reading Home state, or select **Show filtered preview**
-before **Let future hosts use this**. The preview is a fresh, detached Home
+and remains off. After you confirm you heard the station on this device,
+select **Keep Home private** without reading Home state, or select **See what
+the hosts would receive** before **Let Marco and Giulia use these details**.
+The preview is a fresh, detached Home
 Assistant read: it is not published into host scripts and is not sent to an AI
 provider. A preview containing only generic daylight is disclosed as
 ambient-only and not meaningful personalization; keeping it private is the

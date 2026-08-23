@@ -28,7 +28,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeGuard, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,16 @@ class FirstListenReceiptV1:
         }
 
 
+def is_complete_listener_proof(receipt: FirstListenReceiptV1 | None) -> TypeGuard[FirstListenReceiptV1]:
+    """Return whether a validated receipt records monotonic listener proof."""
+    return bool(
+        receipt is not None
+        and receipt.audio_complete
+        and receipt.selected_entity_id is None
+        and (receipt.accepted_attempt_id or "").startswith("listener_")
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FirstListenReceiptLoadResult:
     """One explicit receipt-load outcome.
@@ -171,13 +181,25 @@ def _receipt_from_payload(payload: object, *, now: float) -> FirstListenReceiptV
     if privacy_reviewed_at is not None and not isinstance(privacy_reviewed_at, float):
         return None
 
-    attempt_fields = (entity_id, attempt_id, accepted_at)
-    if any(value is None for value in attempt_fields) and any(value is not None for value in attempt_fields):
-        return None
-    if heard_at is not None and accepted_at is None:
-        return None
-    if heard_at is not None and accepted_at is not None and heard_at < accepted_at:
-        return None
+    if attempt_id is None:
+        # Empty and privacy-only receipts predate any playback proof and remain
+        # valid. Every playback field must otherwise be absent so malformed
+        # state cannot acquire completion by accident.
+        if entity_id is not None or accepted_at is not None or heard_at is not None:
+            return None
+    elif attempt_id.startswith("listener_"):
+        # Browser-listener proof is deliberately distinguishable from the
+        # Home Assistant speaker flow without changing the persisted v1 shape.
+        # It is one atomic fact, so acceptance and hearing share a timestamp.
+        if entity_id is not None or accepted_at is None or heard_at is None or heard_at != accepted_at:
+            return None
+    else:
+        # Existing HA receipts keep their original semantics: an accepted
+        # media_player attempt may be confirmed later by the operator.
+        if entity_id is None or accepted_at is None:
+            return None
+        if heard_at is not None and heard_at < accepted_at:
+            return None
 
     return FirstListenReceiptV1(
         selected_entity_id=entity_id,
@@ -322,7 +344,7 @@ class FirstListenReceiptStore:
         *,
         accepted_at: float | None = None,
     ) -> FirstListenReceiptV1:
-        """Persist one HA-accepted playback and supersede older audio proof."""
+        """Persist one HA-accepted playback without erasing listener proof."""
         if (
             not isinstance(entity_id, str)
             or len(entity_id) > 255
@@ -330,14 +352,42 @@ class FirstListenReceiptStore:
         ):
             raise ValueError("entity_id must be a media_player entity id")
         timestamp = self._fact_timestamp(accepted_at)
-        attempt_id = secrets.token_urlsafe(24)
+        # Keep generated HA attempts structurally disjoint from the reserved
+        # entity-less listener namespace, regardless of random token contents.
+        attempt_id = f"ha_{secrets.token_urlsafe(24)}"
         async with self._mutation_lock:
             current = await _run_serialized_io(load_first_listen_receipt, self.path, self._clock())
+            if is_complete_listener_proof(current):
+                # The optional legacy HA route may still play into a room, but
+                # it must not erase the transport-neutral fact that First
+                # Listen already succeeded on another listening path.
+                return current
             receipt = FirstListenReceiptV1(
                 selected_entity_id=entity_id,
                 accepted_attempt_id=attempt_id,
                 accepted_at=timestamp,
                 heard_at=None,
+                privacy_reviewed_at=current.privacy_reviewed_at if current is not None else None,
+            )
+            await self._persist(receipt)
+            return receipt
+
+    async def record_listener_heard(
+        self,
+        *,
+        heard_at: float | None = None,
+    ) -> FirstListenReceiptV1:
+        """Atomically record audible playback on the current listening path."""
+        async with self._mutation_lock:
+            current = await _run_serialized_io(load_first_listen_receipt, self.path, self._clock())
+            if current is not None and current.audio_complete:
+                return current
+            timestamp = self._fact_timestamp(heard_at)
+            receipt = FirstListenReceiptV1(
+                selected_entity_id=None,
+                accepted_attempt_id=f"listener_{secrets.token_urlsafe(24)}",
+                accepted_at=timestamp,
+                heard_at=timestamp,
                 privacy_reviewed_at=current.privacy_reviewed_at if current is not None else None,
             )
             await self._persist(receipt)
@@ -360,6 +410,11 @@ class FirstListenReceiptStore:
             current = await _run_serialized_io(load_first_listen_receipt, self.path, self._clock())
             if current is None or not secrets.compare_digest(current.accepted_attempt_id or "", attempt_id):
                 raise FirstListenAttemptMismatchError("first-listen attempt is stale or unavailable")
+            if not heard and is_complete_listener_proof(current):
+                # A listener confirmation is one atomic, monotonic fact. Keep
+                # the legacy Not-yet route observational for this new receipt
+                # subtype while retaining its existing HA-attempt behavior.
+                return current
             if heard:
                 if current.heard_at is not None:
                     return current

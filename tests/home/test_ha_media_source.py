@@ -256,49 +256,78 @@ def test_ha_docs_no_longer_defer_media_source() -> None:
     assert "`media_source.py` (casting the stream to other HA speakers)" not in doc
 
 
-def test_first_listen_funnel_documents_speaker_proof_then_privacy_choice() -> None:
-    """The README must lead from real-speaker proof to the explicit privacy gate."""
+def test_first_listen_funnel_documents_firsthand_stream_proof_then_privacy_choice() -> None:
+    """First Listen must prove local audio before privacy; HA speakers stay optional."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     doc = DOC.read_text(encoding="utf-8")
-    rendered_readme = " ".join(readme.split())
     rendered_doc = " ".join(doc.split())
 
-    assert "docs/integrations/ha-integration.md#play-it-on-one-speaker" in readme
-    assert "## First listen: one real speaker" in readme
-    assert "Italian radio for Home Assistant" in readme
-    assert "with no AI key required" in readme
-    assert "Select **Keep private and continue** without reading Home state, or" in rendered_readme
-    assert "**Let future hosts use this**" in readme
-    assert "optional HACS speaker" not in readme
-    assert "No AI key is required for your first listen" in readme
-    assert "offline, attributed twelve-track starter collection" in readme
-    assert "no provider account or network music source is required" in rendered_readme
-    assert "Host home context** choice is omitted and remains off" in rendered_readme
-    assert "send it to an AI provider" in rendered_readme
-    assert "Home Assistant accepting the request is only delivery confirmation" in rendered_readme
-    assert "## Check the app (operators)" in readme
-    assert readme.index("## First listen: one real speaker") < readme.index("### Home Assistant OS app")
-    assert readme.index("## First listen: one real speaker") < readme.index("## When you want the house in the show")
+    section_start = readme.lower().index("## first listen")
+    section_end = readme.find("\n## ", section_start + 3)
+    first_listen = readme[section_start : section_end if section_end >= 0 else None]
+    rendered_first_listen = " ".join(first_listen.split())
+    lowered_first_listen = rendered_first_listen.lower()
+
+    stream_proof = first_listen.index("`/stream`")
+    human_confirmation = first_listen.index("**Yes, I hear it**")
+    privacy_choice = first_listen.index("**Keep Home private**")
+    assert stream_proof < human_confirmation < privacy_choice
+    assert "current device" in lowered_first_listen or "device in front of you" in lowered_first_listen
+    assert any(route in first_listen for route in ("Bluetooth", "AirPlay"))
+    assert "**See what the hosts would receive**" in first_listen
+    assert "**Let Marco and Giulia use these details**" in first_listen
+    assert "No HACS integration" in first_listen
+
+    admin_default = first_listen.index("producer desk")
+    admin_route = first_listen.index("`/admin`", admin_default)
+    listener_seam = first_listen.index("`/listen` station page")
+    assert admin_default < admin_route < listener_seam
+    assert "**Open full listener**" in first_listen
+    assert "**Listen** action" in first_listen
 
     assert "This integration is optional" in doc
-    assert "Home Assistant restart" in doc
+    assert "First Listen flow, `/listen` page, and `/stream` work without HACS" in rendered_doc
     assert "## Let the HACS integration own the media player (optional)" in doc
-    assert "it is not needed for Media Source speaker playback" in rendered_doc
-    assert "does not change this route" in doc
-    assert "Developer tools → Actions" in doc
-    assert "Play specified media" in doc
-    assert "one physical speaker" in doc
-    assert "Mamma Mi Radio Live" in rendered_doc
-    assert "media-source://mammamiradio/live" in doc
-    assert "**Success:**" in doc
-    assert "../troubleshooting.md#home-assistant-app" in doc
-    ownership_choice = doc.index("## Let the HACS integration own the media player (optional)")
-    developer_tools = doc.index("Developer tools → Actions")
-    physical_speaker = doc.index("one physical speaker")
-    success = doc.index("**Success:**")
-    recovery = doc.index("../troubleshooting.md#home-assistant-app")
-    assert "Media → Mamma Mi Radio → Mamma Mi Radio Live" in rendered_doc
-    assert ownership_choice < physical_speaker < success < developer_tools < recovery
+    hacs_install = doc.index("## Install the HACS integration for HA-native playback")
+    speaker_heading = doc.index("## Optional: play it on a Home Assistant speaker")
+    speaker_section = doc[speaker_heading:]
+    assert "current device" in speaker_section
+    assert "firsthand confirmation" in speaker_section
+    assert hacs_install < speaker_heading
+
+
+def test_first_audio_docs_keep_the_self_contained_privacy_contract() -> None:
+    """The new listening seam must not weaken the zero-key, private-first promise."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    rendered = " ".join(readme.split())
+
+    assert "No AI key is required for your first listen" in readme
+    assert "offline, attributed twelve-track starter collection" in rendered
+    assert "no provider account or network music source is required" in rendered
+    assert "**Host home context** choice is omitted and remains off" in rendered
+    assert "Previewing does not publish the snapshot into host scripts or send it to an AI provider" in rendered
+    assert "### Check the app (operators)" in readme
+
+
+def test_optional_ha_playback_docs_keep_the_frozen_media_source_way_out() -> None:
+    """HACS remains optional, but its room-playback route must stay actionable."""
+    doc = DOC.read_text(encoding="utf-8")
+    install_start = doc.index("## Install the HACS integration for HA-native playback")
+    ownership_start = doc.index("## Let the HACS integration own the media player (optional)")
+    speaker_start = doc.index("## Optional: play it on a Home Assistant speaker")
+    speaker_end = doc.index("## How it works", speaker_start)
+    install_section = doc[install_start:ownership_start]
+    speaker_section = doc[speaker_start:speaker_end]
+
+    assert "restart Home Assistant" in install_section
+    assert install_start < ownership_start < speaker_start
+    assert "Developer tools → Actions" in speaker_section
+    assert "Play specified media" in speaker_section
+    assert "physical `media_player`" in speaker_section
+    assert "media-source://mammamiradio/live" in speaker_section
+    assert "Media → Mamma Mi Radio → Mamma Mi Radio Live" in " ".join(speaker_section.split())
+    assert "Confirm the room is audible yourself" in speaker_section
+    assert "../troubleshooting.md#home-assistant-app" in speaker_section
 
 
 # --- Stream-proxy view (MammaRadioStreamView.get) -------------------------------

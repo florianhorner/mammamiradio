@@ -17,6 +17,7 @@ from mammamiradio.core.setup_status import (
     build_setup_status,
     classify_station_mode,
     detect_run_mode,
+    first_listen_continuity_available,
     first_listen_onboarding_active,
     has_safe_home_context,
     home_context_availability,
@@ -358,21 +359,59 @@ def test_unrecognized_install_origin_fails_closed_until_onboarding_is_complete()
     assert first_listen_onboarding_active("malformed", audio_complete=True, privacy_complete=True) is False
 
 
-def test_onboarding_is_never_mandatory_without_home_assistant_access() -> None:
-    """A standalone install cannot complete the speaker check, so it is not owed one."""
+def test_onboarding_remains_active_without_home_assistant_access() -> None:
+    """The station stream makes First Listen independent of HA access."""
     assert (
         first_listen_onboarding_active("fresh", audio_complete=False, privacy_complete=False, ha_access_available=False)
+        is True
+    )
+
+
+def test_first_listen_continuity_uses_explicit_source_evidence_when_available() -> None:
+    config = load_config()
+    state = _demo_state()
+
+    assert first_listen_continuity_available(config, state, {"blocking": False}) is True
+    assert (
+        first_listen_continuity_available(
+            config,
+            state,
+            {
+                "blocking": False,
+                "source_readiness": {
+                    "programming_ready": False,
+                    "continuity_available": True,
+                    "recovery_cover_available": False,
+                    "recovery_on_air": False,
+                },
+            },
+        )
         is False
+    )
+    assert (
+        first_listen_continuity_available(
+            config,
+            state,
+            {
+                "blocking": True,
+                "source_readiness": {
+                    "programming_ready": False,
+                    "recovery_cover_available": True,
+                    "recovery_on_air": False,
+                },
+            },
+        )
+        is True
     )
     assert (
         first_listen_onboarding_active(
             "unknown", audio_complete=False, privacy_complete=False, ha_access_available=False
         )
-        is False
+        is True
     )
     assert (
-        first_listen_onboarding_active("fresh", audio_complete=False, privacy_complete=False, ha_access_available=True)
-        is True
+        first_listen_onboarding_active("fresh", audio_complete=True, privacy_complete=True, ha_access_available=False)
+        is False
     )
 
 
@@ -856,7 +895,7 @@ def test_recommended_next_action_reassures_on_backup_audio_after_onboarding():
     )
 
 
-def test_fresh_no_key_setup_orders_speaker_and_privacy_before_optional_ai():
+def test_fresh_no_key_setup_orders_listen_and_privacy_before_optional_ai():
     config = load_config()
     config.is_addon = True
     config.anthropic_api_key = ""
@@ -885,15 +924,48 @@ def test_fresh_no_key_setup_orders_speaker_and_privacy_before_optional_ai():
         "privacy",
     ]
     assert guided["strip"]["primary_action"] == {
-        "kind": "find_speaker",
-        "label": "Find speaker",
+        "kind": "play_here",
+        "label": "Play here",
         "target": "setup",
     }
+    assert guided["strip"]["items"][1]["label"] == "Listen"
+    assert guided["speaker"]["label"] == "Listening device"
+    assert guided["speaker"]["media_source_uri"] == "/stream"
     assert guided["first_listen"]["show_ai"] is False
     assert guided["ai_hosts"]["status"] == "missing"
     assert guided["privacy"]["enabled"] is False
-    assert setup["recommended_next_action"].startswith("Find a Home Assistant speaker")
+    assert setup["recommended_next_action"] == "Play Mamma Mi Radio on this device, then confirm what you hear."
     assert setup["onboarding_required"] is True
+
+
+def test_fresh_standalone_setup_can_complete_first_listen_without_ha_access():
+    config = load_config()
+    config.is_addon = False
+    config.homeassistant.enabled = False
+    config.ha_token = ""
+
+    setup = build_setup_status(
+        config,
+        _demo_state(),
+        golden_path={"blocking": True, "source_readiness": _first_listen_source_projection()},
+        install_origin="fresh",
+        context_choice_explicit=False,
+    )
+
+    guided = setup["guided_setup"]
+    assert setup["onboarding_required"] is True
+    assert guided["strip"]["primary_action"] == {
+        "kind": "play_here",
+        "label": "Play here",
+        "target": "setup",
+    }
+    assert guided["speaker"] == {
+        "status": "ready",
+        "label": "Listening device",
+        "selected_entity_id": "",
+        "media_source_uri": "/stream",
+        "homeassistant_access": False,
+    }
 
 
 def test_unknown_install_origin_keeps_compatibility_layout_after_onboarding_complete():
@@ -957,7 +1029,7 @@ def test_unknown_install_origin_routes_unproven_installs_through_first_listen():
         "verification",
         "privacy",
     ]
-    assert guided["strip"]["primary_action"]["kind"] == "find_speaker"
+    assert guided["strip"]["primary_action"]["kind"] == "play_here"
 
 
 def test_fresh_jamendo_readiness_is_human_visible_but_ai_stays_later():
@@ -998,6 +1070,8 @@ def test_fresh_jamendo_readiness_is_human_visible_but_ai_stays_later():
         "label": "Review home context",
         "target": "setup",
     }
+    assert guided["privacy"]["preview_required"] is True
+    assert guided["privacy"]["copy"] == "Off until you review a fresh filtered preview and choose Enable."
 
     reviewed = FirstListenReceiptV1(
         selected_entity_id=receipt.selected_entity_id,
@@ -1020,6 +1094,76 @@ def test_fresh_jamendo_readiness_is_human_visible_but_ai_stays_later():
         "label": "Add AI key",
         "target": "setup",
     }
+
+
+def test_listener_receipt_projects_complete_without_a_speaker_entity():
+    config = load_config()
+    config.homeassistant.enabled = False
+    receipt = FirstListenReceiptV1(
+        selected_entity_id=None,
+        accepted_attempt_id="listener_opaque_attempt_token_1234",
+        accepted_at=100.0,
+        heard_at=100.0,
+    )
+
+    guided = build_guided_setup(
+        config,
+        _demo_state(),
+        golden_path={
+            "blocking": True,
+            "source_readiness": _first_listen_source_projection(),
+        },
+        first_listen_receipt=receipt,
+        install_origin="fresh",
+        context_choice_explicit=False,
+    )
+
+    assert guided["first_listen"]["audio_complete"] is True
+    assert guided["first_listen"]["selected_entity_id"] == ""
+    assert guided["speaker"]["status"] == "verified"
+    assert guided["verification"] == {
+        "status": "heard",
+        "attempt_id": "listener_opaque_attempt_token_1234",
+        "heard": True,
+        "milestone": "First listen achieved",
+    }
+    assert guided["strip"]["primary_action"] == {
+        "kind": "keep_home_private",
+        "label": "Keep Home private",
+        "target": "setup",
+    }
+    assert guided["privacy"]["preview_required"] is False
+    assert guided["privacy"]["copy"] == (
+        "Home Assistant details are unavailable here. Keep Home private to continue; the station does not need them."
+    )
+
+
+def test_no_ha_listener_proof_recommends_the_executable_private_choice():
+    config = load_config()
+    config.homeassistant.enabled = False
+    receipt = FirstListenReceiptV1(
+        selected_entity_id=None,
+        accepted_attempt_id="listener_opaque_attempt_token_1234",
+        accepted_at=100.0,
+        heard_at=100.0,
+    )
+
+    setup = build_setup_status(
+        config,
+        _demo_state(),
+        golden_path={
+            "blocking": True,
+            "source_readiness": _first_listen_source_projection(),
+        },
+        first_listen_receipt=receipt,
+        install_origin="fresh",
+        context_choice_explicit=False,
+    )
+
+    assert setup["guided_setup"]["strip"]["primary_action"]["kind"] == "keep_home_private"
+    assert setup["recommended_next_action"] == (
+        "Keep Home private to continue; the station does not need Home Assistant details."
+    )
 
 
 def test_fresh_recovery_strip_advances_through_audio_and_privacy_before_repair():
@@ -1047,10 +1191,12 @@ def test_fresh_recovery_strip_advances_through_audio_and_privacy_before_repair()
         context_choice_explicit=False,
     )
     assert waiting_for_confirmation["strip"]["primary_action"] == {
-        "kind": "verify_audio",
-        "label": "Did you hear it?",
+        "kind": "play_here",
+        "label": "Play here",
         "target": "setup",
     }
+    assert waiting_for_confirmation["speaker"]["status"] == "accepted"
+    assert waiting_for_confirmation["verification"]["status"] == "not_started"
 
     heard = FirstListenReceiptV1(
         selected_entity_id=accepted.selected_entity_id,

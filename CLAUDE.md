@@ -182,8 +182,9 @@ private durable system for strategy or relationship context.
   starter catalog directly. The playback loop rescues from packaged recovery
   clips, then the norm cache, then bundled starter assets, then forced banter —
   silence is never the terminal state. Audio startup remains ungated; a fresh
-  admin visit opens First Listen, and Home-context widening waits for an accepted
-  speaker attempt, human audible confirmation, and an explicit privacy choice.
+  admin visit opens First Listen, and Home-context widening waits for audible
+  browser proof on the operator's own device (a `listener_*` receipt with no
+  selected entity), human audible confirmation, and an explicit privacy choice.
   A release is blocked unless the exact starter files, at least 45 minutes,
   complete human audition evidence, and the 75 MiB package ceiling pass
   `make media-check` and `make media-proof`.

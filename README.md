@@ -10,18 +10,15 @@ an original music bed and a privacy-aware Marco/Giulia opening, followed by a
 source-aware handoff to the live stream. Add more music, Home context, and
 generated host conversations only when you want them.
 
-## First listen: one real speaker
+## First listen: on the device you already have open
 
-**Hear it before you choose what the hosts may use.** Install and start the Home
-Assistant OS app below. If HACS is not already installed, follow its [official
-installation guide](https://www.hacs.xyz/docs/use/download/download/). Then
-install the [HACS
-integration](docs/integrations/ha-integration.md#install-the-hacs-integration-for-speaker-playback)
-and restart Home Assistant once. Open the app's Web UI and follow the
-[first-listen speaker path](docs/integrations/ha-integration.md#play-it-on-one-speaker)
-in **First Listen**. A fresh unfinished install opens there automatically;
-completed installs return to the control room, while the same tab remains
-available to review progress or repair an unfinished step:
+**Hear it on the current device before you choose what the hosts may use.**
+Install and start the Home Assistant OS app below, then open the producer desk
+at `/admin`. First Listen plays `/stream` here — laptop speaker, headphones,
+Bluetooth, or AirPlay. No HACS integration is required. A fresh unfinished
+install opens **First Listen** automatically; completed installs return to the
+control room, while the same tab remains available to review progress or repair
+an unfinished step:
 
 1. The opening card explains the authored 27-second mini-show: an original
    music bed, Marco and Giulia's privacy-aware welcome, then a handoff to the
@@ -30,19 +27,20 @@ available to review progress or repair an unfinished step:
    sits underneath as supporting detail. It says whether primary music,
    recovery cover, or a music repair is what follows; bundled demo music is not
    presented as a song library.
-2. Select **Find my speakers**, choose one physical Home Assistant speaker,
-   then select **Start Mamma Mi Radio**. The request always uses
-   `media-source://mammamiradio/live`; browser playback is not counted.
-3. Home Assistant accepting the request is only delivery confirmation. Select
-   **Yes — that’s Mamma Mi Radio** only after the opening reaches the room, or
-   **Not yet** for
-   [warm repair steps](docs/integrations/ha-integration.md#first-listen-repair).
-4. Select **Keep private and continue** without reading Home state, or review
-   the fresh, filtered preview before selecting **Let future hosts use this**.
+2. Select **Play the station**. Confirm with **Yes, I hear it** only after you
+   hear Mamma Mi Radio, or **Not yet** for
+   [warm repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
+3. Select **Keep Home private** without reading Home state, or
+   **See what the hosts would receive** before
+   **Let Marco and Giulia use these details**.
    If the preview contains only generic daylight, the UI discloses it as
    ambient-only and not meaningful personalization, and recommends keeping it
    private. Add an AI key later if you want generated hosts; it is not part of
    first audio.
+4. The success screen's **Open full listener** is the seam to the `/listen` station page.
+   `/admin` stays the add-on default. Completed admin already has a **Listen** action
+   when stages are ready. Home Assistant speakers remain an
+   [optional later route](docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
 
 ### Home Assistant OS app
 
@@ -73,7 +71,7 @@ See [Music sources and rights boundaries](docs/music-sources.md).
 
 First audio is separate from home context. On every fresh install, the
 **Host home context** choice is omitted and remains off until you hear the
-speaker, request a fresh filtered preview, and explicitly choose **Let future
+station, request a fresh filtered preview, and explicitly choose **Let future
 hosts use this**.
 Previewing does not publish the snapshot into host scripts or send it to an AI
 provider. If that preview contains only generic daylight, it is shown for
@@ -89,7 +87,7 @@ stricter question: it stays `503 starting` until a listener has actually accepte
 audio (`503 stopped` while the station is deliberately paused), so
 `"ready": true` is already proof that someone heard the station, not just that
 the process booted. Neither replaces the first-listen check: hear
-**Mamma Mi Radio Live** on the selected speaker.
+**Mamma Mi Radio** on the current device.
 
 For branch development or repeatable manual QA, use the [disposable local Home
 Assistant lab](docs/runbooks/first-listen-local-ha.md). It preserves the local
@@ -160,7 +158,7 @@ It starts in layers, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | Nothing | The First Listen mini-show proves the speaker path, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
+| **Hear it first** | Nothing | The First Listen mini-show plays right here on this device, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
 | **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
 | **Give your home a voice** | AI host key plus prompt-safe Home Assistant context | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 

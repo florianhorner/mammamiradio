@@ -9,6 +9,7 @@ import sqlite3
 import stat
 import threading
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -81,6 +82,94 @@ def test_receipt_load_is_bounded_strict_and_corrupt_tolerant(tmp_path):
     assert load_first_listen_receipt(path, 200.0) is None
 
 
+def test_receipt_load_accepts_listener_and_existing_ha_proof(tmp_path):
+    path = first_listen_receipt_path(tmp_path)
+    path.parent.mkdir(parents=True)
+
+    listener_payload = _valid_receipt(
+        selected_entity_id=None,
+        accepted_attempt_id="listener_opaque_attempt_token_1234",
+        accepted_at=110.0,
+        heard_at=110.0,
+    )
+    path.write_text(json.dumps(listener_payload), encoding="utf-8")
+    listener = load_first_listen_receipt(path, 200.0)
+
+    assert listener is not None
+    assert listener.selected_entity_id is None
+    assert listener.audio_complete is True
+    assert listener.to_dict() == listener_payload
+
+    path.write_text(json.dumps(_valid_receipt()), encoding="utf-8")
+    ha_receipt = load_first_listen_receipt(path, 200.0)
+
+    assert ha_receipt is not None
+    assert ha_receipt.selected_entity_id == "media_player.kitchen"
+    assert ha_receipt.heard_at == 110.0
+
+
+@pytest.mark.parametrize("privacy_reviewed_at", [None, 120.0])
+def test_receipt_load_keeps_empty_and_privacy_only_v1_shapes_valid(tmp_path, privacy_reviewed_at):
+    path = first_listen_receipt_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    payload = _valid_receipt(
+        selected_entity_id=None,
+        accepted_attempt_id=None,
+        accepted_at=None,
+        heard_at=None,
+        privacy_reviewed_at=privacy_reviewed_at,
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    receipt = load_first_listen_receipt(path, 200.0)
+
+    assert receipt is not None
+    assert receipt.to_dict() == payload
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _valid_receipt(selected_entity_id=None),
+        _valid_receipt(
+            accepted_attempt_id=None,
+            accepted_at=None,
+            heard_at=None,
+        ),
+        _valid_receipt(
+            selected_entity_id=None,
+            accepted_attempt_id=None,
+            heard_at=None,
+        ),
+        _valid_receipt(
+            selected_entity_id=None,
+            accepted_attempt_id=None,
+            accepted_at=None,
+        ),
+        _valid_receipt(
+            selected_entity_id="media_player.kitchen",
+            accepted_attempt_id="listener_opaque_attempt_token_1234",
+        ),
+        _valid_receipt(
+            selected_entity_id=None,
+            accepted_attempt_id="listener_opaque_attempt_token_1234",
+            heard_at=None,
+        ),
+        _valid_receipt(
+            selected_entity_id=None,
+            accepted_attempt_id="listener_opaque_attempt_token_1234",
+            heard_at=111.0,
+        ),
+    ],
+)
+def test_receipt_load_rejects_ambiguous_or_malformed_listener_proof(tmp_path, payload):
+    path = first_listen_receipt_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_first_listen_receipt(path, 200.0) is None
+
+
 def test_receipt_load_result_distinguishes_missing_present_and_unavailable(tmp_path):
     path = first_listen_receipt_path(tmp_path)
 
@@ -115,6 +204,39 @@ async def test_receipt_store_exposes_explicit_load_result(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_receipt_store_rejects_invalid_public_facts(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+
+    with pytest.raises(ValueError, match="event timestamp"):
+        await store.record_listener_heard(heard_at=0.0)
+    with pytest.raises(ValueError, match="media_player entity id"):
+        await store.record_accepted("light.kitchen", accepted_at=100.0)
+    with pytest.raises(ValueError, match="heard must be a boolean"):
+        await store.verify("valid_attempt_token_1234", heard=cast(bool, "yes"))
+    with pytest.raises(FirstListenAttemptMismatchError):
+        await store.verify("short", heard=True)
+
+    assert await store.load() is None
+
+
+@pytest.mark.asyncio
+async def test_incomplete_ha_facts_enforce_time_order_and_idempotence(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+    accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+
+    with pytest.raises(ValueError, match="cannot precede playback acceptance"):
+        await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=99.0)
+
+    still_unheard = await store.verify(accepted.accepted_attempt_id or "", heard=False)
+    first_review = await store.record_privacy_reviewed(reviewed_at=120.0)
+    repeated_review = await store.record_privacy_reviewed(reviewed_at=150.0)
+
+    assert still_unheard == accepted
+    assert repeated_review == first_review
+    assert repeated_review.privacy_reviewed_at == 120.0
+
+
+@pytest.mark.asyncio
 async def test_receipt_records_facts_with_owner_only_atomic_persistence(tmp_path):
     store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
     with patch("mammamiradio.core.first_listen.os.fsync", wraps=os.fsync) as fsync:
@@ -128,6 +250,111 @@ async def test_receipt_records_facts_with_owner_only_atomic_persistence(tmp_path
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert fsync.call_count >= 2
     assert json.loads(path.read_text(encoding="utf-8")) == accepted.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_generated_ha_attempt_namespace_round_trips_reserved_token_output(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+
+    with patch("mammamiradio.core.first_listen.secrets.token_urlsafe", return_value="listener_reserved_collision"):
+        accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+
+    assert accepted.accepted_attempt_id == "ha_listener_reserved_collision"
+    assert await FirstListenReceiptStore(tmp_path, clock=lambda: 200.0).load() == accepted
+
+
+@pytest.mark.asyncio
+async def test_listener_heard_round_trips_and_is_idempotent(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+
+    first = await store.record_listener_heard(heard_at=100.0)
+    second = await store.record_listener_heard(heard_at=150.0)
+
+    assert first == second
+    assert first.selected_entity_id is None
+    assert first.accepted_attempt_id is not None
+    assert first.accepted_attempt_id.startswith("listener_")
+    assert first.accepted_at == 100.0
+    assert first.heard_at == 100.0
+    assert await store.load() == first
+
+
+@pytest.mark.asyncio
+async def test_listener_heard_supersedes_incomplete_ha_attempt(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+    accepted = await store.record_accepted("media_player.kitchen", accepted_at=90.0)
+    await store.record_privacy_reviewed(reviewed_at=95.0)
+
+    listener = await store.record_listener_heard(heard_at=100.0)
+
+    assert listener.accepted_attempt_id != accepted.accepted_attempt_id
+    assert listener.selected_entity_id is None
+    assert listener.accepted_at == listener.heard_at == 100.0
+    assert listener.privacy_reviewed_at == 95.0
+
+
+@pytest.mark.asyncio
+async def test_listener_heard_preserves_concurrent_privacy_fact(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+
+    await asyncio.gather(
+        store.record_listener_heard(heard_at=100.0),
+        store.record_privacy_reviewed(reviewed_at=120.0),
+    )
+
+    final = await store.load()
+    assert final is not None
+    assert final.accepted_at == final.heard_at == 100.0
+    assert final.privacy_reviewed_at == 120.0
+
+
+@pytest.mark.asyncio
+async def test_listener_heard_keeps_completed_ha_proof_unchanged(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+    accepted = await store.record_accepted("media_player.kitchen", accepted_at=90.0)
+    completed = await store.verify(accepted.accepted_attempt_id or "", heard=True, verified_at=100.0)
+
+    listener = await store.record_listener_heard(heard_at=120.0)
+
+    assert listener == completed
+
+
+@pytest.mark.asyncio
+async def test_legacy_verify_not_yet_cannot_invalidate_listener_proof_across_restart(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+    listener = await store.record_listener_heard(heard_at=100.0)
+
+    unchanged = await store.verify(listener.accepted_attempt_id or "", heard=False)
+    restarted = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+
+    assert unchanged == listener
+    assert await restarted.load() == listener
+
+
+@pytest.mark.asyncio
+async def test_legacy_ha_acceptance_cannot_supersede_listener_proof_across_restart(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+    listener = await store.record_listener_heard(heard_at=100.0)
+
+    unchanged = await store.record_accepted("media_player.kitchen", accepted_at=120.0)
+    restarted = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+
+    assert unchanged == listener
+    assert await restarted.load() == listener
+
+
+@pytest.mark.asyncio
+async def test_new_ha_acceptance_still_supersedes_completed_ha_proof(tmp_path):
+    store = FirstListenReceiptStore(tmp_path, clock=lambda: 200.0)
+    first = await store.record_accepted("media_player.kitchen", accepted_at=90.0)
+    completed = await store.verify(first.accepted_attempt_id or "", heard=True, verified_at=100.0)
+
+    second = await store.record_accepted("media_player.bedroom", accepted_at=120.0)
+
+    assert second.accepted_attempt_id != completed.accepted_attempt_id
+    assert second.selected_entity_id == "media_player.bedroom"
+    assert second.heard_at is None
+    assert await FirstListenReceiptStore(tmp_path, clock=lambda: 200.0).load() == second
 
 
 @pytest.mark.asyncio
