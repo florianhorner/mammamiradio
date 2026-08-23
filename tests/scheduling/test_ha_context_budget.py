@@ -75,6 +75,11 @@ def _states_response(states: list[dict]) -> MagicMock:
     return response
 
 
+async def _wait_for_thread_event(event: threading.Event, *, timeout: float = 1.0) -> None:
+    """Wait for a worker signal without blocking the event loop under load."""
+    assert await asyncio.to_thread(event.wait, timeout)
+
+
 @pytest.mark.asyncio
 async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordinator_drains(tmp_path):
     import mammamiradio.home.ha_context as ha_context
@@ -146,7 +151,7 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
         coordinator = _HAContextRefreshCoordinator(config, state)
         try:
             fallback, fresh = await coordinator.prepare_for_segment()
-            assert worker_started.wait(timeout=0.2)
+            await _wait_for_thread_event(worker_started)
             assert fallback.summary == "old ambient"
             assert not fresh
             assert state.ha_context_refresh_stage == "projection"
@@ -172,7 +177,7 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
         finally:
             release_worker.set()
             await coordinator.close()
-    assert worker_finished.wait(timeout=0.5)
+    await _wait_for_thread_event(worker_finished)
 
 
 @pytest.mark.asyncio
@@ -219,7 +224,7 @@ async def test_close_while_projection_worker_runs_ignores_late_candidate_and_cle
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
         await coordinator.prepare_for_segment()
-        assert worker_started.wait(timeout=0.2)
+        await _wait_for_thread_event(worker_started)
         assert state.ha_context_refresh_stage == "projection"
 
         await coordinator.close()
@@ -229,7 +234,7 @@ async def test_close_while_projection_worker_runs_ignores_late_candidate_and_cle
         publish.assert_not_called()
 
         release_worker.set()
-        assert worker_finished.wait(timeout=0.5)
+        await _wait_for_thread_event(worker_finished)
         await asyncio.sleep(0)
         assert state.ha_context_refresh_stage == "idle"
         assert coordinator.current_context is prior
@@ -368,6 +373,9 @@ async def test_total_cap_cancels_owned_request_and_retries_only_after_poll_caden
             assert terminal["adoption_pending"] is False
             assert terminal["last_result"] == "background_timeout"
             assert terminal["last_result_used_background"] is True
+            terminal_duration_ms = terminal["last_result_duration_ms"]
+            assert isinstance(terminal_duration_ms, int)
+            assert terminal_duration_ms > 0
             # The producer can be busy with music for a while before its next
             # eligible boundary. Terminal timing must remain the 30s cap, not
             # expand to the delayed mailbox-drain time.
@@ -383,7 +391,7 @@ async def test_total_cap_cancels_owned_request_and_retries_only_after_poll_caden
             assert state.ha_context_refresh_last_result == "background_timeout"
             assert state.ha_context_refresh_in_flight is False
             assert calls == 1
-            assert 5 <= state.ha_context_refresh_last_result_duration_ms <= 25
+            assert state.ha_context_refresh_last_result_duration_ms == terminal_duration_ms
 
             await coordinator.prepare_for_segment()
             assert calls == 1

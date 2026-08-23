@@ -49,7 +49,7 @@ def _generated_source(pack_dir: Path) -> tuple[dict[str, object], dict[str, byte
     blobs = {
         generator_path: b"deterministic complete-pack generator\n",
         "scripts/core_cadence_gate.py": b"deterministic core generator\n",
-        "radio.toml": b"[station]\nname = 'Mammami Radio'\n",
+        "radio.toml": b"[station]\nname = 'Mamma Mi Radio'\n",
     }
     dependency_paths = tuple(blobs)
 

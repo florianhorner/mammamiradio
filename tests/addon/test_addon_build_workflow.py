@@ -349,7 +349,7 @@ def test_ci_emits_strict_quick_media_proof_before_build() -> None:
 
 
 def test_ci_proves_both_unpushed_images_before_any_publish() -> None:
-    """The full both-image proof runs and uploads its report before any push.
+    """The full both-image proof runs before either architecture is published.
 
     While the twelve starter-catalog tracks are absent by design the job is
     report-only (missing content prints a NOTICE instead of failing, so image

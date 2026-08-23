@@ -107,7 +107,7 @@ private durable system for strategy or relationship context.
 - All checks: `make check` (lint + format check + typecheck + coverage gate with per-module floors) — `format-check` mirrors CI's `ruff format --check` so a format nit can't pass locally then fail CI
 - Pre-commit: `pip install pre-commit && pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg`
 - **Validate addon before push**: `./scripts/validate-addon.sh` (add `--build` for Docker build test)
-- **Release cooldown self-test**: `bash tests/workflows/test_cooldown_gate.sh` (9 scenarios, runs in `quality.yml` on every PR)
+- **Release cooldown self-test**: `bash tests/workflows/test_cooldown_gate.sh` (9 scenarios, runs in `quality.yml` on PRs that touch `.github/`, `scripts/`, or `tests/workflows/`, and on every push to `main`)
 
 ## Docker / Home Assistant
 
@@ -373,9 +373,17 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 - **CI enforcement**: `.github/workflows/quality.yml` runs `scripts/coverage-ratchet.py`:
   - On PRs: `check` mode — fails if any module dropped below its floor.
   - On main merge: `update` mode — auto-ratchets all floors up and commits the new values. Zero human intervention.
+  - The `tests` job checks out full git history (`fetch-depth: 0`). The imaging
+    pack provenance test reads generator inputs at the revision pinned in the
+    manifest, which can be older than `HEAD~1`; a shallow clone cannot prove those hashes.
 - **Pi aarch64 smoke**: `.github/workflows/pi-smoke.yml` is an arm64 FFmpeg
   7.x/8.x compatibility canary, not exact add-on package parity. It uses JVS as
   primary and verifies the supported BtbN fallback against GitHub's digest.
+  The required `pi-smoke` check always reports; the ARM job itself runs on
+  every `main` push and on PRs that touch audio, scheduling, streamer,
+  startup/core configuration, launch-smoke, Python package/runtime/development
+  dependencies, radio/model configuration, the changed-lanes classifier, or
+  the shared Python CI setup.
 - **Explainer guards**: `.github/workflows/explainer.yml` runs the
   `docs/explainer/` test suite (`npm test`), the production build
   (`npm run build`), and the four-scenario funnel end-to-end in real Chromium
@@ -389,7 +397,7 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   change to the CI invocation is exercised by the job it changes.
 - **Local check**: `make coverage-check` to verify locally. `make coverage-ratchet` to preview what CI would commit.
 - **Adding tests**: Write tests, push. CI will auto-raise the floors on merge. The next PR that drops any module will fail.
-- **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on every PR). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
+- **Release cooldown gate**: `.github/workflows/release-cooldown.yml` blocks any `v*` tag push if the prior published release is <24h old. Bypass by adding the `hotfix` label to the PR that introduced the tagged commit. Self-test: `bash tests/workflows/test_cooldown_gate.sh` (9 cases; also runs in `quality.yml` on PRs that touch workflow/script paths, and on every push to `main`). See `docs/runbooks/ha-addon.md` and `docs/stabilization-log.md` for the measurement plan.
 - **Release invariants** (`scripts/check-release-invariants.sh`): runs on every PR. Catches (1) FFmpeg `music_eq_chain` equalizer count ≠ 2 (Pi aarch64 SIGABRT risk), (2) either required recovery asset (`continuity_1.mp3`, `emergency_tone.mp3`) missing, ≤1 KiB, or not recognized as audio by `ffprobe` — each checked independently, so validation never stops at the first playable asset — or any `generate_silence` reference in `producer.py`, (3) missing `_pick_canned_clip=None` test mock (empty-container / missing packaged recovery untested), (4) missing `session_stopped` test (post-restart silence untested). The manifest/hash boundary for those assets is no longer a per-asset call in this script: one Python-3.9-compatible `scripts/validate-spoken-assets.py` run covers the whole packaged demo inventory (and, with `--browser-assets-root`, the browser narration pack) before the per-asset reachability check. Local: `bash scripts/check-release-invariants.sh`.
 - **Version sync check** (inline in `quality.yml`): runs on PRs that touch `pyproject.toml` or `ha-addon/mammamiradio/config.yaml`. Runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on unrelated PRs. Local: `make pre-release`.
 - **Advertised-version guard** (`scripts/check-advertised-version.sh`): asks GHCR whether the version `main` advertises to the HA Supervisor exists, for both arches, over the anonymous token endpoint (no scope needed). Home Assistant requires a prebuilt `image:` add-on's `version:` to name a real tag; when it does not, fresh installs fail and updates roll back.
@@ -407,6 +415,7 @@ These UI elements have regressed in past refactors. Always verify they survive a
 - **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
+- **Station name in copy** (`docs/design/system.md`): Write **Mamma Mi Radio** in prose. Use `mammamiradio` only in URLs, paths, package names, environment variables, entity IDs, and container names. `tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files, including changelogs. Describe the typo without repeating it.
 - **Admin espresso surface** (`mammamiradio/web/static/tokens.css`) — `--surface` / `--surface-strong` / `--line-strong` must remain at Pi-baseline values (`#251E19` / `#362B25` / `0.16`) so admin reads as espresso warm-brown, not washed-out taupe. Listener cards use the dedicated, brighter `--card` / `--card-strong` / `--card-line` tokens for visibility on the dark page; never raise the admin `--surface*` tokens for listener contrast (that washed admin to taupe in PR #298).
 
 When editing any HTML file, grep for these elements before committing.
@@ -449,7 +458,7 @@ Three local lints consume `LINT_PATTERNS`:
 
 - `scripts/check-changelog-lint.sh` — runs in `quality.yml` against `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md`.
 - `scripts/check-pr-body-lint.sh` — runs in `.github/workflows/pr-body-lint.yml` against the PR body on every `opened/edited/synchronize/ready_for_review` event, plus a small set of PR-body-specific patterns for process narrative (`N commits ahead`, `picked up cleanly`, `auto-decided`, `soak verification`, `dual-voice review`, `🤖 Generated with`). The local PreToolUse hook (`~/.claude/hooks/verify-proof-block.sh`) chains it in at `gh pr create` time when the script is present in the project.
-- `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml`).
+- `scripts/check-issue-body-lint.sh` — runs in `.github/workflows/issue-body-lint.yml` against maintainer-authored issue bodies on every `opened/edited` event. Outside contributors' issues are never linted (author guard in the workflow), and failures are quiet by design — a red X in the Actions tab, no bot comment, no label. The local PreToolUse hook (`~/.claude/hooks/verify-issue-body.sh`) blocks `gh issue create`/`gh issue edit` at author time when the script is present in the project. Self-test: `bash tests/workflows/test_issue_body_lint.sh` (runs in `quality.yml` on workflow/script PRs and on `main`).
 
 To extend the rules, add a regex to `LINT_PATTERNS` in `scripts/lint-patterns.sh` — all three lints pick it up automatically.
 
