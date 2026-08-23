@@ -21,6 +21,7 @@ if [ -f proof/preship-review.json ]; then
     commit -q --no-verify -m "test: strip legacy evidence for fixture"
 fi
 BEFORE_EVIDENCE="$(git rev-parse HEAD)"
+BEFORE_EVIDENCE_SHORT="$(git rev-parse --short HEAD)"
 
 write_evidence() {
   git -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null \
@@ -221,7 +222,7 @@ RUN_RC=0
 RUN_OUT="$(env PATH="$MOCK_BIN:$PATH" \
     GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_STATE_DIR="$GH_MOCK_STATE_DIR" \
     GH_MOCK_HEAD="$BEFORE_EVIDENCE" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
-    MMR_LAND_REVIEW_READER="$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
+    MMR_LAND_REVIEW_READER="$(make_reader review "$BEFORE_EVIDENCE_SHORT" "$NOW_ISO")" \
     MMR_LAND_UPDATE_TIMEOUT=6 MMR_LAND_SKIP_THREAD_CHECK=1 \
     bash "$LAND" 7 2>&1)" || RUN_RC=$?
 [ "$RUN_RC" -ne 0 ] || fail "missing evidence must deny when evidence gate is live"
