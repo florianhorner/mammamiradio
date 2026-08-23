@@ -23,7 +23,8 @@ This file supplements the global instructions for the `mammamiradio` repository.
 - Before opening any PR (ANY runtime — Claude, Codex, Cursor): run the pre-ship
   review squad, then `scripts/emit-review-evidence.sh`, and commit
   `proof/preship-review/pr-<number>.json` (schema v2). CI (`preship-evidence.yml`)
-  verifies it against the PR head, report-only. Legacy `proof/preship-review.json`
+  verifies it against the PR head and **blocks** merge when evidence is missing
+  or invalid. Legacy `proof/preship-review.json` is accepted with a migration
   is accepted with a migration warning. Invalidity on `main` after squash is
   expected — enforcement is at the PR boundary, not post-merge ancestry.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
