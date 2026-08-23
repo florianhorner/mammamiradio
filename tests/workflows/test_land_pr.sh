@@ -130,6 +130,15 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
 merged_with "$HEAD_FULL" || fail "clean PR should arm auto-merge pinned to head"
 pass "clean PR arms --squash --auto --match-head-commit <head>"
 
+# Case 1b: GitHub's millisecond timestamps are accepted for both the squad
+# entry and the newest PR commit.
+FRACTIONAL_ISO="${NOW_ISO%Z}.300Z"
+run_land "$(make_reader review "$HEAD_SHORT" "$FRACTIONAL_ISO")" \
+  GH_MOCK_COMMIT_DATE="$FRACTIONAL_ISO"
+[ "$RUN_RC" -eq 0 ] || fail "fractional timestamps should arm auto-merge (exit code)"
+merged_with "$HEAD_FULL" || fail "fractional timestamps should arm auto-merge"
+pass "millisecond timestamps are accepted"
+
 # Case 2: entry commit is an ANCESTOR of head, push within grace => allow
 run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")"
 [ "$RUN_RC" -eq 0 ] || fail "ancestor entry within grace should arm (exit code)"
