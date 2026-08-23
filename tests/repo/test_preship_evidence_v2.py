@@ -2125,11 +2125,20 @@ def test_pr_rejects_unavailable_reviewed_commit_while_main_accepts(repo: GitRepo
     assert verify_v2(repo, target=target, base=None, mode="main").content_sha256 == content_digest
 
 
-def test_pr_rejects_reviewed_commit_outside_base_to_target_history(repo: GitRepository) -> None:
+@pytest.mark.parametrize("descends_from_base", [False, True])
+def test_pr_rejects_reviewed_commit_outside_base_to_target_history(
+    repo: GitRepository,
+    descends_from_base: bool,
+) -> None:
     base = repo.head()
     content_digest = snapshot_tree(repo, base).content_sha256
     tree = _git(repo.root, "rev-parse", f"{base}^{{tree}}").stdout.decode().strip()
-    side_commit = _git(repo.root, "commit-tree", tree, input_bytes=b"side\n").stdout.decode().strip()
+    commit_args = ["commit-tree", tree]
+    if descends_from_base:
+        commit_args.extend(["-p", base])
+    side_commit = _git(repo.root, *commit_args, input_bytes=b"side\n").stdout.decode().strip()
+    assert repo.is_ancestor(base, side_commit) is descends_from_base
+    assert not repo.is_ancestor(side_commit, base)
     _add_receipt(repo, reviewed_commit=side_commit, content_digest=content_digest)
 
     with pytest.raises(EvidenceError, match="outside base-to-target history"):
