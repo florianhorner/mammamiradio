@@ -666,8 +666,13 @@ gates" (single source of truth). The short version:
   after verifying pre-ship evidence.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
-  `allow_auto_merge`, and the required contexts. Run it if landing behaves
+  `allow_auto_merge`, required contexts (`quality`, `pi-smoke`, `pre-ship evidence`),
+  and `required_conversation_resolution` on `main`. Run it if landing behaves
   oddly.
+- **Operator ruleset step (required):** In GitHub → Settings → Rules →
+  `require-pull-request-before-merging`, enable **Require conversation
+  resolution before merging**. This is the belt to `land-pr.sh`'s suspenders
+  for unresolved bot review threads. `check-merge-gate.sh` fails if it drifts off.
 
 ## Pre-merge checklist
 

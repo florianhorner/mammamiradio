@@ -28,6 +28,10 @@ case "$*" in
     [ -n "${GH_MOCK_PROT_FAIL:-}" ] && exit 1
     printf '%s\n' "${GH_MOCK_PROT:?}"
     ;;
+  *"branches/main/protection"*)
+    [ -n "${GH_MOCK_PROT_FULL_FAIL:-}" ] && exit 1
+    printf '%s\n' "${GH_MOCK_PROT_FULL:-{\"required_conversation_resolution\":{\"enabled\":true}}}"
+    ;;
   *"repos/{owner}/{repo}"*)
     [ -n "${GH_MOCK_REPO_FAIL:-}" ] && exit 1
     printf '%s\n' "${GH_MOCK_REPO:?}"
@@ -38,7 +42,7 @@ MOCK
 chmod +x "$MOCK_BIN/gh"
 
 GOOD_REPO='{"allow_update_branch":true,"allow_auto_merge":true}'
-GOOD_PROT='{"strict":true,"contexts":["quality","pi-smoke"]}'
+GOOD_PROT='{"strict":true,"contexts":["quality","pi-smoke","pre-ship evidence"]}'
 
 run_gate() { # [env overrides...]
   RUN_RC=0
@@ -70,18 +74,24 @@ run_gate GH_MOCK_REPO='{"allow_update_branch":true,"allow_auto_merge":false}'
 [ "$RUN_RC" -ne 0 ] || fail "allow_auto_merge=false must fail"
 pass "allow_auto_merge=false fails"
 
-# Case 5: required check context missing => FAIL naming it
+# Case 5b: conversation resolution disabled => FAIL
+run_gate GH_MOCK_PROT_FULL='{"required_conversation_resolution":{"enabled":false}}'
+[ "$RUN_RC" -ne 0 ] || fail "conversation resolution disabled must fail"
+printf '%s' "$RUN_OUT" | grep -q "conversation resolution" || fail "failure should name conversation resolution"
+pass "required_conversation_resolution=false fails"
+
+# Case 6: required check context missing => FAIL naming it
 run_gate GH_MOCK_PROT='{"strict":true,"contexts":["quality"]}'
 [ "$RUN_RC" -ne 0 ] || fail "missing pi-smoke context must fail"
 printf '%s' "$RUN_OUT" | grep -q "pi-smoke" || fail "failure should name the missing context"
 pass "missing required context fails"
 
-# Case 6: protection unreadable => FAIL loudly (never silently pass)
+# Case 7: protection unreadable => FAIL loudly (never silently pass)
 run_gate GH_MOCK_PROT_FAIL=1
 [ "$RUN_RC" -ne 0 ] || fail "unreadable protection must fail"
 pass "unreadable protection fails loudly"
 
-# Case 7: CI set => loud SKIP, exit 0, no gh calls needed
+# Case 8: CI set => loud SKIP, exit 0, no gh calls needed
 RUN_RC=0
 RUN_OUT="$(env CI=true PATH="$MOCK_BIN:$PATH" bash "$GATE" 2>&1)" || RUN_RC=$?
 [ "$RUN_RC" -eq 0 ] || fail "CI run must skip with exit 0"
@@ -89,4 +99,4 @@ printf '%s' "$RUN_OUT" | grep -q "SKIPPED in CI" || fail "CI skip must be loud"
 pass "CI skips loudly with exit 0"
 
 echo
-echo "All 7 check-merge-gate cases passed."
+echo "All 8 check-merge-gate cases passed."

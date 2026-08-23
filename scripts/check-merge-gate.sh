@@ -36,6 +36,7 @@ prot_json="$(gh api 'repos/{owner}/{repo}/branches/main/protection/required_stat
   echo "check-merge-gate: FAIL — could not read main branch protection (needs admin-scoped gh auth)." >&2
   exit 1
 }
+prot_full_json="$(gh api 'repos/{owner}/{repo}/branches/main/protection' 2>/dev/null)" || prot_full_json="{}"
 
 assert_true() { # <label> <json> <jq-path>
   local val
@@ -54,7 +55,7 @@ assert_true "repo allow_auto_merge" "$repo_json" '.allow_auto_merge'
 
 # The required contexts the strict flag protects — drift here would let PRs
 # land without the quality/pi-smoke verdicts entirely.
-for ctx in quality pi-smoke; do
+for ctx in quality pi-smoke "pre-ship evidence"; do
   if printf '%s' "$prot_json" | jq -e --arg c "$ctx" '.contexts | index($c)' >/dev/null 2>&1; then
     echo "check-merge-gate: PASS — required check '$ctx' present"
   else
@@ -62,6 +63,15 @@ for ctx in quality pi-smoke; do
     rc=1
   fi
 done
+
+conv_enabled="$(printf '%s' "$prot_full_json" | jq -r '.required_conversation_resolution.enabled // false' 2>/dev/null)"
+if [ "$conv_enabled" = "true" ]; then
+  echo "check-merge-gate: PASS — required conversation resolution enabled"
+else
+  echo "check-merge-gate: FAIL — required_conversation_resolution is not enabled on main." >&2
+  echo "check-merge-gate:        Enable it on ruleset require-pull-request-before-merging (see docs/runbooks/ha-addon.md)." >&2
+  rc=1
+fi
 
 if [ "$rc" -eq 0 ]; then
   echo "check-merge-gate: all merge-gate settings intact."
