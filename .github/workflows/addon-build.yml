@@ -217,9 +217,9 @@ jobs:
 
       # Report-only while the twelve starter tracks are absent by design: the
       # full proof still runs against both unpushed images and uploads its
-      # report, but this job does not fail on the missing content — push needs
-      # this job, so a hard failure here blocked every image publish and the
-      # edge channel with it. The stable promotion media-proof job in
+      # report, but this job does not fail on the missing content — publish
+      # needs this job, so a hard failure here still blocks every image publish
+      # and the edge channel. The stable promotion media-proof job in
       # addon-release.yml and the hard gate in scripts/pre-release-check.sh
       # (section 10) keep the release path blocked until the content lands.
       - name: Prove source, packages, and both built images (report-only)

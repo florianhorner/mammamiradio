@@ -2454,6 +2454,10 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
     async def _write_voice(_text, _voice, output_path, **_kwargs):
         Path(output_path).write_bytes(b"voice")
 
+    def _write_chime(output_path, *_args, **_kwargs):
+        Path(output_path).write_bytes(b"tone")
+        return output_path
+
     def _write_concat(_parts, output_path, *_args, **_kwargs):
         # The delay belongs here, not on generate_tone: producer.py imports that
         # name only as a patch seam for the recovery tests and never calls it on
@@ -2465,10 +2469,14 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
         Path(output_path).write_bytes(b"mixed")
         return output_path
 
+    imaging = MagicMock()
+    imaging.pick_time_check_sting.side_effect = _write_chime
+
     with (
         patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 0),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
         patch(

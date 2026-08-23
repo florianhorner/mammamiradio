@@ -214,3 +214,29 @@ def test_cmd_update_ratchets_floor_up_for_present_module(tmp_path, monkeypatch) 
 
     assert rc == 0
     assert json.loads(floors_file.read_text())["mammamiradio.core.config"] == 91
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", []),
+        ("off", []),
+        ("0", []),
+        ("auto", ["-n", "auto"]),
+        ("AUTO", ["-n", "auto"]),
+        ("²", []),
+        ("  auto  ", ["-n", "auto"]),
+        ("4", ["-n", "4"]),
+        ("nope", []),
+    ],
+)
+def test_xdist_args_from_env(monkeypatch, value: str, expected: list[str]) -> None:
+    module = _load_coverage_ratcheter()
+    monkeypatch.setenv("COVERAGE_RATCHET_XDIST", value)
+    assert module.xdist_args() == expected
+
+
+def test_xdist_args_defaults_to_serial_when_unset(monkeypatch) -> None:
+    module = _load_coverage_ratcheter()
+    monkeypatch.delenv("COVERAGE_RATCHET_XDIST", raising=False)
+    assert module.xdist_args() == []

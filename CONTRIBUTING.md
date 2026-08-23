@@ -126,7 +126,7 @@ make check
 
 Notes:
 
-- `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes.
+- `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes. On PRs that job runs when audio, scheduling, streamer, startup/core configuration, launch-smoke, Python package/runtime/development dependencies, radio/model configuration, the changed-lanes classifier, or the shared Python CI setup change; every push to `main` still runs it.
 - Home Assistant add-on changes must also pass the local add-on build check:
 
 ```bash
