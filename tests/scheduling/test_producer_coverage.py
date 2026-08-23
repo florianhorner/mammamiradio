@@ -440,16 +440,16 @@ async def test_try_crossfade_failure(tmp_path):
 
     voice_path = tmp_path / "voice.mp3"
     voice_path.write_bytes(b"voice")
-    music_path = tmp_path / "music.mp3"
-    music_path.write_bytes(b"music")
+    tail_path = tmp_path / "reserved_tail.mp3"
+    tail_path.write_bytes(b"tail")
     config = MagicMock()
     config.tmp_dir = tmp_path
 
     with patch(
-        "mammamiradio.scheduling.producer.crossfade_voice_over_music",
+        "mammamiradio.scheduling.producer.crossfade_voice_over_tail",
         side_effect=Exception("ffmpeg failed"),
     ):
-        result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3", music_path)
+        result = await _try_crossfade(voice_path, config, tmp_path / "output.mp3", tail_path)
         assert result == voice_path
 
 
@@ -1099,6 +1099,12 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
     def _slow_bumper(*_args, **_kwargs):
         time.sleep(0.05)
 
+    imaging = MagicMock()
+    imaging.pick_ad_bumper.side_effect = _slow_bumper
+    imaging.ad_sfx_dir.return_value = None
+    imaging.ad_beds_dir.return_value = None
+    imaging.resolve_ad_recipe.return_value = None
+
     os.environ.pop("MAMMAMIRADIO_SKIP_QUALITY_GATE", None)
 
     with (
@@ -1110,7 +1116,7 @@ async def test_ad_break_quality_reject_resets_songs_since_ad(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{SCRIPTWRITER_MODULE}.write_ad", new_callable=AsyncMock, return_value=fake_script),
         patch(f"{PRODUCER_MODULE}.synthesize_ad", new_callable=AsyncMock, return_value=fake_audio),
-        patch(f"{PRODUCER_MODULE}.generate_bumper_jingle", side_effect=_slow_bumper),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}._try_crossfade", new_callable=AsyncMock, return_value=fake_audio),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
@@ -2026,10 +2032,10 @@ async def test_drain_guard_norm_cache_bridge_when_no_canned_clip(tmp_path):
 
     recent_norm_file = tmp_path / "norm_aaa_ordinary_192k.mp3"
     recent_norm_file.write_bytes(b"fake recent norm audio" * 100)
-    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren")
+    save_track_metadata(recent_norm_file, title="Ordinary", artist="Alex Warren", source_kind="local")
     norm_file = tmp_path / "norm_zzz_cached_192k.mp3"
     norm_file.write_bytes(b"fake norm audio" * 100)
-    save_track_metadata(norm_file, title="Cached", artist="Cache Artist")
+    save_track_metadata(norm_file, title="Cached", artist="Cache Artist", source_kind="local")
 
     async def _queue_segment(segment: Segment, *, stale_check=None) -> bool:
         if stale_check and stale_check():
@@ -2190,9 +2196,13 @@ async def test_drain_guard_does_not_record_bridge_fire_when_enqueue_rejected(tmp
 
 
 @pytest.mark.asyncio
-async def test_banter_metadata_includes_has_music_tail(tmp_path):
-    """Banter segments produced after a crossfade transition must carry
-    has_music_tail=True so the sting layer does not double-stack."""
+async def test_banter_metadata_has_no_tail_before_a_pair_commits(tmp_path):
+    """A render alone must never claim a music tail in public metadata.
+
+    The producer only sets ``has_music_tail`` during the final synchronous
+    music-head/speech-successor admission, after the exact queued predecessor
+    has been revalidated.
+    """
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
@@ -2248,8 +2258,7 @@ async def test_banter_metadata_includes_has_music_tail(tmp_path):
     assert not queue.empty(), "Producer must have queued a banter segment"
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
-    # When _try_crossfade produces xfade_out (different from input path), has_music_tail must be True
-    assert seg.metadata.get("has_music_tail") is True
+    assert seg.metadata.get("has_music_tail") is False
 
 
 @pytest.mark.asyncio
@@ -2445,20 +2454,29 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
     async def _write_voice(_text, _voice, output_path, **_kwargs):
         Path(output_path).write_bytes(b"voice")
 
-    def _write_tone(output_path, *_args, **_kwargs):
-        time.sleep(0.05)
+    def _write_chime(output_path, *_args, **_kwargs):
         Path(output_path).write_bytes(b"tone")
         return output_path
 
     def _write_concat(_parts, output_path, *_args, **_kwargs):
+        # The delay belongs here, not on generate_tone: producer.py imports that
+        # name only as a patch seam for the recovery tests and never calls it on
+        # the time-check path, so the sleep never ran and "mix > tts" was
+        # comparing two sub-millisecond durations that both round to the same
+        # integer. concat_files runs inside `_timed_render_stage(state, "mix")`,
+        # so delaying it actually attributes measurable work to the mix stage.
+        time.sleep(0.05)
         Path(output_path).write_bytes(b"mixed")
         return output_path
+
+    imaging = MagicMock()
+    imaging.pick_time_check_sting.side_effect = _write_chime
 
     with (
         patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 0),
         patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.TIME_CHECK),
         patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_voice),
-        patch(f"{PRODUCER_MODULE}.generate_tone", side_effect=_write_tone),
+        patch(f"{PRODUCER_MODULE}._make_imaging_lib", return_value=imaging),
         patch(f"{PRODUCER_MODULE}.concat_files", side_effect=_write_concat),
         patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.0),
         patch(
@@ -2472,6 +2490,9 @@ async def test_time_check_render_trace_records_tts_and_mix(tmp_path):
     timing = next(item for item in state.render_timings if item["kind"] == SegmentType.TIME_CHECK.value)
     assert timing["outcome"] == "produced"
     assert set(timing["stages_ms"]) >= {"tts", "mix"}
+    # Pins the injected 50ms to the stage that did the work, rather than relying
+    # on mix happening to out-measure tts by scheduler noise.
+    assert timing["stages_ms"]["mix"] >= 50
     assert timing["stages_ms"]["mix"] > timing["stages_ms"]["tts"]
 
 

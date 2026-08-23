@@ -80,6 +80,10 @@
     segmentDurationMs: 0,
     progressTimer: null,
     lastNpKey: null,
+    currentNowPlaying: null,
+    starterCatalog: [],
+    lastCreditIdentity: null,
+    catalogCreditKey: '',
   };
 
   /* ── DOM refs (cached after DOMContentLoaded) ── */
@@ -190,6 +194,221 @@
       case 'news_flash': return 'pill-news';
       case 'idle': return 'pill-idle';
       default: return 'pill-idle';
+    }
+  }
+
+  /* ── Music credits ──
+   * Attribution reaches the listener only through /public-status. Treat it as
+   * untrusted display data anyway: textContent for copy, a strict host/path
+   * allowlist for links, and DOM construction throughout. */
+  function safeCreditUrl(raw, kind) {
+    if (typeof raw !== 'string' || raw.length > 2048) return null;
+    let url;
+    try { url = new URL(raw); } catch (_) { return null; }
+    if (url.protocol !== 'https:' || url.username || url.password) return null;
+    const host = url.hostname.toLowerCase();
+    if (kind === 'license') {
+      const validHost = host === 'creativecommons.org' || host === 'www.creativecommons.org';
+      const validPath = /^\/licenses\/by\/(3\.0|4\.0)\/?$/.test(url.pathname);
+      return validHost && validPath ? url.href : null;
+    }
+    const validSource = host === 'incompetech.com'
+      || host === 'www.incompetech.com'
+      || host === 'jamendo.com'
+      || host === 'www.jamendo.com';
+    return validSource ? url.href : null;
+  }
+
+  function creditLink(label, rawUrl, kind) {
+    const href = safeCreditUrl(rawUrl, kind);
+    if (!href) return null;
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = label;
+    return link;
+  }
+
+  function appendCreditLinks(container, attribution) {
+    const links = document.createElement('div');
+    links.className = 'mmr-credit-links';
+    const source = creditLink(_t('credits_source', 'Source'), attribution && attribution.source_url, 'source');
+    const license = creditLink(_t('credits_license', 'License'), attribution && attribution.license_url, 'license');
+    if (!source || !license) return false;
+    links.append(source, license);
+    container.appendChild(links);
+    return true;
+  }
+
+  function nowPlayingIdentity(np) {
+    const metadata = (np && np.metadata) || {};
+    const label = (np && np.label) || '';
+    const splitAt = label.indexOf(' \u2014 ');
+    const fallbackArtist = splitAt > 0 ? label.slice(0, splitAt) : '';
+    const fallbackTitle = splitAt > 0 ? label.slice(splitAt + 3) : label;
+    return {
+      title: String(metadata.title_only || metadata.title || fallbackTitle || '').slice(0, 300),
+      artist: String(metadata.artist || fallbackArtist || '').slice(0, 300),
+    };
+  }
+
+  function currentAttribution(np) {
+    if (!np || np.type !== 'music') return null;
+    const candidate = np.music_attribution || (np.metadata && np.metadata.music_attribution);
+    return candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate : null;
+  }
+
+  function renderCurrentCredit(np, announce) {
+    const container = $('music-credits-current');
+    if (!container) return;
+    container.replaceChildren();
+    const inlineTrigger = $('music-credits-inline');
+    const isMusic = Boolean(np && np.type === 'music');
+    if (inlineTrigger) inlineTrigger.hidden = !isMusic;
+
+    const identity = nowPlayingIdentity(np);
+    const attribution = currentAttribution(np);
+    const metadata = (np && np.metadata) || {};
+    const sourceKind = String(metadata.source_kind || metadata.audio_source || '').toLowerCase();
+    const key = JSON.stringify([isMusic, identity.title, identity.artist, attribution]);
+    if (announce && state.lastCreditIdentity && key !== state.lastCreditIdentity) {
+      const region = $('music-credits-announcement');
+      if (region) region.textContent = identity.title
+        ? _t('current_track_credit', 'Current track') + ': ' + identity.title
+        : _t('credits_no_current_music', 'No music track is on air right now.');
+    }
+    state.lastCreditIdentity = key;
+
+    const paragraph = document.createElement('p');
+    if (!isMusic) {
+      paragraph.textContent = _t('credits_no_current_music', 'No music track is on air right now.');
+      container.appendChild(paragraph);
+      return;
+    }
+    if (!attribution && sourceKind === 'local') {
+      paragraph.textContent = _t(
+        'local_credit',
+        "Provided by this station's operator. Mamma Mi Radio supplies no license information for this file.",
+      );
+      container.appendChild(paragraph);
+      return;
+    }
+    if (!attribution) {
+      paragraph.textContent = _t('source_unavailable', 'Source information unavailable.');
+      container.appendChild(paragraph);
+      return;
+    }
+
+    const licenseId = String(attribution.license_id || '').slice(0, 80);
+    const provider = String(attribution.provider || '').toLowerCase();
+    const title = identity.title || _t('seg_music', 'Music');
+    const artist = identity.artist || (provider === 'jamendo' ? 'Jamendo artist' : 'Kevin MacLeod');
+    const intro = document.createElement('span');
+    intro.className = 'mmr-credit-title';
+    intro.textContent = '\u201c' + title + '\u201d \u2014 ' + artist + '. ';
+    paragraph.appendChild(intro);
+    const fact = document.createElement('span');
+    if (provider === 'jamendo' || attribution.basis === 'provider_reported') {
+      fact.textContent = _t('credits_provided_by_jamendo', 'Provided by Jamendo under {license}.')
+        .replace('{license}', licenseId || 'the reported license');
+    } else {
+      fact.textContent = _t('credits_licensed_under', 'Licensed under {license}.')
+        .replace('{license}', licenseId || 'the listed license');
+    }
+    paragraph.appendChild(fact);
+    container.appendChild(paragraph);
+    const linksComplete = appendCreditLinks(container, attribution);
+    if (!linksComplete) {
+      const neutral = document.createElement('p');
+      neutral.className = 'mmr-credit-notice';
+      neutral.textContent = _t('source_unavailable', 'Source information unavailable.');
+      container.appendChild(neutral);
+    }
+    const notice = document.createElement('p');
+    notice.className = 'mmr-credit-notice';
+    notice.textContent = provider === 'jamendo' || attribution.basis === 'provider_reported'
+      ? _t('provider_reported_notice', 'License information supplied by Jamendo.')
+      : _t('normalized_notice', 'Normalized for Mamma Mi Radio.');
+    container.appendChild(notice);
+  }
+
+  function catalogAttribution(item) {
+    const license = item && typeof item.license === 'object' ? item.license : {};
+    return {
+      license_id: item.license_id || license.id || '',
+      license_url: item.license_url || license.url || '',
+      source_url: item.official_piece_url || item.source_url || '',
+    };
+  }
+
+  function renderStarterCatalog(items) {
+    const list = $('music-credits-catalog');
+    if (!list) return;
+    const safeItems = Array.isArray(items) ? items.slice(0, 12) : [];
+    const renderKey = JSON.stringify(safeItems);
+    if (state.catalogCreditKey === renderKey) return;
+    state.catalogCreditKey = renderKey;
+    list.replaceChildren();
+    if (!safeItems.length) {
+      const row = document.createElement('li');
+      row.textContent = _t('credits_catalog_unavailable', 'Starter catalog information is unavailable.');
+      list.appendChild(row);
+      return;
+    }
+    safeItems.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const row = document.createElement('li');
+      const title = document.createElement('span');
+      title.className = 'mmr-credit-title';
+      title.textContent = String(item.title || '').slice(0, 300) + ' \u2014 '
+        + String(item.artist || 'Kevin MacLeod').slice(0, 300) + '. ';
+      row.appendChild(title);
+      const attribution = catalogAttribution(item);
+      const license = document.createElement('span');
+      license.textContent = _t('credits_licensed_under', 'Licensed under {license}.')
+        .replace('{license}', String(attribution.license_id || 'CC BY 4.0'));
+      row.appendChild(license);
+      appendCreditLinks(row, attribution);
+      const notice = document.createElement('span');
+      notice.className = 'mmr-credit-notice';
+      notice.textContent = String(item.modification_notice || _t(
+        'normalized_notice',
+        'Normalized and transcoded by Mamma Mi Radio; no musical edits.',
+      )).slice(0, 300);
+      row.appendChild(notice);
+      list.appendChild(row);
+    });
+  }
+
+  let creditsInvoker = null;
+  function openMusicCredits(event) {
+    if (event) event.preventDefault();
+    const dialog = $('music-credits-dialog');
+    if (!dialog) return;
+    creditsInvoker = event && event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    renderCurrentCredit(state.currentNowPlaying, false);
+    renderStarterCatalog(state.starterCatalog);
+    if (!dialog.open) dialog.showModal();
+    requestAnimationFrame(() => $('music-credits-title')?.focus());
+  }
+
+  function trapCreditsFocus(event) {
+    if (event.key !== 'Tab') return;
+    const dialog = $('music-credits-dialog');
+    if (!dialog || !dialog.open) return;
+    const focusable = Array.from(dialog.querySelectorAll('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+      .filter((el) => !el.hasAttribute('hidden'));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const heading = $('music-credits-title');
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === heading)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   }
 
@@ -427,6 +646,7 @@
   /* ── Rendering ── */
   function renderNowPlayingStrip(np) {
     if (!np) return;
+    state.currentNowPlaying = np;
     const label = np.label || '';
     const trackEl = $('np-track');
     const artistEl = $('np-artist');
@@ -485,6 +705,7 @@
     }
 
     updateMediaSession(np);
+    renderCurrentCredit(np, Boolean($('music-credits-dialog')?.open));
   }
 
   function adReceiptCountText(count, singularKey, singularFallback, pluralKey, pluralFallback) {
@@ -902,6 +1123,8 @@
         if (data && data.retry_after) {
           msg = _t('clip_rate_limited', 'The tape decks need a moment — give them {s}s and tap again.')
             .replace('{s}', data.retry_after);
+        } else if (data && data.error_code === 'music_share_unavailable') {
+          msg = _t('music_share_unavailable', 'A complete included track has to finish before it can be shared.');
         } else if (data && data.reason === 'no_audio') {
           msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
         } else {
@@ -919,7 +1142,8 @@
       }
       const npEl = document.getElementById('np-track');
       const stationName = currentStationName();
-      const title = (npEl && npEl.textContent && npEl.textContent.trim()) || stationName;
+      const title = (data.track_title && String(data.track_title).trim()) ||
+        ((npEl && npEl.textContent && npEl.textContent.trim()) || stationName);
       if (navigator.share) {
         try {
           await navigator.share({ title: title + ' — ' + stationName, url: shareUrl });
@@ -977,6 +1201,8 @@
       state.status = status;
       state.caps = caps;
       state.firstDataReceived = true;
+      state.starterCatalog = Array.isArray(status.starter_catalog) ? status.starter_catalog : [];
+      renderStarterCatalog(state.starterCatalog);
       // Toggle [data-cap] elements based on capabilities (design D2: client-side
       // capability-conditional rendering).
       if (typeof window.mmrApplyCaps === 'function') {
@@ -1031,6 +1257,22 @@
    * .form-sent.is-visible (a CSS transition — already collapsed to 0.01ms
    * under prefers-reduced-motion by base.css's blanket rule, so it needs no
    * separate JS gate). */
+  const SONG_RECEIPT_STORAGE_KEY = 'mmr.listener.songReceipt.v1';
+  const SONG_RECEIPT_POLL_MS = 3000;
+  // A pending request has no server-side deadline: it sits in the queue until a
+  // host consumes it or an admin dismisses it, so `searching` can be the honest
+  // answer for hours. Without a client bound this poll is forever — ~1,200
+  // requests an hour per open tab, with the form locked the whole time.
+  const SONG_RECEIPT_MAX_TRACKING_MS = 600000;
+  // Only the retryable answers back off: a station that is up and still
+  // searching keeps the responsive 3s cadence.
+  const SONG_RECEIPT_MAX_BACKOFF_MS = 30000;
+  let songReceiptBackoffMs = SONG_RECEIPT_POLL_MS;
+  let songReceiptPollTimer = null;
+  let activeSongReceiptToken = null;
+  let requestFormResetTimer = null;
+  let requestReceiptRenderRevision = 0;
+
   function _setRequestFieldsHidden(formEl, hidden) {
     if (!formEl) return;
     Array.from(formEl.children).forEach((child) => {
@@ -1038,12 +1280,25 @@
     });
   }
 
+  function _setRequestReceiptText(sentEl, text) {
+    requestReceiptRenderRevision += 1;
+    if (sentEl) sentEl.textContent = text;
+    return requestReceiptRenderRevision;
+  }
+
   function _revealSentCrossfade(formEl, sentEl) {
     _setRequestFieldsHidden(formEl, true);
     if (sentEl) {
+      const announcement = sentEl.textContent;
+      const renderRevision = requestReceiptRenderRevision;
       delete sentEl.dataset.validation;
+      sentEl.textContent = '';
       sentEl.style.display = '';
-      requestAnimationFrame(() => sentEl.classList.add('is-visible'));
+      requestAnimationFrame(() => {
+        if (renderRevision !== requestReceiptRenderRevision) return;
+        sentEl.textContent = announcement;
+        sentEl.classList.add('is-visible');
+      });
     }
   }
 
@@ -1056,10 +1311,10 @@
     }
     if (sentEl) {
       sentEl.dataset.validation = 'empty';
-      sentEl.textContent = _t(
+      _setRequestReceiptText(sentEl, _t(
         'form_message_required',
         'Write a message first, then send it to the DJ.',
-      );
+      ));
       sentEl.style.display = '';
       sentEl.classList.add('is-visible');
     }
@@ -1073,19 +1328,28 @@
       delete sentEl.dataset.validation;
       sentEl.style.display = 'none';
       sentEl.classList.remove('is-visible');
-      sentEl.textContent = '';
+      _setRequestReceiptText(sentEl, '');
     }
   }
 
+  // Every "the listener can type again" path clears the same submit-state bits.
+  // One definition so the retry path and the timeout path cannot drift on which
+  // of them get cleared and leave a dead-looking Send button behind.
+  function _restoreEditableRequestForm(formEl) {
+    if (!formEl) return;
+    formEl.style.display = '';
+    _setRequestFieldsHidden(formEl, false);
+    formEl.classList.remove('is-sending');
+    delete formEl.dataset.submitting;
+    const submitBtn = formEl.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = false;
+  }
+
   function _resetRequestForm(formEl, sentEl) {
-    if (formEl) {
-      formEl.style.display = '';
-      _setRequestFieldsHidden(formEl, false);
-      formEl.classList.remove('is-sending');
-      delete formEl.dataset.submitting;
-      const submitBtn = formEl.querySelector('button[type="submit"]');
-      if (submitBtn) submitBtn.disabled = false;
-    }
+    // Cancel any deferred requestAnimationFrame from an older searching or
+    // terminal receipt before making the editable form visible again.
+    requestReceiptRenderRevision += 1;
+    _restoreEditableRequestForm(formEl);
     if (sentEl) {
       delete sentEl.dataset.validation;
       sentEl.style.display = 'none';
@@ -1093,6 +1357,268 @@
     }
     const msgInput = $('req-msg');
     if (msgInput) msgInput.removeAttribute('aria-invalid');
+  }
+
+  function _cancelRequestFormReset() {
+    if (requestFormResetTimer !== null) {
+      clearTimeout(requestFormResetTimer);
+      requestFormResetTimer = null;
+    }
+  }
+
+  function _scheduleRequestFormReset(callback, delayMs) {
+    _cancelRequestFormReset();
+    requestFormResetTimer = setTimeout(() => {
+      requestFormResetTimer = null;
+      callback();
+    }, delayMs);
+  }
+
+  function _validSongReceipt(value) {
+    return Boolean(
+      value &&
+      typeof value.public_token === 'string' &&
+      value.public_token.trim() &&
+      typeof value.message === 'string' &&
+      value.message.trim()
+    );
+  }
+
+  function _songReceiptStartedAt(receipt) {
+    // A receipt stored before tracking was bounded (or by a browser that lost
+    // the field) has no start. Stamp it now rather than expiring a request the
+    // listener is still waiting on: the bound applies from here forward.
+    if (!Number.isFinite(receipt.started_at)) {
+      receipt.started_at = Date.now();
+      _storeSongReceipt(receipt);
+    }
+    return receipt.started_at;
+  }
+
+  function _songReceiptExpired(receipt) {
+    return Date.now() - _songReceiptStartedAt(receipt) >= SONG_RECEIPT_MAX_TRACKING_MS;
+  }
+
+  function _readStoredSongReceipt() {
+    try {
+      const raw = sessionStorage.getItem(SONG_RECEIPT_STORAGE_KEY);
+      if (!raw) return null;
+      const value = JSON.parse(raw);
+      if (_validSongReceipt(value)) return value;
+      sessionStorage.removeItem(SONG_RECEIPT_STORAGE_KEY);
+    } catch (_) {
+      // Storage can be unavailable in private browsing. Tracking continues in memory.
+    }
+    return null;
+  }
+
+  function _storeSongReceipt(receipt) {
+    try {
+      sessionStorage.setItem(SONG_RECEIPT_STORAGE_KEY, JSON.stringify(receipt));
+    } catch (_) {
+      // A storage failure must not turn a successfully accepted request into an error.
+    }
+  }
+
+  function _clearStoredSongReceipt(publicToken) {
+    try {
+      const current = _readStoredSongReceipt();
+      if (publicToken && current && current.public_token !== publicToken) return;
+      sessionStorage.removeItem(SONG_RECEIPT_STORAGE_KEY);
+    } catch (_) {
+      // Nothing else is required when sessionStorage is unavailable.
+    }
+  }
+
+  function _stopSongReceiptPoll(publicToken) {
+    if (publicToken && activeSongReceiptToken && activeSongReceiptToken !== publicToken) return;
+    if (songReceiptPollTimer !== null) {
+      clearTimeout(songReceiptPollTimer);
+      songReceiptPollTimer = null;
+    }
+    activeSongReceiptToken = null;
+  }
+
+  function _restoreSongReceiptInput(receipt) {
+    const nameInput = $('req-name');
+    const msgInput = $('req-msg');
+    if (nameInput && typeof receipt.name === 'string') nameInput.value = receipt.name;
+    if (msgInput) msgInput.value = receipt.message;
+  }
+
+  function _songSearchingText() {
+    return _t(
+      'form_song_searching',
+      _t('form_success_song', 'Request received. We’re checking the catalogue for a matching recording…'),
+    );
+  }
+
+  function _isTerminalSongResolution(value) {
+    return ['matched', 'not_matched', 'failed'].includes(value);
+  }
+
+  // '' = the server gave a real answer. 'deadline' = we stopped watching a
+  // request that is still pending. 'gone' = the record itself is no longer
+  // there. The three need different copy: only 'deadline' can honestly say the
+  // hosts still have the message.
+  function _songTerminalText(payload, reason) {
+    if (reason === 'deadline') {
+      return _t(
+        'form_song_tracking_expired',
+        'We’ve stopped watching this one for now — the hosts still have your message. Keep listening, and send it again if it doesn’t turn up.',
+      );
+    }
+    if (reason === 'gone') {
+      return _t(
+        'form_song_tracking_lost',
+        'We’ve lost track of this one. Your message is back in the box — if you didn’t hear it, send it again.',
+      );
+    }
+    if (payload.song_resolution === 'matched') {
+      const track = typeof payload.song_track === 'string' ? payload.song_track.trim() : '';
+      if (!track) {
+        return _t(
+          'form_song_matched_generic',
+          'We found a match. It’s ready for the hosts to introduce.',
+        );
+      }
+      return _t(
+        'form_song_matched',
+        'We found {track}. It’s ready for the hosts to introduce.',
+      ).replace('{track}', track);
+    }
+    if (payload.outcome_reason === 'not_playable') {
+      return _t(
+        'form_song_not_playable',
+        'We found a possible match, but couldn’t prepare it for air. Try another title or artist.',
+      );
+    }
+    if (payload.song_resolution === 'not_matched' || payload.outcome_reason === 'no_verified_match') {
+      return _t(
+        'form_song_no_verified_match',
+        'We couldn’t find a clear match for that request. Try again with the exact song title and artist.',
+      );
+    }
+    return _t(
+      'form_song_temporarily_unavailable',
+      'We couldn’t finish that song request this time. Your message is still here — try again later or rewrite it as a dedication instead.',
+    );
+  }
+
+  function _showTerminalSongReceipt(receipt, payload, reason = '') {
+    if (activeSongReceiptToken && activeSongReceiptToken !== receipt.public_token) return;
+    _stopSongReceiptPoll(receipt.public_token);
+    _clearStoredSongReceipt(receipt.public_token);
+    _restoreSongReceiptInput(receipt);
+
+    const formEl = $('request-form');
+    const sentEl = $('request-sent');
+    const matched = !reason && payload.song_resolution === 'matched';
+    const text = _songTerminalText(payload, reason);
+    _setRequestReceiptText(sentEl, text);
+
+    if (matched) {
+      _revealSentCrossfade(formEl, sentEl);
+      _scheduleRequestFormReset(() => {
+        _resetRequestForm(formEl, sentEl);
+        const msgInput = $('req-msg');
+        if (msgInput) msgInput.value = '';
+      }, 15000);
+      return;
+    }
+
+    // A refusal or lookup failure is retryable: put the original request back
+    // in the textarea and keep the localized next step in the live region.
+    _restoreEditableRequestForm(formEl);
+    if (sentEl) {
+      delete sentEl.dataset.validation;
+      sentEl.style.display = '';
+      sentEl.classList.add('is-visible');
+    }
+    _scheduleRequestFormReset(() => _resetRequestForm(formEl, sentEl), 15000);
+  }
+
+  function _scheduleSongReceiptPoll(receipt, { backoff = false } = {}) {
+    if (!_validSongReceipt(receipt)) return;
+    if (_songReceiptExpired(receipt)) {
+      // Stop watching and hand the form back. The request itself may still be
+      // in the queue, so the copy must not promise it is gone.
+      _showTerminalSongReceipt(receipt, { song_resolution: 'failed' }, 'deadline');
+      return;
+    }
+    if (backoff) {
+      songReceiptBackoffMs = Math.min(songReceiptBackoffMs * 2, SONG_RECEIPT_MAX_BACKOFF_MS);
+    } else {
+      songReceiptBackoffMs = SONG_RECEIPT_POLL_MS;
+    }
+    if (songReceiptPollTimer !== null) clearTimeout(songReceiptPollTimer);
+    activeSongReceiptToken = receipt.public_token;
+    songReceiptPollTimer = setTimeout(() => {
+      songReceiptPollTimer = null;
+      _pollSongReceipt(receipt);
+    }, songReceiptBackoffMs);
+  }
+
+  async function _pollSongReceipt(receipt) {
+    if (activeSongReceiptToken !== receipt.public_token) return;
+    const fetchController = new AbortController();
+    const fetchTimeout = setTimeout(() => fetchController.abort(), 8000);
+    try {
+      const r = await fetch(
+        _base + '/public-listener-requests/' + encodeURIComponent(receipt.public_token),
+        { signal: fetchController.signal, cache: 'no-store' },
+      );
+      if (activeSongReceiptToken !== receipt.public_token) return;
+      if (r.status === 404 || r.status === 410) {
+        _showTerminalSongReceipt(receipt, { song_resolution: 'failed' }, 'gone');
+        return;
+      }
+      if (!r.ok) {
+        _scheduleSongReceiptPoll(receipt, { backoff: true });
+        return;
+      }
+      const payload = await r.json();
+      if (activeSongReceiptToken !== receipt.public_token) return;
+      if (!payload || payload.ok !== true || payload.type !== 'song_request') {
+        _scheduleSongReceiptPoll(receipt, { backoff: true });
+        return;
+      }
+      if (payload.song_resolution === 'searching') {
+        _scheduleSongReceiptPoll(receipt);
+        return;
+      }
+      if (_isTerminalSongResolution(payload.song_resolution)) {
+        _showTerminalSongReceipt(receipt, payload);
+        return;
+      }
+      _scheduleSongReceiptPoll(receipt, { backoff: true });
+    } catch (_) {
+      // Wi-Fi can blink while the server is still resolving the request. Keep
+      // the honest searching receipt and try again instead of inventing failure.
+      if (activeSongReceiptToken === receipt.public_token) {
+        _scheduleSongReceiptPoll(receipt, { backoff: true });
+      }
+    } finally {
+      // Keep the bound through r.json(): response headers can arrive while a
+      // broken connection leaves the body unreadable indefinitely.
+      clearTimeout(fetchTimeout);
+    }
+  }
+
+  function _resumeSongReceipt() {
+    const receipt = _readStoredSongReceipt();
+    if (!receipt) return;
+    _restoreSongReceiptInput(receipt);
+    const formEl = $('request-form');
+    const sentEl = $('request-sent');
+    if (formEl) {
+      formEl.dataset.submitting = '1';
+      const submitBtn = formEl.querySelector('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
+    }
+    _setRequestReceiptText(sentEl, _songSearchingText());
+    _revealSentCrossfade(formEl, sentEl);
+    _scheduleSongReceiptPoll(receipt);
   }
 
   async function submitRequest(ev) {
@@ -1106,6 +1632,7 @@
       return;
     }
     _clearEmptyRequestMessage();
+    _cancelRequestFormReset();
     // Act VI now leaves the form visibly on-screen for up to ~1.7s of
     // stamp-press + card-lift before it hides (previously an instant swap) —
     // that widened window makes a double-click/double-tap resubmission easy
@@ -1139,12 +1666,26 @@
       const d = await r.json();
       clearTimeout(fetchTimeout);
       let isSuccess = false;
+      let isSongRequest = false;
+      let immediateSongTerminal = false;
+      let songReceipt = null;
       let text;
       if (r.ok && d.ok) {
         isSuccess = true;
-        text = d.type === 'song_request'
-          ? _t('form_success_song', 'Song request received! The hosts will cue it soon.')
+        isSongRequest = d.type === 'song_request';
+        immediateSongTerminal = isSongRequest && _isTerminalSongResolution(d.song_resolution);
+        text = isSongRequest
+          ? (immediateSongTerminal ? _songTerminalText(d, '') : _songSearchingText())
           : _t('form_success_shoutout', 'Dedication received! The hosts will read it soon.');
+        if (isSongRequest && typeof d.public_token === 'string' && d.public_token.trim()) {
+          songReceipt = {
+            public_token: d.public_token,
+            name,
+            message: msg,
+            started_at: Date.now(),
+          };
+          if (!immediateSongTerminal) _storeSongReceipt(songReceipt);
+        }
       } else if (r.status === 429) {
         text = d.retry_after != null
           ? _t('form_rate_limited', 'Give the DJ {s}s before sending another dedication.')
@@ -1153,7 +1694,15 @@
       } else {
         text = _t('form_declined', "That dedication didn't go through — wait a moment and try again.");
       }
-      if (sentEl) sentEl.textContent = text;
+      const submitRenderRevision = _setRequestReceiptText(sentEl, text);
+
+      // Some terminal states are known before the POST returns (for example,
+      // downloads disabled). Render that honest outcome now instead of forcing
+      // a searching receipt and waiting for the first three-second poll.
+      if (songReceipt && immediateSongTerminal) {
+        _showTerminalSongReceipt(songReceipt, d);
+        return;
+      }
 
       if (isSuccess && formEl && !reducedMotion()) {
         formEl.classList.add('is-sending');
@@ -1164,15 +1713,23 @@
           formEl.removeEventListener('animationend', onCardLiftEnd);
           clearTimeout(liftFallback);
           formEl.classList.remove('is-sending');
-          _setRequestFieldsHidden(formEl, true);
-          if (sentEl) {
-            // #request-sent is aria-live="polite" — its text was set while
-            // still display:none (below), which most screen readers won't
-            // announce; re-assigning at reveal time makes the mutation and
-            // the visibility change coincident (adversarial review finding).
-            sentEl.textContent = text;
-            sentEl.style.display = '';
-            requestAnimationFrame(() => sentEl.classList.add('is-visible'));
+          // A terminal poll can land while animation frames are deferred in a
+          // background tab. Never let this stale searching animation hide the
+          // retry form or overwrite the newer terminal receipt.
+          if (submitRenderRevision === requestReceiptRenderRevision) {
+            _setRequestFieldsHidden(formEl, true);
+            if (sentEl) {
+              // #request-sent is aria-live="polite" — its text was set while
+              // still display:none (below), which most screen readers won't
+              // announce; re-assigning at reveal time makes the mutation and
+              // the visibility change coincident.
+              sentEl.textContent = text;
+              sentEl.style.display = '';
+              requestAnimationFrame(() => {
+                if (submitRenderRevision !== requestReceiptRenderRevision) return;
+                sentEl.classList.add('is-visible');
+              });
+            }
           }
         };
         const onCardLiftEnd = (e) => {
@@ -1192,6 +1749,7 @@
         // must add the class directly or the confirmation renders invisible.
         _setRequestFieldsHidden(formEl, true);
         if (sentEl) {
+          sentEl.textContent = text;
           sentEl.style.display = '';
           sentEl.classList.add('is-visible');
         }
@@ -1199,23 +1757,27 @@
         _revealSentCrossfade(formEl, sentEl);
       }
 
-      setTimeout(() => {
-        _resetRequestForm(formEl, sentEl);
-        if (isSuccess) {
-          const msgInput = $('req-msg');
-          if (msgInput) msgInput.value = '';
-        }
-      }, isSuccess ? 15000 : 6000);
+      if (songReceipt) {
+        _scheduleSongReceiptPoll(songReceipt);
+      } else {
+        _scheduleRequestFormReset(() => {
+          _resetRequestForm(formEl, sentEl);
+          if (isSuccess) {
+            const msgInput = $('req-msg');
+            if (msgInput) msgInput.value = '';
+          }
+        }, isSuccess ? 15000 : 6000);
+      }
     } catch (e) {
       clearTimeout(fetchTimeout);
       if (sentEl) {
-        sentEl.textContent = _t(
+        _setRequestReceiptText(sentEl, _t(
           'form_network_error',
           'We lost the connection — check it and try again.',
-        );
+        ));
       }
       _revealSentCrossfade(formEl, sentEl);
-      setTimeout(() => {
+      _scheduleRequestFormReset(() => {
         _resetRequestForm(formEl, sentEl);
       }, 6000);
     }
@@ -1277,10 +1839,26 @@
         if (reqMsg.value.trim()) _clearEmptyRequestMessage();
       });
     }
+    _resumeSongReceipt();
 
     // Clip sharing button
     const shareBtn = document.getElementById('share-clip-btn');
     if (shareBtn) shareBtn.addEventListener('click', doShare);
+
+    // Music credits are informational only and never touch playback intent.
+    document.querySelectorAll('.mmr-credits-trigger').forEach((trigger) => {
+      trigger.addEventListener('click', openMusicCredits);
+    });
+    const creditsDialog = $('music-credits-dialog');
+    const creditsClose = $('music-credits-close');
+    if (creditsClose) creditsClose.addEventListener('click', () => creditsDialog?.close());
+    if (creditsDialog) {
+      creditsDialog.addEventListener('keydown', trapCreditsFocus);
+      creditsDialog.addEventListener('close', () => {
+        if (creditsInvoker && document.contains(creditsInvoker)) creditsInvoker.focus();
+        creditsInvoker = null;
+      });
+    }
 
     // Playback intent is scoped to the three explicit play affordances above.
     // Form, navigation, share, and install interactions must never start audio.

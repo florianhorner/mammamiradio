@@ -39,11 +39,14 @@ def _server_setup_error_codes() -> set[str]:
     raise AssertionError("_SETUP_ERRORS not found")
 
 
-def _ui_first_listen_error_codes() -> set[str]:
+def _first_listen_errors_block() -> str:
     html = _html()
     start = html.index("const FIRST_LISTEN_ERRORS={")
-    end = html.index("\n};", start)
-    return set(re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{", html[start:end], re.MULTILINE))
+    return html[start : html.index("\n};", start)]
+
+
+def _ui_first_listen_error_codes() -> set[str]:
+    return set(re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{", _first_listen_errors_block(), re.MULTILINE))
 
 
 def test_first_listen_is_one_vertical_progressive_path_before_advanced_details() -> None:
@@ -269,7 +272,11 @@ def test_existing_install_opens_privacy_without_replaying_first_audio() -> None:
     assert "/api/setup/first-listen/play',{entity_id" not in setup + progress
 
     choice = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
-    assert "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy" in choice
+    assert "const continuityAvailable=firstListenSourceState(projection).continuityAvailable" in choice
+    assert (
+        "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy"
+        "&&continuityAvailable" in choice
+    )
 
     preview_gate = _function("shouldShowHomeContextPreview", "previewRows")
     assert "first.install_origin==='existing'" in preview_gate
@@ -616,6 +623,24 @@ def test_fixed_error_copy_covers_all_public_first_listen_failures() -> None:
     assert "response?.error?.message" not in error_block
 
 
+def test_every_first_listen_error_states_a_failure_and_a_way_out() -> None:
+    """Require each error to name the problem and recovery action (principle #5).
+
+    The key-parity test cannot detect empty fields. This check leaves the
+    wording flexible.
+    """
+    entries = re.findall(r"^\s{2}([a-z][a-z0-9_]*):\{(.*)\},$", _first_listen_errors_block(), re.MULTILINE)
+    assert len(entries) == len(_ui_first_listen_error_codes())
+
+    for code, body in entries:
+        for field in ("title", "message", "action"):
+            match = re.search(rf"{field}:'([^']*)'", body)
+            assert match and match.group(1).strip(), f"{code}.{field} must contain text"
+
+    media_source = re.search(r"action:'([^']*)'", dict(entries)["media_source_missing"])
+    assert media_source is not None and "Mamma Mi Radio" in media_source.group(1)
+
+
 def test_interactive_subtrees_are_static_and_status_polling_only_patches_them() -> None:
     html = _html()
     for control_id in (
@@ -870,6 +895,28 @@ def test_existing_setup_inventory_stays_under_advanced_details() -> None:
     assert "details.addEventListener('toggle',sync)" in init
     assert "body.setAttribute('aria-hidden',details.open?'false':'true')" in init
     assert "body.toggleAttribute('inert',!details.open)" in init
+
+
+def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actionable() -> None:
+    html = _html()
+    assert 'id="firstListenSourceActions"' in html
+    assert 'onclick="openMusicSourceTools()"' in html
+    assert 'id="firstListenSuccessRepair"' in html
+    assert 'id="setupConversationsHeading"' in html
+    assert 'id="setupVoiceQualityHeading"' in html
+    assert "Choose the clarity, warmth, and presence" in html
+    assert "These providers shape how the hosts sound" in html
+    assert "They do not add new conversations" not in html
+
+    strip = _function("renderGuidedSetupStrip", "shouldShowHomeContextPreview")
+    assert "primary.focus" in strip
+    assert "openSetupPanel('source')" in strip
+
+    source_state = _function("firstListenSourceState", "renderFirstListenSources")
+    assert "continuity_available===true" in source_state
+    progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
+    assert "const sourceComplete=sourceMilestone&&continuityAvailable" in progress
+    assert "sourceKnown&&!continuityAvailable?'repair the music source'" in progress
 
 
 def test_post_hacs_timing_is_local_and_ends_only_on_heard_confirmation() -> None:

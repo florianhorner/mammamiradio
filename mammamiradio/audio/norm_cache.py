@@ -7,8 +7,9 @@ import re
 import time
 from pathlib import Path
 
-from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_metadata
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.audio.normalizer import humanize_norm_filename, load_track_cache_source, load_track_metadata
+from mammamiradio.core.models import ListenerTrackReservations, Segment, SegmentType, StationState, Track
+from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.downloader import is_rejected_cache_key
 
 _NORM_CACHE_KEY_RE = re.compile(r"^norm_(?P<cache_key>.+)_\d+k\.mp3$")
@@ -93,6 +94,20 @@ def _norm_cache_key(path: Path) -> str:
     return match.group("cache_key")
 
 
+def norm_cache_origin_is_eligible(path: Path, *, allow_external_media: bool = False) -> bool:
+    """Return whether a persisted normalized artifact has a playable origin.
+
+    Operator-local origins are always eligible. Starter artifacts play directly
+    from the canonical package and must never be impersonated by a cache sidecar.
+    Extractor origins remain coupled to the effective optional capability, while
+    legacy unknown, demo, and persistent Jamendo origins fail closed.
+    """
+    allowed_sources = {"local"}
+    if allow_external_media:
+        allowed_sources.update({"classic", "youtube"})
+    return load_track_cache_source(path) in allowed_sources
+
+
 def _rescue_identity(path: Path) -> str:
     """Return the stable rescue identity, ignoring bitrate-only file variants."""
     return _norm_cache_key(path) or str(path)
@@ -164,19 +179,49 @@ def sidecar_track_key(sidecar: dict) -> tuple[str, str]:
     )
 
 
-def _is_blocklisted(path: Path, blocklist: object) -> bool:
+def _is_blocklisted(path: Path, blocklist: object, *, sidecar: dict | None = None) -> bool:
     """True if this cache file's ``(artist, title)`` is on the operator blocklist.
 
-    The blocklist key is ``(track.artist.lower(), track.title.lower())`` and the norm
-    sidecar stores exactly ``track.title``/``track.artist`` (producer.save_track_metadata),
-    so the sidecar maps straight onto the ban identity. A file with no sidecar can't be
-    identified and is left selectable (best-effort — banned songs almost always carry one)."""
+    The norm sidecar stores ``track.title``/``track.artist`` verbatim. The shared
+    identity comparison then applies the same accent, punctuation, compact-spacing,
+    uploader-wrapper, and feature-credit equivalence used by every other hard gate.
+    A file with no sidecar cannot be identified and remains selectable (best-effort —
+    banned songs almost always carry one).
+
+    Pass ``sidecar`` when the caller already read it, like the other cache-file
+    predicates here, so one selection sweep reads each sidecar once.
+    """
     if not blocklist or not isinstance(blocklist, dict):
         return False
-    sidecar = load_track_metadata(path)
+    if sidecar is None:
+        sidecar = load_track_metadata(path)
     if not sidecar:
         return False
-    return sidecar_track_key(sidecar) in blocklist
+    return song_identity_key_is_blocklisted(sidecar_track_key(sidecar), blocklist)
+
+
+def is_listener_reserved_cache_file(
+    path: Path,
+    reservations: ListenerTrackReservations,
+    *,
+    sidecar: dict | None = None,
+) -> bool:
+    """Keep a cached listener pick silent until its dedication is acknowledged.
+
+    The source cache key catches the exact downloaded recording without disk
+    metadata. Canonical sidecar identity also catches older or alternate-source
+    cache entries for the same song. While a reservation exists, an unidentified
+    cache file fails closed: it cannot prove that it is safe to air anonymously.
+    """
+    if not reservations.cache_keys and not reservations.track_keys:
+        return False
+    if reservations.reserves_cache_key(_norm_cache_key(path)):
+        return True
+    if sidecar is None:
+        sidecar = load_track_metadata(path) or {}
+    if not sidecar:
+        return True
+    return reservations.reserves_track_key(sidecar_track_key(sidecar))
 
 
 def _path_on_cooldown(airplay: dict[Path, float], path: Path, now: float) -> bool:
@@ -291,6 +336,8 @@ def select_norm_cache_rescue(
     state: StationState,
     *,
     allow_recent_repeat: bool,
+    require_known_origin: bool = False,
+    allow_external_media: bool = False,
 ) -> Path | None:
     """Pick a cache rescue clip without replaying the current/recent song first.
 
@@ -317,10 +364,39 @@ def select_norm_cache_rescue(
     bridge came to queue the on-air song back-to-back with nothing in between.
     """
     norm_files = sorted(cache_dir.glob("norm_*.mp3"))
+    if require_known_origin:
+        norm_files = [
+            path
+            for path in norm_files
+            if norm_cache_origin_is_eligible(path, allow_external_media=allow_external_media)
+        ]
     norm_files = [path for path in norm_files if not is_rejected_cache_key(_norm_cache_key(path))]
+
+    # The ban, reservation, and recent-song filters below all ask the same
+    # sidecar for the same {title, artist} pair. Read it at most once per
+    # candidate: a warm cache holds hundreds of norm files, and this runs
+    # synchronously inside the producer coroutine on the dead-air rescue path,
+    # where latency is the whole point (leadership principle #2). Files a filter
+    # never reaches are still never read.
+    sidecars: dict[Path, dict] = {}
+
+    def sidecar_for(path: Path) -> dict:
+        sidecar = sidecars.get(path)
+        if sidecar is None:
+            sidecar = load_track_metadata(path) or {}
+            sidecars[path] = sidecar
+        return sidecar
+
     blocklist = getattr(state, "blocklist", None)
     if blocklist:
-        norm_files = [path for path in norm_files if not _is_blocklisted(path, blocklist)]
+        norm_files = [path for path in norm_files if not _is_blocklisted(path, blocklist, sidecar=sidecar_for(path))]
+    reservations = state.listener_track_reservations()
+    if reservations.cache_keys or reservations.track_keys:
+        norm_files = [
+            path
+            for path in norm_files
+            if not is_listener_reserved_cache_file(path, reservations, sidecar=sidecar_for(path))
+        ]
     if not norm_files:
         return None
 
@@ -328,7 +404,7 @@ def select_norm_cache_rescue(
     if not recent_keys:
         return _choose_rescue_candidate(norm_files, state)
 
-    candidates = [path for path in norm_files if not is_recent_music(path, recent_keys)]
+    candidates = [path for path in norm_files if not is_recent_music(path, recent_keys, sidecar=sidecar_for(path))]
     if not candidates and not allow_recent_repeat:
         return None
     return _choose_rescue_candidate(candidates or norm_files, state)

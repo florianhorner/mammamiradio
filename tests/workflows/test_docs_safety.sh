@@ -100,10 +100,15 @@ expect_default_install_guard() {
     ha-addon/mammamiradio/README.md \
     ha-addon/mammamiradio-edge/README.md \
     ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
     docs/architecture.md \
+    docs/conductor.md \
     docs/festival-mode.md \
+    docs/listener-qs-train.md \
     docs/troubleshooting.md \
     docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
     docs/runbooks/ha-addon.md; do
     printf '# Safe\n' > "$fixture_root/$file"
   done
@@ -164,10 +169,15 @@ expect_default_listing_guard() {
     ha-addon/mammamiradio/README.md \
     ha-addon/mammamiradio-edge/README.md \
     ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
     docs/architecture.md \
+    docs/conductor.md \
     docs/festival-mode.md \
+    docs/listener-qs-train.md \
     docs/troubleshooting.md \
     docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
     docs/runbooks/ha-addon.md; do
     printf '# Safe\n' > "$fixture_root/$file"
   done
@@ -209,10 +219,15 @@ expect_default_persistence_guard() {
     ha-addon/mammamiradio/README.md \
     ha-addon/mammamiradio-edge/README.md \
     ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
     docs/architecture.md \
+    docs/conductor.md \
     docs/festival-mode.md \
+    docs/listener-qs-train.md \
     docs/troubleshooting.md \
     docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
     docs/runbooks/ha-addon.md; do
     printf '# Safe\n' > "$fixture_root/$file"
   done

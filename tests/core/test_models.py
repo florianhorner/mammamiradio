@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+import asyncio
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,8 @@ from mammamiradio.core.models import (
     HEADING_MAX_LIFT,
     HEADING_MIN_LIFT,
     HEADING_TARGET_SHARE,
+    LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+    LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     ChaosSubtype,
     DialogueLine,
@@ -19,15 +22,20 @@ from mammamiradio.core.models import (
     Heading,
     HostPersonality,
     ListenerProfile,
+    ListenerRequestHandoff,
+    MediaAttribution,
     PlaylistSource,
     Segment,
     SegmentType,
     SourceReadinessEvidence,
+    StarterCycleReservationPendingError,
     StationState,
     Track,
     normalized_track_key,
+    safe_media_attribution_dict,
     segment_track_key,
 )
+from mammamiradio.core.song_identity import song_identity_keys_match
 from mammamiradio.playlist.preferences import PREFERENCE_UP_WEIGHT
 
 
@@ -937,13 +945,441 @@ def test_track_display():
     assert t.display == "Artist 1 – Song 1"
 
 
+def test_pre_byte_failure_backlogs_retry_behind_existing_handoff():
+    state = StationState()
+    failed_track = _track(1)
+    newer_track = _track(2)
+    assert state.arm_listener_request_handoff({"request_id": "failed"}, failed_track)
+    failed_handoff = state.listener_request_handoff
+    assert failed_handoff is not None
+    failed_segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/failed-admitted.mp3"),
+        metadata={
+            "artist": failed_track.artist,
+            "title_only": failed_track.title,
+            **state.listener_request_handoff_metadata(failed_track),
+        },
+    )
+    state.admit_listener_request_handoff(failed_segment)
+    assert state.arm_listener_request_handoff({"request_id": "newer"}, newer_track)
+    newer_handoff = state.listener_request_handoff
+
+    assert state.restore_listener_request_handoff_before_first_byte(failed_segment) is True
+    assert state.listener_request_handoff is newer_handoff
+    assert [handoff.token for handoff in state.listener_request_retry_handoffs] == [failed_handoff.token]
+    assert state.listener_track_reservations().reserves_track(failed_track)
+
+    state.clear_listener_request_handoff()
+    assert state.promote_listener_request_retry_handoff() is True
+    assert state.listener_request_handoff is not None
+    assert state.listener_request_handoff.token == failed_handoff.token
+    assert state.listener_request_handoff.music_selection_exclusive is True
+    assert not state.listener_request_retry_handoffs
+
+
+def test_media_attribution_object_serializes_through_the_public_validator() -> None:
+    attribution = MediaAttribution(
+        provider="incompetech",
+        license_id="CC-BY-4.0",
+        license_url="https://creativecommons.org/licenses/by/4.0/",
+        source_url="https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+        credit="Carefree by Kevin MacLeod",
+        modified=True,
+        basis="bundled_manifest",
+    )
+
+    assert safe_media_attribution_dict(attribution) == attribution.to_dict()
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"basis": "unknown"},
+        {"provider": None},
+        {"license_url": None},
+        {"license_url": "https://creativecommons.org:bad/licenses/by/4.0/"},
+        {"source_url": "https://incompetech.com/%2e%2e/private"},
+        {"source_url": "https://incompetech.com/music/royalty-free/index.html?token=secret"},
+        # A bundled Jamendo row must still point at a jamendo.com track page:
+        # the provider/basis pair is now legitimate, the mismatched host is not.
+        {"provider": "jamendo", "basis": "bundled_manifest"},
+        {
+            "provider": "jamendo",
+            "basis": "bundled_manifest",
+            "source_url": "https://evil.example.com/track/1",
+        },
+    ],
+)
+def test_media_attribution_rejects_malformed_or_mismatched_public_facts(override) -> None:
+    raw = {
+        "provider": "incompetech",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400037",
+        "credit": "Carefree by Kevin MacLeod",
+        "modified": True,
+        "basis": "bundled_manifest",
+        **override,
+    }
+
+    assert safe_media_attribution_dict(raw) is None
+
+
+def test_track_cache_keys_cover_transient_identity_and_url_normalization() -> None:
+    identified = Track(
+        title="Transient",
+        artist="Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="track-123",
+    )
+    url_only = Track(
+        title="Transient",
+        artist="Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        direct_url="HTTPS://storage.jamendo.com:443/path/",
+    )
+    root_url = Track(
+        title="Transient",
+        artist="Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        direct_url="https://storage.jamendo.com/",
+    )
+
+    assert identified.cache_key == "jamendo_track_123"
+    assert url_only.cache_key == "jamendo_https_storage_jamendo_com_443_path"
+    assert root_url.cache_key == "jamendo_https_storage_jamendo_com"
+
+
+def test_segment_release_callback_runs_exactly_once():
+    events: list[str] = []
+
+    def admit() -> bool:
+        events.append("started")
+        return True
+
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/single-use.mp3"),
+        playback_start_callback=admit,
+        release_callback=lambda: events.append("released"),
+    )
+
+    assert segment.mark_playback_started() is True
+    assert segment.mark_playback_started() is True
+    segment.release()
+    segment.release()
+    assert segment.mark_playback_started() is False
+
+    assert events == ["started", "released"]
+
+
+def test_segment_denied_playback_releases_provider_resource():
+    events: list[str] = []
+
+    def deny() -> bool:
+        events.append("denied")
+        return False
+
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/denied-single-use.mp3"),
+        playback_start_callback=deny,
+        release_callback=lambda: events.append("released"),
+    )
+
+    assert segment.mark_playback_started() is False
+    assert segment.mark_playback_started() is False
+    segment.release()
+
+    assert events == ["denied", "released"]
+
+
+def test_segment_provider_callback_exceptions_fail_closed_without_escaping() -> None:
+    def reject_with_exception() -> bool:
+        raise RuntimeError("provider admission failed")
+
+    def release_with_exception() -> None:
+        raise OSError("provider cleanup failed")
+
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/provider-callback-failure.mp3"),
+        playback_start_callback=reject_with_exception,
+        release_callback=release_with_exception,
+    )
+
+    assert segment.mark_playback_started() is False
+    assert segment.mark_playback_started() is False
+    segment.release()
+
+
+def _starter_track(index: int) -> Track:
+    return Track(
+        title=f"Starter {index:02d}",
+        artist="Catalog Artist",
+        duration_ms=240_000,
+        source="starter",
+        local_path=Path(f"/catalog/starter-{index:02d}.mp3"),
+    )
+
+
+def test_starter_reservations_fill_lookahead_without_counting_as_air() -> None:
+    tracks = [_starter_track(index) for index in range(12)]
+    state = StationState(playlist=tracks, playlist_source=PlaylistSource(kind="starter"))
+
+    reserved: list[Track] = []
+    for index in range(12):
+        track = state.select_next_track()
+        assert state.reserve_music_admission(f"queue-{index}", track) is True
+        reserved.append(track)
+
+    assert len({track.cache_key for track in reserved}) == 12
+    assert list(state.played_tracks) == []
+    assert state.current_track is None
+    assert state.jamendo_base_music_since_last == 0
+    with pytest.raises(StarterCycleReservationPendingError):
+        state.select_next_track()
+
+    for index in range(11):
+        assert state.commit_music_admission(f"queue-{index}") is True
+    with pytest.raises(StarterCycleReservationPendingError):
+        state.select_next_track()
+
+    assert state.commit_music_admission("queue-11") is True
+    assert state.select_next_track().cache_key == tracks[0].cache_key
+
+
+def test_starter_reservation_rollback_restores_identity_without_advancing_cycle() -> None:
+    tracks = [_starter_track(0), _starter_track(1)]
+    state = StationState(playlist=tracks, playlist_source=PlaylistSource(kind="starter"))
+    selected = state.select_next_track()
+
+    assert state.reserve_music_admission("removed-before-playback", selected) is True
+    assert state.rollback_music_admission("removed-before-playback") is True
+    assert state.rollback_music_admission("removed-before-playback") is False
+
+    assert state.select_next_track() is selected
+    assert state.jamendo_base_music_since_last == 0
+    assert list(state.played_tracks) == []
+
+
+def test_jamendo_cadence_counts_playback_starts_not_queue_reservations() -> None:
+    starter = _starter_track(0)
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    jamendo = Track(
+        title="Transient",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-1",
+    )
+    state = StationState(playlist=[starter, local])
+
+    assert state.reserve_music_admission("starter", starter) is True
+    assert state.reserve_music_admission("local", local) is True
+    assert state.jamendo_insert_eligible() is False
+
+    assert state.commit_music_admission("starter") is True
+    assert state.jamendo_insert_eligible() is False
+    assert state.commit_music_admission("local") is True
+    assert state.jamendo_insert_eligible() is True
+
+    assert state.reserve_music_admission("jamendo-removed", jamendo) is True
+    assert state.jamendo_insert_eligible() is False
+    assert state.rollback_music_admission("jamendo-removed") is True
+    assert state.jamendo_insert_eligible() is True
+
+    assert state.reserve_music_admission("jamendo-started", jamendo) is True
+    assert state.commit_music_admission("jamendo-started") is True
+    assert state.jamendo_base_music_since_last == 0
+    assert state.jamendo_insert_eligible() is False
+
+
+def test_jamendo_insert_eligible_when_rotation_crate_is_empty() -> None:
+    jamendo = Track(
+        title="Transient",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-1",
+    )
+    state = StationState(playlist=[])
+
+    assert state.jamendo_insert_eligible() is True
+    assert state.reserve_music_admission("jamendo-only", jamendo) is True
+    assert state.jamendo_insert_eligible() is False
+    assert state.rollback_music_admission("jamendo-only") is True
+    assert state.jamendo_insert_eligible() is True
+
+
+def test_restore_playlist_if_still_empty_preserves_operator_intent() -> None:
+    """Unlike switch_playlist, this recovery must not wipe operator state."""
+    pinned = Track(title="Pinned Song", artist="Pinned Artist", duration_ms=180_000, source="local")
+    heading = Heading(id="h1", seed="italo disco", label="Italo Disco", set_at=1.0, set_by="operator")
+    state = StationState(
+        playlist=[],
+        heading=heading,
+        pinned_track=pinned,
+        force_next=SegmentType.AD,
+        operator_force_pending=SegmentType.NEWS_FLASH,
+        songs_since_banter=3,
+    )
+    state.pending_actions.append({"type": "note", "detail": "operator note"})
+    previously_played = Track(title="Some Title", artist="Some Artist", duration_ms=180_000, source="local")
+    state.played_tracks.append(previously_played)
+    starting_heading_revision = state.heading_revision
+
+    recovered = Track(title="Recovered", artist="Operator", duration_ms=180_000, source="local")
+    source = PlaylistSource(kind="local", source_id="local_music_dir", label="Local music/ files", track_count=1)
+
+    assert state.restore_playlist_if_still_empty([recovered], source) is True
+    assert state.playlist == [recovered]
+    assert state.playlist_source is source
+    assert state.heading is heading
+    assert state.heading_revision == starting_heading_revision
+    assert state.pinned_track is pinned
+    assert state.force_next == SegmentType.AD
+    assert state.operator_force_pending == SegmentType.NEWS_FLASH
+    assert state.songs_since_banter == 3
+    assert len(state.pending_actions) == 1
+    assert previously_played in state.played_tracks
+
+
+def test_restore_playlist_if_still_empty_backs_off_when_no_longer_empty() -> None:
+    """A concurrent writer (e.g. an admin source switch) must win — this
+    recovery must never clobber a playlist that filled in the meantime."""
+    admin_track = Track(title="Admin Pick", artist="Admin", duration_ms=180_000, source="youtube")
+    admin_source = PlaylistSource(kind="charts", source_id="apple_music_it_top_100", label="Charts", track_count=1)
+    state = StationState(playlist=[admin_track], playlist_source=admin_source)
+
+    recovered = Track(title="Recovered", artist="Operator", duration_ms=180_000, source="local")
+    local_source = PlaylistSource(kind="local", source_id="local_music_dir", label="Local music/ files", track_count=1)
+
+    assert state.restore_playlist_if_still_empty([recovered], local_source) is False
+    assert state.playlist == [admin_track]
+    assert state.playlist_source is admin_source
+
+
+def test_music_admission_rejects_invalid_duplicate_and_missing_reservations() -> None:
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    other_local = Track(
+        title="Other Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/other.mp3"),
+    )
+    jamendo_one = Track(
+        title="Transient One",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-1",
+    )
+    jamendo_two = Track(
+        title="Transient Two",
+        artist="Provider Artist",
+        duration_ms=180_000,
+        source="jamendo",
+        provider_track_id="jamendo-2",
+    )
+    ordinary = _track(99)
+    state = StationState(playlist=[local, other_local])
+
+    assert state.reserve_music_admission("   ", local) is False
+    assert state.reserve_music_admission("local", local) is True
+    assert state.reserve_music_admission("local", local) is True
+    assert state.reserve_music_admission("local", other_local) is False
+    assert state.commit_music_admission("missing") is False
+
+    assert state.reserve_music_admission("jamendo-one", jamendo_one) is True
+    assert state.reserve_music_admission("jamendo-two", jamendo_two) is False
+    assert state.rollback_music_admission("jamendo-one") is True
+
+    state.jamendo_base_music_since_last = 2
+    assert state.reserve_music_admission("ordinary", ordinary) is True
+    assert state.commit_music_admission("ordinary") is True
+    assert state.jamendo_base_music_since_last == 2
+
+
+@pytest.mark.asyncio
+async def test_music_admission_wait_returns_on_capacity_signal_and_timeout() -> None:
+    starter = _starter_track(0)
+    state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))
+
+    await state.wait_for_music_admission_change(timeout=0)
+    assert state.reserve_music_admission("starter", starter) is True
+
+    asyncio.get_running_loop().call_soon(state.music_admission_changed.set)
+    await state.wait_for_music_admission_change(timeout=0.1)
+    await state.wait_for_music_admission_change(timeout=0)
+
+
+def test_reserved_pinned_starter_falls_through_to_local_track() -> None:
+    starter = _starter_track(0)
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="starter"))
+    state.pinned_track = starter
+    assert state.reserve_music_admission("starter", starter) is True
+
+    assert state.select_next_track() is local
+    assert state.pinned_track is starter
+
+
+def test_exhausted_starter_cycle_without_available_reservation_fails_closed() -> None:
+    starter = _starter_track(0)
+    state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))
+    state.starter_cycle_catalog = {starter.cache_key}
+    state.starter_cycle_remaining.clear()
+    state.starter_cycle_reserved = {starter.cache_key}
+
+    with pytest.raises(RuntimeError, match="current starter cycle"):
+        state.select_next_track()
+
+
 def test_switch_playlist_clears_listener_request_state():
     state = StationState(playlist=[_track(1)])
     state.pending_requests.append({"request_id": "req-1", "name": "Luca", "message": "ciao", "type": "shoutout"})
     state.pending_actions.append({"type": "skip_bridge"})
     state._listener_request_rl = {"127.0.0.1": 123.0}
-    state.pinned_track = _track(99)
-    state.force_next = SegmentType.BANTER
+    promised = _track(99)
+    state.set_pinned_track(promised)
+    assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, promised)
+    admitted = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/admitted-request.mp3"),
+        metadata={
+            "artist": promised.artist,
+            "title_only": promised.title,
+            **state.listener_request_handoff_metadata(promised),
+        },
+    )
+    state.admit_listener_request_handoff(admitted)
+    assert state.listener_request_admitted_reservations
+    assert state.arm_listener_request_handoff({"request_id": "active-request"}, promised)
+    force_revision = state.set_force_next(SegmentType.BANTER)
 
     state.switch_playlist([_track(2)])
 
@@ -959,7 +1395,176 @@ def test_switch_playlist_clears_listener_request_state():
     assert list(state.pending_actions) == []
     assert state._listener_request_rl == {}
     assert state.pinned_track is None
+    assert state.listener_request_handoff is None
+    assert state.listener_request_admitted_reservations == {}
     assert state.force_next is None
+    assert state.force_next_revision == force_revision + 1
+
+
+def test_metadata_only_source_commit_keeps_every_ownership_field_and_revision():
+    """A stale source load owns the crate, never the live timeline's controls.
+
+    This is the regression guard for the metadata-only path: it went through
+    ``switch_playlist`` and hand-restored four fields, so listener request
+    ownership (three stores plus the pending queue) was silently revoked, and
+    the guarded clears left ``pinned_track_revision`` / ``force_next_revision``
+    one ahead of the revision every surviving owner recorded.
+    """
+    state = StationState(playlist=[_track(1)])
+    state.pending_requests.append({"request_id": "req-1", "name": "Luca", "message": "ciao", "type": "shoutout"})
+    state.pending_actions.append({"type": "skip_bridge"})
+    state._listener_request_rl = {"127.0.0.1": 123.0}
+    promised = _track(99)
+    pin_revision = state.set_pinned_track(promised)
+    assert state.arm_listener_request_handoff({"request_id": "admitted-request"}, promised)
+    admitted = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/admitted-request.mp3"),
+        metadata={
+            "artist": promised.artist,
+            "title_only": promised.title,
+            **state.listener_request_handoff_metadata(promised),
+        },
+    )
+    state.admit_listener_request_handoff(admitted)
+    admitted_reservations = dict(state.listener_request_admitted_reservations)
+    assert admitted_reservations
+    assert state.arm_listener_request_handoff({"request_id": "active-request"}, promised)
+    active_handoff = state.listener_request_handoff
+    retry_handoff = _handoff(_track(98), token="retry-token")
+    state.listener_request_retry_handoffs.append(retry_handoff)
+    force_revision = state.set_force_next(SegmentType.BANTER)
+    state.operator_force_pending = SegmentType.AD
+
+    state.apply_source_metadata_only([_track(2)], None)
+
+    # The crate half committed.
+    assert [track.title for track in state.playlist] == [_track(2).title]
+    # The ownership half did not run — values *and* the revisions their owners
+    # recorded are untouched.
+    assert [req["request_id"] for req in state.pending_requests] == ["req-1"]
+    assert list(state.recently_consumed_requests) == []
+    assert list(state.pending_actions) == [{"type": "skip_bridge"}]
+    assert state._listener_request_rl == {"127.0.0.1": 123.0}
+    assert state.pinned_track is promised
+    assert state.pinned_track_revision == pin_revision
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == force_revision
+    assert state.operator_force_pending is SegmentType.AD
+    assert state.listener_request_handoff is active_handoff
+    assert state.listener_request_admitted_reservations == admitted_reservations
+    assert list(state.listener_request_retry_handoffs) == [retry_handoff]
+
+
+def test_metadata_only_source_commit_keeps_queued_music_admissible():
+    """Preserving the queue is a lie if its music can no longer start.
+
+    A queued music segment holds a reservation until ``commit_music_admission``
+    runs from ``Segment.mark_playback_started``. Clearing the map under a queue
+    the commit promises to preserve made every queued song fail that admission
+    and get skipped at the moment it should have aired.
+    """
+    track = _track(1)
+    state = StationState(playlist=[track])
+    assert state.reserve_music_admission("q1", track)
+
+    state.apply_source_metadata_only([_track(2)], None)
+
+    assert state.music_admission_reservations == {"q1": track}
+    assert state.commit_music_admission("q1") is True
+
+
+def test_switch_playlist_revokes_reservations_but_keeps_named_survivors():
+    """The cutover replaces the queue, except for what the caller kept in it.
+
+    `_apply_loaded_source` deliberately preserves the on-air dedication's
+    promised song and the assetless branch's runway head. Revoking their
+    reservations deletes them just as surely, only later: they fail
+    `mark_playback_started` and are skipped at the moment they should air.
+
+    Starter tracks are used on purpose. A `_track()` fixture has
+    `source="youtube"`, never populates `starter_cycle_reserved`, and would
+    assert nothing about the cycle half of the same move.
+    """
+    gone, survivor = _starter_track(1), _starter_track(2)
+    state = StationState(playlist=[gone, survivor], playlist_source=PlaylistSource(kind="starter"))
+    assert state.reserve_music_admission("gone", gone)
+    assert state.reserve_music_admission("survivor", survivor)
+    assert state.starter_cycle_reserved == {gone.cache_key, survivor.cache_key}
+
+    state.switch_playlist([survivor, _starter_track(3)], preserve_reservation_ids={"survivor"})
+
+    assert state.music_admission_reservations == {"survivor": survivor}
+    assert state.starter_cycle_reserved == {survivor.cache_key}
+    assert state.commit_music_admission("gone") is False
+    assert state.commit_music_admission("survivor") is True
+
+
+def test_metadata_only_commit_cannot_re_offer_a_still_reserved_starter_track():
+    """The self-healing claim must hold in BOTH directions of a crate swap.
+
+    Trimming the reserved set against the new catalogue forgets a live
+    reservation when the crate loses that track; if it comes back, the cycle
+    offers the same recording again while the first copy is still queued.
+    """
+    starter = _starter_track(1)
+    state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))
+    assert state.reserve_music_admission("queued", starter)
+
+    state.apply_source_metadata_only([_track(9)], PlaylistSource(kind="url"))
+    # The reconciliation runs when the cycle is next consulted, not when the
+    # crate is assigned. Force that read while the starter track is out of the
+    # crate: this is the moment the old trim dropped a live reservation, and
+    # without it the catalogue never appears to change and the test proves
+    # nothing.
+    state.select_next_track()
+    # Pin the precondition rather than trusting that `select_next_track` still
+    # consults the cycle: if that consult point ever moves, this test silently
+    # reverts to the vacuous version it replaced.
+    assert state.starter_cycle_catalog == set(), "the cycle must have reconciled against the swapped-in crate"
+    state.apply_source_metadata_only([starter], PlaylistSource(kind="starter"))
+
+    assert state.reserve_music_admission("second", starter) is False
+    assert state.music_admission_reservations == {"queued": starter}
+
+
+def test_empty_crate_recovery_keeps_queued_music_startable():
+    """Refilling an emptied crate is not a cutover and must not strip the queue.
+
+    `restore_playlist_if_still_empty` explicitly preserves operator intent and
+    never purges the queue, so a song that outlived the empty crate has to stay
+    startable.
+    """
+    track = _track(1)
+    state = StationState(playlist=[])
+    assert state.reserve_music_admission("queued", track)
+
+    assert state.restore_playlist_if_still_empty([_track(2)]) is True
+
+    assert state.music_admission_reservations == {"queued": track}
+    assert state.commit_music_admission("queued") is True
+
+
+def test_force_next_revision_protects_same_valued_replacement():
+    state = StationState()
+
+    listener_revision = state.set_force_next(SegmentType.MUSIC)
+    panic_revision = state.set_force_next(SegmentType.MUSIC)
+
+    assert panic_revision == listener_revision + 1
+    assert not state.clear_force_next(
+        expected_revision=listener_revision,
+        expected_type=SegmentType.MUSIC,
+    )
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision == panic_revision
+
+    assert state.clear_force_next(
+        expected_revision=panic_revision,
+        expected_type=SegmentType.MUSIC,
+    )
+    assert state.force_next is None
+    assert state.force_next_revision == panic_revision + 1
 
 
 def test_pending_actions_are_bounded():
@@ -1425,6 +2030,53 @@ def test_course_track_blocked_past_the_plain_repeat_cooldown():
     assert course[0] not in eligible_course
     assert course[2] in eligible_course
     assert course[3] in eligible_course
+
+
+def test_course_cooldown_ignores_a_course_track_no_longer_in_the_pool():
+    # A banned or dropped course track cannot be cycled back to, so it must not
+    # consume a cooldown slot and let a current track return before the set has
+    # actually worked through.
+    heading = _heading()
+    course = [_track(n) for n in range(3)]
+    for track in course:
+        track.heading_id = heading.id
+    dropped = _track(50)
+    dropped.heading_id = heading.id  # tagged, but never in the playlist
+    normals = [_track(100 + n) for n in range(3)]
+    state = StationState(playlist=course + normals, heading=heading)
+    # The stale track sits between two current course plays.
+    state.played_tracks = [course[0], dropped, course[1]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    # course_keys is 3, so the last 2 *current* course plays are excluded. Without
+    # filtering history to the pool the stale track fills a slot and course[0] returns.
+    assert [c for c in candidates if c.heading_id == heading.id] == [course[2]]
+
+
+def test_course_cooldown_sizes_itself_to_selectable_tracks_only():
+    # Under allow_explicit=False an explicit course track is not selectable. Counting
+    # it inflates the set to 3, so the cooldown excludes the last 2 course plays —
+    # every track that could actually air — and steering silently stops.
+    heading = _heading()
+    clean = [_track(n) for n in range(2)]
+    explicit = _track(9)
+    explicit.explicit = True
+    for track in [*clean, explicit]:
+        track.heading_id = heading.id
+    normals = [_track(100 + n) for n in range(2)]
+    state = StationState(playlist=[*clean, explicit, *normals], heading=heading)
+    state.played_tracks = [clean[0], clean[1]]
+
+    candidates, _weights = _capture_selection_weights(
+        state, allow_explicit=False, repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0
+    )
+
+    # Sized to the 2 selectable tracks, only the most recent is cooled, so the course
+    # still has a runner. Sized to 3, both are excluded and only normals remain.
+    assert [c for c in candidates if c.heading_id == heading.id] == [clean[0]]
 
 
 def test_single_track_course_is_not_cooled_against_itself():
@@ -2058,6 +2710,7 @@ def test_generation_waste_reason_string_values_are_stable():
     assert GenerationWasteReason.QUALITY_GATE_REJECT == "quality_gate_reject"
     assert GenerationWasteReason.STALE_PLAYLIST == "stale_playlist"
     assert GenerationWasteReason.STALE_SOURCE == "stale_source"
+    assert GenerationWasteReason.LISTENER_REQUEST_RESERVED == "listener_request_reserved"
 
 
 # ---------------------------------------------------------------------------
@@ -2123,3 +2776,339 @@ def test_segment_track_key_coalesces_an_explicit_none_artist():
     )
     assert segment_track_key(nulled) == ("", "senza nome")
     assert "none" not in segment_track_key(nulled)
+
+
+@pytest.mark.parametrize("song_pinned", [False, True], ids=["waiting-for-pin", "already-pinned"])
+def test_listener_track_reservation_lifetime_is_the_pending_request(song_pinned):
+    requested = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="listener-requested-recording",
+    )
+    same_song_other_source = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=240_000,
+        youtube_id="older-cached-recording",
+    )
+    request = {
+        "request_id": "listener-request",
+        "type": "song_request",
+        "song_found": True,
+        "song_pinned": song_pinned,
+        "song_track_obj": requested,
+    }
+    state = StationState(pending_requests=[request])
+
+    reservations = state.listener_track_reservations()
+
+    assert reservations.reserves_track(requested)
+    assert reservations.reserves_track(same_song_other_source)
+    assert reservations.reserves_segment(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/cache/preexisting.mp3"),
+            metadata={"artist": "Vasco Rossi", "title_only": "Albachiara"},
+        )
+    )
+
+    state.archive_listener_request(request, status="sent_to_hosts")
+    released = state.listener_track_reservations()
+    assert not released.reserves_track(requested)
+    assert not released.reserves_track(same_song_other_source)
+
+
+@pytest.mark.parametrize(
+    ("requested_artist", "requested_title", "candidate_artist", "candidate_title"),
+    [
+        ("Toto Cutugno", "LItaliano", "Toto Cutugno", "L'Italiano"),
+        ("Lucio Battìsti", "Emozioni", "Lucio Battisti", "Emozioni"),
+        ("TotoCutugno", "L'Italiano", "Toto Cutugno", "LItaliano"),
+        ("Lady Gaga", "Shallow (feat. Bradley Cooper)", "Lady Gaga", "Shallow"),
+    ],
+)
+def test_listener_track_reservation_uses_matcher_identity_equivalence(
+    requested_artist,
+    requested_title,
+    candidate_artist,
+    candidate_title,
+):
+    requested = Track(
+        title=requested_title,
+        artist=requested_artist,
+        duration_ms=180_000,
+        youtube_id="listener-requested-recording",
+    )
+    state = StationState(
+        pending_requests=[
+            {
+                "type": "song_request",
+                "song_found": True,
+                "song_track_obj": requested,
+            }
+        ]
+    )
+    candidate = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/equivalent-recording.mp3"),
+        metadata={"artist": candidate_artist, "title_only": candidate_title},
+    )
+
+    assert state.listener_track_reservations().reserves_segment(candidate)
+
+
+def test_shared_song_identity_key_match_handles_compact_artist_and_punctuation():
+    assert song_identity_keys_match(
+        ("Toto Cutugno", "L'Italiano"),
+        ("TotoCutugno", "LItaliano"),
+    )
+    assert not song_identity_keys_match(
+        ("Toto Cutugno Tribute", "L'Italiano"),
+        ("Toto Cutugno", "LItaliano"),
+    )
+
+
+def _handoff(track: Track, **overrides) -> ListenerRequestHandoff:
+    base = ListenerRequestHandoff(token="handoff-token", request_id="listener-request", track=track)
+    return replace(base, **overrides) if overrides else base
+
+
+def test_clear_force_next_type_mismatch_leaves_the_directive_alone():
+    state = StationState()
+    revision = state.set_force_next(SegmentType.BANTER)
+
+    assert not state.clear_force_next(expected_type=SegmentType.MUSIC)
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == revision
+
+
+def test_clear_pinned_track_without_a_pin_reports_nothing_cleared():
+    state = StationState()
+    revision_before = state.pinned_track_revision
+
+    assert not state.clear_pinned_track()
+    assert state.pinned_track_revision == revision_before
+
+
+def test_restore_before_first_byte_ignores_a_segment_with_no_reservation():
+    state = StationState()
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/promised.mp3"),
+        metadata={
+            LISTENER_REQUEST_HANDOFF_ADMITTED_KEY: True,
+            LISTENER_REQUEST_HANDOFF_TOKEN_KEY: "ghost-token",
+        },
+    )
+
+    assert not state.restore_listener_request_handoff_before_first_byte(segment)
+    assert state.listener_request_handoff is None
+    assert not state.listener_request_retry_handoffs
+
+
+def test_source_switch_restore_refuses_a_busy_active_slot():
+    state = StationState()
+    state.listener_request_handoff = _handoff(_track(1))
+
+    with pytest.raises(RuntimeError):
+        state.restore_listener_request_handoff_after_source_switch(_handoff(_track(2), token="other"))
+
+
+def test_arm_handoff_with_busy_slot_only_confirms_the_same_promise():
+    track = _track(1)
+    state = StationState()
+    assert state.arm_listener_request_handoff({"request_id": "r1"}, track)
+
+    assert state.arm_listener_request_handoff({"request_id": "r1"}, track)
+    assert not state.arm_listener_request_handoff({"request_id": "r2"}, track)
+    assert state.listener_request_handoff is not None
+    assert state.listener_request_handoff.request_id == "r1"
+
+
+def test_force_handoff_music_defers_to_an_existing_directive():
+    state = StationState()
+    state.force_listener_request_handoff_music()  # no handoff: nothing to own
+    assert state.force_next is None
+
+    state.listener_request_handoff = _handoff(_track(1))
+    revision = state.set_force_next(SegmentType.BANTER)
+    state.force_listener_request_handoff_music()
+
+    assert state.force_next is SegmentType.BANTER
+    assert state.force_next_revision == revision
+    assert state.listener_request_handoff.force_next_revision is None
+
+
+def test_revoke_discarded_dedication_restores_a_borrowed_pin_without_a_borrowed_force():
+    track = _track(1)
+    state = StationState()
+    handoff = _handoff(
+        track,
+        dedication_queue_id="q1",
+        borrowed_pin_clear_revision=state.pinned_track_revision,
+        borrowed_force_clear_revision=None,
+    )
+    state.listener_request_handoff = handoff
+    epoch_before = state.continuity_epoch
+    dedication = Segment(
+        type=SegmentType.BANTER,
+        path=Path("/cache/dedication.mp3"),
+        metadata={"queue_id": "q1"},
+    )
+
+    assert state.revoke_listener_request_handoff_for_discarded_dedication(dedication)
+    assert state.listener_request_handoff is None
+    assert state.pinned_track is track
+    assert state.force_next is None
+    assert state.continuity_epoch == epoch_before + 1
+
+
+def test_admit_handoff_raises_when_ownership_changed_before_admission():
+    state = StationState()
+    state.listener_request_handoff = _handoff(_track(1))
+    unmarked = Segment(type=SegmentType.MUSIC, path=Path("/cache/other.mp3"), metadata={})
+
+    with pytest.raises(RuntimeError):
+        state.admit_listener_request_handoff(unmarked)
+
+
+def test_clear_handoff_is_a_noop_without_a_handoff_or_for_another_track():
+    state = StationState()
+    state.clear_listener_request_handoff()  # empty slot: nothing to do
+
+    handoff = _handoff(_track(1))
+    state.listener_request_handoff = handoff
+    state.clear_listener_request_handoff(_track(2))
+
+    assert state.listener_request_handoff is handoff
+
+
+def test_heading_renarrates_as_a_crate_beat_after_the_quiet_window():
+    import time as _time
+
+    now = _time.time()
+    heading = Heading(
+        id="h1",
+        seed="vasco",
+        label="Vasco night",
+        set_at=now - 7200,
+        set_by="operator",
+        announced=True,
+        phase="steering",
+        first_found_at=now - 7200,
+        last_narrated_at=now - 3600,
+        narration_count=1,
+    )
+    state = StationState(heading=heading)
+    track = Track(title="Albachiara", artist="Vasco Rossi", duration_ms=240_000, heading_id="h1")
+
+    state._arm_heading_announcement_if_needed(track)
+
+    assert state.heading_pending_announcement == "Vasco night"
+    assert state.heading_pending_narration_kind == "crate_beat"
+
+
+def test_record_llm_usage_rejects_an_unknown_category():
+    state = StationState()
+
+    with pytest.raises(ValueError):
+        state.record_llm_usage("script_horoscope", "model", 1, 1)  # type: ignore[arg-type]
+    assert state.api_calls == 0
+
+
+def test_record_tts_usage_ignores_empty_and_malformed_counts():
+    state = StationState()
+
+    state.record_tts_usage(0)
+    state.record_tts_usage(-40)
+    state.record_tts_usage("not-a-number")  # type: ignore[arg-type]
+
+    assert state.tts_characters == 0
+    assert state.tts_characters_by_category == {}
+
+
+def test_record_discard_skips_companionship_settlement_for_a_non_int_epoch(tmp_path, monkeypatch):
+    state = StationState()
+    abandoned: list[int] = []
+    monkeypatch.setattr(state.listener_session, "abandon_companionship", abandoned.append)
+    segment = Segment(
+        type=SegmentType.BANTER,
+        path=tmp_path / "b.mp3",
+        duration_sec=10.0,
+        metadata={"listener_session_cue": "companionship", "listener_session_epoch": True},
+    )
+
+    state.record_discard(segment, reason="stale_source", timestamp=100.0)
+
+    assert abandoned == []
+    assert state.discarded_segments_total == 1
+
+
+def test_record_discard_does_not_save_a_campaign_that_recorded_nothing(tmp_path):
+    class _QuietCampaign:
+        def __init__(self):
+            self.saved = False
+
+        def record_queue_discard(self, metadata):
+            return False
+
+        def save_if_dirty(self):
+            self.saved = True
+
+    campaign = _QuietCampaign()
+    state = StationState(release_campaign=campaign)
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=10.0)
+
+    state.record_discard(segment, reason="stale_source", timestamp=100.0)
+
+    assert not campaign.saved
+    assert state.discarded_segments_total == 1
+
+
+def test_record_discard_swallows_a_broken_accounting_surface(tmp_path):
+    state = StationState()
+    state.discard_events = None  # type: ignore[assignment]
+    segment = Segment(type=SegmentType.BANTER, path=tmp_path / "b.mp3", duration_sec=10.0)
+
+    state.record_discard(segment, reason="stale_source", timestamp=100.0)
+
+
+def test_observe_runtime_provider_resets_a_malformed_observation_revision():
+    state = StationState()
+    state.runtime_provider_state["llm"] = {"observation_revision": "garbage"}
+
+    state.observe_runtime_provider(
+        "llm",
+        current_provider="anthropic",
+        primary_provider="anthropic",
+        fallback_active=False,
+        reason="boot",
+    )
+
+    assert state.runtime_provider_state["llm"]["observation_revision"] == 1
+
+
+def test_runtime_provider_observation_scopes_require_a_real_token():
+    state = StationState()
+
+    with pytest.raises(ValueError):
+        state.bind_runtime_provider_observation_scope("   ")
+    assert state.snapshot_runtime_provider_observations("") == {}
+    assert state.take_runtime_provider_observations("   ") == {}
+
+
+def test_audible_music_splits_a_combined_artist_dash_title_label():
+    state = StationState()
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/cache/mina.mp3"),
+        duration_sec=180.0,
+        metadata={"title": "Mina – Città vuota"},
+    )
+    state.on_stream_segment_selected(segment)
+
+    assert state.on_stream_segment_audible(segment)
+    entry = state.played_track_log[-1]
+    assert entry.track.artist == "Mina"
+    assert entry.track.title == "Città vuota"

@@ -26,6 +26,21 @@ COPY: dict[str, dict[str, str]] = {
         "schedule_button": "Schedule",
         "install_app": "Install app",
         "footer_listen": "Listen",
+        "music_credits": "Music credits",
+        "credits_dialog_title": "Music credits and sources",
+        "current_track_credit": "Current track",
+        "included_music_catalog": "Included starter collection",
+        "credits_close": "Close credits",
+        "credits_source": "Source",
+        "credits_license": "License",
+        "credits_licensed_under": "Licensed under {license}",
+        "credits_provided_by_jamendo": "Provided by Jamendo under {license}",
+        "credits_no_current_music": "No music is playing right now.",
+        "credits_catalog_unavailable": "The included collection is not available in this build.",
+        "local_credit": "Provided by the station operator; rights remain their responsibility.",
+        "source_unavailable": "Source details are unavailable for this track.",
+        "normalized_notice": "Normalized and transcoded by Mamma Mi Radio; no musical edits.",
+        "provider_reported_notice": "License and source details are reported by the provider, not a clearance verdict.",
         # Listener page — stat labels under hero
         "stat_airtime": "On Air Today",
         "casa_moments_title": "On-air moments from your home",
@@ -49,8 +64,28 @@ COPY: dict[str, dict[str, str]] = {
         "form_message_placeholder": "Dear Radio, I'd like to dedicate a song to…",
         "form_message_required": "Write a message first, then send it to the DJ.",
         "form_submit": "Send with a kiss",
-        "form_success_song": "Song request received! The hosts will cue it soon.",
+        "form_success_song": "Request received. We’re checking the catalogue for a matching recording…",
         "form_success_shoutout": "Dedication received! The hosts will read it soon.",
+        "form_song_searching": "Request received. We’re checking the catalogue for a matching recording…",
+        "form_song_matched": "We found {track}. It’s ready for the hosts to introduce.",
+        "form_song_matched_generic": "We found a match. It’s ready for the hosts to introduce.",
+        "form_song_no_verified_match": (
+            "We couldn’t find a clear match for that request. Try again with the exact song title and artist."
+        ),
+        "form_song_not_playable": (
+            "We found a possible match, but couldn’t prepare it for air. Try another title or artist."
+        ),
+        "form_song_temporarily_unavailable": (
+            "We couldn’t finish that song request this time. Your message is still here — "
+            "try again later or rewrite it as a dedication instead."
+        ),
+        "form_song_tracking_expired": (
+            "We’ve stopped watching this one for now — the hosts still have your message. "
+            "Keep listening, and send it again if it doesn’t turn up."
+        ),
+        "form_song_tracking_lost": (
+            "We’ve lost track of this one. Your message is back in the box — if you didn’t hear it, send it again."
+        ),
         "form_rate_limited": "Give the DJ {s}s before sending another dedication.",
         "form_queue_full": "The dedication queue is full — wait a moment and try again.",
         "form_declined": "That dedication didn't go through — wait a moment and try again.",
@@ -92,6 +127,7 @@ COPY: dict[str, dict[str, str]] = {
         "clip_copied": "Link copied — paste it anywhere to share.",
         "clip_rate_limited": "The tape decks are still spooling your last clip — give them {s}s and tap again.",
         "clip_no_audio": "Nothing to clip just yet — let the radio play for a moment, then tap Share.",
+        "music_share_unavailable": "A complete included track has to finish before it can be shared.",
         "clip_error": "That clip didn't take — give it a moment and tap Share again.",
         "clip_copy_prompt": "Copy this link:",
     },
@@ -107,6 +143,23 @@ COPY: dict[str, dict[str, str]] = {
         "schedule_button": "Il Palinsesto",
         "install_app": "Installa app",
         "footer_listen": "Ascolta",
+        "music_credits": "Crediti musicali",
+        "credits_dialog_title": "Crediti e fonti musicali",
+        "current_track_credit": "Brano in onda",
+        "included_music_catalog": "Collezione iniziale inclusa",
+        "credits_close": "Chiudi i crediti",
+        "credits_source": "Fonte",
+        "credits_license": "Licenza",
+        "credits_licensed_under": "Concesso in licenza con {license}",
+        "credits_provided_by_jamendo": "Fornito da Jamendo con licenza {license}",
+        "credits_no_current_music": "Al momento non c'è musica in onda.",
+        "credits_catalog_unavailable": "La collezione inclusa non è disponibile in questa build.",
+        "local_credit": "Fornito dall'operatore della radio; i diritti restano sotto la sua responsabilità.",
+        "source_unavailable": "I dettagli della fonte non sono disponibili per questo brano.",
+        "normalized_notice": "Normalizzato e transcodificato da Mamma Mi Radio; nessuna modifica musicale.",
+        "provider_reported_notice": (
+            "Licenza e fonte sono dichiarate dal provider, non costituiscono una verifica dei diritti."
+        ),
         "stat_airtime": "In onda oggi",
         "casa_moments_title": "Momenti dalla tua casa andati in onda",
         "casa_moments_helper": (
@@ -129,8 +182,31 @@ COPY: dict[str, dict[str, str]] = {
         "form_message_placeholder": "Cara Radio, vorrei dedicare una canzone a…",
         "form_message_required": "Scrivi prima un messaggio, poi spediscilo al DJ.",
         "form_submit": "Spedisci con un bacio",
-        "form_success_song": "Richiesta ricevuta! I conduttori metteranno presto la canzone in scaletta.",
+        "form_success_song": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
         "form_success_shoutout": "Dedica ricevuta! I conduttori la leggeranno presto.",
+        "form_song_searching": "Richiesta ricevuta. Cerchiamo in catalogo una registrazione corrispondente…",
+        "form_song_matched": "Abbiamo trovato {track}. I conduttori ora possono presentarla.",
+        "form_song_matched_generic": "Abbiamo trovato una corrispondenza. I conduttori ora possono presentarla.",
+        "form_song_no_verified_match": (
+            "Non abbiamo trovato una corrispondenza chiara per questa richiesta. "
+            "Riprova indicando titolo esatto e artista."
+        ),
+        "form_song_not_playable": (
+            "Abbiamo trovato una possibile corrispondenza, ma non siamo riusciti a prepararla "
+            "per la messa in onda. Prova un altro titolo o artista."
+        ),
+        "form_song_temporarily_unavailable": (
+            "Questa volta non siamo riusciti a completare la richiesta musicale. Il messaggio è ancora qui — "
+            "riprova più tardi oppure riscrivilo come dedica."
+        ),
+        "form_song_tracking_expired": (
+            "Per ora smettiamo di seguire la richiesta — i conduttori hanno ancora il tuo messaggio. "
+            "Resta in ascolto e rimandala se non arriva."
+        ),
+        "form_song_tracking_lost": (
+            "Abbiamo perso le tracce di questa richiesta. Il messaggio è di nuovo qui — "
+            "se non l’hai sentita, rimandala."
+        ),
         "form_rate_limited": "Aspetta {s}s prima di mandare un'altra dedica.",
         "form_queue_full": "La coda delle dediche è piena — aspetta un attimo e riprova.",
         "form_declined": "La dedica non è partita — aspetta un attimo e riprova.",
@@ -168,6 +244,7 @@ COPY: dict[str, dict[str, str]] = {
         "clip_copied": "Link copiato — incollalo dove vuoi per condividerlo.",
         "clip_rate_limited": "I registratori stanno ancora montando l'ultima clip — aspetta {s}s e ritocca.",
         "clip_no_audio": "Ancora niente da clippare — lascia suonare la radio un attimo, poi tocca Condividi.",
+        "music_share_unavailable": "Prima di condividerlo, lascia finire un brano incluso completo.",
         "clip_error": "La clip non è partita — aspetta un attimo e ritocca Condividi.",
         "clip_copy_prompt": "Copia il link:",
     },

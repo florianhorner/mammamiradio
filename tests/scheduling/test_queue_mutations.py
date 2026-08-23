@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState
+from mammamiradio.core.models import GenerationWasteReason, Segment, SegmentType, StationState, Track
 from mammamiradio.home.moment_receipts import MomentStore
 from mammamiradio.scheduling import queue_mutations
+from mammamiradio.scheduling.producer import _reserve_music_segment
 from mammamiradio.scheduling.queue_mutations import drop_matching_segments
 
 
@@ -67,6 +68,35 @@ def test_drop_at_each_position_preserves_unrelated_order_and_shadow(drop_id: str
     assert _queue_ids(queue) == expected
     assert [entry["id"] for entry in state.queued_segments] == expected
     assert state.discard_by_reason == {GenerationWasteReason.OPERATOR_BAN: 1}
+
+
+def test_purge_rolls_back_starter_reservation_before_playback() -> None:
+    track = Track(
+        title="Reserved Starter",
+        artist="Catalog Artist",
+        duration_ms=180_000,
+        source="starter",
+        local_path=Path("/catalog/reserved.mp3"),
+    )
+    state = StationState(playlist=[track])
+    segment = _segment("reserved", metadata={"source_kind": "starter", "audio_source": "starter"})
+    _reserve_music_segment(state, track, segment)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=3)
+    _fill(queue, state, [segment])
+
+    assert (
+        drop_matching_segments(
+            queue,
+            state,
+            should_drop=lambda candidate: candidate is segment,
+            reason=GenerationWasteReason.OPERATOR_PURGE,
+        )
+        == 1
+    )
+
+    assert state.music_admission_reservations == {}
+    assert state.jamendo_base_music_since_last == 0
+    assert state.select_next_track() is track
 
 
 @pytest.mark.asyncio
@@ -135,6 +165,27 @@ def test_drop_settles_receipts_and_removes_only_discarded_ephemeral_render(tmp_p
     assert survivor_path.exists()
     assert store.rows[0].status == "dropped"
     assert store.rows[0].drop_reason == GenerationWasteReason.OPERATOR_PURGE
+
+
+def test_drop_releases_provider_resource_exactly_once(tmp_path: Path) -> None:
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    state = StationState()
+    artifact = tmp_path / "jamendo.mp3"
+    artifact.write_bytes(b"single use")
+    releases: list[str] = []
+    segment = _segment("jamendo", path=artifact, ephemeral=True)
+    segment.release_callback = lambda: releases.append("released")
+    _fill(queue, state, [segment])
+
+    drop_matching_segments(
+        queue,
+        state,
+        should_drop=lambda _segment: True,
+        reason=GenerationWasteReason.OPERATOR_PURGE,
+    )
+    segment.release()
+
+    assert releases == ["released"]
 
 
 def test_drop_preserves_packaged_asset_even_when_marked_ephemeral(tmp_path: Path, monkeypatch) -> None:

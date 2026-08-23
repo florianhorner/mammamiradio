@@ -20,18 +20,18 @@ RADIO_CONFIG = ROOT / "radio.toml"
 CLI_VERSION_FILE = ROOT / ".playwright-cli-version"
 
 
-def _quality_job() -> dict:
+def _browser_smoke_job() -> dict:
     workflow = yaml.safe_load(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
     assert isinstance(workflow, dict)
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict)
-    quality = jobs.get("quality")
-    assert isinstance(quality, dict)
-    return quality
+    browser = jobs.get("browser-smoke")
+    assert isinstance(browser, dict)
+    return browser
 
 
-def _workflow_step(quality: dict, name: str) -> dict:
-    steps = quality.get("steps")
+def _workflow_step(job: dict, name: str) -> dict:
+    steps = job.get("steps")
     assert isinstance(steps, list)
     matches = [step for step in steps if isinstance(step, dict) and step.get("name") == name]
     assert len(matches) == 1, f"quality.yml must contain exactly one {name!r} step"
@@ -47,14 +47,14 @@ def test_player_smoke_target_is_opt_in_and_uses_the_bounded_runner() -> None:
 
     assert CLI_VERSION_FILE.read_text(encoding="utf-8").strip() == "0.1.17"
 
-    quality = _quality_job()
-    assert quality.get("timeout-minutes") == 45, "the complete quality job needs an external deadline"
+    browser = _browser_smoke_job()
+    assert browser.get("timeout-minutes") == 15, "browser-smoke needs its own deadline once split from coverage"
 
-    node_step = _workflow_step(quality, "Set up Node.js for browser smoke")
+    node_step = _workflow_step(browser, "Set up Node.js for browser smoke")
     assert node_step.get("uses") == "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"
     assert node_step.get("with") == {"node-version": "22.17.1", "check-latest": False}
 
-    install_step = _workflow_step(quality, "Install listener smoke browser")
+    install_step = _workflow_step(browser, "Install listener smoke browser")
     assert install_step.get("timeout-minutes") == 10
     assert "continue-on-error" not in install_step
     install_run = str(install_step.get("run") or "")
@@ -62,7 +62,7 @@ def test_player_smoke_target_is_opt_in_and_uses_the_bounded_runner() -> None:
     assert 'npx --yes --package "@playwright/cli@$PLAYWRIGHT_CLI_VERSION"' in install_run
     assert "install-browser chromium --with-deps --only-shell" in install_run
 
-    smoke_step = _workflow_step(quality, "Listener interaction browser smoke")
+    smoke_step = _workflow_step(browser, "Listener interaction browser smoke")
     assert smoke_step.get("timeout-minutes") == 10
     assert "continue-on-error" not in smoke_step
     smoke_env = smoke_step.get("env")
@@ -192,6 +192,35 @@ def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
         "Casa on-air receipt did not render",
     ):
         assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
+
+
+def test_player_smoke_wires_listener_song_receipt_scenarios() -> None:
+    """The runner must install receipt mocks and invoke the executable scenario helper."""
+    code = RUN_CODE.read_text(encoding="utf-8")
+    route = "page.route('**/public-listener-requests/*'"
+    helper = "async function exerciseSongReceiptScenarios()"
+    invocation = "await exerciseSongReceiptScenarios();"
+
+    assert route in code
+    assert helper in code
+    assert invocation in code
+    assert code.index(helper) < code.index(invocation)
+    for retryable_outcome in (
+        "async function exerciseRetryableTerminalReceipt",
+        "song_not_playable",
+        "form_song_not_playable",
+        "song_temporarily_unavailable",
+        "form_song_temporarily_unavailable",
+        "continued polling after its terminal receipt",
+        # A pruned record and a request we merely stopped watching are
+        # different situations and must not share one string.
+        "form_song_tracking_lost",
+        # The tracking deadline is only really covered by the browser: the
+        # source-level guard can see the constants but not that they are obeyed.
+        "tracking deadline on resume",
+        "an already-expired receipt still polled the station",
+    ):
+        assert retryable_outcome in code
 
 
 def test_player_smoke_executes_ad_receipt_contract() -> None:

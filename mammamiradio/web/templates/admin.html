@@ -426,6 +426,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .setup-strip-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex:1}
 .setup-strip-chip{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 8px;border:1px solid rgba(245,237,216,0.14);border-radius:8px;font-size:11px;color:rgba(245,237,216,0.82);background:rgba(245,237,216,0.04)}
 .setup-strip-chip[data-s="ready"]{border-color:rgba(37,99,235,0.35);color:var(--ok-text)}
+.setup-strip-chip[data-s="degraded"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
 .setup-strip-chip[data-s="missing"],.setup-strip-chip[data-s="checking"],.setup-strip-chip[data-s="waiting_ai"],.setup-strip-chip[data-s="empty"],.setup-strip-chip[data-s="stale"]{border-color:rgba(208,161,72,0.35);color:var(--warning)}
 .setup-strip-chip[data-s="blocked"],.setup-strip-chip[data-s="rejected"]{border-color:rgba(184,44,32,0.45);color:var(--error)}
 .setup-strip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
@@ -449,6 +450,41 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 }
 .setup-group-body { margin-top: 12px; }
 .setup-pre { margin-top: 8px; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: 11px; color: rgba(245,237,216,0.82); }
+.music-sources { display: grid; gap: 8px; margin-bottom: 14px; }
+.music-source-row {
+  display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center;
+  min-height: 64px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 8px; background: rgba(20,17,15,0.28);
+}
+.music-source-row[data-state="ready"] { border-color: rgba(37,99,235,0.35); }
+.music-source-row[data-state="working"] { border-color: rgba(244,208,72,0.32); }
+.music-source-row[data-state="degraded"] { border-color: rgba(217,119,6,0.42); }
+.music-source-row[data-state="blocked"] { border-color: rgba(196,74,74,0.44); }
+.music-source-copy { min-width: 0; }
+.music-source-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; font-weight: 800; color: var(--cream); }
+.music-source-detail { margin-top: 3px; font-size: 11px; line-height: 1.45; color: rgba(245,237,216,0.65); }
+.music-source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.music-source-actions .btn { min-width: 44px; min-height: 44px; }
+.music-source-note { margin: 0 2px; font-size: 11px; line-height: 1.45; color: rgba(245,237,216,0.58); }
+.jamendo-settings { display: grid; gap: 10px; margin: 8px 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(20,17,15,0.22); }
+.jamendo-secret-state { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.jamendo-secret-saved { font-size: 12px; font-weight: 700; color: var(--ok-text); }
+.jamendo-secret-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.jamendo-checkbox { min-height: 44px; display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; font-size: 12px; line-height: 1.45; color: var(--cream-dk); cursor: pointer; }
+.jamendo-checkbox input { width: 20px; height: 20px; margin-top: 1px; accent-color: var(--sun2); flex: 0 0 auto; }
+.jamendo-help { font-size: 11px; line-height: 1.55; color: rgba(245,237,216,0.64); }
+.jamendo-help a { min-height: 44px; display: inline-flex; align-items: center; color: var(--sun); text-decoration: underline; text-underline-offset: 3px; }
+.jamendo-form-message { min-height: 20px; font-size: 11px; line-height: 1.45; color: var(--cream-dk); }
+.jamendo-form-message[data-state="degraded"] { color: var(--warning); }
+.jamendo-form-message[data-state="blocked"] { color: var(--error); }
+.jamendo-form-message[data-state="ready"] { color: var(--ok-text); }
+@media(max-width:720px){
+  .music-source-row { grid-template-columns: 1fr; }
+  .music-source-actions { justify-content: stretch; }
+  .music-source-actions .btn { flex: 1; }
+  .jamendo-secret-actions { width: 100%; }
+  .jamendo-secret-actions .btn { flex: 1; }
+}
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* ── PLAYLIST / SEARCH ── */
@@ -1191,6 +1227,23 @@ input[type="range"]:focus-visible {
 .lg-row .ts { font-family: var(--font-mono); font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .lg-row .tx { color: var(--cream-dk); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lg-row.now .tx { color: var(--cream); font-weight: 600; font-family: var(--font-display); font-style: italic; font-size: 14px; }
+.kept-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 9px 14px; font-size: 12px; border-bottom: 1px solid rgba(245,237,216,0.04); }
+.kept-row:last-child { border-bottom: none; }
+.kept-link { color: var(--cream); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kept-when { font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* Child combinator on purpose: this pads the empty-state line, and `.sub` is
+   also on the timestamp inside a row. Unscoped it indented the timestamp 14px
+   past the title on a narrow screen, breaking the left edge the stacked layout
+   exists to line up. */
+#keptList > .sub { padding: 10px 14px; }
+/* Narrow screens: the title is how the operator recognizes the moment, so it
+   gets its own line rather than being squeezed to a few characters by an
+   auto-width timestamp sitting beside it. */
+@media (max-width: 720px) {
+  .kept-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .kept-link { grid-column: 1 / -1; }
+  .kept-when { grid-column: 1; }
+}
 
 /* 2-column grid */
 .a-row-2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; align-items: start; }
@@ -1911,6 +1964,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <button type="button" id="prefDownNowBtn" class="btn-icon pref-btn down" title="Play this song less often" aria-label="Dislike this song" aria-pressed="false" data-preference-target="now" data-preference-vote="down" style="display:none">
               <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-down"/></svg>
             </button>
+            <button type="button" id="keepNowBtn" class="btn-icon" title="Keep this — save it for good" aria-label="Keep this moment, saved for good" onclick="doKeepThis(this)" style="display:none">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2.5h8v11l-4-3-4 3z"/></svg>
+            </button>
             <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
             </button>
@@ -2044,6 +2100,23 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
         <h2>Rotazione</h2>
         <div class="sub" id="plMeta"></div>
       </header>
+      <div class="music-sources" aria-label="Music sources">
+        <div class="music-source-row" id="jamendoSourceRow" data-state="idle">
+          <div class="music-source-copy">
+            <div class="music-source-title"><span id="jamendoSourceChip"><span class="status-chip idle" aria-label="status: idle"><span class="shape" aria-hidden="true">○</span>idle</span></span><span id="jamendoSourceLabel">Jamendo off</span></div>
+            <div class="music-source-detail" id="jamendoSourceDetail">Starter and local music continue.</div>
+          </div>
+          <div class="music-source-actions" id="jamendoSourceActions"></div>
+        </div>
+        <p class="music-source-note">License information is reported by Jamendo. Provider confirmation for this station model is pending.</p>
+        <div id="jamendoStateAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+        <div class="music-source-row" id="starterSourceRow" data-state="blocked">
+          <div class="music-source-copy">
+            <div class="music-source-title"><span id="starterSourceChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span><span id="starterSourceLabel">Starter collection unavailable</span></div>
+            <div class="music-source-detail" id="starterSourceDetail">The verified twelve-track package is not available.</div>
+          </div>
+        </div>
+      </div>
       <section class="record-hunt" aria-labelledby="recordHuntHeading">
         <p class="record-hunt-label">Record Hunt</p>
         <p class="record-hunt-copy" id="recordHuntHeading">Steer what the station <strong>becomes next.</strong></p>
@@ -2090,7 +2163,6 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <p class="rotation-library-label">Add a source</p>
             <div class="quick-actions" id="playlistSourceControls">
               <button type="button" class="btn btn-chip" id="sourceChartsBtn" data-capability="charts_reload" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('charts',this)">Charts</button>
-              <button type="button" class="btn btn-chip" id="sourceJamendoBtn" data-capability="jamendo" data-stopped-exempt style="display:none" onclick="enrichPlaylistSource('jamendo',this)">Jamendo</button>
             </div>
           </section>
           <section class="library-tools-group" id="playlistPoolControls">
@@ -2100,7 +2172,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
             </div>
             <div class="library-tools-danger">
-              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
+              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation. Your own music files stay where they are and come back on their own — delete them from the music folder to stop that.">Clear pool</button>
             </div>
           </section>
         </div>
@@ -2235,6 +2307,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
         </div>
       </div>
       <div class="a-log" id="logBody"></div>
+      <div class="card-label" style="margin-top:18px">Kept moments</div>
+      <div class="sub" style="margin-bottom:8px">Saved for good, with no expiry. These play without a password for anyone who can open the link.</div>
+      <div class="a-log" id="keptList"></div>
     </section>
     </section>
 
@@ -2367,6 +2442,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <h4 class="benefit-heading">Hear the full Mamma Mi Radio opening.</h4>
                   <p class="use-copy">You’ll hear Marco and Giulia, then the music starts.</p>
                   <div class="first-listen-status" id="firstListenSourceRepair"></div>
+                  <div class="first-listen-actions" id="firstListenSourceActions" hidden>
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
+                  </div>
                 </div>
               </section>
 
@@ -2526,18 +2604,28 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                     </div>
                     <form id="setupKeysForm" onsubmit="event.preventDefault();setupSaveKeys(event.submitter)">
                       <div class="setup-note safety-note"><strong>Saved keys stay hidden.</strong> Leave a field empty to keep its current value.</div>
-                      <div class="setup-keys">
-                        <label class="key-field"><span>Anthropic API key</span><input class="input" id="setupAnthropicKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Anthropic API key" oninput="updateFirstListenKeySaveState()"></label>
-                        <label class="key-field"><span>OpenAI API key</span><input class="input" id="setupOpenaiKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="OpenAI API key" oninput="updateFirstListenKeySaveState()"></label>
-                        <details class="setup-advanced" id="setupPremiumVoices">
-                          <summary>Voice providers</summary>
-                          <div class="setup-note">These change the voices. They do not add new conversations.</div>
+                      <div class="setup-sound-lanes">
+                        <section class="setup-sound-lane" aria-labelledby="setupConversationsHeading">
+                          <h4 id="setupConversationsHeading">Conversations</h4>
+                          <p>Choose which service can write new host moments between songs.</p>
                           <div class="setup-keys">
-                            <label class="key-field"><span>Azure Speech key</span><input class="input" id="setupAzureSpeechKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Azure Speech key" oninput="updateFirstListenKeySaveState()"></label>
-                            <label class="key-field"><span>Azure Speech region</span><input class="input" id="setupAzureSpeechRegion" type="text" placeholder="Leave blank to keep saved region" autocomplete="off" aria-label="Azure Speech region" oninput="updateFirstListenKeySaveState()"></label>
-                            <label class="key-field"><span>ElevenLabs API key</span><input class="input" id="setupElevenlabsKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="ElevenLabs API key" oninput="updateFirstListenKeySaveState()"></label>
+                            <label class="key-field"><span>Anthropic API key</span><input class="input" id="setupAnthropicKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Anthropic API key" oninput="updateFirstListenKeySaveState()"></label>
+                            <label class="key-field"><span>OpenAI API key</span><input class="input" id="setupOpenaiKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="OpenAI API key" oninput="updateFirstListenKeySaveState()"></label>
                           </div>
-                        </details>
+                        </section>
+                        <section class="setup-sound-lane" aria-labelledby="setupVoiceQualityHeading">
+                          <h4 id="setupVoiceQualityHeading">Voice quality</h4>
+                          <p>Choose the clarity, warmth, and presence of Marco and Giulia.</p>
+                          <details class="setup-advanced" id="setupPremiumVoices">
+                            <summary>Voice providers</summary>
+                            <div class="setup-note">These providers shape how the hosts sound when they speak.</div>
+                            <div class="setup-keys">
+                              <label class="key-field"><span>Azure Speech key</span><input class="input" id="setupAzureSpeechKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="Azure Speech key" oninput="updateFirstListenKeySaveState()"></label>
+                              <label class="key-field"><span>Azure Speech region</span><input class="input" id="setupAzureSpeechRegion" type="text" placeholder="Leave blank to keep saved region" autocomplete="off" aria-label="Azure Speech region" oninput="updateFirstListenKeySaveState()"></label>
+                              <label class="key-field"><span>ElevenLabs API key</span><input class="input" id="setupElevenlabsKey" type="password" placeholder="Leave blank to keep saved key" autocomplete="off" aria-label="ElevenLabs API key" oninput="updateFirstListenKeySaveState()"></label>
+                            </div>
+                          </details>
+                        </section>
                       </div>
                       <div class="setup-actions" style="margin-top:10px">
                         <button type="submit" class="btn btn-trigger" id="setupSaveBtn" data-stopped-exempt disabled>Save changes</button>
@@ -2551,12 +2639,12 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               <details class="setup-advanced technical-details" id="setupAdvancedDetails">
                 <summary>Technical details and help</summary>
                 <div class="technical-body" aria-hidden="true" inert>
-                  <section class="technical-group"><h3>Music after the welcome</h3><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
+                  <section class="technical-group technical-group-wide"><h3>Music after the welcome</h3><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
                   <section class="technical-group"><h3>Exact Home Assistant source</h3><p><code>media-source://mammamiradio/live</code></p><p>Exactly one selected <code>media_player</code>. No automatic room choice or volume change.</p></section>
                   <section class="technical-group"><h3>Identity</h3><div class="setup-list" id="setupIdentity"></div></section>
                   <section class="technical-group"><h3>Original setup evidence</h3><ul class="setup-steps" id="setupSteps"></ul></section>
                   <section class="technical-group"><h3>First Listen timing</h3><p id="firstListenTiming">Measured in this browser after the media source is ready. No telemetry leaves this browser.</p></section>
-                  <section class="technical-group"><h3>Requirements</h3><div class="setup-list" id="setupEssentials"></div><div class="setup-list" id="setupChecks"></div></section>
+                  <section class="technical-group technical-group-wide"><h3>Requirements</h3><div class="setup-list" id="setupEssentials"></div><div class="setup-list" id="setupChecks"></div></section>
                   <details class="setup-advanced" id="setupCachedContextDiagnostics">
                     <summary>Cached Home context diagnostics</summary>
                     <div class="setup-note">This view may be old and cannot unlock Home context.</div>
@@ -2587,7 +2675,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 <h2 id="firstListenSuccessTitle" tabindex="-1">Your station is on air.</h2>
                 <p class="success-copy" id="firstListenSuccessCopy">You heard Marco and Giulia, and your privacy choice is saved.</p>
                 <div class="success-receipt" aria-label="Saved First Listen choices"><div><span>Heard in</span><strong id="firstListenSuccessSpeaker">Your speaker</strong></div><div><span>Home choice</span><strong id="firstListenSuccessPrivacy">Home stays private</strong></div></div>
-                <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openFirstListenStation()">Open your station</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
+                <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openFirstListenStation()">Open your station</button><button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Repair music source</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
                 <div class="guide-audio" data-guide="success">
                   <button type="button" class="guide-audio-play" data-guide-key="success" aria-describedby="guideSuccessNote" onclick="toggleFirstListenGuide('success',this)">Play the celebration</button>
                   <p class="guide-audio-copy" id="guideSuccessNote"><strong>9 seconds on this device</strong><span>This celebration plays only on this device.</span></p>
@@ -2596,6 +2684,45 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               </div>
             </section>
             <div class="sr-only" id="firstListenLiveRegion" role="status" aria-live="polite" aria-atomic="true"></div>
+
+            <section class="first-listen-surface setup-music-sources" id="setupMusicSources" aria-labelledby="jamendoSetupHeading">
+              <div class="setup-subhead" id="jamendoSetupHeading" tabindex="-1">Music sources</div>
+              <div class="music-sources">
+                <div class="music-source-row" id="starterSetupRow" data-state="blocked">
+                  <div class="music-source-copy">
+                    <div class="music-source-title" id="starterSetupLabel">Starter collection unavailable</div>
+                    <div class="music-source-detail" id="starterSetupDetail">The verified twelve-track package is not available.</div>
+                  </div>
+                  <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span>
+                </div>
+              </div>
+              <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
+                <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
+                  <span class="jamendo-secret-saved">✓ Client ID saved</span>
+                  <div class="jamendo-secret-actions">
+                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="replaceJamendoClientId()">Replace</button>
+                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="clearJamendoClientId(this)">Clear</button>
+                  </div>
+                </div>
+                <div id="jamendoClientField">
+                  <label class="setup-title" for="jamendoClientId">Jamendo client ID</label>
+                  <input class="input" id="jamendoClientId" type="password" autocomplete="off" spellcheck="false" aria-describedby="jamendoHelp" placeholder="Enter your own client ID">
+                </div>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoEnabled">
+                  <span><strong>Enable Jamendo live rotation</strong></span>
+                </label>
+                <label class="jamendo-checkbox">
+                  <input type="checkbox" id="jamendoNoncommercialAck">
+                  <span>I confirm this station's Jamendo API use is non-commercial and understand that Mamma Mi Radio does not certify broadcast rights.</span>
+                </label>
+                <p class="jamendo-help" id="jamendoHelp">Optional. Uses your Jamendo API client ID for non-commercial API use. Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
+                <div class="jamendo-form-message" id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"></div>
+                <div class="setup-actions">
+                  <button type="button" class="btn btn-trigger" id="jamendoSaveBtn" data-stopped-exempt onclick="saveJamendoSettings(this)">Save and check</button>
+                </div>
+              </div>
+            </section>
           </div>
         </details>
 
@@ -2633,10 +2760,8 @@ let _pendingPurge=false;
 const SHAPE={ok:'✓',warn:'△',error:'✕',info:'·'};
 const SEGMENT_GLYPH={music:'♪',banter:'🎙',ad:'[Ad]',news_flash:'[!]'};
 const CHARTS_SENTINEL_URL='https://rss.applemarketingtools.com/api/v2/it/music/most-played/100/songs.json';
-const JAMENDO_SENTINEL_URL='jamendo://default';
 const _SOURCE_DISPATCH={
   charts:{url:CHARTS_SENTINEL_URL,toast:'Charts added to rotation'},
-  jamendo:{url:JAMENDO_SENTINEL_URL,toast:'Jamendo added to rotation'},
   classic_70s:{url:'classic://italian/70s',toast:"70s added to rotation"},
   classic_80s:{url:'classic://italian/80s',toast:"80s added to rotation"},
   classic_90s:{url:'classic://italian/90s',toast:"90s added to rotation"},
@@ -2650,6 +2775,7 @@ const SOURCE_CHIPS={
   classic:{label:'classici',cls:'classic'},
   youtube:{label:'charts',cls:'charts'},
   charts:{label:'charts',cls:'charts'},
+  starter:{label:'starter',cls:'local'},
   jamendo:{label:'jamendo',cls:'jamendo'},
   local:{label:'locali',cls:'local'},
   demo:{label:'demo',cls:'local'},
@@ -2660,7 +2786,7 @@ const FIRST_LISTEN_ERRORS={
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then find speakers again.'},
   ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
   ha_unreachable:{title:'We can’t reach Home Assistant',message:'The station could not connect in time.',action:'Check that Home Assistant is online, then try again.'},
-  media_source_missing:{title:'Mamma Mi Radio Live is not loaded',message:'Home Assistant cannot see the Mamma Mi Radio media source.',action:'Check HACS, restart Home Assistant if the integration was just installed, then confirm its config entry and recheck.'},
+  media_source_missing:{title:'Mamma Mi Radio Live is not loaded',message:'Home Assistant cannot see the exact Mamma Mi Radio Live media source yet.',action:'Confirm the Mamma Mi Radio integration is loaded, then choose “Check Home Assistant again.”'},
   ambiguous_station:{title:'More than one station is connected',message:'The stable Live source cannot safely choose between multiple Mamma Mi Radio entries.',action:'Keep one active integration entry, then find speakers again.'},
   no_players:{title:'No ready speaker was found',message:'No other media player currently reports that it can play media.',action:'Bring a speaker online in Home Assistant, then find speakers again.'},
   player_unavailable:{title:'That speaker is not available now',message:'The selected player changed or went offline.',action:'Find speakers again and choose an available target.'},
@@ -3140,6 +3266,10 @@ function showAdminTab(name,{render=true,persist=true}={}){
   // Render the newly-shown panel immediately from cached state so switching
   // tabs doesn't wait up to 3s for the next poll.
   if(render)renderActiveTab();
+  // Kept moments are not in the status poll — they change only when the
+  // operator keeps or removes one, so they are fetched on arrival rather than
+  // every three seconds.
+  if(name==='archivio')refreshKeptMoments();
 }
 function initFirstListenPanelMount(){
   const mount=document.getElementById('firstListenPanelMount');
@@ -3223,6 +3353,101 @@ async function doSkip(el){
     }
     toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
   }catch(_){toast(offlineMsg());}
+}
+// Keep-this stays reachable for a beat after a host break ends, because the
+// moment you want is usually the one that JUST finished — the payoff lands, the
+// segment ends, music starts, and only then do you reach for the button. Mirrors
+// the server's lookback window (CLIP_LOOKBACK_SECONDS).
+const KEEP_GRACE_MS=15000;
+// Mirrors KEEPSAKE_SEGMENT_TYPES in mammamiradio/scheduling/clip.py. The server
+// is the authority; this only decides when offering the press is honest.
+const KEEPABLE_TYPES=new Set(['banter','ad','news_flash','station_id','sweeper','time_check']);
+let _keepGraceUntil=0;
+let _keepPending=false;
+// The station may be reached through Home Assistant ingress, where every page
+// lives under /api/hassio_ingress/<token>/ and a bare /clips/... resolves to the
+// HA host instead of the add-on. `_base` is the prefix the rest of this console
+// already talks through, so the link we hand the operator is one that works
+// from where they are standing.
+function keepShareLink(shareUrl){return new URL(_base+shareUrl,location.href).href}
+async function doKeepThis(el){
+  // Keeping writes a file nothing ever deletes on its own, so a double-click
+  // must not put the same moment on the shelf twice.
+  if(_keepPending)return;
+  _keepPending=true;
+  if(el)el.disabled=true;
+  flash(el);
+  try{
+    const r=await api('POST','/api/clip/keep');
+    if(!(r&&r.ok)){
+      toast((r&&r.message)||wayOut('keep this moment'));
+      return;
+    }
+    const label=r.title?`Kept — ${r.title}`:'Kept — saved for good';
+    const link=keepShareLink(r.share_url);
+    let copied=false;
+    // Say "copied" only once the write actually resolved. Direct LAN admin is
+    // plain HTTP, where the Clipboard API is commonly unavailable, and claiming
+    // a copy that never happened sends the operator to an empty clipboard.
+    try{await navigator.clipboard.writeText(link);copied=true;}catch(e){}
+    if(typeof window.undoableToast==='function'){
+      window.undoableToast(copied?`${label}. Link copied.`:`${label}. Link: ${link}`,async()=>{
+        const u=await api('DELETE',`/api/clip/keep/${r.keepsake_id}`);
+        toast(u&&u.ok?'Removed — that one is not kept after all':((u&&u.message)||wayOut('remove that one')));
+        if(_activeTab==='archivio')refreshKeptMoments();
+      });
+    }else{
+      toast(copied?`${label}. Link copied.`:`${label}. Link: ${link}`);
+    }
+    if(_activeTab==='archivio')refreshKeptMoments();
+  }catch(_){
+    toast(offlineMsg());
+  }finally{
+    _keepPending=false;
+    if(el)el.disabled=false;
+  }
+}
+// ── Kept moments (Archivio) ──
+// A keepsake outlives every retention window and is served without a password,
+// so the operator needs somewhere to see what is kept and remove one. Without
+// this the shelf-full refusal would be naming a folder an add-on operator
+// cannot open.
+async function refreshKeptMoments(){
+  const list=document.getElementById('keptList');
+  if(!list)return;
+  let r;
+  try{r=await api('GET','/api/clip/keep');}catch(_){r=null;}
+  if(!(r&&r.ok)){list.innerHTML='<div class="sub">Couldn\'t read the kept moments — give it a few seconds and try again.</div>';return}
+  const rows=r.keepsakes||[];
+  if(!rows.length){list.innerHTML='<div class="sub">Nothing kept yet. Press Keep on the console while the hosts are talking.</div>';return}
+  list.innerHTML=rows.map(row=>{
+    const title=esc(row.title||(row.segment_type?segmentText(row.segment_type):'')||'A moment');
+    const when=row.created_at?new Date(row.created_at*1000).toLocaleString():'';
+    return `<div class="kept-row"><a class="kept-link" href="${esc(_base+row.share_url)}" target="_blank" rel="noopener">${title}</a>`+
+      `<span class="sub kept-when">${esc(when)}</span>`+
+      // Trash, not the ban glyph: Ban means "never play this song again" a few
+      // rows up in the same console, and one symbol cannot carry both meanings.
+      // Same icon the queue's own remove button uses.
+      `<button type="button" class="btn-icon" title="Remove this kept moment" aria-label="Remove ${title}" data-keepsake-remove="${esc(row.keepsake_id)}">`+
+      `<svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button></div>`;
+  }).join('');
+}
+// Delegated rather than an inline onclick: `esc` escapes for HTML text, and an
+// id inside a JS string inside an attribute is decoded back to a quote before
+// the JS is parsed. A data attribute has no such second parse.
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-keepsake-remove]');
+  if(!button)return;
+  event.preventDefault();
+  doUnkeep(button.dataset.keepsakeRemove,button);
+});
+async function doUnkeep(id,el){
+  flash(el);
+  try{
+    const r=await api('DELETE',`/api/clip/keep/${id}`);
+    toast(r&&r.ok?'Removed — that one is not kept after all':((r&&r.message)||wayOut('remove that one')));
+  }catch(_){toast(offlineMsg());}
+  refreshKeptMoments();
 }
 async function doBanNowPlaying(el){
   // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
@@ -3558,6 +3783,25 @@ function updateNow(ns){
   const onAir=document.getElementById('on-air');
   const isMusic=!!(ns&&ns.type&&segmentTypeKey(ns.type)==='music');
   if(banBtn)banBtn.style.display=isMusic?'':'none';
+  // Keep-this follows the inverse of Ban: it is meaningful while the hosts are
+  // talking, and for KEEP_GRACE_MS after, so the segment that just ended is
+  // still reachable. The server decides what may actually be kept; this only
+  // decides when asking is worth offering.
+  const keepBtn=document.getElementById('keepNowBtn');
+  if(keepBtn){
+    // Match the server's KEEPSAKE_SEGMENT_TYPES rather than testing "not music".
+    // segmentTypeKey passes 'stopped' and 'skipping' through unchanged, so
+    // not-music armed the button and its grace window against a station that is
+    // not on air, inviting a press that can only ever be refused.
+    const nowKey=(ns&&ns.type)?segmentTypeKey(ns.type):'';
+    const isVoiceNow=KEEPABLE_TYPES.has(nowKey);
+    if(isVoiceNow)_keepGraceUntil=Date.now()+KEEP_GRACE_MS;
+    // Stop and Skip end the grace immediately. The lookback the grace stands in
+    // for is cleared server-side on stop, so leaving the button up for another
+    // fifteen seconds only invites a press that is already refused.
+    else if(nowKey==='stopped'||nowKey==='skipping'||!nowKey)_keepGraceUntil=0;
+    keepBtn.style.display=(isVoiceNow||Date.now()<_keepGraceUntil)?'':'none';
+  }
   prefBtns.forEach(btn=>{btn.style.display=isMusic?'':'none';});
   syncNowPreferenceButtons(isMusic?(_st.current_track_preference||0):0);
   if(!ns||!ns.type){
@@ -4196,6 +4440,9 @@ function updateRuntimeStatus(st){
         air_next_overflow:'queue overflow',
         egress_stale:'stale on air',
         blocklist_gate:'banned song',
+        listener_request_reserved:'held for its dedication',
+        playback_file_error:'audio unavailable before air',
+        playback_admission_denied:'source withdrew it before air',
         operator_ban:'banned song',
         operator_stop:'operator stop',
         operator_panic:'panic stop',
@@ -4284,8 +4531,324 @@ function setupRow(label, detail, status){
 function openListener(){
   window.open((_base||'')+'/listen','_blank','noopener');
 }
-function openSetupPanel(){
+let _lastJamendoAnnouncementKey='';
+let _jamendoFormDirty=false;
+let _jamendoReplaceMode=false;
+const JAMENDO_ERROR_COPY={
+  jamendo_invalid_request:'Review the Jamendo fields and try again.',
+  jamendo_client_id_invalid:'Enter a valid Jamendo client ID.',
+  jamendo_client_id_conflict:'Replace or clear the client ID, not both.',
+  jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
+  jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
+  jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
+  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check that the station storage has free space and is writable, then try again.',
+};
+// Covers every code in JAMENDO_FAILURE_CODES (playlist/jamendo_transient.py).
+// test_jamendo_failure_code_contract.py fails if the provider gains a code that
+// has no sentence here. Each line says what happened AND whether the operator
+// must act — a bare reason fragment is a log line, not product copy.
+// Two codes here carry a real operator lever: api_auth_failed (their client ID)
+// and temp_root_invalid (their storage). Everything else ends in "no action
+// needed" or says the station is retrying, so the operator can stop looking.
+// The blocked row adds a third lever of its own, because a state that never
+// recovers unaided cannot be described by any sentence in this table.
+// There is deliberately no "try different music tags" line: jamendo_tags is a
+// radio.toml key with no env override, no add-on option and no admin field, so
+// on the add-on that advice would name a step the reader cannot take.
+function jamendoFailureHint(code){
+  return {
+    api_auth_failed:"Jamendo isn't accepting the client ID — check it in your Jamendo account and enter it again.",
+    temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
+    api_failed:"Jamendo didn't respond — retrying automatically.",
+    api_malformed:"Jamendo sent a reply the station couldn't read — retrying automatically.",
+    network_timeout:'Jamendo took too long to answer — retrying automatically.',
+    metadata_oversize:"Jamendo's reply was too large to read — retrying automatically.",
+    metadata_invalid:"Jamendo sent song details the station couldn't read — retrying automatically.",
+    metadata_changed:"A song's details changed between checks — this resolves on its own, no action needed.",
+    identity_mismatch:'Jamendo sent back a different song than expected — retrying automatically.',
+    empty_results:"Jamendo isn't returning any usable songs right now — retrying automatically.",
+    license_rejected:"That song's license doesn't qualify — skipping it, no action needed.",
+    duration_rejected:'That song is too short or too long for a break — skipping it, no action needed.',
+    invalid_url:'Jamendo sent a broken link — skipping it, no action needed.',
+    audio_fetch_failed:"The song wouldn't download — retrying automatically.",
+    audio_empty:'The downloaded song was empty — skipping it, no action needed.',
+    audio_oversize:'That song is too large to prepare — skipping it, no action needed.',
+    audio_size_invalid:"The song's download size didn't add up — skipping it, no action needed.",
+    ffmpeg_failed:"That song couldn't be prepared for air — skipping it, no action needed.",
+    ffmpeg_timeout:'Preparing that song took too long — skipping it, no action needed.',
+    ffprobe_failed:"The station couldn't inspect that song's audio — skipping it, no action needed.",
+    lease_invalid:'The prepared track failed a safety check — skipping it, no action needed.',
+    source_revision_invalid:'The music source changed while a song was being prepared — no action needed.',
+    internal_error:'Something went wrong inside the station while preparing a song — retrying automatically.',
+  }[code]||'';
+}
+function jamendoPresentation(status){
+  const s=status&&typeof status==='object'?status:{};
+  const internal=String(s.state||'disabled');
+  if(internal==='playing'&&!s.enabled)return{state:'working',shape:'●',label:'Jamendo track finishing',detail:'Jamendo is off. This track will finish and then be deleted.',actions:[],announcement:'Jamendo track finishing'};
+  if(!s.enabled||internal==='disabled')return{state:'idle',shape:'○',label:'Jamendo off',detail:'Starter and local music continue.',actions:['setup'],announcement:''};
+  if(internal==='needs_config')return{state:'blocked',shape:'✗',label:'Finish Jamendo setup',detail:'Add a client ID and confirm non-commercial use.',actions:['setup'],announcement:'Jamendo setup needed'};
+  if(['idle','discovering','fetching','normalizing','queued','playing','consumed'].includes(internal)){
+    // No candidate count here by design. A lifetime total ("823 candidates
+    // skipped") reads as catastrophic, says nothing about whether the attempt
+    // running right now is healthy, and gives the operator nothing to do. The
+    // sentence for THIS attempt's dominant failure does all three jobs.
+    let detail='Starter and local music continue.';
+    let announcement='Preparing one Jamendo track';
+    const dominantCode=s.dominant_failure_code_this_attempt||s.last_failure_code;
+    if(Number(s.rejected_this_attempt||0)>0&&dominantCode){
+      const reason=jamendoFailureHint(dominantCode);
+      if(reason){
+        detail=reason+' Starter and local music continue.';
+        // The announcement has to change as well, and the dedup key it feeds
+        // must include it — see renderJamendoStatus. Keying on state and label
+        // alone made this line dead: both are constants in this branch.
+        announcement=reason;
+      }
+    }
+    return{state:'working',shape:'●',label:'Preparing one Jamendo track',detail,actions:[],announcement};
+  }
+  if(internal==='ready')return{state:'ready',shape:'✓',label:'One Jamendo track ready',detail:'Single use; deleted after play.',actions:[],announcement:'One Jamendo track ready'};
+  if(internal==='degraded'){
+    // Between retries is exactly when the operator reads the card, so this is
+    // the most valuable place to name the reason rather than repeat "temporarily
+    // unavailable" — which says nothing they can act on.
+    const degradedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
+    return{state:'degraded',shape:'△',label:'Jamendo temporarily unavailable',detail:degradedReason?degradedReason+' Starter and local music continue.':'Starter and local music continue.',actions:['retry'],announcement:degradedReason||'Jamendo temporarily unavailable'};
+  }
+  // Blocked is where the two codes an operator can actually fix land:
+  // api_auth_failed and temp_root_invalid are raised as blocking errors, so a
+  // branch that never called jamendoFailureHint left their wording as dead code
+  // and told the operator nothing on the one failure that is theirs to fix.
+  // Blocked schedules no retry, so any sentence promising one is wrong here.
+  // Jamendo's non-retryable contract rejections surface as api_failed, whose
+  // normal copy says "retrying automatically" — that would tell the operator to
+  // wait for something that will never happen.
+  let blockedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
+  // Screens BOTH wrong-on-blocked shapes. source_revision_invalid is raised
+  // as a blocking error and its copy says 'no action needed', which on a row
+  // that will never recover unaided is just as misleading as promising a retry.
+  if(!blockedReason||blockedReason.indexOf('retrying automatically')!==-1||blockedReason.indexOf('no action needed')!==-1){
+    blockedReason="Jamendo turned the station away and isn't trying again — check the Jamendo settings, or turn it off.";
+  }
+  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:blockedReason+' Starter and local music continue.',actions:['retry','off'],announcement:blockedReason};
+}
+// The chip's CSS class stays the machine state; the visible and spoken text
+// does not. "working" / "degraded" / "blocked" are enum values — they tell an
+// operator nothing, which is the same defect as the raw candidate count.
+const MEDIA_SOURCE_STATE_WORDS={
+  ready:'ready',
+  working:'starting up',
+  degraded:'having trouble',
+  blocked:'needs you',
+  idle:'off',
+};
+function mediaSourceStateWord(state){
+  return MEDIA_SOURCE_STATE_WORDS[state]||state;
+}
+function mediaSourceStatusChip(state,shape){
+  const chip=document.createElement('span');
+  const word=mediaSourceStateWord(state);
+  chip.className='status-chip '+state;
+  chip.setAttribute('aria-label','status: '+word);
+  const mark=document.createElement('span');
+  mark.className='shape';
+  mark.setAttribute('aria-hidden','true');
+  mark.textContent=shape;
+  chip.append(mark,document.createTextNode(word));
+  return chip;
+}
+function renderStarterCatalogStatus(status){
+  const catalog=Array.isArray(status&&status.starter_catalog)?status.starter_catalog:[];
+  const ready=catalog.length===12;
+  const state=ready?'ready':'blocked';
+  const shape=ready?'✓':'✗';
+  const label=ready?'Starter collection on air':'Starter collection unavailable';
+  const detail=ready
+    ?'Twelve attributed bundled tracks are the offline rotation floor.'
+    :'The verified twelve-track package is not available.';
+  for(const id of ['starterSourceRow','starterSetupRow']){
+    const row=document.getElementById(id);
+    if(row)row.dataset.state=state;
+  }
+  for(const id of ['starterSourceChip','starterSetupChip']){
+    const holder=document.getElementById(id);
+    if(holder)holder.replaceChildren(mediaSourceStatusChip(state,shape));
+  }
+  for(const id of ['starterSourceLabel','starterSetupLabel']){
+    const node=document.getElementById(id);
+    if(node)node.textContent=label;
+  }
+  for(const id of ['starterSourceDetail','starterSetupDetail']){
+    const node=document.getElementById(id);
+    if(node)node.textContent=detail;
+  }
+}
+function jamendoStatusChip(presentation){
+  const chip=document.createElement('span');
+  // Class keeps the machine state for styling; text and aria-label do not.
+  // This is the chip the Jamendo row actually renders — mediaSourceStatusChip
+  // serves the starter row only, so a fix applied there alone never lands here.
+  const word=mediaSourceStateWord(presentation.state);
+  chip.className='status-chip '+presentation.state;
+  chip.setAttribute('aria-label','status: '+word);
+  const shape=document.createElement('span');
+  shape.className='shape';
+  shape.setAttribute('aria-hidden','true');
+  shape.textContent=presentation.shape;
+  chip.append(shape,document.createTextNode(word));
+  return chip;
+}
+function jamendoAction(label,handler){
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='btn btn-util';
+  button.dataset.stoppedExempt='';
+  button.textContent=label;
+  button.addEventListener('click',handler);
+  return button;
+}
+function renderJamendoStatus(status){
+  const row=document.getElementById('jamendoSourceRow');
+  const chipWrap=document.getElementById('jamendoSourceChip');
+  const label=document.getElementById('jamendoSourceLabel');
+  const detail=document.getElementById('jamendoSourceDetail');
+  const actions=document.getElementById('jamendoSourceActions');
+  if(!row||!chipWrap||!label||!detail||!actions)return;
+  const presentation=jamendoPresentation(status);
+  row.dataset.state=presentation.state;
+  chipWrap.replaceChildren(jamendoStatusChip(presentation));
+  label.textContent=presentation.label;
+  detail.textContent=presentation.detail;
+  actions.replaceChildren();
+  presentation.actions.forEach(action=>{
+    if(action==='setup')actions.appendChild(jamendoAction(status?.state==='needs_config'?'Configure':'Set up',openJamendoSetup));
+    else if(action==='retry')actions.appendChild(jamendoAction('Check again',retryJamendo));
+    else if(action==='off')actions.appendChild(jamendoAction('Turn off',turnOffJamendo));
+  });
+  // The reason belongs in the key. State and label are both constant across the
+  // whole working branch, so keying on them alone meant a provider that started
+  // failing mid-attempt never re-announced, and a degraded row kept speaking the
+  // previous retry's reason while showing the current one.
+  const announcementKey=presentation.state+':'+presentation.label+':'+(presentation.announcement||'');
+  if(_lastJamendoAnnouncementKey&&announcementKey!==_lastJamendoAnnouncementKey&&presentation.announcement){
+    const live=document.getElementById('jamendoStateAnnouncement');
+    if(live)live.textContent=presentation.announcement;
+  }
+  _lastJamendoAnnouncementKey=announcementKey;
+  renderJamendoSettings(status,false);
+}
+function openJamendoSetup(){
+  openSetupPanel();
+  const heading=document.getElementById('jamendoSetupHeading');
+  setTimeout(()=>{
+    heading?.scrollIntoView({block:'center',behavior:'smooth'});
+    heading?.focus();
+  },80);
+}
+function setJamendoFormMessage(message,state='idle'){
+  const el=document.getElementById('jamendoFormMessage');
+  if(!el)return;
+  el.dataset.state=state;
+  el.textContent=message||'';
+}
+function renderJamendoSettings(status,force){
+  if(!status||typeof status!=='object'||(_jamendoFormDirty&&!force))return;
+  const enabled=document.getElementById('jamendoEnabled');
+  const ack=document.getElementById('jamendoNoncommercialAck');
+  const secret=document.getElementById('jamendoSecretState');
+  const field=document.getElementById('jamendoClientField');
+  if(enabled)enabled.checked=Boolean(status.enabled);
+  if(ack)ack.checked=Boolean(status.noncommercial_acknowledged);
+  const configured=Boolean(status.client_id_configured);
+  if(secret)secret.hidden=!configured;
+  if(field)field.hidden=configured&&!_jamendoReplaceMode;
+}
+async function mediaSourceRequest(method,path,payload){
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),10000);
+  try{
+    const response=await fetch(_base+path,{method,headers:H(),body:payload===undefined?undefined:JSON.stringify(payload),signal:controller.signal});
+    const data=await response.json().catch(()=>({}));
+    return{ok:response.ok,status:response.status,data:data&&typeof data==='object'?data:{}};
+  }finally{clearTimeout(timeout);}
+}
+function jamendoErrorMessage(data){
+  return JAMENDO_ERROR_COPY[data?.error_code]||"Jamendo settings did not change. Starter and local music continue; try again.";
+}
+function applyJamendoResponse(result,successCopy){
+  if(!result.ok||!result.data?.ok){
+    const message=jamendoErrorMessage(result.data);
+    setJamendoFormMessage(message,result.status>=500?'degraded':'blocked');
+    return false;
+  }
+  if(result.data.status){
+    _st.jamendo=result.data.status;
+    renderJamendoStatus(result.data.status);
+  }
+  _jamendoFormDirty=false;
+  _jamendoReplaceMode=false;
+  const input=document.getElementById('jamendoClientId');
+  if(input)input.value='';
+  renderJamendoSettings(result.data.status||_st.jamendo,true);
+  setJamendoFormMessage(successCopy,'ready');
+  toast(successCopy);
+  return true;
+}
+async function saveJamendoSettings(button){
+  const enabled=Boolean(document.getElementById('jamendoEnabled')?.checked);
+  const acknowledged=Boolean(document.getElementById('jamendoNoncommercialAck')?.checked);
+  const clientId=(document.getElementById('jamendoClientId')?.value||'').trim();
+  const payload={enabled,noncommercial_acknowledged:acknowledged};
+  if(clientId)payload.client_id=clientId;
+  button.disabled=true;
+  setJamendoFormMessage('Saving Jamendo settings…','working');
+  try{
+    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',payload);
+    applyJamendoResponse(result,'Jamendo settings saved. Starter and local music stayed on air.');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' Starter and local music continue.','degraded');}
+  finally{button.disabled=false;}
+}
+function replaceJamendoClientId(){
+  _jamendoReplaceMode=true;
+  _jamendoFormDirty=true;
+  const field=document.getElementById('jamendoClientField');
+  if(field)field.hidden=false;
+  document.getElementById('jamendoClientId')?.focus();
+}
+async function clearJamendoClientId(button){
+  if(!confirm('Clear the saved Jamendo client ID and turn Jamendo off? Starter and local music will continue.'))return;
+  button.disabled=true;
+  const acknowledged=Boolean(document.getElementById('jamendoNoncommercialAck')?.checked);
+  try{
+    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',{enabled:false,noncommercial_acknowledged:acknowledged,clear_client_id:true});
+    applyJamendoResponse(result,'Jamendo client ID cleared. Starter and local music continue.');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' The saved settings were not changed.','degraded');}
+  finally{button.disabled=false;}
+}
+async function retryJamendo(){
+  setJamendoFormMessage('Checking Jamendo again…','working');
+  try{
+    const result=await mediaSourceRequest('POST','/api/media-sources/jamendo/retry');
+    if(!result.ok){setJamendoFormMessage(jamendoErrorMessage(result.data),'blocked');return;}
+    if(result.data.status){_st.jamendo=result.data.status;renderJamendoStatus(result.data.status);}
+    setJamendoFormMessage(result.data.already_in_progress?'Jamendo preparation is already in progress.':'Jamendo check started. Starter and local music continue.','ready');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' Starter and local music continue.','degraded');}
+}
+async function turnOffJamendo(){
+  const acknowledged=Boolean(_st.jamendo?.noncommercial_acknowledged);
+  try{
+    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',{enabled:false,noncommercial_acknowledged:acknowledged});
+    applyJamendoResponse(result,'Jamendo turned off. Starter and local music continue.');
+  }catch(_){setJamendoFormMessage(offlineMsg()+' The saved setting was not changed.','degraded');}
+}
+function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
+  if(focus==='source'){
+    _firstListenUi.showSuccess=false;
+    updateFirstListenSuccess();
+    document.body.dataset.firstListenFocus='source';
+  }
   showAdminTab('setup',{render:true,persist:true});
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
@@ -4293,8 +4856,20 @@ function openSetupPanel(){
   const firstListenRequired=document.body.dataset.firstListenEntry==='required';
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
-    if(firstListenRequired)focusCurrentFirstListenStep();
+    if(focus==='source')focusFirstListenStep('source');
+    else if(firstListenRequired)focusCurrentFirstListenStep();
     else summary?.focus({preventScroll:true});
+  },50);
+}
+function openMusicSourceTools(){
+  showAdminTab('rotazione',{render:true,persist:true});
+  setTimeout(()=>{
+    const tools=document.getElementById('libraryTools');
+    if(tools){
+      tools.open=true;
+      tools.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+    }
+    document.getElementById('sourceChartsBtn')?.focus({preventScroll:true});
   },50);
 }
 function firstListenInstallNeedsOnboarding(first){
@@ -4304,7 +4879,7 @@ function firstListenInstallNeedsOnboarding(first){
 function firstListenEntryRequired(setup){
   const first=setup?.guided_setup?.first_listen||{};
   const needsOnboarding=firstListenInstallNeedsOnboarding(first);
-  return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete);
+  return first.bootstrap_ready===true&&needsOnboarding&&!(first.audio_complete&&first.privacy_complete&&first.continuity_available);
 }
 function resolveFirstListenLanding(setup){
   const first=setup?.guided_setup?.first_listen||{};
@@ -4335,7 +4910,10 @@ function renderGuidedSetupStrip(setup){
   const primaryKind=primary.kind||'review_setup';
   const primaryLabel=primary.label||'Review setup';
   const primaryTarget=primary.target||(primaryKind==='open_listener'?'listen':'setup');
-  const primaryHandler=(primaryTarget==='listen'||primaryKind==='open_listener')?'openListener()':'openSetupPanel()';
+  const primaryFocus=primary.focus||'';
+  const primaryHandler=(primaryTarget==='listen'||primaryKind==='open_listener')
+    ?'openListener()'
+    :primaryFocus==='source'?"openSetupPanel('source')":'openSetupPanel()';
   actions.innerHTML=`<button type="button" class="btn btn-util setup-strip-action" data-stopped-exempt onclick="${primaryHandler}">${esc(primaryLabel)}</button>`;
 }
 function firstListenSetChip(id,state,label){
@@ -4405,6 +4983,23 @@ function focusCurrentFirstListenStep(){
   if(heading){heading.focus();return true}
   return false;
 }
+function focusFirstListenStep(key){
+  const step=Object.entries(FIRST_LISTEN_STEP_KEYS).find(([,value])=>value===key)?.[0];
+  const section=step?document.getElementById(step):null;
+  if(!section)return false;
+  const review=section.querySelector(':scope > .first-listen-head > .first-listen-review');
+  if(section.dataset.state==='complete'&&review&&!review.hidden){
+    toggleFirstListenReview(key,review);
+    return true;
+  }
+  const heading=section.querySelector('.first-listen-heading');
+  if(heading){
+    heading.focus({preventScroll:true});
+    heading.scrollIntoView({block:'center',behavior:recordHuntReducedMotion()?'auto':'smooth'});
+    return true;
+  }
+  return false;
+}
 function closeFirstListenExpansion({restoreFocus=true}={}){
   const trigger=_firstListenUi.reviewTrigger;
   _firstListenUi.reviewStep='';
@@ -4456,14 +5051,20 @@ function updateFirstListenSuccess(){
   success.toggleAttribute('inert',!show);
   if(!show){success.classList.remove('is-celebrating');return}
   const projection=firstListenProjection();
+  const sourceState=firstListenSourceState(projection);
   const speaker=_firstListenUi.selectedName||'your saved speaker';
   const privacy=projection.privacyEnabled?'Home context is on':'Home stays private';
   const copy=document.getElementById('firstListenSuccessCopy');
   const speakerEl=document.getElementById('firstListenSuccessSpeaker');
   const privacyEl=document.getElementById('firstListenSuccessPrivacy');
-  if(copy)copy.textContent=`You heard Marco and Giulia on ${speaker}. Your privacy choice is saved.`;
+  const repair=document.getElementById('firstListenSuccessRepair');
+  const backupFollowUp=sourceState.continuityAvailable&&!sourceState.healthy;
+  if(copy)copy.textContent=backupFollowUp
+    ?`You heard Marco and Giulia on ${speaker}. Backup audio is keeping the station playing; primary music still needs attention.`
+    :`You heard Marco and Giulia on ${speaker}. Your privacy choice is saved.`;
   if(speakerEl)speakerEl.textContent=speaker;
   if(privacyEl)privacyEl.textContent=privacy;
+  if(repair)repair.hidden=!backupFollowUp;
   if(wasVisible)return;
   success.classList.remove('is-celebrating');
   void success.offsetWidth;
@@ -4471,7 +5072,9 @@ function updateFirstListenSuccess(){
   success.scrollIntoView({block:'start'});
   document.getElementById('firstListenSuccessTitle')?.focus({preventScroll:true});
   const live=document.getElementById('firstListenLiveRegion');
-  if(live)live.textContent='First Listen complete. Your station is on air.';
+  if(live)live.textContent=backupFollowUp
+    ?'First Listen complete. Backup audio is keeping the station playing; primary music still needs attention.'
+    :'First Listen complete. Your station is on air.';
 }
 function reviewFirstListenChoices(){
   _firstListenUi.showSuccess=false;
@@ -4552,8 +5155,8 @@ const FIRST_LISTEN_SOURCE_ROWS=[
 function firstListenSourceStatus(kind,status){
   const value=String(status||'checking').toLowerCase();
   if(kind==='recovery'){
-    if(value==='on_air')return{state:'degraded',label:'On air as cover'};
-    if(value==='playable'||value==='cover_only')return{state:'degraded',label:'Speaker-test cover'};
+    if(value==='on_air')return{state:'degraded',label:'Backup audio playing'};
+    if(value==='playable'||value==='cover_only')return{state:'degraded',label:'Backup audio available'};
   }
   const values={
     on_air:{state:'ready',label:'On air'},
@@ -4574,6 +5177,16 @@ function firstListenSourceRows(source){
     const found=supplied.find(row=>required.aliases.includes(String(row?.kind||row?.id||'').toLowerCase()));
     return{...required,row:found||{status:'checking',detail:'Waiting for source evidence.'}};
   });
+}
+function firstListenSourceState(projection){
+  const source=projection?.guided?.source_readiness||{};
+  const normalized=firstListenSourceRows(source);
+  const healthy=source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
+  const recoveryRow=normalized.find(item=>item.kind==='recovery')?.row||{};
+  const recoveryStatus=String(recoveryRow.status||recoveryRow.state||'');
+  const recoveryOnAir=source.recovery_on_air===true||recoveryStatus==='on_air';
+  const recoveryAvailable=recoveryOnAir||source.recovery_cover_available===true||['playable','cover_only'].includes(recoveryStatus);
+  return{source,normalized,healthy,recoveryOnAir,recoveryAvailable,continuityAvailable:source.continuity_available===true||healthy||recoveryAvailable};
 }
 function renderFirstListenSources(source){
   const box=document.getElementById('firstListenSources');
@@ -4703,15 +5316,12 @@ function firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable}){
 }
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
-  const source=projection.guided.source_readiness||{};
+  const sourceState=firstListenSourceState(projection);
+  const source=sourceState.source;
   const sourceRows=Array.isArray(source.rows)?source.rows:[];
-  const normalized=firstListenSourceRows(source);
+  const normalized=sourceState.normalized;
   const sourceKnown=sourceRows.length>0;
-  const healthy=source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
-  const recoveryRow=normalized.find(item=>item.kind==='recovery')?.row||{};
-  const recoveryStatus=String(recoveryRow.status||recoveryRow.state||'');
-  const recoveryOnAir=source.recovery_on_air===true||recoveryStatus==='on_air';
-  const recoveryAvailable=recoveryOnAir||source.recovery_cover_available===true||['playable','cover_only'].includes(recoveryStatus);
+  const {healthy,recoveryOnAir,recoveryAvailable,continuityAvailable}=sourceState;
   renderFirstListenSources(source);
 
   const priorInstall=projection.legacy||projection.first.install_origin==='existing';
@@ -4725,7 +5335,8 @@ function renderFirstListenProgress(){
   renderFirstListenShow({projection,sourceKnown,healthy,recoveryOnAir,recoveryAvailable,priorInstall});
   const privacyMilestone=projection.privacyReviewed;
   const sourceMilestone=sourceKnown||listenAccepted||listenComplete||privacyMilestone||priorInstall;
-  firstListenSetStep('firstListenSourceStep',sourceMilestone?'complete':'current');
+  const sourceComplete=sourceMilestone&&continuityAvailable;
+  firstListenSetStep('firstListenSourceStep',sourceComplete?'complete':'current');
   firstListenSetStep('firstListenSpeakerStep',listenAccepted?'complete':sourceMilestone?'current':'upcoming');
   firstListenSetStep('firstListenVerifyStep',listenComplete?'complete':receiptRepairRequired||listenAccepted?'current':'upcoming');
   firstListenSetStep('firstListenPrivacyStep',privacyMilestone?'complete':existingPrivacyReview||listenComplete?'current':'upcoming');
@@ -4735,7 +5346,7 @@ function renderFirstListenProgress(){
   const progressLine=document.getElementById('firstListenProgressLine');
   const currentStep=document.querySelector('.first-listen-step[data-state="current"]');
   const currentNumber=currentStep?Number(currentStep.querySelector('.first-listen-number')?.textContent||0):0;
-  const nextLabels={1:'choose one room',2:'check the sound',3:'choose whether the hosts can use Home details',4:'optional new conversations'};
+  const nextLabels={1:sourceKnown&&!continuityAvailable?'repair the music source':'choose one room',2:'check the sound',3:'choose whether the hosts can use Home details',4:'optional new conversations'};
   if(surface)surface.dataset.currentStep=currentNumber?String(currentNumber):'complete';
   if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of 5. Next: ${nextLabels[currentNumber]||'finish'}.`:'First Listen complete. Review any choice below.';
 
@@ -4752,16 +5363,18 @@ function renderFirstListenProgress(){
   }else if(recoveryOnAir){
     firstListenSetChip('firstListenSourceChip','degraded','Backup playing');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup music will keep the station playing.';
-    if(sourceRepair)sourceRepair.textContent='You can continue. Backup music will play after the welcome. Technical details below show what needs attention.';
+    if(sourceRepair)sourceRepair.textContent='You can continue and finish First Listen. Backup music will play after the welcome. Primary music still needs attention.';
   }else if(recoveryAvailable){
-    firstListenSetChip('firstListenSourceChip','degraded','Backup ready');
-    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup music will keep the station playing.';
-    if(sourceRepair)sourceRepair.textContent='You can continue. Backup music is ready after the welcome. Technical details below show what needs attention.';
+    firstListenSetChip('firstListenSourceChip','degraded','Backup audio available');
+    if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup audio can keep the station playing while primary music is repaired.';
+    if(sourceRepair)sourceRepair.textContent='You can continue and finish First Listen with backup audio. Backup music is ready after the welcome. Primary music still needs attention; open music source tools when you are ready.';
   }else{
-    firstListenSetChip('firstListenSourceChip','degraded','Music missing');
+    firstListenSetChip('firstListenSourceChip','degraded','Music still needed');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready, but music cannot continue afterward yet.';
-    if(sourceRepair)sourceRepair.textContent='The welcome can still play. Open Technical details below to repair the music that follows it.';
+    if(sourceRepair)sourceRepair.textContent='The welcome can still play, but there is no audio ready afterward. Open music source tools to continue.';
   }
+  const sourceActions=document.getElementById('firstListenSourceActions');
+  if(sourceActions)sourceActions.hidden=!sourceKnown||healthy;
 
   const findBtn=document.getElementById('firstListenFindPlayersBtn');
   const select=document.getElementById('firstListenPlayerSelect');
@@ -4773,7 +5386,7 @@ function renderFirstListenProgress(){
   const speakerBusy=_firstListenUi.discovery==='finding'||_firstListenUi.dispatch==='starting'||_firstListenUi.receiptSaving;
   const browserGuidePlaying=firstListenGuideLocksRoomProof();
   const deliberateRetry=_firstListenUi.verification==='not_yet'&&!listenComplete;
-  const discoveryLabel=_firstListenUi.discovery==='finding'?'Finding speakers…':_firstListenUi.players.length?'Search again':'Find my speakers';
+  const discoveryLabel=_firstListenUi.discovery==='finding'?'Finding speakers…':_firstListenUi.discovery==='error'?'Check Home Assistant again':_firstListenUi.players.length?'Search again':'Find my speakers';
   if(findBtn){findBtn.hidden=false;findBtn.disabled=!sourceKnown||speakerBusy;findBtn.textContent=discoveryLabel;firstListenSetActionTone(findBtn,!_firstListenUi.players.length&&!listenAccepted);}
   if(select)select.disabled=!sourceKnown||!_firstListenUi.players.length||speakerBusy;
   if(choices)choices.disabled=!sourceKnown||speakerBusy;
@@ -4838,7 +5451,7 @@ function renderFirstListenProgress(){
     if(verifySummary)verifySummary.textContent='Your existing speaker choice still stands. Review your Home details next.';
   }else if(listenComplete){
     firstListenSetChip('firstListenVerifyChip','ready','Heard');
-    if(verifySummary)verifySummary.textContent=healthy?'Bella — Mamma Mi Radio is in the room.':recoveryOnAir?'The station is in the room. Backup music follows the opening.':recoveryAvailable?'The station is in the room. Backup music is ready, but the main music still needs attention.':'The opening reached the room; the music still needs attention.';
+    if(verifySummary)verifySummary.textContent=healthy?'Bella — Mamma Mi Radio is in the room.':recoveryOnAir?'The station is in the room. Backup music follows the opening.':recoveryAvailable?'The station is in the room. Backup audio is available, but primary music still needs attention.':'The opening reached the room; the music still needs attention.';
     firstListenSetStatus('firstListenVerifyStatus',`You heard the station on ${_firstListenUi.selectedName||'your saved speaker'}.`,'ready');
   }else if(receiptRepairRequired){
     firstListenSetChip('firstListenVerifyChip','degraded','Save check');
@@ -4935,7 +5548,7 @@ function renderFirstListenProgress(){
   const activeGuideButton=_firstListenUi.guideButton;
   if(activeGuideButton&&(activeGuideButton.closest('[hidden]')||activeGuideButton.closest('[inert]')))stopFirstListenGuide();
   updateFirstListenSuccess();
-  return{healthy,recoveryOnAir,recoveryAvailable,sourceKnown,needsAction:!listenMilestone||!projection.privacyReviewed};
+  return{healthy,recoveryOnAir,recoveryAvailable,continuityAvailable,sourceKnown,needsAction:!listenMilestone||!projection.privacyReviewed};
 }
 function shouldShowHomeContextPreview(setup){
   const guided=setup?.guided_setup||{};
@@ -5373,7 +5986,8 @@ async function chooseFirstListenPrivacy(enabled,el){
   const priorInstall=projection.legacy||projection.first.install_origin==='existing';
   const reviewingPrivacy=_firstListenUi.reviewStep==='privacy';
   const reviewTrigger=_firstListenUi.reviewTrigger;
-  const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy;
+  const continuityAvailable=firstListenSourceState(projection).continuityAvailable;
+  const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy&&continuityAvailable;
   let focusTarget='';
   _firstListenUi.privacySaving=true;
   renderFirstListenProgress();
@@ -5658,8 +6272,11 @@ function renderSetup(setup){
 }
 async function setupRecheck(el){
   flash(el);
+  const focusSource=document.body.dataset.firstListenFocus==='source';
+  delete document.body.dataset.firstListenFocus;
   const data=await api('POST','/api/setup/recheck',{});
   renderSetup(data);
+  if(focusSource)setTimeout(()=>focusFirstListenStep('source'),50);
   toast('Configuration re-check complete');
 }
 function firstListenKeyValues(){
@@ -5933,13 +6550,12 @@ function playlistRenderSignature(page){
 function sourceControlVisibility(caps){
   const capabilities=caps?.capabilities||{};
   return {
-    jamendo:Boolean(capabilities.jamendo),
     charts_reload:Boolean(capabilities.charts_reload),
   };
 }
 function emptyPoolRecoveryState(st,caps,capsState){
   const visibility=sourceControlVisibility(caps);
-  const sourcesAvailable=visibility.jamendo||visibility.charts_reload;
+  const sourcesAvailable=visibility.charts_reload;
   if(capsState==='checking'){
     return {action:'setup',message:'The rotation is empty. Checking available music sources…'};
   }
@@ -5963,13 +6579,11 @@ function emptyPoolRecoveryState(st,caps,capsState){
   return {action:'setup',message:`The rotation is empty. ${detail}`};
 }
 function updateSourceControls(st,caps){
-  const jamBtn=document.getElementById('sourceJamendoBtn');
   const chartsBtn=document.getElementById('sourceChartsBtn');
   const sourceGroup=document.getElementById('sourceImportGroup');
   const visibility=sourceControlVisibility(caps);
-  if(jamBtn)jamBtn.style.display=visibility.jamendo?'':'none';
   if(chartsBtn)chartsBtn.style.display=visibility.charts_reload?'':'none';
-  if(sourceGroup)sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload;
+  if(sourceGroup)sourceGroup.hidden=!visibility.charts_reload;
   updateEmptyPoolRecovery(st,caps);
 }
 function openLibraryTools(){
@@ -5986,10 +6600,14 @@ async function shufflePlaylist(el){
   await refreshFast();
 }
 async function purgePool(el){
-  if(!confirm('Clear the rotation pool? Every track will be removed from rotation.\nMusic resumes as soon as you add a source.'))return;
+  // Say plainly that this does not touch files on disk. Clearing the pool empties
+  // the rotation in memory; the station then reloads any MP3s it finds in the
+  // music folder on its next pass, so an operator who wants those songs gone was
+  // left thinking the button was broken.
+  if(!confirm('Clear the rotation pool? Every track will be removed from rotation.\nMusic resumes as soon as you add a source.\n\nYour own music files are not deleted. Songs in the music folder come back into rotation on their own — remove the files from that folder if you want them gone for good.'))return;
   flash(el);
   const r=await api('POST','/api/playlist/purge',{});
-  if(r&&r.ok){toast(r.persisted===false?'Rotation pool cleared for now — I could not save that, so it may come back after a restart':'Rotation pool cleared');await refreshFast();}
+  if(r&&r.ok){toast(r.persisted===false?'Rotation pool cleared for now — I could not save that, so it may come back after a restart':'Rotation pool cleared. Your own music files stay put and can return on their own.');await refreshFast();}
   else toast(r?.error||wayOut('empty the rotation'));
 }
 async function enrichPlaylistSource(kind,el){
@@ -6909,14 +7527,20 @@ async function applyHostPreset(n,presetName){
 
 // ── Listener Requests ──
 const LISTENER_SONG_ERROR_TEXT={
-  longform_audio:['not a single-track song','Not a single-track song'],
-  non_music_audio:['not a song','Not a song'],
-  banned:['banned song','Banned song'],
-  download_failed:['download failed','Download failed'],
-  download_cancelled:['cancelled','Cancelled'],
+  low_confidence:['needs exact title + artist','Try exact title + artist'],
+  not_found:['no match — try title + artist','No match — try title + artist'],
+  longform_audio:['too long — choose one song','Too long — choose one song'],
+  non_music_audio:['not playable — choose another','Not playable — choose another'],
+  banned:['blocked — unban or choose another','Blocked — unban or choose another'],
+  downloads_disabled:['song requests are off — enable them','Song requests off — enable them'],
+  lookup_failed:['catalogue unavailable — retry later','Catalogue unavailable — retry later'],
+  lookup_timed_out:['no catalogue answer — retry','No catalogue answer — retry'],
+  source_changed:['music changed — submit again','Music changed — submit again'],
+  download_failed:['could not prepare track — retry or add it','Could not prepare track — retry or add it'],
+  download_cancelled:['preparation stopped — retry','Preparation stopped — retry'],
 };
-function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['not found'])[0];}
-function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'Song not found'])[1];}
+function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['no match — try title + artist'])[0];}
+function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'No match — try title + artist'])[1];}
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
@@ -6939,7 +7563,6 @@ function updateListenerRequests(reqs,consumed){
     if(r.type==='song_request'){
       if(r.song_found){
         status=statusInline('ready',r.song_track||'ready');
-        actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
         status=statusInline('blocked',listenerSongErrorLabel(r.song_error_reason));
       } else {
@@ -6960,7 +7583,9 @@ function updateListenerRequests(reqs,consumed){
     html+=consumed.map(r=>{
       const age=formatRequestAge(r.age_s);
       const badge=r.status==='source_changed'
-        ?'<span class="lr-badge lr-badge-warn">&#8635; Playlist changed</span>'
+        ?'<span class="lr-badge lr-badge-warn">&#8635; Music changed — submit again</span>'
+        :r.status==='dismissed'
+        ?'<span class="lr-badge lr-badge-warn">&#10005; Dismissed — resubmit if still wanted</span>'
         :r.status==='song_not_found'
         ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
@@ -6980,14 +7605,6 @@ async function lrDismiss(id){
   if(!r||r.ok===false){toast(wayOut('remove that request'));return;}
   if(r.removed>0)toast('Request removed');
   else toast('Already removed');
-}
-async function lrQueueNext(i){
-  const req=_lrReqs[i];if(!req)return;
-  if(req.type==='song_request'&&req.song_found){
-    const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
-    if(!r||r.ok===false){toast(wayOut('handle that request'));return;}
-    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
-  }
 }
 
 // ── Log / Archivio ──
@@ -7488,6 +8105,8 @@ async function refreshFast(){
     updateMoments(_st);
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
+    renderStarterCatalogStatus(_st);
+    renderJamendoStatus(_st.jamendo||{enabled:false,state:'disabled'});
     updateChaosState(_st.chaos_mode);
     if(!_paceOk&&_st.pacing){_paceOk=true;applyPacingResponse(_st.pacing);}
   }catch(e){
@@ -7561,6 +8180,9 @@ async function refreshSlow(){
 async function refresh(){await Promise.all([refreshFast(),refreshSlow()])}
 
 refresh();
+['jamendoClientId','jamendoEnabled','jamendoNoncommercialAck'].forEach(id=>{
+  document.getElementById(id)?.addEventListener('input',()=>{_jamendoFormDirty=true;setJamendoFormMessage('Settings changed. Save and check when ready.','idle');});
+});
 loadSuperItalianToggle();
 loadBroadcastChainToggle();
 loadQuality();

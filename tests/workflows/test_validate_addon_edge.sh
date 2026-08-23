@@ -67,10 +67,18 @@ cleanup() {
 trap cleanup EXIT
 
 # Portable in-place sed (BSD/macOS + GNU/Linux): edit via temp file.
+# A sed that matches nothing leaves the file unchanged, the validator then
+# correctly passes, and the case fails with a misleading "exited 0" — so a
+# no-op mutation aborts loudly naming the stale target instead.
 mutate_file() {
   local file="$1"
   shift
-  sed "$@" "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  sed "$@" "$file" > "$file.tmp"
+  if cmp -s "$file" "$file.tmp"; then
+    rm -f "$file.tmp"
+    fail "mutation left $file unchanged (stale sed target?): $*"
+  fi
+  mv "$file.tmp" "$file"
 }
 mutate_edge() { mutate_file "$EDGE_CONFIG" "$@"; }
 mutate_both() {
@@ -157,8 +165,8 @@ assert_rejects "wrong image" "edge image mismatch"
 mutate_edge 's/^stage: .*/stage: stable/'
 assert_rejects "wrong stage" "edge stage must stay experimental"
 
-# Case 4: schema drift from stable
-mutate_edge 's/jamendo_client_id: password?/jamendo_client_id: str?/'
+# Case 4: schema drift from stable (flip a schema value type edge-side only)
+mutate_edge 's/admin_token: password?/admin_token: str?/'
 assert_rejects "schema drift" "edge schema block drifted"
 
 # Case 5: options drift from stable (flip the edge default away from stable to force drift)

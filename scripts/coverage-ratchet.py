@@ -43,6 +43,27 @@ def _module_source_exists(module: str) -> bool:
     return (SOURCE_ROOT / (module.replace(".", "/") + ".py")).exists()
 
 
+def xdist_args() -> list[str]:
+    """Optional pytest-xdist workers from COVERAGE_RATCHET_XDIST.
+
+    Empty / 0 / false / off keeps serial pytest. ``auto`` or a positive
+    integer becomes ``-n <value>``. Anything else is ignored with a warning
+    so a typo cannot silently change the coverage gate.
+    """
+    raw = os.environ.get("COVERAGE_RATCHET_XDIST", "").strip()
+    if not raw or raw.lower() in {"0", "false", "no", "off"}:
+        return []
+    if raw.lower() == "auto":
+        return ["-n", "auto"]
+    if raw.isascii() and raw.isdigit() and int(raw) > 0:
+        return ["-n", raw]
+    print(
+        f"WARNING: ignoring invalid COVERAGE_RATCHET_XDIST={raw!r}; use 'auto' or a positive integer.",
+        file=sys.stderr,
+    )
+    return []
+
+
 def run_coverage() -> tuple[dict[str, int], int]:
     """Run pytest with coverage and parse the term output for per-module percentages.
 
@@ -59,6 +80,7 @@ def run_coverage() -> tuple[dict[str, int], int]:
             "--cov=mammamiradio",
             "--cov-report=term-missing",
             "-q",
+            *xdist_args(),
         ],
         capture_output=True,
         text=True,

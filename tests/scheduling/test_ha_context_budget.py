@@ -75,6 +75,11 @@ def _states_response(states: list[dict]) -> MagicMock:
     return response
 
 
+async def _wait_for_thread_event(event: threading.Event, *, timeout: float = 1.0) -> None:
+    """Wait for a worker signal without blocking the event loop under load."""
+    assert await asyncio.to_thread(event.wait, timeout)
+
+
 @pytest.mark.asyncio
 async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordinator_drains(tmp_path):
     import mammamiradio.home.ha_context as ha_context
@@ -146,7 +151,7 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
         coordinator = _HAContextRefreshCoordinator(config, state)
         try:
             fallback, fresh = await coordinator.prepare_for_segment()
-            assert worker_started.wait(timeout=0.2)
+            await _wait_for_thread_event(worker_started)
             assert fallback.summary == "old ambient"
             assert not fresh
             assert state.ha_context_refresh_stage == "projection"
@@ -172,7 +177,7 @@ async def test_projection_worker_keeps_loop_live_and_publishes_only_when_coordin
         finally:
             release_worker.set()
             await coordinator.close()
-    assert worker_finished.wait(timeout=0.5)
+    await _wait_for_thread_event(worker_finished)
 
 
 @pytest.mark.asyncio
@@ -219,7 +224,7 @@ async def test_close_while_projection_worker_runs_ignores_late_candidate_and_cle
     ):
         coordinator = _HAContextRefreshCoordinator(config, state)
         await coordinator.prepare_for_segment()
-        assert worker_started.wait(timeout=0.2)
+        await _wait_for_thread_event(worker_started)
         assert state.ha_context_refresh_stage == "projection"
 
         await coordinator.close()
@@ -229,11 +234,19 @@ async def test_close_while_projection_worker_runs_ignores_late_candidate_and_cle
         publish.assert_not_called()
 
         release_worker.set()
-        assert worker_finished.wait(timeout=0.5)
+        await _wait_for_thread_event(worker_finished)
         await asyncio.sleep(0)
         assert state.ha_context_refresh_stage == "idle"
         assert coordinator.current_context is prior
         publish.assert_not_called()
+
+
+async def _wait_for_retained_refresh(coordinator: _HAContextRefreshCoordinator) -> None:
+    """Wait for the owned request itself instead of guessing scheduler latency."""
+    task = coordinator.in_flight_task
+    assert task is not None
+    done, _pending = await asyncio.wait({task}, timeout=0.25)
+    assert task in done
 
 
 @pytest.mark.asyncio
@@ -276,7 +289,7 @@ async def test_warm_two_second_foreground_fallback_keeps_one_late_request_and_ad
             assert calls == 1
             assert second_elapsed < config.homeassistant.context_refresh_timeout / 2
 
-            await asyncio.sleep(0.03)
+            await _wait_for_retained_refresh(coordinator)
             ready = coordinator.read_refresh_mailbox_status()
             assert ready["in_flight"] is False
             assert ready["adoption_pending"] is True
@@ -320,7 +333,7 @@ async def test_cold_start_keeps_the_longer_foreground_wait_then_recovers_late_re
             assert elapsed >= 0.015
             assert state.ha_context_refresh_active_foreground_timed_out
 
-            await asyncio.sleep(0.01)
+            await _wait_for_retained_refresh(coordinator)
             adopted, fresh_handoff = await coordinator.prepare_for_segment()
             assert adopted.summary == "first snapshot"
             assert fresh_handoff
@@ -354,12 +367,15 @@ async def test_total_cap_cancels_owned_request_and_retries_only_after_poll_caden
         coordinator = _HAContextRefreshCoordinator(config, state)
         try:
             await coordinator.prepare_for_segment()
-            await asyncio.sleep(0.016)
+            await _wait_for_retained_refresh(coordinator)
             terminal = coordinator.read_refresh_mailbox_status()
             assert terminal["in_flight"] is False
             assert terminal["adoption_pending"] is False
             assert terminal["last_result"] == "background_timeout"
             assert terminal["last_result_used_background"] is True
+            terminal_duration_ms = terminal["last_result_duration_ms"]
+            assert isinstance(terminal_duration_ms, int)
+            assert terminal_duration_ms > 0
             # The producer can be busy with music for a while before its next
             # eligible boundary. Terminal timing must remain the 30s cap, not
             # expand to the delayed mailbox-drain time.
@@ -375,7 +391,7 @@ async def test_total_cap_cancels_owned_request_and_retries_only_after_poll_caden
             assert state.ha_context_refresh_last_result == "background_timeout"
             assert state.ha_context_refresh_in_flight is False
             assert calls == 1
-            assert 5 <= state.ha_context_refresh_last_result_duration_ms <= 25
+            assert state.ha_context_refresh_last_result_duration_ms == terminal_duration_ms
 
             await coordinator.prepare_for_segment()
             assert calls == 1
@@ -392,15 +408,18 @@ async def test_late_success_started_before_the_stale_threshold_keeps_its_one_sho
     """Crossing the threshold in flight is not a stale-gap resynchronization."""
     config = _config(tmp_path)
     state = StationState()
-    prior = _snapshot("almost stale", age=119.99)
-    event = HomeEvent("switch.lamp", "Lamp", "off", "on", time.time())
-    match = RadioEventMatch("lamp", "directive", "say it once", event, 60, time.time())
+    clock = [1_000.0]
+    prior = HomeContext(summary="almost stale", timestamp=clock[0] - 119.99)
+    event = HomeEvent("switch.lamp", "Lamp", "off", "on", clock[0])
+    match = RadioEventMatch("lamp", "directive", "say it once", event, 60, clock[0])
 
     async def _late_fetch(**_kwargs):
         await asyncio.sleep(0.016)
+        clock[0] += 0.02
         return _outcome(_snapshot("fresh", events=deque([event], maxlen=20), radio_events=[match]), duration=0.016)
 
     with (
+        patch.object(producer.time, "time", side_effect=lambda: clock[0]),
         patch.object(producer, "get_cached_home_context", lambda *_args, **_kwargs: prior),
         patch.object(producer, "_fetch_home_context_outcome", _late_fetch),
         patch.object(producer, "_publish_home_context_outcome", return_value=True),
@@ -410,7 +429,7 @@ async def test_late_success_started_before_the_stale_threshold_keeps_its_one_sho
             fallback, handoff = await coordinator.prepare_for_segment()
             assert fallback.summary == "almost stale"
             assert not handoff
-            await asyncio.sleep(0.02)
+            await _wait_for_retained_refresh(coordinator)
 
             adopted, fresh_handoff = await coordinator.prepare_for_segment()
             assert fresh_handoff
@@ -544,7 +563,7 @@ async def test_normal_late_success_hands_unmuted_one_shots_to_exactly_one_bounda
             fallback, first_handoff = await coordinator.prepare_for_segment()
             assert fallback.summary == "old"
             assert not first_handoff
-            await asyncio.sleep(0.025)
+            await _wait_for_retained_refresh(coordinator)
 
             adopted, fresh_handoff = await coordinator.prepare_for_segment()
             assert fresh_handoff

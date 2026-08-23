@@ -1,0 +1,12 @@
+ruff 0.16.3 docs code-block formatting — cross-version acceptance
+commit: 2cba26e58a4dc707360e83f0e8e9e31760db9e6e
+date:   2026-08-21T11:54:36Z
+
+$ uvx ruff@0.16.3 format --check .   # the version #908 bumps to
+463 files already formatted
+
+$ ruff format --check .              # the version CI runs today (ruff 0.15.22)
+390 files already formatted
+
+$ ruff check .                       # lint rules unchanged by the bump
+All checks passed!

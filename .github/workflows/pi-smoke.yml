@@ -6,34 +6,89 @@ on:
   pull_request:
     branches: [main, "train/**"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  pi-smoke:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      audio: ${{ steps.filter.outputs.audio }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify expensive lanes
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci-changed-lanes.sh
+
+  pi-smoke-run:
+    needs: [changes]
+    if: needs.changes.outputs.audio == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
-      - name: Install static ffmpeg (arm64) matching HA addon runtime
-        # apt on ubuntu-24.04-arm ships ffmpeg 6.x, but the HA addon's Alpine base
-        # runs ffmpeg 7.x and the Pi runs the same. John Van Sickle's static
-        # release build mirrors the production runtime; accept 7.x or 8.x so the
-        # check keeps passing when the release track bumps. BtbN's release build
-        # is a fallback because JVS is intermittently unreachable from CI runners
-        # (curl 28 connect timeout) — a single-host outage must not fail the gate.
+      - name: Install static ffmpeg compatibility build (arm64)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # This is an arm64 compatibility canary, not an exact add-on package
+        # mirror. It accepts 7.x/8.x to exercise the known FFmpeg 8.x ARM crash
+        # surface. JVS is primary; BtbN's floating tag is a digest-verified
+        # fallback so one host outage or release rotation cannot fail the gate.
         run: |
           set -euo pipefail
           cd /tmp
           download_jvs() {
-            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused \
+            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused --retry-all-errors \
               https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz \
               -o ffmpeg.tar.xz
           }
           download_btbn() {
-            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused \
-              https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linuxarm64-gpl-7.1.tar.xz \
+            local asset_metadata asset_url asset_digest expected_sha
+            asset_metadata="$(
+              curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused --retry-all-errors \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest |
+                jq -er '(
+                  [
+                    .assets[]
+                    | select(.name | test("^ffmpeg-n(7\\.[0-9]+-latest-linuxarm64-gpl-7\\.[0-9]+|8\\.[0-9]+-latest-linuxarm64-gpl-8\\.[0-9]+)\\.tar\\.xz$"))
+                  ]
+                  | sort_by(.name)
+                  | last // empty
+                ) | [.browser_download_url, .digest] | @tsv'
+            )" || {
+              echo "::error::BtbN latest tag has no supported FFmpeg 7.x/8.x Linux arm64 GPL build"
+              return 1
+            }
+            IFS=$'\t' read -r asset_url asset_digest <<< "$asset_metadata"
+            if [[ ! "$asset_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::BtbN did not publish a SHA-256 digest for the selected asset"
+              return 1
+            fi
+            expected_sha="${asset_digest#sha256:}"
+            curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 3 --retry-connrefused --retry-all-errors \
+              "$asset_url" \
               -o ffmpeg.tar.xz
+            printf '%s  ffmpeg.tar.xz\n' "$expected_sha" |
+              sha256sum --check --strict -
           }
           download_jvs || { echo "::warning::John Van Sickle ffmpeg unreachable — falling back to BtbN"; download_btbn; }
           rm -rf ffmpeg-static && mkdir -p ffmpeg-static
@@ -47,15 +102,7 @@ jobs:
           ffmpeg -version | head -1
           ffmpeg -version | head -1 | grep -E 'ffmpeg version (7|n7|8|n8)'
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          pip install -e .
-          pip install -r requirements-dev.txt
+      - uses: ./.github/actions/setup-python-ci
 
       - name: Run normalizer smoke tests (mocked)
         run: pytest tests/audio/test_normalizer_unit.py tests/audio/test_normalizer_extended.py -v
@@ -72,3 +119,25 @@ jobs:
         # Invoke the script directly: this job installs into the system Python,
         # so `make launch-smoke` (which uses .venv/bin/python) would not resolve.
         run: python scripts/ha-green-launch-smoke.py
+
+  pi-smoke:
+    if: ${{ always() && !cancelled() }}
+    needs: [changes, pi-smoke-run]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: ARM smoke passed or correctly skipped
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUN: ${{ needs.pi-smoke-run.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES" != "success" ]; then
+            echo "changes lane was $CHANGES" >&2
+            exit 1
+          fi
+          if [ "$RUN" = "success" ] || [ "$RUN" = "skipped" ]; then
+            exit 0
+          fi
+          echo "pi-smoke-run was $RUN" >&2
+          exit 1

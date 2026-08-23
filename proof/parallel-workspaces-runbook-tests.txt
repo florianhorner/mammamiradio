@@ -1,0 +1,33 @@
+=== pytest tests/repo/test_conductor_settings.py -v ===
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- /Users/florianhorner/conductor/workspaces/mammamiradio/lyon/.venv/bin/python3
+cachedir: .pytest_cache
+Using --randomly-seed=307773788
+rootdir: /Users/florianhorner/conductor/workspaces/mammamiradio/lyon
+configfile: pyproject.toml
+plugins: cov-7.1.0, xdist-3.8.0, timeout-2.4.0, asyncio-1.4.0, randomly-4.1.0, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 2 items
+
+tests/repo/test_conductor_settings.py::test_shared_conductor_settings_use_committed_lifecycle_scripts PASSED [ 50%]
+tests/repo/test_conductor_settings.py::test_general_prompt_preserves_workspace_operating_contract PASSED [100%]
+
+============================== 2 passed in 0.56s ===============================
+
+=== bash tests/workflows/test_docs_safety.sh ===
+Docs-safety lint self-test passed.
+
+=== bash scripts/check-docs-safety.sh ===
+Documentation safety lint clean.
+
+=== ruff check tests/repo/test_conductor_settings.py ===
+All checks passed!
+
+=== ruff format --check tests/repo/test_conductor_settings.py ===
+1 file already formatted
+
+=== shellcheck scripts/check-docs-safety.sh scripts/land-pr.sh tests/workflows/test_docs_safety.sh ===
+shellcheck: clean
+
+=== python3 -c tomllib validate .conductor/settings.toml ===
+TOML valid

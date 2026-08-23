@@ -1,4 +1,4 @@
-.PHONY: help dev test test-fast test-watch lint format format-check typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke launch-smoke player-smoke pre-release edge-release
+.PHONY: help dev test test-fast test-watch lint format format-check typecheck check deadcode validate coverage-check coverage-ratchet perf-smoke launch-smoke ha-green-release-proof player-smoke media-check media-proof pre-release edge-release
 
 PYTHON := .venv/bin/python
 PYTEST := $(PYTHON) -m pytest
@@ -40,7 +40,7 @@ typecheck: ## Type-check with mypy
 deadcode: ## Find unused code with vulture
 	.venv/bin/vulture mammamiradio/
 
-check: lint format-check typecheck deadcode coverage-check ## Run all checks (lint + format check + typecheck + deadcode + coverage gate)
+check: media-check lint format-check typecheck deadcode coverage-check ## Run all checks, including the media-rights report
 	@echo "All checks passed"
 
 validate: ## Validate HA addon config (pre-merge gate)
@@ -58,8 +58,22 @@ perf-smoke: ## Run HA Green perf smoke against a live station
 launch-smoke: ## Cold-launch a station on temp dirs and assert first byte <= 2s
 	$(PYTHON) scripts/ha-green-launch-smoke.py
 
+ha-green-release-proof: ## Validate 20 physical HA Green cold-launch receipts and p95 <= 2s
+	$(PYTHON) scripts/validate-ha-green-release-evidence.py
+
 player-smoke: ## Run deterministic listener interactions against PLAYER_SMOKE_URL
 	PLAYER_SMOKE_URL="$(or $(PLAYER_SMOKE_URL),http://127.0.0.1:8000)" PLAYWRIGHT_CLI="$(PLAYWRIGHT_CLI)" ./scripts/player-smoke.sh
+
+media-check: ## Starter manifest, evidence, bytes, and audio report (report-only until the starter content lands)
+	@if $(PYTHON) scripts/media-proof.py --quick; then \
+		echo "media-proof: PASS"; \
+	else \
+		echo "NOTICE: media-proof reported missing content: the twelve starter-catalog tracks (normalized audio and human-audition evidence) have not landed yet."; \
+		echo "NOTICE: make media-check is report-only; scripts/pre-release-check.sh keeps the hard media gate on the release path."; \
+	fi
+
+media-proof: ## Full package, image, extractor, and transient-media proof
+	$(PYTHON) scripts/media-proof.py --output "$(or $(MEDIA_PROOF_OUTPUT),tmp/media-proof/media-proof.json)"
 
 pre-release: ## Run pre-release checks (version sync + invariants + CHANGELOG head + merge-gate settings)
 	./scripts/pre-release-check.sh

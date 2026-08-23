@@ -15,14 +15,16 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | Ads (brands, voices, campaign spines)              | `mammamiradio/hosts/ad_creative.py`          |
 | Foreign/competitor station-name scrubbing (spoken + now-playing) | `mammamiradio/hosts/station_name_guard.py` |
 | Post-air listener/song memory extraction          | `mammamiradio/hosts/memory_extractor.py`   |
-| Music sources (charts, Jamendo, local files)       | `mammamiradio/playlist/playlist.py`          |
-| yt-dlp / Jamendo / local file fetch                | `mammamiradio/playlist/downloader.py`        |
+| Durable base sources (starter, local, optional standalone external) | `mammamiradio/playlist/playlist.py` |
+| Transient Jamendo stream lease and artifact       | `mammamiradio/playlist/jamendo_transient.py` |
+| Optional standalone extraction / local normalization | `mammamiradio/playlist/downloader.py`     |
 | Per-track rules ("skip the bridge", anthems)       | `mammamiradio/playlist/track_rules.py`       |
 | Per-track machine-derived song memory              | `mammamiradio/playlist/song_cues.py`         |
 | "Why this track?" rationale generation             | `mammamiradio/playlist/track_rationale.py`   |
 | FFmpeg normalize / mix / concat / SFX              | `mammamiradio/audio/normalizer.py`           |
 | Generated ad/imaging layer cache                   | `mammamiradio/audio/synth_cache.py`          |
-| Station imaging stingers and talk beds             | `mammamiradio/audio/imaging.py`              |
+| Station imaging stingers, beds, and recipe resolver | `mammamiradio/audio/imaging.py`             |
+| Ad-recipe schema contract                          | `mammamiradio/audio/imaging_schema.py`       |
 | Edge / OpenAI / Azure / ElevenLabs TTS synthesis   | `mammamiradio/audio/tts.py`                  |
 | Audio quality gate (duration, silence checks)      | `mammamiradio/audio/audio_quality.py`        |
 | Voice catalog (Edge, OpenAI, Azure voice IDs)      | `mammamiradio/audio/voice_catalog.py`        |
@@ -100,7 +102,10 @@ The `tests/` tree mirrors the source tree exactly. To find the test for `mammami
 | Adding a new party mode theme    | `docs/party-mode-extension.md`   |
 | Design system (colors, fonts)    | `docs/design/system.md`          |
 | Admin panel layout standards     | `docs/design/admin-panel.md`     |
+| Admitted-audio queue refactor    | `docs/2026-07-27-admitted-audio-queue-refactor.md` |
+| Radio appliance architecture ADR | `docs/2026-08-20-open-source-radio-landscape-assessment.md` |
 | Conductor workspace lifecycle    | `docs/conductor.md`              |
+| Parallel workspaces + landing    | `docs/runbooks/parallel-workspaces.md` |
 | Listener QS integration train    | `docs/listener-qs-train.md`      |
 | Cathedral restructure plan       | `docs/archive/2026-04-28-cathedral-restructure.md` |
 

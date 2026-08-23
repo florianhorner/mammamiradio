@@ -218,14 +218,78 @@ def test_run_playback_loop_strips_per_segment_metadata():
         raise AssertionError("run_playback_loop not found")
 
 
+def test_run_playback_loop_settles_a_denied_admission_before_moving_on():
+    """A denied admission is a pre-air drop and must settle like every other one.
+
+    Without it the segment vanishes holding its listener-request reservation, so
+    the promised recording stays excluded from ordinary rotation for the rest of
+    the session with no retry and no waste trail. The reason must be its own:
+    the usual cause is the segment's provider withdrawing it, and
+    ``operator_purge`` renders to the operator as "queue cleared".
+    """
+    import ast
+
+    src = (Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "streamer.py").read_text()
+    tree = ast.parse(src)
+    loop = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_playback_loop"),
+        None,
+    )
+    assert loop is not None, "run_playback_loop not found"
+
+    denied_branch = next(
+        (
+            n
+            for n in ast.walk(loop)
+            if isinstance(n, ast.If) and "mark_playback_started" in (ast.get_source_segment(src, n.test) or "")
+        ),
+        None,
+    )
+    assert denied_branch is not None, "admission-denied branch not found"
+
+    # Match call nodes, never raw source: a substring check over the branch text
+    # is satisfied by a comment naming the helper, which is the same vacuity this
+    # guard exists to prevent.
+    called = {
+        c.func.id if isinstance(c.func, ast.Name) else c.func.attr
+        for c in ast.walk(denied_branch)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name | ast.Attribute)
+    }
+    discard_calls = [
+        c
+        for c in ast.walk(denied_branch)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "record_discard"
+    ]
+    assert len(discard_calls) == 1, "expected exactly one record_discard in the admission-denied branch"
+    kwargs = {k.arg: ast.unparse(k.value) for k in discard_calls[0].keywords}
+    assert kwargs.get("reason") == "GenerationWasteReason.PLAYBACK_ADMISSION_DENIED"
+    assert kwargs.get("already_counted_in_produced") == "pulled_from_queue"
+    assert "_settle_discarded_selection_handoff" in called, (
+        "a denied promised segment must settle its handoff, or the listener gets no retry"
+    )
+    assert "_drop_segment_moment_receipts" in called
+    # Reason attributes, again as nodes: the in-code comment mentions the old
+    # reason on purpose, and a cosmetic edit to it must not turn this red.
+    reasons = {
+        node.attr
+        for node in ast.walk(denied_branch)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "GenerationWasteReason"
+    }
+    assert reasons == {"PLAYBACK_ADMISSION_DENIED"}, (
+        f"a provider withdrawing a segment is not an operator action; got {sorted(reasons)}"
+    )
+
+
 def test_run_playback_loop_records_session_stop_discard_before_airing():
     """A stop landing after queue pull but before on_stream_segment must count as
     waste (a record_discard call with the right keywords) AND clean up the temp via
     the hardened best-effort helper — never a raw ``segment.path.unlink()`` that could
     throw into the playback coroutine and drop the stream.
 
-    Inspects the call node inside the ``if state.session_stopped:`` branch directly
-    (not a whole-function substring grep, which false-passes on unrelated matches).
+    The stop branch records the domain outcome while the outer selected-segment
+    finalizer owns cleanup for stop, callback failure, and normal send alike.
     """
     import ast
 
@@ -261,14 +325,21 @@ def test_run_playback_loop_records_session_stop_discard_before_airing():
     assert kwargs.get("reason") == "GenerationWasteReason.SESSION_STOPPED"
     assert kwargs.get("already_counted_in_produced") == "pulled_from_queue"
 
-    # Temp cleanup must go through the hardened helper (never raises), not a raw
-    # unlink that could escape into the playback coroutine and drop the stream.
+    finalizer = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_finalize_selected_playback"),
+        None,
+    )
+    assert finalizer is not None, "selected-segment finalizer not found"
+
+    # Temp cleanup must go through the hardened helper in that mandatory outer
+    # finalizer, not a raw unlink in either the branch or finalizer.
     assert any(
         isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "_unlink_ephemeral_best_effort"
-        for c in ast.walk(stop_branch)
-    ), "stop-race branch must clean up via _unlink_ephemeral_best_effort"
-    assert "segment.path.unlink(" not in (ast.get_source_segment(src, stop_branch) or ""), (
-        "no raw unlink in the stop-race branch — it must use the hardened helper"
+        for c in ast.walk(finalizer)
+    ), "selected-segment finalizer must clean up via _unlink_ephemeral_best_effort"
+    finalizer_source = ast.get_source_segment(src, finalizer) or ""
+    assert "segment.path.unlink(" not in finalizer_source, (
+        "no raw unlink in the selected-segment finalizer — it must use the hardened helper"
     )
 
 

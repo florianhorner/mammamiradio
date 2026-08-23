@@ -26,8 +26,9 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.audio.normalizer import probe_duration_sec
-from mammamiradio.core.models import Segment, SegmentType, Track
+from mammamiradio.core.models import LISTENER_REQUEST_HANDOFF_ADMITTED_KEY, Segment, SegmentType, Track
 from mammamiradio.core.path_safety import safe_path_within
+from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.music_admission import classify_youtube_candidate
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ _METADATA_BLOCK_FLAGS = frozenset(
         "error",
         "fallback",
         "interrupt",
+        LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
         "overlay",
         "recycled",
         "rescue",
@@ -301,6 +303,8 @@ def admit_restart_handoff_entries(
     max_entries: int = DEFAULT_MAX_ENTRIES,
     max_age_sec: float = DEFAULT_MAX_ENTRY_AGE_SEC,
     duration_probe: DurationProbe = probe_duration_sec,
+    allow_external_media: bool = True,
+    require_known_source: bool = False,
 ) -> RestartHandoffAdmission:
     """Load and validate restart handoff entries for startup use."""
 
@@ -315,6 +319,8 @@ def admit_restart_handoff_entries(
         max_entries=max_entries,
         max_age_sec=max_age_sec,
         duration_probe=duration_probe,
+        allow_external_media=allow_external_media,
+        require_known_source=require_known_source,
     )
 
 
@@ -329,6 +335,8 @@ def admit_restart_handoff_manifest(
     max_entries: int = DEFAULT_MAX_ENTRIES,
     max_age_sec: float = DEFAULT_MAX_ENTRY_AGE_SEC,
     duration_probe: DurationProbe = probe_duration_sec,
+    allow_external_media: bool = True,
+    require_known_source: bool = False,
 ) -> RestartHandoffAdmission:
     """Validate a manifest without raising into the startup audio path."""
 
@@ -355,6 +363,8 @@ def admit_restart_handoff_manifest(
             now=now,
             max_age_sec=max_age_sec,
             duration_probe=duration_probe,
+            allow_external_media=allow_external_media,
+            require_known_source=require_known_source,
         )
         if reason is None:
             accepted.append(entry)
@@ -560,6 +570,8 @@ def _entry_rejection_reason(
     now: float,
     max_age_sec: float,
     duration_probe: DurationProbe,
+    allow_external_media: bool,
+    require_known_source: bool,
 ) -> str | None:
     if reason := _segment_class_rejection_reason(entry.segment_class):
         return reason
@@ -595,7 +607,13 @@ def _entry_rejection_reason(
         return "missing_file"
     if _validated_duration(path, entry.duration_sec, duration_probe) is None:
         return "invalid_duration"
-    admission_reason = _music_admission_rejection_reason(entry, playlist=playlist, pacing=pacing)
+    admission_reason = _music_admission_rejection_reason(
+        entry,
+        playlist=playlist,
+        pacing=pacing,
+        allow_external_media=allow_external_media,
+        require_known_source=require_known_source,
+    )
     if admission_reason is not None:
         return admission_reason
     return None
@@ -616,7 +634,9 @@ def _identity_metadata_rejection_reason(
 ) -> str | None:
     if not artist.strip() or not title.strip():
         return "missing_identity"
-    if blocklist and (_normalize_identity(artist), _normalize_identity(title)) in blocklist:
+    if blocklist and song_identity_key_is_blocklisted(
+        (_normalize_identity(artist), _normalize_identity(title)), blocklist
+    ):
         return "blocklisted"
     if _has_blocked_metadata_marker(metadata):
         return "ephemeral_or_dynamic_marker"
@@ -642,12 +662,24 @@ def _music_admission_rejection_reason(
     *,
     playlist: Iterable[Track] | None,
     pacing: Any | None,
+    allow_external_media: bool,
+    require_known_source: bool,
 ) -> str | None:
     metadata = dict(entry.metadata) if isinstance(entry.metadata, Mapping) else {}
     youtube_id = _coerce_str(metadata.get("youtube_id"))
     source = _coerce_str(metadata.get("source") or metadata.get("source_kind") or metadata.get("audio_source"))
-    if not youtube_id and source.casefold() not in {"youtube", "yt-dlp", "ytdlp"}:
+    source = source.casefold()
+    if source == "jamendo":
+        return "persistent_jamendo_retired"
+    if source == "starter":
+        return "starter_direct_only"
+    if source == "local":
         return None
+    external_source = bool(youtube_id) or source in {"charts", "classic", "youtube", "yt-dlp", "ytdlp"}
+    if not external_source:
+        return "unknown_source" if require_known_source else None
+    if not allow_external_media:
+        return "external_media_disabled"
 
     track = Track(
         title=entry.title,

@@ -407,7 +407,12 @@ async def test_ban_last_track_mid_render_cannot_restore_playable_readiness(tmp_p
     track.local_path.write_bytes(b"audio")
     state = StationState(playlist=[track], listeners_active=1)
     config = _make_config(tmp_path)
-    config.music_dir = tmp_path
+    # Empty and separate from tmp_path: a real operator music_dir holds only
+    # operator files, never the render/cache scratch this test writes below.
+    # Pointing it at tmp_path would let the empty-crate recovery path in
+    # producer.py rediscover this test's own scratch files as "operator
+    # tracks" and reopen the source the ban just closed.
+    config.music_dir = tmp_path / "music"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     rendered_path = tmp_path / "rendered.mp3"
     rendered_path.write_bytes(b"audio")
@@ -1421,6 +1426,10 @@ async def test_blocklist_drop_on_main_loop_does_not_append_shadow_row(tmp_path):
         ("artista", "canzone uno"): {"display": "Artista - Canzone Uno"},
         ("artista", "canzone due"): {"display": "Artista - Canzone Due"},
     }
+    # Pin the cache path under assertion. Without this, two probes can both
+    # belong to the randomly selected second track while this test checks the
+    # first track's cache, making the queue contract spuriously order-dependent.
+    state.pinned_track = state.playlist[0]
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
     cache_path = _normalized_cache_path(state.playlist[0], config)

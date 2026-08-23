@@ -31,7 +31,8 @@ from mammamiradio.core.config import GUEST_HOST_NAME, StationConfig, resolve_mod
 from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.listener_truth import contains_unsafe_listener_claims, home_return_authority_for_directive
 from mammamiradio.core.models import (
-    RECENTLY_CONSUMED_RETENTION_SECONDS,
+    LISTENER_REQUEST_FORCE_REVISION_KEY,
+    LISTENER_REQUEST_PIN_REVISION_KEY,
     ChaosSubtype,
     CostCategory,
     DialogueLine,
@@ -40,6 +41,9 @@ from mammamiradio.core.models import (
     PersonalityAxes,
     SegmentType,
     StationState,
+    Track,
+    listener_request_force_revision,
+    listener_request_pin_revision,
 )
 from mammamiradio.hosts.ad_creative import (
     AD_FORMATS,
@@ -201,6 +205,38 @@ _GUEST_HOST_CAMEO_PROBABILITY = 1 / 6
 _GUEST_HOST_CAMEO_COOLDOWN_BREAKS = 1
 
 
+_LISTENER_REQUEST_PLAN_FIELDS = (
+    "type",
+    "status",
+    "name",
+    "message",
+    "song_found",
+    "song_error",
+    "song_error_reason",
+    "song_track",
+    "song_pinned",
+    LISTENER_REQUEST_PIN_REVISION_KEY,
+    "banter_cycles_missed",
+)
+
+
+def _listener_request_plan_signature(request: dict) -> tuple[object, ...]:
+    """Return the request values that determine what the hosts may say."""
+
+    return tuple(request.get(field) for field in _LISTENER_REQUEST_PLAN_FIELDS)
+
+
+@dataclass(frozen=True)
+class _ListenerRequestPlanSnapshot:
+    """Exact listener outcome and pin identity used to write one banter."""
+
+    request_signature: tuple[object, ...]
+    track_obj: object | None
+    matched_pin: object | None = None
+    matched_pin_revision: int | None = None
+    requires_matched_pin: bool = False
+
+
 @dataclass
 class ListenerRequestCommit:
     """Deferred listener-request state update, applied only after banter queues."""
@@ -209,36 +245,144 @@ class ListenerRequestCommit:
     banter_cycles_missed: int | None = None
     mark_song_error: bool = False
     consume: bool = False
+    _plan_snapshot: _ListenerRequestPlanSnapshot | None = None
+    # Set only when this plan itself claimed the play-next slot; ``None`` means
+    # there is nothing of ours to release. It is the single record of that claim,
+    # so a released claim cannot half-survive in a second flag.
+    _claimed_pin_track: object | None = None
+    _claimed_pin_revision: int | None = None
+    _claimed_force_next_revision: int | None = None
+
+    def capture_plan(
+        self,
+        *,
+        matched_pin: object | None = None,
+        matched_pin_revision: int | None = None,
+        requires_matched_pin: bool = False,
+        claimed_pin_track: object | None = None,
+        claimed_pin_revision: int | None = None,
+        claimed_force_next_revision: int | None = None,
+    ) -> ListenerRequestCommit:
+        """Freeze the request truth that the generated copy is allowed to air."""
+
+        self._plan_snapshot = _ListenerRequestPlanSnapshot(
+            request_signature=_listener_request_plan_signature(self.request),
+            track_obj=self.request.get("song_track_obj"),
+            matched_pin=matched_pin,
+            matched_pin_revision=matched_pin_revision,
+            requires_matched_pin=requires_matched_pin,
+        )
+        self._claimed_pin_track = claimed_pin_track
+        self._claimed_pin_revision = claimed_pin_revision
+        self._claimed_force_next_revision = claimed_force_next_revision
+        return self
+
+    def is_plan_current(self, state: StationState, *, require_matched_pin: bool = True) -> bool:
+        """Return whether this banter still describes the pending head exactly.
+
+        Admission additionally requires the promised song pin. Once banter is
+        admitted, producer lookahead may legitimately consume that pin while
+        selecting the following MUSIC segment; the deferred request commit must
+        then validate request truth without demanding an already-spent handoff.
+        """
+
+        snapshot = self._plan_snapshot
+        if snapshot is None:
+            # Invisible missed-cycle commits and legacy/directly-created commits do
+            # not carry listener copy, so there is no spoken plan to invalidate.
+            return True
+        if not state.pending_requests or state.pending_requests[0] is not self.request:
+            return False
+        if _listener_request_plan_signature(self.request) != snapshot.request_signature:
+            return False
+        if self.request.get("song_track_obj") is not snapshot.track_obj:
+            return False
+        if require_matched_pin and snapshot.requires_matched_pin:
+            if state.pinned_track is not snapshot.matched_pin:
+                return False
+            if snapshot.matched_pin_revision is not None:
+                return state.pinned_track_revision == snapshot.matched_pin_revision
+        return True
+
+    def abandon(self, state: StationState) -> None:
+        """Release only the synchronous request pin claimed by this failed plan."""
+
+        claimed_track = self._claimed_pin_track
+        if claimed_track is None:
+            return
+
+        if (
+            any(pending is self.request for pending in state.pending_requests)
+            and self.request.get("song_track_obj") is claimed_track
+            and self.request.get("song_pinned")
+        ):
+            self.request["song_pinned"] = False
+            if listener_request_pin_revision(self.request) == self._claimed_pin_revision:
+                self.request[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+            if listener_request_force_revision(self.request) == self._claimed_force_next_revision:
+                self.request[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
+
+        # Track identity alone is not ownership: a newer operator may pin the
+        # same object. Clear only the revision this plan actually claimed.
+        if self._claimed_pin_revision is not None and state.clear_pinned_track(
+            expected_revision=self._claimed_pin_revision,
+            expected_track=claimed_track if isinstance(claimed_track, Track) else None,
+        ):
+            claimed_force_revision = self._claimed_force_next_revision
+            if claimed_force_revision is not None:
+                state.clear_force_next(
+                    expected_revision=claimed_force_revision,
+                    expected_type=SegmentType.MUSIC,
+                )
+
+        # Idempotence matters because a rendered segment can be rejected in a
+        # nested failure path and then pass through the outer cleanup belt.
+        self._claimed_pin_track = None
+        self._claimed_pin_revision = None
+        self._claimed_force_next_revision = None
 
     def apply(self, state: StationState, config: StationConfig | None = None, *, queue_id: str = "") -> None:
-        del config, queue_id
-        if self.request not in state.pending_requests:
+        del config
+        if not any(pending is self.request for pending in state.pending_requests):
+            return
+        if not self.is_plan_current(state, require_matched_pin=False):
             return
         if self.banter_cycles_missed is not None:
             self.request["banter_cycles_missed"] = self.banter_cycles_missed
-        if self.mark_song_error:
+        # A lookup may finish while the fifth-cycle timeout banter is being
+        # rendered. Re-read the shared request at commit time: a verified track
+        # already queued must never be overwritten by the stale timeout plan.
+        # That banter was explicitly told *not* to announce an outcome, so it
+        # also cannot truthfully archive the late match as "sent_to_hosts".
+        # Leave the request pending for the next banter to announce and consume.
+        if self.mark_song_error and self.request.get("song_found"):
+            return
+        mark_song_error = self.mark_song_error and not self.request.get("song_found")
+        if mark_song_error:
             self.request["song_error"] = True
             if not self.request.get("song_error_reason"):
-                self.request["song_error_reason"] = "not_found"
+                self.request["song_error_reason"] = "lookup_timed_out"
         if self.consume:
-            now = time.time()
-            state.recently_consumed_requests.append(
-                {
-                    "id": self.request.get("request_id") or str(self.request.get("ts", "")),
-                    "name": self.request.get("name"),
-                    "message": self.request.get("message"),
-                    "song_track": self.request.get("song_track"),
-                    "type": self.request.get("type"),
-                    "status": "song_not_found" if self.mark_song_error else "sent_to_hosts",
-                    "song_error_reason": self.request.get("song_error_reason") or "",
-                    "consumed_at": now,
-                }
+            snapshot = self._plan_snapshot
+            matched_pin = snapshot.matched_pin if snapshot is not None and snapshot.requires_matched_pin else None
+            # Queue admission made the spoken promise durable. Give its exact
+            # recording one request-scoped pass through reservations from later
+            # listeners before archiving this request.
+            if isinstance(matched_pin, Track):
+                # ``None`` can mean producer lookahead already selected the
+                # admitted pin; a different live pin means ownership changed.
+                if state.pinned_track is not None and state.pinned_track is not matched_pin:
+                    return
+                if not state.arm_listener_request_handoff(
+                    self.request,
+                    matched_pin,
+                    dedication_queue_id=queue_id,
+                ):
+                    return
+            state.archive_listener_request(
+                self.request,
+                status="song_not_found" if self.request.get("song_error") else "sent_to_hosts",
             )
-            cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
-            state.recently_consumed_requests = [
-                r for r in state.recently_consumed_requests if r.get("consumed_at", 0) >= cutoff
-            ]
-            state.pending_requests.remove(self.request)
 
 
 @dataclass
@@ -355,7 +499,7 @@ class BanterCommit:
     def apply(self, state: StationState, config: StationConfig, *, queue_id: str = "") -> None:
         self.apply_queue_acceptance(state)
         if self.listener_request is not None:
-            self.listener_request.apply(state)
+            self.listener_request.apply(state, queue_id=queue_id)
         if self.heading_announcement is not None:
             self.heading_announcement.apply(state, config)
         if self.release_beat is not None:
@@ -396,8 +540,36 @@ def _banter_commit(
     )
 
 
+def _listener_request_commit_from_banter(commit: object) -> ListenerRequestCommit | None:
+    if isinstance(commit, ListenerRequestCommit):
+        return commit
+    listener_request = getattr(commit, "listener_request", None)
+    return listener_request if isinstance(listener_request, ListenerRequestCommit) else None
+
+
+def listener_request_plan_is_current(commit: object, state: StationState) -> bool:
+    """Facade used by producer admission without depending on commit shape."""
+
+    listener_request = _listener_request_commit_from_banter(commit)
+    return listener_request is None or listener_request.is_plan_current(state)
+
+
+def abandon_listener_request_plan(commit: object, state: StationState) -> None:
+    """Restore a synchronously claimed listener pin after a plan is discarded."""
+
+    listener_request = _listener_request_commit_from_banter(commit)
+    if listener_request is not None:
+        listener_request.abandon(state)
+
+
 def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequestCommit | None]:
     """Build prompt text plus a deferred state mutation for the pending request."""
+    # The previous dedication owns the single promised-song handoff until its
+    # music segment reaches queue admission. Do not let the next request claim
+    # the pin or generate another promise while that transfer is in flight.
+    if state.listener_request_handoff is not None:
+        return "", None
+
     pending = state.pending_requests
     if not pending:
         return "", None
@@ -433,18 +605,121 @@ def _plan_listener_request_block(state: StationState) -> tuple[str, ListenerRequ
     song_track = _sanitize_prompt_data(str(req.get("song_track") or ""), max_len=120)
     if is_song and req.get("song_found") and req.get("song_track"):
         track_obj = req.get("song_track_obj")
-        # Pin the requested song exactly ONCE. The background download may have
-        # already claimed the play-next slot (_download_listener_song marks
-        # req["song_pinned"] when its commit returned "pinned"). The request lingers
-        # in pending_requests until THIS banter's deferred commit is applied, so a
-        # second pin here would force the song to air a SECOND time after it already
-        # played from the download pin. Setting the marker synchronously (here, at
-        # peek time — not in the deferred commit) also makes it safe against the
-        # lookahead race where two banters peek the same pending request.
+        claimed_pin_track: object | None = None
+        claimed_pin_revision: int | None = None
+        claimed_force_next_revision: int | None = None
+        # Establish one exact play-next claim. The background download may
+        # already own the slot; otherwise this planner claims it when available.
+        # The pending request keeps that recording out of anonymous rotation,
+        # then the admitted dedication transfers it through the one-shot
+        # handoff. Setting the marker while planning also prevents two lookahead
+        # banters from claiming the same request.
+        if track_obj is not None:
+            pinned_track = state.pinned_track
+            same_recording_pin = pinned_track is track_obj or (
+                isinstance(track_obj, Track)
+                and isinstance(pinned_track, Track)
+                and pinned_track.cache_key == track_obj.cache_key
+            )
+            if req.get("song_pinned"):
+                request_pin_revision = listener_request_pin_revision(req)
+                owns_current_pin = (
+                    same_recording_pin
+                    and request_pin_revision is not None
+                    and request_pin_revision == state.pinned_track_revision
+                )
+                if not same_recording_pin:
+                    # An operator can replace a download-owned pin before this
+                    # request reaches the head. Losing that recording makes the
+                    # request wait for or reclaim the slot before promising it.
+                    req["song_pinned"] = False
+                    req[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                    req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
+                elif not owns_current_pin:
+                    # A newer operator pin for the same recording can fulfill
+                    # the spoken request, but the listener lifecycle does not
+                    # own it and must never clear it on later cleanup.
+                    req[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                    req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
+                elif pinned_track is not track_obj:
+                    # Keep the request's verified Track object authoritative
+                    # when an equivalent cache-key object owns the same slot.
+                    request_pin_revision = state.set_pinned_track(track_obj)
+                    req[LISTENER_REQUEST_PIN_REVISION_KEY] = request_pin_revision
+                    pinned_track = track_obj
+            elif same_recording_pin:
+                # Borrow an independently-owned same-recording pin without
+                # converting it into listener-owned state.
+                req["song_pinned"] = True
+                req[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
+            if not req.get("song_pinned") and pinned_track is not None and not same_recording_pin:
+                later_pin_owner: dict | None = None
+                for later_req in pending:
+                    later_track = later_req.get("song_track_obj")
+                    if (
+                        later_req is req
+                        or not later_req.get("song_found")
+                        or not isinstance(later_track, Track)
+                        or later_track.cache_key != pinned_track.cache_key
+                    ):
+                        continue
+                    later_pin_revision = listener_request_pin_revision(later_req)
+                    if later_pin_revision is not None and later_pin_revision == state.pinned_track_revision:
+                        later_pin_owner = later_req
+                        break
+                if later_pin_owner is None:
+                    # The download deliberately joined rotation without replacing an
+                    # unrelated operator/earlier-request pin. Preserve that same
+                    # ordering here: this banter cannot promise or consume the request
+                    # until its track can actually claim the play-next handoff.
+                    return "", None
+                # A pin for a later listener request cannot jump FIFO and air
+                # without its own dedication. Its pending request already keeps
+                # that recording reserved, so release the shared slot for the
+                # head request; the later request will reclaim it on its turn.
+                released_later_pin = state.clear_pinned_track(
+                    expected_revision=state.pinned_track_revision,
+                    expected_track=pinned_track,
+                )
+                if not released_later_pin:
+                    return "", None
+                later_force_revision = listener_request_force_revision(later_pin_owner)
+                if later_force_revision is not None:
+                    # Transfer a later request's paired MUSIC force together
+                    # with its pin. Leaving that directive behind would make
+                    # the head request borrow unowned state; if its dedication
+                    # were then abandoned, an unrelated song could consume the
+                    # stale force while neither listener request owned a pin.
+                    state.clear_force_next(
+                        expected_revision=later_force_revision,
+                        expected_type=SegmentType.MUSIC,
+                    )
+                later_pin_owner["song_pinned"] = False
+                later_pin_owner[LISTENER_REQUEST_PIN_REVISION_KEY] = None
+                later_pin_owner[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
         if track_obj is not None and not req.get("song_pinned"):
-            state.pinned_track = track_obj
-            state.force_next = SegmentType.MUSIC
+            # Exact-object and same-cache-key pins both become this request's
+            # single handoff. Replacing a distinct Track object for the same
+            # recording keeps the downloaded request metadata authoritative.
+            claimed_pin_revision = state.set_pinned_track(track_obj)
+            req[LISTENER_REQUEST_PIN_REVISION_KEY] = claimed_pin_revision
+            req[LISTENER_REQUEST_FORCE_REVISION_KEY] = None
+            if state.force_next is None:
+                claimed_force_next_revision = state.set_force_next(SegmentType.MUSIC)
+                req[LISTENER_REQUEST_FORCE_REVISION_KEY] = claimed_force_next_revision
             req["song_pinned"] = True
+            claimed_pin_track = track_obj
+        matched_pin = state.pinned_track if isinstance(state.pinned_track, Track) else track_obj
+        matched_pin_revision = state.pinned_track_revision if state.pinned_track is matched_pin else None
+        commit.capture_plan(
+            matched_pin=matched_pin,
+            matched_pin_revision=matched_pin_revision,
+            requires_matched_pin=True,
+            claimed_pin_track=claimed_pin_track,
+            claimed_pin_revision=claimed_pin_revision,
+            claimed_force_next_revision=claimed_force_next_revision,
+        )
         return (
             f"""
 LISTENER REQUEST:
@@ -454,15 +729,30 @@ Sii caldo, divertente, fai sentire {name} speciale. Questa è la magia della rad
 """,
             commit,
         )
-    if is_song and (req.get("song_error") or commit.mark_song_error):
+    if is_song and req.get("song_error"):
+        commit.capture_plan()
         return (
             f"""
-LISTENER REQUEST (SONG NOT FOUND):
+LISTENER REQUEST (SONG UNAVAILABLE):
 {name} ha chiesto: "{msg}"
-Non sei riuscito a trovare quella canzone. Dillo con simpatia e dedica comunque un saluto speciale a {name}.
+Non è stato possibile preparare la richiesta per la messa in onda. Non dire che la canzone non esiste o che non è stata trovata: il motivo potrebbe essere tecnico o editoriale. Dillo con simpatia e dedica comunque un saluto speciale a {name}.
 """,
             commit,
         )
+    if is_song and commit.mark_song_error:
+        # Fifth-cycle lookup timeout. The background task can still resolve
+        # before this deferred commit applies, so the script must be truthful in
+        # either outcome and avoid announcing a catalogue miss.
+        commit.capture_plan()
+        return (
+            f"""
+LISTENER REQUEST (LOOKUP STILL PENDING):
+{name} ha chiesto: "{msg}"
+Non dare alcun esito sulla canzone e non promettere che andrà in onda. Dedica comunque un saluto speciale a {name}.
+""",
+            commit,
+        )
+    commit.capture_plan()
     return (
         f"""
 LISTENER REQUEST:
@@ -471,6 +761,56 @@ Menziona {name} per nome in modo naturale durante il banter. Fallo sentire ascol
 """,
         commit,
     )
+
+
+def _stock_listener_request_exchange(
+    state: StationState,
+    config: StationConfig,
+    commit: ListenerRequestCommit | None = None,
+) -> tuple[list[DialogueLine], ListenerRequestCommit | None]:
+    """Acknowledge a pending request truthfully without generated copy.
+
+    Demo Radio and provider-failure paths still have to advance the same
+    deferred request lifecycle as generated banter. The stock line mentions a
+    verified match only when the planner owns its exact play-next handoff; all
+    terminal non-match outcomes stay neutral about why the song did not air.
+    """
+    if commit is None:
+        _prompt, commit = _plan_listener_request_block(state)
+    if commit is None:
+        return random.choice(_banter_fallback_pools(config)), None
+    if not commit.is_plan_current(state):
+        commit.abandon(state)
+        return random.choice(_banter_fallback_pools(config)), None
+
+    # Cycles one through four are intentionally invisible while lookup remains
+    # in flight. Air ordinary stock copy, but preserve the deferred counter so
+    # a permanently stalled lookup still reaches its bounded terminal receipt.
+    if commit.banter_cycles_missed is not None and not commit.consume:
+        return random.choice(_banter_fallback_pools(config)), commit
+
+    request = commit.request
+    language = _spoken_fallback_language(config)
+    default_name = "Un ascoltatore" if language == "it" else "A listener"
+    name = _sanitize_prompt_data(str(request.get("name") or default_name), max_len=60).strip() or default_name
+    if request.get("type") == "song_request" and request.get("song_found") and request.get("song_track"):
+        song_track = _sanitize_prompt_data(str(request["song_track"]), max_len=120).strip()
+        if language == "it":
+            text = f"{name}, abbiamo trovato {song_track}. Arriva tra poco."
+        else:
+            text = f"{name}, we found {song_track}. It's coming up."
+    elif request.get("type") == "song_request":
+        if language == "it":
+            text = f"{name}, grazie per averci scritto. Intanto continuiamo con la musica."
+        else:
+            text = f"{name}, thanks for writing in. For now, we keep the music moving."
+    elif language == "it":
+        text = f"{name}, il tuo saluto è arrivato in studio. Grazie per averci scritto."
+    else:
+        text = f"{name}, your message reached the studio. Thanks for writing in."
+
+    host = random.choice(_regular_hosts(config))
+    return [DialogueLine(host, text)], commit
 
 
 def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
@@ -1797,7 +2137,22 @@ async def _generate_json_response_with_language_guard(
 
 
 def _ensure_attention_grabbing_ad_parts(parts: list[AdPart], sonic: SonicWorld) -> list[AdPart]:
-    """Guarantee each ad has a distinct opener and at least one internal accent."""
+    """Guarantee ad attention while keeping packaged recipes in sole control of sound.
+
+    A recipe already has a reviewed bed and up to two timed real-world details.
+    Letting the LLM add its historical synthetic opener or mid-ad SFX on top
+    would break that cap and recreate the very layered drone the recipe avoids.
+
+    The recipe branch keeps the allowlist the prompt itself states — "only voice
+    and optional pause parts" — rather than naming the types to drop. ``type``
+    is copied straight from model JSON with no validation, so a denylist only
+    ever catches the tokens we already thought of: ``sfx`` was caught, then
+    ``environment`` had to be added behind it. Nothing else is renderable for a
+    recipe spot anyway.
+    """
+    if sonic.is_recipe_driven:
+        return [part for part in parts if part.type in ("voice", "pause")]
+
     updated = list(parts)
     motif = sonic.transition_motif or "chime"
     if not updated or updated[0].type != "sfx":
@@ -2226,6 +2581,7 @@ async def write_banter(
     prompt_fact: PromptFact | None = None,
     use_directed_home_context: bool = False,
     companionship_context: CompanionshipPromptContext | None = None,
+    include_listener_request: bool = True,
     submission_guard: Callable[[], bool] | None = None,
 ) -> tuple[list[DialogueLine], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
@@ -2246,6 +2602,8 @@ async def write_banter(
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script LLM unavailable; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
+        if include_listener_request and state.pending_requests:
+            return _stock_listener_request_exchange(state, config)
         host = random.choice(_regular_hosts(config))
         fallback = (
             "E torniamo alla musica!" if _spoken_fallback_language(config) == "it" else "And back to the music, amici!"
@@ -2496,7 +2854,10 @@ Make this the focus of this banter break. It happened just now — react natural
         # Normal reactive directives fire once. Interrupt directives stay pending
         # until the urgent segment is actually queued, so a stale in-flight render
         # cannot consume the only copy before producer epoch guards discard it.
-        is_interrupt = ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
+        is_interrupt = (
+            ChaosSubtype.URGENT_INTERRUPT in (chaos_subtype, state.chaos_pending)
+            or state.urgent_interrupt_force_next_revision is not None
+        )
         if not is_interrupt:
             state.ha_pending_directive = ""
             state.ha_pending_directive_moment_id = ""
@@ -2515,7 +2876,10 @@ Make this the focus of this banter break. It happened just now — react natural
     heading_announcement = _sanitize_prompt_data(raw_heading_announcement, max_len=120)
 
     # Listener request injection
-    listener_request_block, listener_request_commit = _plan_listener_request_block(state)
+    if include_listener_request and chaos_subtype is None:
+        listener_request_block, listener_request_commit = _plan_listener_request_block(state)
+    else:
+        listener_request_block, listener_request_commit = "", None
 
     release_beat_block = ""
     release_beat_schema = ""
@@ -2989,6 +3353,12 @@ Return JSON:
             pending_joke,
         )
 
+    except asyncio.CancelledError:
+        if listener_request_commit is not None:
+            listener_request_commit.abandon(state)
+        if release_beat_commit is not None:
+            release_beat_commit.abandon(state)
+        raise
     except Exception as e:
         state.last_banter_home_fact = None
         state.last_banter_return_authority = None
@@ -3047,10 +3417,14 @@ Return JSON:
                 logger.debug("Moment receipt gag drop failed", exc_info=True)
         state.ha_running_gag_moment_id = ""
         if chaos_subtype is not None:
+            if listener_request_commit is not None:
+                listener_request_commit.abandon(state)
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"
             logger.warning("Chaos script generation failed; using stock chaos line (%s)", chaos_subtype.value)
             return _chaos_stock_exchange(config, chaos_subtype), None
+        if listener_request_commit is not None:
+            return _stock_listener_request_exchange(state, config, listener_request_commit)
         return random.choice(_banter_fallback_pools(config)), None
 
 
@@ -3555,6 +3929,7 @@ async def write_ad(
     ``callback_gag`` is an optional single verbal gag (chosen by the producer via
     the verbal-gag ledger) to land cross-domain; None means no callback.
     """
+    sonic = sonic or SonicWorld()
     direct_primary_role = (
         brand.campaign.spokesperson_role.strip()
         if brand.campaign and isinstance(brand.campaign.spokesperson_role, str)
@@ -3563,11 +3938,14 @@ async def write_ad(
     if not has_script_llm(config):
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)],
+            parts=_ensure_attention_grabbing_ad_parts(
+                [AdPart(type="voice", text=_ad_fallback_text(brand, config), role=direct_primary_role)],
+                sonic,
+            ),
             summary=brand.tagline,
             format=ad_format,
+            sonic=sonic,
         )
-    sonic = sonic or SonicWorld()
 
     # Build context for cross-referencing
     recent_ads = (
@@ -3642,6 +4020,29 @@ CAMPAIGN SPINE:
 
     role_names = list(voices.keys())
 
+    if sonic.is_recipe_driven:
+        sonic_rule = (
+            f"- Station recipe: {sonic.recipe_id}. It supplies the bed and any sound details after speech is rendered. "
+            "Return only voice and optional pause parts; do not return an sfx or environment part."
+        )
+        parts_example = f'''    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+    {{"type": "pause", "duration": 0.5}},
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+    else:
+        sonic_rule = (
+            "- You may interleave sound effect cues and environment cues between voice lines. "
+            "Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.\n"
+            f'- Available SFX types for "sfx" cues — use ONLY these exact strings, never the music bed or '
+            f"environment name above, never invent new ones: {sfx_types}"
+        )
+        parts_example = f'''    {{"type": "sfx", "sfx": "{sonic.transition_motif}"}},
+    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
+    {{"type": "sfx", "sfx": "sweep"}},
+    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
+    {{"type": "pause", "duration": 0.5}},
+    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}'''
+
     prompt = f"""Write a fake radio ad for the fictional brand "{brand.name}".
 Tagline: "{brand.tagline}"
 Category: {brand.category}
@@ -3672,21 +4073,14 @@ RULES:
 - Follow the ad format rules above. Use the assigned speakers by their role names.
 {direct_spokesperson_rule}
 - Open HARD. The first beat should grab attention immediately.
-- You may interleave sound effect cues and environment cues between voice lines.
-- Change the sonic texture inside the ad: opener sting, one extra accent, then the sales copy.
-- Available SFX types for "sfx" cues — use ONLY these exact strings, never the music bed or environment name above, never invent new ones: {sfx_types}
+{sonic_rule}
 - {language_mode_rule(config.super_italian_mode, config.station.language)}
 - You may reference what the hosts said, what other ads claimed, or current music.
 
 Return JSON:
 {{
   "parts": [
-    {{"type": "sfx", "sfx": "{sonic.transition_motif}"}},
-    {{"type": "voice", "text": "Ad copy line here", "role": "{role_names[0]}"}},
-    {{"type": "sfx", "sfx": "sweep"}},
-    {{"type": "voice", "text": "More ad copy", "role": "{role_names[-1]}"}},
-    {{"type": "pause", "duration": 0.5}},
-    {{"type": "voice", "text": "Fast disclaimer", "role": "{role_names[-1]}"}}
+{parts_example}
   ],
   "mood": "{sonic.music_bed}",
   "summary": "One sentence summary IN ENGLISH for internal tracking",
@@ -3795,7 +4189,7 @@ Return JSON:
                 fallback_parts.append(
                     AdPart(type="voice", text=_pharma_disclaimer_text(config), role="disclaimer_goblin")
                 )
-            parts = fallback_parts
+            parts = _ensure_attention_grabbing_ad_parts(fallback_parts, sonic)
             actual_format = AdFormat.CLASSIC_PITCH
             roles_found = {p.role for p in parts if p.type == "voice" and p.role}
             used_owned_fallback = True
@@ -3820,7 +4214,10 @@ Return JSON:
         text = _ad_fallback_text(brand, config)
         return AdScript(
             brand=brand.name,
-            parts=[AdPart(type="voice", text=text, role=direct_primary_role)],
+            parts=_ensure_attention_grabbing_ad_parts(
+                [AdPart(type="voice", text=text, role=direct_primary_role)],
+                sonic,
+            ),
             summary=f"Fallback ad for {brand.name}",
             format=ad_format,
             sonic=sonic,

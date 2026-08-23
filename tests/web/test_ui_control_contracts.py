@@ -653,6 +653,127 @@ class TestBanNowPlayingEndpoint:
         assert "doBanNowPlaying(this)" in html
         assert "/api/track/ban-now-playing" in _admin_function_block("doBanNowPlaying")
 
+    def test_admin_html_has_keep_this_button_and_handler(self):
+        """Same contract as Ban: the button calls the handler, and the handler
+        hits the dedicated endpoint. Without this the wiring can vanish in an
+        HTML refactor and nothing notices."""
+        html = ADMIN_HTML.read_text()
+        assert 'id="keepNowBtn"' in html
+        assert "doKeepThis(this)" in html
+        assert "/api/clip/keep" in _admin_function_block("doKeepThis")
+
+    def test_keep_this_button_stays_hidden_while_the_station_is_stopped(self):
+        """Keep is only meaningful while the hosts are talking. segmentTypeKey
+        passes 'stopped' and 'skipping' through unchanged, so gating on
+        not-music armed the button, and its 15s grace window, against a station
+        that is not on air, inviting a press that could only ever be refused.
+
+        The allowlist must also stay in step with the server's
+        KEEPSAKE_SEGMENT_TYPES, or the console offers a press the route rejects.
+        """
+        from mammamiradio.scheduling.clip import KEEPSAKE_SEGMENT_TYPES
+
+        html = ADMIN_HTML.read_text()
+        block = _admin_function_block("updateNow")
+        assert "KEEPABLE_TYPES.has(nowKey)" in block, (
+            "Keep is gated on not-music, which arms it while the station is stopped"
+        )
+        assert "_keepGraceUntil=0" in block, "the grace window outlives a Stop or a Skip"
+        declared = re.search(r"const KEEPABLE_TYPES=new Set\(\[([^\]]*)\]\)", html)
+        assert declared, "KEEPABLE_TYPES is not declared"
+        client_types = {t.strip().strip("'\"") for t in declared.group(1).split(",") if t.strip()}
+        assert client_types == set(KEEPSAKE_SEGMENT_TYPES), (
+            f"console allowlist {client_types} drifted from the server's {set(KEEPSAKE_SEGMENT_TYPES)}"
+        )
+
+    def test_kept_moment_titles_survive_a_narrow_viewport(self):
+        """At 390px the three-column row squeezed the title to a few characters
+        while the auto-width timestamp kept its full size. The title is how the
+        operator recognizes the moment, so it gets its own line.
+
+        Asserted against the media block's own body, not against the file. A
+        whole-file search passes when the full-width rule is hoisted OUT of the
+        query into unconditional CSS, which silently breaks the desktop layout
+        (title spans every width, timestamp and button always wrap). Spacing is
+        matched tolerantly so reformatting to the file's other `@media(...)`
+        style cannot red-build correct CSS.
+        """
+        html = ADMIN_HTML.read_text()
+        blocks = re.findall(
+            r"@media\s*\([^)]*max-width:\s*720px[^)]*\)\s*\{(.*?)\n\}",
+            html,
+            re.DOTALL,
+        )
+        body = next((b for b in blocks if ".kept-row" in b), None)
+        assert body, "the kept-row narrow-viewport media query is gone; titles collapse again"
+        assert re.search(r"\.kept-link\s*\{[^}]*grid-column:\s*1\s*/\s*-1", body), (
+            "the title no longer spans the row on a narrow screen"
+        )
+        # `.sub` is on the timestamp too, so the empty-state padding has to stay
+        # scoped to a direct child or it indents the timestamp past the title.
+        assert "#keptList > .sub" in html, "the empty-state padding leaks onto the row timestamp"
+
+    def test_keep_grace_never_outlives_the_server_lookback(self):
+        """If the console's grace window outlives CLIP_LOOKBACK_SECONDS, the
+        button stays up for a press the route can only refuse — the exact failure
+        the stopped/skipping gating was added to stop."""
+        from mammamiradio.web.streamer import CLIP_LOOKBACK_SECONDS
+
+        html = ADMIN_HTML.read_text()
+        declared = re.search(r"const KEEP_GRACE_MS=(\d+)", html)
+        assert declared, "KEEP_GRACE_MS is not declared"
+        assert int(declared.group(1)) <= CLIP_LOOKBACK_SECONDS * 1000, (
+            f"console grace {declared.group(1)}ms outlives the server's {CLIP_LOOKBACK_SECONDS}s lookback"
+        )
+
+    def test_keep_this_share_link_survives_home_assistant_ingress(self):
+        """Under ingress every page lives below /api/hassio_ingress/<token>/, so a
+        link built from the bare /clips/... path resolves to the HA host and does
+        not reach the add-on at all. `_base` is the prefix the rest of the console
+        already talks through."""
+        html = ADMIN_HTML.read_text()
+        builder = _admin_function_block("keepShareLink")
+        assert "_base+shareUrl" in builder, "the copied link drops the ingress prefix"
+        assert "new URL(r.share_url,location.href)" not in html, (
+            "a bare share_url is still being resolved against the page URL"
+        )
+
+    def test_keep_this_only_claims_a_copy_that_happened(self):
+        """Direct LAN admin is plain HTTP, where the Clipboard API is commonly
+        unavailable. Announcing the copy before the write and swallowing the
+        error sent the operator to an empty clipboard with nothing to retry."""
+        block = _admin_function_block("doKeepThis")
+        assert "copied=true" in block
+        assert "copied?" in block, "the toast does not distinguish a failed copy"
+        assert "Link: ${link}" in block, "a failed copy leaves the operator no URL at all"
+
+    def test_keep_this_handles_a_failed_request_and_guards_a_double_press(self):
+        """Every sibling control wraps its call. Without it a network error is an
+        unhandled rejection with no toast — and keeping writes a file nothing
+        ever deletes on its own, so a double-click shelves the same moment twice."""
+        block = _admin_function_block("doKeepThis")
+        assert "catch(_){" in block and "offlineMsg()" in block
+        assert "if(_keepPending)return;" in block
+        assert "finally{" in block, "the pending flag is never cleared on failure"
+
+    def test_kept_moments_can_be_listed_and_removed_from_the_admin(self):
+        """A keepsake never expires and is served without a password, so the
+        console has to show what is on the shelf and let one come back off it."""
+        html = ADMIN_HTML.read_text()
+        assert 'id="keptList"' in html
+        assert "/api/clip/keep" in _admin_function_block("refreshKeptMoments")
+        assert "data-keepsake-remove" in _admin_function_block("refreshKeptMoments")
+        # Trash, not the ban glyph. Ban means "never play this song again" in the
+        # same console, and one symbol cannot carry two destructive meanings.
+        block = _admin_function_block("refreshKeptMoments")
+        assert "#ic-trash" in block
+        assert "btn-icon-ban" not in block
+        assert "'DELETE'" in _admin_function_block("doUnkeep")
+        # A delegated listener, not an inline onclick: `esc` escapes for HTML
+        # text, and an id inside a JS string inside an attribute is decoded back
+        # to a quote before the JS is parsed.
+        assert "doUnkeep('${esc(" not in html
+
     def test_admin_direction_control_has_busy_and_keyboard_guards(self):
         html = ADMIN_HTML.read_text()
         handler = _admin_function_block("setDirectionText")
@@ -1203,7 +1324,7 @@ class TestCapabilitiesEndpoint:
 
 class TestSourceControlVisibilityContract:
     @pytest.mark.asyncio
-    async def test_capabilities_expose_admin_source_control_flags(self):
+    async def test_capabilities_expose_admin_source_control_flags(self, external_media_installed):
         app = _make_app()
         app.state.config.playlist.jamendo_client_id = "jamendo-client"
         app.state.config.allow_ytdlp = False
@@ -1224,23 +1345,34 @@ class TestSourceControlVisibilityContract:
         assert data["charts_reload"] is True
 
     @pytest.mark.asyncio
-    async def test_admin_html_binds_source_buttons_to_capability_flags_only(self):
+    async def test_capabilities_keep_charts_hidden_when_external_media_missing(self, external_media_missing):
+        """Without the optional external-media module, opt-in never surfaces chart controls."""
+        app = _make_app()
+        app.state.config.allow_ytdlp = True
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/capabilities", headers=AUTH)
+
+        assert resp.json()["capabilities"]["charts_reload"] is False
+
+    @pytest.mark.asyncio
+    async def test_admin_html_keeps_jamendo_out_of_quick_add_and_charts_capability_gated(self):
         app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             resp = await c.get("/admin", headers=AUTH)
 
         html = resp.text
-        assert re.search(r'id="sourceJamendoBtn"[^>]*\bdata-capability="jamendo"', html)
+        assert 'id="sourceJamendoBtn"' not in html
+        assert 'id="jamendoSourceRow"' in html
+        assert 'id="jamendoSettings"' in html
         assert re.search(r'id="sourceChartsBtn"[^>]*\bdata-capability="charts_reload"', html)
         assert "function sourceControlVisibility(caps)" in html
-        assert "Boolean(capabilities.jamendo)" in html
         assert "Boolean(capabilities.charts_reload)" in html
         assert 'id="libraryTools"' in html
         tools = html[html.index('id="libraryTools"') : html.index("<!-- Diretta zone -->")]
-        assert 'id="sourceJamendoBtn"' in tools
         assert 'id="sourceChartsBtn"' in tools
-        assert "sourceGroup.hidden=!visibility.jamendo&&!visibility.charts_reload" in html
+        assert "sourceGroup.hidden=!visibility.charts_reload" in html
         assert "jamendoSourceAvailable" not in html
 
     @pytest.mark.asyncio

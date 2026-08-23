@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCH_SMOKE = ROOT / "scripts" / "ha-green-launch-smoke.py"
@@ -35,6 +36,48 @@ def test_launch_smoke_names_the_listener_timing_boundary_honestly() -> None:
     assert "does not claim process-spawn-to-audio" in launch_body
     assert "Fresh-process listener-to-first-byte smoke (<= 2s)" in workflow_body
     assert "request-to-first-byte, not" in workflow_body
+
+
+def test_pi_smoke_keeps_required_check_name_when_arm_work_is_path_gated() -> None:
+    document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    jobs = document["jobs"]
+    assert "pi-smoke" in jobs
+    assert jobs["pi-smoke"]["if"] == "${{ always() && !cancelled() }}"
+    assert jobs["pi-smoke"]["needs"] == ["changes", "pi-smoke-run"]
+    assert jobs["pi-smoke-run"]["if"] == "needs.changes.outputs.audio == 'true'"
+    assert jobs["pi-smoke-run"]["runs-on"] == "ubuntu-24.04-arm"
+
+
+def test_pi_smoke_cancels_superseded_pr_runs_and_serializes_main() -> None:
+    document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    concurrency = document["concurrency"]
+    assert concurrency["group"] == "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+
+
+def test_pi_smoke_limits_github_token_to_read_only_contents() -> None:
+    document = yaml.safe_load(PI_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+
+    assert document["permissions"] == {"contents": "read"}
+
+
+def test_pi_smoke_btbn_fallback_tracks_supported_assets_and_verifies_digest() -> None:
+    workflow_body = PI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    asset_pattern = (
+        r"^ffmpeg-n(7\\.[0-9]+-latest-linuxarm64-gpl-7\\.[0-9]+|"
+        r"8\\.[0-9]+-latest-linuxarm64-gpl-8\\.[0-9]+)\\.tar\\.xz$"
+    )
+
+    assert "Install static ffmpeg compatibility build (arm64)" in workflow_body
+    assert "api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest" in workflow_body
+    assert f'test("{asset_pattern}")' in workflow_body
+    assert "[.browser_download_url, .digest]" in workflow_body
+    assert '[[ ! "$asset_digest" =~ ^sha256:[0-9a-f]{64}$ ]]' in workflow_body
+    assert "sha256sum --check --strict -" in workflow_body
+    assert workflow_body.count("--retry-all-errors") >= 3
+    assert "BtbN/FFmpeg-Builds/releases/download/latest/" not in workflow_body
+    assert "BtbN/FFmpeg-Builds/releases/download/autobuild-" not in workflow_body
+    assert "matching HA addon runtime" not in workflow_body
 
 
 @pytest.mark.parametrize(

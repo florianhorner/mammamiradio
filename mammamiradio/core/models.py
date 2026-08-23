@@ -10,17 +10,22 @@ import random
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Collection, Iterator
+from collections.abc import Callable, Collection, Iterator, Mapping
 from contextvars import ContextVar, Token
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal, TypedDict
+from typing import TYPE_CHECKING, ClassVar, Literal, NotRequired, TypedDict
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 from mammamiradio.core.listener_session import ListenerSession
 from mammamiradio.core.segment_status import is_fallback_active
+from mammamiradio.core.song_identity import (
+    normalize_song_identity_key,
+    song_identity_keys_match,
+)
 from mammamiradio.playlist.preferences import preference_score_map, preference_weight
 
 if TYPE_CHECKING:
@@ -83,14 +88,26 @@ class GenerationWasteReason:
     AIR_NEXT_OVERFLOW = "air_next_overflow"
     EGRESS_STALE = "egress_stale"
     BLOCKLIST_GATE = "blocklist_gate"
+    LISTENER_REQUEST_RESERVED = "listener_request_reserved"
     OPERATOR_STOP = "operator_stop"
     OPERATOR_PANIC = "operator_panic"
     OPERATOR_PURGE = "operator_purge"
     SOURCE_SWITCH = "source_switch"
     OPERATOR_BAN = "operator_ban"
     OPERATOR_QUEUE_REMOVE = "operator_queue_remove"
+    PLAYBACK_FILE_ERROR = "playback_file_error"
+    PLAYBACK_ADMISSION_DENIED = "playback_admission_denied"
     STALE_PLAYED_TRACK_REF = "stale_played_track_ref"
     LISTENER_SESSION_STALE = "listener_session_stale"
+
+
+class StarterCycleReservationPendingError(RuntimeError):
+    """The current starter cycle is fully reserved by queued segments.
+
+    This is a transient scheduling condition, not an unavailable-media error:
+    the producer must wait for one queued starter to begin playback or be
+    released instead of filling the next cycle early.
+    """
 
 
 class SegmentType(Enum):
@@ -141,6 +158,140 @@ class InterruptSpec:
     cooldown: int = 60  # seconds before this entity can fire again
 
 
+@dataclass(frozen=True)
+class MediaAttribution:
+    """Immutable, listener-safe music provenance facts.
+
+    This describes what a source or committed manifest reports; it is not a
+    legal-clearance verdict. Provider-private stream URLs and credentials never
+    belong in this object.
+    """
+
+    provider: str
+    license_id: str
+    license_url: str
+    source_url: str
+    credit: str
+    modified: bool
+    basis: Literal["bundled_manifest", "provider_reported"]
+
+    def to_dict(self) -> dict[str, str | bool]:
+        """Return the stable additive shape used by public serializers."""
+        return asdict(self)
+
+
+def safe_media_attribution_dict(value: MediaAttribution | Mapping | None) -> dict[str, str | bool] | None:
+    """Validate and bound one attribution object before it crosses a public boundary.
+
+    Attribution links are clickable on unauthenticated surfaces.  Keep the
+    currently supported provider contracts explicit here so a malformed
+    segment cannot turn an audio download URL, token-bearing link, or arbitrary
+    HTTPS host into a listener-facing link.
+    """
+    raw = value.to_dict() if isinstance(value, MediaAttribution) else value
+    if not isinstance(raw, Mapping):
+        return None
+    basis = raw.get("basis")
+    if basis not in {"bundled_manifest", "provider_reported"}:
+        return None
+
+    def _text(name: str, limit: int) -> str | None:
+        candidate = raw.get(name)
+        if not isinstance(candidate, str):
+            return None
+        candidate = candidate.strip()
+        return candidate if 0 < len(candidate) <= limit else None
+
+    def _url(name: str) -> tuple[str, object] | None:
+        candidate = _text(name, 512)
+        if candidate is None:
+            return None
+        try:
+            parsed = urlsplit(candidate)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.fragment
+                or parsed.port not in (None, 443)
+                or "\\" in candidate
+                or any(ord(char) < 32 for char in candidate)
+                or "%2e" in parsed.path.lower()
+                or any(part == ".." for part in parsed.path.split("/"))
+            ):
+                return None
+        except ValueError:
+            return None
+        return candidate, parsed
+
+    provider = _text("provider", 64)
+    license_id = _text("license_id", 64)
+    credit = _text("credit", 512)
+    license_result = _url("license_url")
+    source_result = _url("source_url")
+    modified = raw.get("modified")
+    if (
+        None in {provider, license_id, credit}
+        or license_result is None
+        or source_result is None
+        or not isinstance(modified, bool)
+    ):
+        return None
+    assert provider is not None
+    assert license_id is not None
+    assert credit is not None
+    license_url, _license_parts = license_result
+    source_url, source_parts = source_result
+
+    allowed_licenses = {
+        "https://creativecommons.org/licenses/by/3.0/": "CC-BY-3.0",
+        "https://creativecommons.org/licenses/by/4.0/": "CC-BY-4.0",
+    }
+    if allowed_licenses.get(license_url) != license_id:
+        return None
+
+    source_host = str(getattr(source_parts, "hostname", "") or "").lower().rstrip(".")
+    source_path = str(getattr(source_parts, "path", "") or "")
+    source_query = str(getattr(source_parts, "query", "") or "")
+    if provider == "incompetech" and basis == "bundled_manifest":
+        if (
+            source_host not in {"incompetech.com", "www.incompetech.com"}
+            or not source_path.startswith("/music/royalty-free/")
+            or (source_query and re.fullmatch(r"isrc=[A-Z0-9]{12}", source_query) is None)
+            or license_id != "CC-BY-4.0"
+        ):
+            return None
+    elif provider == "jamendo" and basis in {"provider_reported", "bundled_manifest"}:
+        # `bundled_manifest` is the packaged crate, `provider_reported` the
+        # transient runtime source. Both point at a jamendo.com track page; the
+        # difference is who vouched for it, not what it looks like.
+        #
+        # Bundled Jamendo tracks are CC BY 3.0 — Jamendo publishes no 4.0 at all
+        # — so this branch must not inherit the 4.0-only rule the Incompetech
+        # branch applies. Dropping them here is what silently strips the credit
+        # from half the crate, and CC BY requires that credit to accompany the
+        # work.
+        if (
+            source_host not in {"jamendo.com", "www.jamendo.com"}
+            or not source_path.startswith("/track/")
+            or source_query
+        ):
+            return None
+    else:
+        return None
+
+    return {
+        "provider": provider,
+        "license_id": license_id,
+        "license_url": license_url,
+        "source_url": source_url,
+        "credit": credit,
+        "modified": modified,
+        "basis": basis,
+    }
+
+
 @dataclass
 class Track:
     """A playable track sourced from charts, cache, or local files."""
@@ -158,8 +309,10 @@ class Track:
     explicit: bool = False
     popularity: int = 0
     year: int = 0
-    source: Literal["youtube", "jamendo", "local", "demo", "classic"] = "youtube"
+    source: Literal["youtube", "jamendo", "local", "demo", "classic", "starter"] = "youtube"
     heading_id: str = ""
+    provider_track_id: str = ""
+    attribution: MediaAttribution | None = None
 
     @staticmethod
     def _slugify_cache_value(raw: str, *, max_length: int = 160) -> str:
@@ -188,7 +341,7 @@ class Track:
         if self.youtube_id:
             return self._slugify_cache_value(f"youtube|{self.youtube_id}")
         if self.source == "jamendo":
-            jamendo_id = self.spotify_id.strip()
+            jamendo_id = self.provider_track_id.strip()
             if jamendo_id:
                 return self._slugify_cache_value(f"jamendo|{jamendo_id}")
             if self.direct_url:
@@ -204,12 +357,23 @@ class Track:
 
     @cached_property
     def normalized_key(self) -> tuple[str, str]:
-        """Canonical station song identity used by bans, preferences, and dedupe."""
-        return (self.artist.strip().lower(), self.title.strip().lower())
+        """Stored literal key used by preferences, dedupe, and persisted bans."""
+        return song_identity_key(self.artist, self.title)
+
+
+def song_identity_key(artist: object, title: object) -> tuple[str, str]:
+    """Build the stored literal song key from a raw artist/title pair.
+
+    The single key definition for callers that hold two fields rather than a
+    :class:`Track` — listener-request blocklist aliases, sidecars, and segment
+    metadata all have to mean the same thing by "the same song", and every
+    hand-rolled ``strip().lower()`` copy is a place that meaning can drift.
+    """
+    return (str(artist or "").strip().lower(), str(title or "").strip().lower())
 
 
 def normalized_track_key(track: Track) -> tuple[str, str]:
-    """Canonical station song identity used by bans, preferences, and dedupe."""
+    """Return the stored literal key used by preferences, dedupe, and bans."""
     return track.normalized_key
 
 
@@ -708,21 +872,216 @@ class Segment:
         default_factory=dict,
         repr=False,
     )
+    # Private queue-lifecycle marker for a music-head / speech-tail handoff.
+    # It deliberately lives outside ``metadata`` because metadata is projected
+    # through public/admin status payloads.
+    handoff_id: str | None = field(default=None, repr=False, compare=False)
+    # Provider-owned single-use resources are released only through this hook;
+    # queue mutation and playback finalizers call ``release()`` exactly once.
+    playback_start_callback: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+    release_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _playback_started: bool = field(default=False, init=False, repr=False, compare=False)
+    _released: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def mark_playback_started(self) -> bool:
+        """Synchronously admit a segment and notify its provider before airing.
+
+        Ordinary segments have no admission callback and remain admitted by
+        default. Provider-owned segments fail closed when their callback denies
+        admission or raises; their release hook is run immediately.
+        """
+        if self._released:
+            return False
+        if self._playback_started:
+            return True
+        callback = self.playback_start_callback
+        if callback is None:
+            self._playback_started = True
+            return True
+        try:
+            admitted = callback()
+        except Exception:
+            logger.debug("Segment playback admission callback failed", exc_info=True)
+            admitted = False
+        if admitted is not True:
+            self.release()
+            return False
+        self._playback_started = True
+        self.playback_start_callback = None
+        return True
+
+    def release(self) -> None:
+        """Idempotently release any provider-owned resource carried by this segment."""
+        if self._released:
+            return
+        self._released = True
+        self.playback_start_callback = None
+        callback = self.release_callback
+        self.release_callback = None
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            # Cleanup must never interrupt queue restoration or playback.
+            logger.debug("Segment release callback failed for %s", self.path, exc_info=True)
 
 
 def segment_track_key(segment: Segment) -> tuple[str, str]:
-    """Canonical station song identity carried by a rendered segment.
+    """Return the stored literal song key carried by a rendered segment.
 
     The segment-side mirror of :func:`normalized_track_key`: producer music
     stamps ``title_only`` (the bare title) alongside ``artist``, while norm-cache
-    bridges and rescue fills stamp only ``title``.  One key definition, so bans,
-    rotation membership, and dedupe can never disagree about what "the same
-    song" means.
+    bridges and rescue fills stamp only ``title``. Hard gates pass this key
+    through the shared exact-equivalence normalizer; preferences and rotation
+    dedupe intentionally retain literal stored-key behavior.
     """
     metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
     return (
         str(metadata.get("artist") or "").strip().lower(),
         str(metadata.get("title_only") or metadata.get("title") or "").strip().lower(),
+    )
+
+
+@dataclass(frozen=True)
+class ListenerTrackReservations:
+    """Matched listener songs that must wait for their dedication handoff.
+
+    Pending requests own ordinary reservations whether or not they already own
+    ``pinned_track``. After a successful dedication acknowledgement archives a
+    request, its exact promised source remains reserved through handoff,
+    admission, and the first emitted byte. Cache-key and canonical song
+    identities cover both the downloaded object and pre-existing segments for
+    the same recording.
+    """
+
+    cache_keys: frozenset[str] = frozenset()
+    track_keys: frozenset[tuple[str, str]] = frozenset()
+
+    @classmethod
+    def from_pending_requests(cls, requests: Collection[dict]) -> ListenerTrackReservations:
+        tracks = [
+            track
+            for request in requests
+            if request.get("song_found") and isinstance((track := request.get("song_track_obj")), Track)
+        ]
+        return cls(
+            cache_keys=frozenset(track.cache_key for track in tracks),
+            track_keys=frozenset(normalize_song_identity_key(normalized_track_key(track)) for track in tracks),
+        )
+
+    def including_tracks(self, tracks: Collection[Track]) -> ListenerTrackReservations:
+        """Return this set plus equivalent lifecycle-owned recordings."""
+        return ListenerTrackReservations(
+            cache_keys=self.cache_keys | frozenset(track.cache_key for track in tracks),
+            track_keys=self.track_keys
+            | frozenset(normalize_song_identity_key(normalized_track_key(track)) for track in tracks),
+        )
+
+    def reserves_cache_key(self, cache_key: object) -> bool:
+        return bool(cache_key) and str(cache_key) in self.cache_keys
+
+    def reserves_track_key(self, track_key: tuple[str, str]) -> bool:
+        # Nothing reserved is the overwhelmingly common state, and the answer is
+        # then False whatever the key normalizes to. Check that first so the
+        # producer's per-pick sweep of the whole playlist does not pay full
+        # identity normalization per track for a foregone answer.
+        if not self.track_keys:
+            return False
+        equivalence_key = normalize_song_identity_key(track_key)
+        return bool(equivalence_key[0] and equivalence_key[1]) and equivalence_key in self.track_keys
+
+    def reserves_track(self, track: Track) -> bool:
+        return self.reserves_cache_key(track.cache_key) or self.reserves_track_key(normalized_track_key(track))
+
+    def reserves_segment(self, segment: Segment) -> bool:
+        if self.reserves_track_key(segment_track_key(segment)):
+            return True
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        if self.reserves_cache_key(metadata.get("cache_key")):
+            return True
+        youtube_id = str(metadata.get("youtube_id") or "").strip()
+        if youtube_id:
+            source_key = Track(title="", artist="", duration_ms=0, youtube_id=youtube_id).cache_key
+            return self.reserves_cache_key(source_key)
+        return False
+
+
+# Frozen, empty, and immutable — safe to hand to every caller when the listener
+# lifecycle owns nothing, which is the state the station is in most of the time.
+_NO_LISTENER_TRACK_RESERVATIONS = ListenerTrackReservations()
+
+LISTENER_REQUEST_HANDOFF_TOKEN_KEY = "listener_request_handoff_id"
+LISTENER_REQUEST_HANDOFF_ADMITTED_KEY = "listener_request_handoff_admitted"
+LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY = "listener_request_dedication_queue_id"
+LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY = "listener_request_handoff_exclusive"
+LISTENER_REQUEST_FORCE_REVISION_KEY = "song_force_next_revision"
+LISTENER_REQUEST_PIN_REVISION_KEY = "song_pinned_track_revision"
+LISTENER_REQUEST_INTERNAL_METADATA_KEYS = frozenset(
+    {
+        LISTENER_REQUEST_HANDOFF_TOKEN_KEY,
+        LISTENER_REQUEST_HANDOFF_ADMITTED_KEY,
+        LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+        LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
+    }
+)
+URGENT_INTERRUPT_PRIORITY_KEY = "urgent_interrupt_priority"
+
+
+def _positive_revision(request: dict, key: str) -> int | None:
+    """Return a request-carried ownership revision, or ``None`` if not a real one.
+
+    ``bool`` is excluded deliberately: it is an ``int`` subclass, so a stray
+    ``True`` would otherwise read as revision 1 and let a request clear state it
+    never owned. That subtlety lives here once, for every revision field.
+    """
+    revision = request.get(key)
+    if isinstance(revision, int) and not isinstance(revision, bool) and revision > 0:
+        return revision
+    return None
+
+
+def listener_request_force_revision(request: dict) -> int | None:
+    """Return the owned MUSIC-force revision carried by a request, if valid."""
+    return _positive_revision(request, LISTENER_REQUEST_FORCE_REVISION_KEY)
+
+
+def listener_request_pin_revision(request: dict) -> int | None:
+    """Return the pinned-track ownership revision carried by a request."""
+    return _positive_revision(request, LISTENER_REQUEST_PIN_REVISION_KEY)
+
+
+@dataclass(frozen=True)
+class ListenerRequestHandoff:
+    """Single request-owned exception to later same-recording reservations."""
+
+    token: str
+    request_id: str
+    track: Track
+    dedication_queue_id: str = ""
+    force_next_revision: int | None = None
+    pin_revision: int | None = None
+    music_selection_exclusive: bool = False
+    borrowed_pin_clear_revision: int | None = None
+    borrowed_force_clear_revision: int | None = None
+
+    def matches_track(self, track: Track) -> bool:
+        """Match the exact media source, never a live/remix textual alias."""
+        return self.track.cache_key == track.cache_key
+
+    def authorizes_segment(self, segment: Segment) -> bool:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        return str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "") == self.token and song_identity_keys_match(
+            normalized_track_key(self.track), segment_track_key(segment)
+        )
+
+
+def segment_has_admitted_listener_request_handoff(segment: Segment) -> bool:
+    """Return whether producer admission marked this exact promised segment."""
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    return bool(
+        metadata.get(LISTENER_REQUEST_HANDOFF_ADMITTED_KEY)
+        and str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "")
     )
 
 
@@ -900,16 +1259,19 @@ HA_REFRESH_STAGES = ("states_request", "enrichment_wait", "projection", "idle")
 
 
 class ConsumedListenerRequest(TypedDict):
-    """A consumed listener request retained for 5-minute admin visibility."""
+    """A terminal listener receipt retained briefly for admin and public views."""
 
     id: str
     name: str | None
     message: str | None
     song_track: str | None
     type: str | None
-    status: str  # "sent_to_hosts" | "song_not_found" | "source_changed"
+    status: str  # "sent_to_hosts" | "song_not_found" | "source_changed" | "dismissed"
     song_error_reason: str
     consumed_at: float
+    public_token: NotRequired[str | None]
+    song_found: NotRequired[bool]
+    song_error: NotRequired[bool]
 
 
 @dataclass
@@ -925,6 +1287,18 @@ class StationState:
     source_revision: int = 0
     played_tracks: deque[Track] = field(default_factory=lambda: deque(maxlen=50))
     played_track_log: deque[PlayedEntry] = field(default_factory=lambda: deque(maxlen=100))
+    # Automatic starter rotation consumes every manifest track once before any
+    # starter repeat. Queue admission reserves an identity; only playback start
+    # consumes it from the cycle. Local/operator tracks may interleave without
+    # resetting the cycle.
+    starter_cycle_remaining: set[str] = field(default_factory=set, repr=False)
+    starter_cycle_catalog: set[str] = field(default_factory=set, repr=False)
+    starter_cycle_reserved: set[str] = field(default_factory=set, repr=False)
+    music_admission_reservations: dict[str, Track] = field(default_factory=dict, repr=False)
+    music_admission_changed: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    # Jamendo is eligible only after two starter/local tracks actually begin
+    # playback. Queued reservations never advance this counter.
+    jamendo_base_music_since_last: int = 0
     songs_since_banter: int = 0
     songs_since_ad: int = 0
     songs_since_news: int = 0
@@ -978,6 +1352,15 @@ class StationState:
     _last_audible_stream: dict = field(default_factory=dict, repr=False)
     # Pre-produced segments waiting to play (shadow of asyncio.Queue for UI display)
     queued_segments: list[dict] = field(default_factory=list)
+    # Private exact-once music→speech handoffs.  Entries are owned by
+    # ``scheduling.handoff`` and are never serialized into status payloads or
+    # restart-handoff manifests.
+    handoff_reservations: dict[str, object] = field(default_factory=dict, repr=False, compare=False)
+    # The playback loop owns the actual Segment while ``now_streaming`` remains
+    # a public projection.  Keeping this private pointer lets a Skip/Panic
+    # cancel the matching tail-bearing successor without leaking internal
+    # handoff state into the wire contract.
+    active_playback_segment: Segment | None = field(default=None, repr=False, compare=False)
     # Every live control-plane change that can invalidate queued/in-flight audio
     # bumps this generation. Producer commits compare it before admission.
     continuity_epoch: int = 0
@@ -1110,6 +1493,11 @@ class StationState:
     ha_ritual_recipe_audit: list[dict[str, object]] = field(default_factory=list)
     # Force-trigger: producer will use this type instead of scheduler for the next segment
     force_next: SegmentType | None = None
+    # Monotonic ownership generation for ``force_next``. Every semantic writer,
+    # including a same-valued replacement, advances this counter so cleanup for
+    # an older render cannot erase a newer operator/internal directive merely
+    # because both happen to request the same SegmentType.
+    force_next_revision: int = 0
     # Operator-attributed pending trigger: set ONLY by the /api/trigger endpoint so the
     # admin panel can honestly surface "you triggered X" without false-lighting on internal
     # forces — the 60s-silence dead-air rescue and stop/skip/resume all set force_next too.
@@ -1130,12 +1518,20 @@ class StationState:
     # Chaos Mode: station-wide host-chaos toggle plus first-strike handoff.
     chaos_mode_active: bool = False
     chaos_pending: ChaosSubtype | None = None
+    # Lifecycle owner for the urgent-interrupt BANTER safety belt. It remains
+    # set after force claim and across failed renders, then is cleared only by
+    # admission or an explicit stronger control. A later same-valued operator
+    # force must survive cleanup for the older interrupt.
+    urgent_interrupt_force_next_revision: int | None = None
     chaos_cutover_epoch: int = 0
     chaos_script_fallbacks: int = 0
     chaos_audio_failures: int = 0
     chaos_last_degraded_reason: str = ""
     # Pinned track: select_next_track returns this immediately then clears it
     pinned_track: Track | None = None
+    # Monotonic ownership generation for the play-next slot. Listener cleanup
+    # must not clear a later operator pin merely because it names the same Track.
+    pinned_track_revision: int = 0
     # Transport ownership for an operator Skip. The now-playing "skipping"
     # sentinel can be replaced as soon as playback selects the next segment,
     # while the originating request is still settling history. Keep request
@@ -1158,8 +1554,20 @@ class StationState:
     song_preferences_revision: int = 0
     # Listener requests: shoutouts and song wishes submitted via the dashboard
     pending_requests: list[dict] = field(default_factory=list)
-    # Recently consumed requests kept for 5 min so the admin can see what happened
-    # to a request that left Pending (sent to hosts, or song not found).
+    # One admitted dedication may carry its promised recording past equivalent
+    # reservations owned by later requests. The token is transferred to exactly
+    # one producer-built music segment and cleared at queue admission.
+    listener_request_handoff: ListenerRequestHandoff | None = None
+    # Queue admission clears the mutable handoff so the next request may plan,
+    # but the promised recording must remain reserved until its marked segment
+    # emits audio. Keep the full handoff so a pre-byte file failure can restore
+    # the request-owned promise. Multiple lookahead promises may coexist here.
+    listener_request_admitted_reservations: dict[str, ListenerRequestHandoff] = field(default_factory=dict)
+    # A failed admitted promise waits here only when another request already
+    # owns the single active handoff slot. The producer promotes retries before
+    # planning more request music.
+    listener_request_retry_handoffs: deque[ListenerRequestHandoff] = field(default_factory=deque)
+    # Short-lived terminal receipts used by admin history and public-token lookup.
     recently_consumed_requests: list[ConsumedListenerRequest] = field(default_factory=list)
     # Operator-visible pending actions/directives. This mirrors legacy single
     # slots while the producer still consumes those slots for compatibility.
@@ -1687,6 +2095,7 @@ class StationState:
         # observer below so queue removal, overflow, mode changes, and playback
         # rejection cannot leave a claimed companionship cue retryable.
         metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        self.release_listener_request_admitted_reservation(segment)
         if metadata.get("listener_session_cue") == "companionship":
             cue_epoch = metadata.get("listener_session_epoch")
             if isinstance(cue_epoch, int) and not isinstance(cue_epoch, bool):
@@ -1976,10 +2385,26 @@ class StationState:
             timestamp=timestamp,
         )
 
-    def switch_playlist(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
-        """Replace the active playlist and bump revision counter.
+    def _apply_playlist_context(self, tracks: list[Track], source: PlaylistSource | None) -> None:
+        """Swap the crate and everything scoped to the crate, and nothing else.
 
-        In-flight producer segments are discarded on next commit check.
+        This is the half of a source change that belongs to the *playlist*:
+        which records exist, how they rotate, what steering they inherited. It
+        deliberately touches no transport intent (pin, force, listener
+        ownership, pending work) so a caller that must not disturb the live
+        timeline can reuse it. ``switch_playlist`` adds the revocation half on
+        top; ``apply_source_metadata_only`` does not.
+
+        Music admission reservations and the starter cycle live in the
+        revocation half for the same reason. A queued music segment holds its
+        reservation until ``commit_music_admission`` runs from
+        ``Segment.mark_playback_started``; clearing the map under a queue that
+        survives makes every one of those segments fail admission and get
+        skipped at the moment it should air. ``_sync_starter_cycle`` rebuilds
+        ``starter_cycle_reserved`` from the live reservations the next time the
+        cycle is consulted and finds the catalogue changed, so leaving the cycle
+        alone here is self-healing rather than stale, in both directions of a
+        swap.
         """
         self.playlist_revision += 1
         self.source_revision += 1
@@ -1990,11 +2415,71 @@ class StationState:
         self.songs_since_banter = 0
         self.songs_since_ad = 0
         self.songs_since_news = 0
+        self.music_admission_changed.set()
+        self.jamendo_base_music_since_last = 0
         # Clear play history so diversity filters start fresh for the new
         # playlist context.  Without this, a 20-track playlist loops after
         # ~30-40 min because the deque fills and recency weights flatten.
         self.played_tracks.clear()
         self.played_track_log.clear()
+        self.heading = None
+        self.heading_revision += 1
+        self.heading_pending_announcement = ""
+        self.heading_pending_narration_kind = ""
+        self.heading_announced_id = ""
+
+    def apply_source_metadata_only(self, tracks: list[Track], source: PlaylistSource | None = None) -> None:
+        """Commit a stale source load as metadata, leaving the live timeline whole.
+
+        A source load whose captured continuity epoch has moved (a Stop, or a
+        Stop plus a fast Resume) owns the crate, not the controls. Every piece
+        of transport intent visible on the current epoch — the pinned track, the
+        force slot, listener request ownership, queued operator work — belongs to
+        a newer timeline than this request and must survive untouched, revision
+        counters included. Restoring those fields *after* ``switch_playlist``
+        revoked them cannot do that: the guarded clears bump
+        ``pinned_track_revision`` / ``force_next_revision``, orphaning every
+        handoff and pending request that recorded the revision it owns. So the
+        revocation half never runs here.
+        """
+        self._apply_playlist_context(tracks, source)
+
+    def switch_playlist(
+        self,
+        tracks: list[Track],
+        source: PlaylistSource | None = None,
+        *,
+        preserve_reservation_ids: frozenset[str] | set[str] = frozenset(),
+    ) -> None:
+        """Replace the active playlist and bump revision counter.
+
+        In-flight producer segments are discarded on next commit check.
+
+        ``preserve_reservation_ids`` names queue ids the caller deliberately kept
+        in the queue across the switch: the on-air dedication's promised song,
+        and the assetless branch's preserved runway head. A queued music segment
+        cannot start without its ``music_admission_reservations`` entry
+        (``commit_music_admission`` runs from ``Segment.mark_playback_started``),
+        so revoking a survivor's reservation is the same as deleting the segment,
+        only later and silently. Everything not named here is genuinely gone and
+        its reservation goes with it.
+        """
+        self._apply_playlist_context(tracks, source)
+        retained_reservations = {
+            reservation_id: track
+            for reservation_id, track in self.music_admission_reservations.items()
+            if reservation_id in preserve_reservation_ids
+        }
+        self.starter_cycle_remaining.clear()
+        self.starter_cycle_catalog.clear()
+        self.starter_cycle_reserved.clear()
+        self.music_admission_reservations.clear()
+        self.music_admission_reservations.update(retained_reservations)
+        # A retained starter reservation keeps holding its cycle slot, or the
+        # rebuilt cycle would hand the same recording out a second time.
+        self.starter_cycle_reserved.update(
+            track.cache_key for track in retained_reservations.values() if track.source == "starter"
+        )
         # Clear listener requests and pinned track so in-flight background
         # download tasks from the old source can't zombie-pin a track into
         # the new playlist context. Keep an admin-visible trail so accepted
@@ -2002,37 +2487,330 @@ class StationState:
         self._mark_pending_requests_source_changed()
         self.pending_actions.clear()
         self._listener_request_rl.clear()
-        self.pinned_track = None
-        self.force_next = None
+        self.set_pinned_track(None)
+        self.listener_request_handoff = None
+        self.listener_request_admitted_reservations.clear()
+        self.listener_request_retry_handoffs.clear()
+        self.clear_force_next()
         self.operator_force_pending = None
-        self.heading = None
-        self.heading_revision += 1
-        self.heading_pending_announcement = ""
-        self.heading_pending_narration_kind = ""
-        self.heading_announced_id = ""
+
+    def restore_playlist_if_still_empty(self, tracks: list[Track], source: PlaylistSource | None = None) -> bool:
+        """Repopulate an empty crate without the full source-switch reset.
+
+        Unlike ``switch_playlist`` (an operator-initiated source override),
+        this is a mid-session recovery from an empty rotation. It preserves
+        heading (Record Hunt steering), pending listener requests, the pinned
+        track, force_next/operator_force_pending, and play history — none of
+        that operator intent should be wiped just because the crate briefly
+        went empty and refilled. It does not purge the queue either, so music
+        admission reservations stay with the segments still holding them; a
+        queued song that outlived the empty crate must remain startable.
+
+        Returns False and mutates nothing if the playlist is no longer empty
+        (e.g. an admin source switch landed while the caller's directory scan
+        was still in flight) — the caller must not clobber it.
+        """
+        if self.playlist:
+            return False
+        self.playlist = tracks
+        self.playlist_source = source
+        self.playlist_revision += 1
+        self.startup_source_error = ""
+        self._reset_source_readiness()
+        self.music_admission_changed.set()
+        self.jamendo_base_music_since_last = 0
+        return True
+
+    def set_force_next(self, value: SegmentType | None) -> int:
+        """Replace the next-segment directive and return its ownership revision.
+
+        A same-valued write is still a new directive. Advancing the revision on
+        every call lets deferred cleanup distinguish its own force from a newer
+        Panic Cut, move-to-next, or other writer that selected the same type.
+        """
+        self.force_next = value
+        self.force_next_revision += 1
+        return self.force_next_revision
+
+    def clear_force_next(
+        self,
+        *,
+        expected_revision: int | None = None,
+        expected_type: SegmentType | None = None,
+    ) -> bool:
+        """Clear ``force_next`` only when optional ownership checks still match."""
+        if expected_revision is not None and self.force_next_revision != expected_revision:
+            return False
+        if expected_type is not None and self.force_next is not expected_type:
+            return False
+        self.set_force_next(None)
+        return True
+
+    def set_pinned_track(self, track: Track | None) -> int:
+        """Replace the play-next pin and return its ownership revision."""
+        self.pinned_track = track
+        self.pinned_track_revision += 1
+        return self.pinned_track_revision
+
+    def clear_pinned_track(
+        self,
+        *,
+        expected_revision: int | None = None,
+        expected_track: Track | None = None,
+    ) -> bool:
+        """Clear the play-next pin only while optional ownership checks match."""
+        if expected_revision is not None and self.pinned_track_revision != expected_revision:
+            return False
+        if expected_track is not None and self.pinned_track is not expected_track:
+            return False
+        if self.pinned_track is None:
+            return False
+        self.set_pinned_track(None)
+        return True
 
     def _mark_pending_requests_source_changed(self) -> None:
         if not self.pending_requests:
             return
         now = time.time()
-        for request in self.pending_requests:
-            self.recently_consumed_requests.append(
-                {
-                    "id": request.get("request_id") or str(request.get("ts", "")),
-                    "name": request.get("name"),
-                    "message": request.get("message") or request.get("text"),
-                    "song_track": request.get("song_track"),
-                    "type": request.get("type"),
-                    "status": "source_changed",
-                    "song_error_reason": "",
-                    "consumed_at": now,
-                }
+        for request in list(self.pending_requests):
+            self.archive_listener_request(
+                request,
+                status="source_changed",
+                song_error_reason="source_changed" if request.get("type") == "song_request" else "",
+                now=now,
             )
-        cutoff = now - RECENTLY_CONSUMED_RETENTION_SECONDS
-        self.recently_consumed_requests = [
-            request for request in self.recently_consumed_requests if request.get("consumed_at", 0) >= cutoff
-        ]
-        self.pending_requests.clear()
+
+    def archive_listener_request(
+        self,
+        request: dict,
+        *,
+        status: str,
+        song_error_reason: str | None = None,
+        now: float | None = None,
+    ) -> ConsumedListenerRequest:
+        """Move one request to the short-lived receipt trail without losing its public token."""
+        consumed_at = time.time() if now is None else now
+        reason = str(song_error_reason if song_error_reason is not None else request.get("song_error_reason") or "")
+        song_error = bool(request.get("song_error")) or bool(reason)
+        receipt: ConsumedListenerRequest = {
+            "id": request.get("request_id") or str(request.get("ts", "")),
+            "name": request.get("name"),
+            "message": request.get("message") or request.get("text"),
+            "song_track": request.get("song_track"),
+            "type": request.get("type"),
+            "status": status,
+            "song_error_reason": reason,
+            "song_found": bool(request.get("song_found")) and not song_error,
+            "song_error": song_error,
+            "public_token": request.get("public_token"),
+            "consumed_at": consumed_at,
+        }
+        self.recently_consumed_requests.append(receipt)
+        self.prune_recent_listener_requests(consumed_at)
+        if request in self.pending_requests:
+            self.pending_requests.remove(request)
+        return receipt
+
+    def prune_recent_listener_requests(self, now: float | None = None) -> None:
+        """Drop terminal listener receipts after their public retention window."""
+        cutoff = (time.time() if now is None else now) - RECENTLY_CONSUMED_RETENTION_SECONDS
+        records = self.recently_consumed_requests
+        # Every listener receipt poll and every admin poll lands here, and almost
+        # none of them find an expired record. Only rebuild the trail when one
+        # actually fell outside the window.
+        if all(record.get("consumed_at", 0) >= cutoff for record in records):
+            return
+        self.recently_consumed_requests = [record for record in records if record.get("consumed_at", 0) >= cutoff]
+
+    def listener_track_reservations(self) -> ListenerTrackReservations:
+        """Return song identities owned anywhere in the listener-request lifecycle."""
+        lifecycle_tracks = [handoff.track for handoff in self.listener_request_admitted_reservations.values()]
+        lifecycle_tracks.extend(handoff.track for handoff in self.listener_request_retry_handoffs)
+        if self.listener_request_handoff is not None:
+            lifecycle_tracks.append(self.listener_request_handoff.track)
+        if not self.pending_requests and not lifecycle_tracks:
+            # No request owns anything: hand back the shared empty answer instead
+            # of normalizing identities into two throwaway frozensets on every
+            # music pick and every status poll.
+            return _NO_LISTENER_TRACK_RESERVATIONS
+        reservations = ListenerTrackReservations.from_pending_requests(self.pending_requests)
+        return reservations.including_tracks(lifecycle_tracks)
+
+    def release_listener_request_admitted_reservation(self, segment: Segment) -> bool:
+        """Release the promise carried by one admitted music segment."""
+        if not segment_has_admitted_listener_request_handoff(segment):
+            return False
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        token = str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "")
+        if not token or token not in self.listener_request_admitted_reservations:
+            return False
+        del self.listener_request_admitted_reservations[token]
+        return True
+
+    @staticmethod
+    def _retry_listener_request_handoff(handoff: ListenerRequestHandoff) -> ListenerRequestHandoff:
+        """Return a clean, request-owned retry after its admitted file failed."""
+        return replace(
+            handoff,
+            force_next_revision=None,
+            pin_revision=None,
+            music_selection_exclusive=True,
+            borrowed_pin_clear_revision=None,
+            borrowed_force_clear_revision=None,
+        )
+
+    def restore_listener_request_handoff_before_first_byte(self, segment: Segment) -> bool:
+        """Restore an admitted promise whose file failed before emitting audio."""
+        if not segment_has_admitted_listener_request_handoff(segment):
+            return False
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        token = str(metadata.get(LISTENER_REQUEST_HANDOFF_TOKEN_KEY) or "")
+        handoff = self.listener_request_admitted_reservations.pop(token, None)
+        if handoff is None:
+            return False
+        retry = self._retry_listener_request_handoff(handoff)
+        if self.listener_request_handoff is None:
+            self.listener_request_handoff = retry
+        else:
+            self.listener_request_retry_handoffs.append(retry)
+        return True
+
+    def restore_listener_request_handoff_after_source_switch(self, handoff: ListenerRequestHandoff) -> None:
+        """Restore an audible promise after a source switch cleared ownership."""
+        if self.listener_request_handoff is not None:
+            raise RuntimeError("source-switch retry restore requires an empty active handoff slot")
+        self.listener_request_handoff = self._retry_listener_request_handoff(handoff)
+        self.force_listener_request_handoff_music()
+
+    def active_listener_request_handoff_on_air(self) -> ListenerRequestHandoff | None:
+        """Return the active handoff only when its dedication is currently airing."""
+        handoff = self.listener_request_handoff
+        now_streaming = self.now_streaming if isinstance(self.now_streaming, dict) else {}
+        metadata = now_streaming.get("metadata")
+        if handoff is None or now_streaming.get("type") != SegmentType.BANTER.value or not isinstance(metadata, dict):
+            return None
+        queue_id = str(metadata.get("queue_id") or "")
+        return handoff if queue_id and queue_id == handoff.dedication_queue_id else None
+
+    def promote_listener_request_retry_handoff(self) -> bool:
+        """Promote the oldest failed promise when the active slot is free."""
+        if self.listener_request_handoff is not None or not self.listener_request_retry_handoffs:
+            return False
+        self.listener_request_handoff = self.listener_request_retry_handoffs.popleft()
+        return True
+
+    def arm_listener_request_handoff(
+        self,
+        request: dict,
+        track: Track,
+        *,
+        dedication_queue_id: str = "",
+    ) -> bool:
+        """Give one queued dedication scoped ownership of its music handoff."""
+        request_id = str(request.get("request_id") or request.get("ts") or "").strip() or uuid4().hex
+        current = self.listener_request_handoff
+        if current is not None:
+            return current.request_id == request_id and current.matches_track(track)
+        pin_revision = listener_request_pin_revision(request)
+        self.listener_request_handoff = ListenerRequestHandoff(
+            token=uuid4().hex,
+            request_id=request_id,
+            track=track,
+            dedication_queue_id=dedication_queue_id,
+            force_next_revision=listener_request_force_revision(request),
+            pin_revision=pin_revision,
+            music_selection_exclusive=pin_revision is not None,
+        )
+        return True
+
+    def force_listener_request_handoff_music(self) -> None:
+        """Arm and revision-own the next retry for an admitted dedication."""
+        handoff = self.listener_request_handoff
+        if handoff is None or self.force_next is not None:
+            return
+        revision = self.set_force_next(SegmentType.MUSIC)
+        self.listener_request_handoff = replace(handoff, force_next_revision=revision)
+
+    def revoke_listener_request_handoff_for_discarded_dedication(self, segment: Segment) -> bool:
+        """Revoke a promise only when its still-queued dedication is discarded."""
+        handoff = self.listener_request_handoff
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        queue_id = str(metadata.get("queue_id") or "")
+        if handoff is None or not handoff.dedication_queue_id or queue_id != handoff.dedication_queue_id:
+            return False
+        if (
+            handoff.pin_revision is not None
+            and self.pinned_track is not None
+            and handoff.matches_track(self.pinned_track)
+        ):
+            self.clear_pinned_track(
+                expected_revision=handoff.pin_revision,
+                expected_track=self.pinned_track,
+            )
+        restore_borrowed_pin = bool(
+            not handoff.music_selection_exclusive
+            and handoff.borrowed_pin_clear_revision is not None
+            and self.pinned_track is None
+            and self.pinned_track_revision == handoff.borrowed_pin_clear_revision
+        )
+        restore_borrowed_force = bool(
+            restore_borrowed_pin
+            and handoff.borrowed_force_clear_revision is not None
+            and self.force_next is None
+            and self.force_next_revision == handoff.borrowed_force_clear_revision
+        )
+        self.clear_listener_request_handoff()
+        if restore_borrowed_pin:
+            # The handoff borrowed, rather than owned, an operator's same-track
+            # pin. Its in-flight render is fenced below, so put that independent
+            # action back only if neither ownership slot changed meanwhile.
+            self.set_pinned_track(handoff.track)
+            if restore_borrowed_force:
+                self.set_force_next(SegmentType.MUSIC)
+        # Selection consumes the pin before its slow render. Fence any such
+        # in-flight music attempt so removing the still-queued dedication cannot
+        # let the now-unannounced song cross render, egress, or capacity waits.
+        self.continuity_epoch += 1
+        return True
+
+    def listener_request_handoff_metadata(self, track: Track) -> dict[str, str | bool]:
+        """Return admission and dedication-link metadata for the promised recording."""
+        handoff = self.listener_request_handoff
+        if handoff is None or not handoff.matches_track(track):
+            return {}
+        metadata: dict[str, str | bool] = {
+            LISTENER_REQUEST_HANDOFF_TOKEN_KEY: handoff.token,
+            LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY: handoff.music_selection_exclusive,
+        }
+        if handoff.dedication_queue_id:
+            metadata[LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY] = handoff.dedication_queue_id
+        return metadata
+
+    def listener_request_handoff_authorizes(self, segment: Segment) -> bool:
+        """Validate a promised segment while it crosses producer admission."""
+        handoff = self.listener_request_handoff
+        return handoff is not None and handoff.authorizes_segment(segment)
+
+    def admit_listener_request_handoff(self, segment: Segment) -> None:
+        """Mark the promised segment and release the single in-memory handoff slot."""
+        if not self.listener_request_handoff_authorizes(segment):
+            raise RuntimeError("listener request handoff ownership changed before admission")
+        handoff = self.listener_request_handoff
+        assert handoff is not None
+        segment.metadata[LISTENER_REQUEST_HANDOFF_ADMITTED_KEY] = True
+        self.listener_request_admitted_reservations[handoff.token] = handoff
+        self.listener_request_handoff = None
+
+    def clear_listener_request_handoff(self, track: Track | None = None) -> None:
+        """Revoke a pending handoff, optionally only when it owns ``track``."""
+        handoff = self.listener_request_handoff
+        if handoff is not None and (track is None or handoff.matches_track(track)):
+            if handoff.force_next_revision is not None:
+                self.clear_force_next(
+                    expected_revision=handoff.force_next_revision,
+                    expected_type=SegmentType.MUSIC,
+                )
+            self.listener_request_handoff = None
 
     def _arm_heading_announcement_if_needed(self, track: Track) -> None:
         heading = self.heading
@@ -2247,6 +3025,102 @@ class StationState:
         self.playlist.append(track)
         return track
 
+    def _sync_starter_cycle(self) -> set[str]:
+        """Refresh the manifest identity bag without crossing a queued boundary."""
+        catalog = {track.cache_key for track in self.playlist if track.source == "starter"}
+        if catalog != self.starter_cycle_catalog:
+            self.starter_cycle_catalog = catalog
+            self.starter_cycle_remaining = set(catalog)
+            # Rebuild the reserved set from the reservations that actually exist
+            # rather than trimming the old one. Trimming is lossy in one
+            # direction: a crate that drops a starter track forgets a live
+            # reservation, and if that track returns the cycle offers it again
+            # while the first copy is still queued.
+            self.starter_cycle_reserved = {
+                reserved.cache_key
+                for reserved in self.music_admission_reservations.values()
+                if reserved.source == "starter" and reserved.cache_key in catalog
+            }
+        elif catalog and not self.starter_cycle_remaining and not self.starter_cycle_reserved:
+            # A new cycle may begin only after the last reservation in the old
+            # cycle actually started (commit) or was removed (rollback).
+            self.starter_cycle_remaining = set(catalog)
+        return catalog
+
+    def reserve_music_admission(self, reservation_id: str, track: Track) -> bool:
+        """Reserve queue ownership without counting the track as aired.
+
+        Reservations are idempotent by queue identity and fail closed for a
+        duplicate starter identity or a second queued Jamendo lease.
+        """
+        token = reservation_id.strip()
+        if not token:
+            return False
+        existing = self.music_admission_reservations.get(token)
+        if existing is not None:
+            return existing is track
+
+        if track.source == "starter":
+            self._sync_starter_cycle()
+            key = track.cache_key
+            if key not in self.starter_cycle_remaining or key in self.starter_cycle_reserved:
+                return False
+            self.starter_cycle_reserved.add(key)
+        elif track.source == "jamendo" and any(
+            reserved.source == "jamendo" for reserved in self.music_admission_reservations.values()
+        ):
+            return False
+
+        self.music_admission_reservations[token] = track
+        return True
+
+    def commit_music_admission(self, reservation_id: str) -> bool:
+        """Count one reserved track exactly when it is admitted to playback."""
+        track = self.music_admission_reservations.pop(reservation_id, None)
+        if track is None:
+            return False
+        if track.source == "starter":
+            self.starter_cycle_reserved.discard(track.cache_key)
+            self.starter_cycle_remaining.discard(track.cache_key)
+            self.jamendo_base_music_since_last += 1
+        elif track.source == "local":
+            self.jamendo_base_music_since_last += 1
+        elif track.source == "jamendo":
+            self.jamendo_base_music_since_last = 0
+        self.music_admission_changed.set()
+        return True
+
+    def rollback_music_admission(self, reservation_id: str) -> bool:
+        """Release a queued reservation without advancing cycle or cadence."""
+        track = self.music_admission_reservations.pop(reservation_id, None)
+        if track is None:
+            return False
+        if track.source == "starter":
+            self.starter_cycle_reserved.discard(track.cache_key)
+        self.music_admission_changed.set()
+        return True
+
+    def jamendo_insert_eligible(self) -> bool:
+        """Return whether cadence permits exactly one new transient insert."""
+        if any(track.source == "jamendo" for track in self.music_admission_reservations.values()):
+            return False
+        if self.jamendo_base_music_since_last >= 2:
+            return True
+        # No starter/local crate exists to satisfy the two-track gate.
+        # Jamendo is then the only remaining legal music path.
+        return not self.playlist
+
+    async def wait_for_music_admission_change(self, *, timeout: float = 1.0) -> None:
+        """Wait without spinning while a full starter lookahead owns the cycle."""
+        self.music_admission_changed.clear()
+        self._sync_starter_cycle()
+        if self.starter_cycle_remaining - self.starter_cycle_reserved:
+            return
+        try:
+            await asyncio.wait_for(self.music_admission_changed.wait(), timeout=timeout)
+        except TimeoutError:
+            pass
+
     def select_next_track(
         self,
         *,
@@ -2267,18 +3141,55 @@ class StationState:
             raise RuntimeError("Playlist is empty")
 
         excluded = set(excluded_cache_keys or ())
+        starter_catalog = self._sync_starter_cycle()
 
         if self.pinned_track is not None:
             track = self.pinned_track
-            self.pinned_track = None
-            if track.cache_key not in excluded:
-                return track
-            if not any(candidate.cache_key not in excluded for candidate in self.playlist):
-                raise RuntimeError("Playlist has no eligible tracks")
+            starter_blocked = track.source == "starter" and (
+                track.cache_key not in self.starter_cycle_remaining or track.cache_key in self.starter_cycle_reserved
+            )
+            if not starter_blocked:
+                # Consuming the pin is a semantic write: go through the setter so
+                # the revision advances and a listener/operator pin owner can
+                # still tell its own pin apart from a newer one.
+                self.set_pinned_track(None)
+                if track.cache_key not in excluded:
+                    return track
+                if not any(candidate.cache_key not in excluded for candidate in self.playlist):
+                    raise RuntimeError("Playlist has no eligible tracks")
 
         pool = [track for track in self.playlist if track.cache_key not in excluded]
         if not pool:
             raise RuntimeError("Playlist has no eligible tracks")
+
+        # Fail closed on automatic starter repeats: a queued starter identity is
+        # reserved, then removed from the cycle only when playback begins. A
+        # failed render remains selectable and a queued identity cannot be
+        # selected twice merely to fill lookahead.
+        if starter_catalog:
+            pool = [
+                track
+                for track in pool
+                if track.source != "starter"
+                or (
+                    track.cache_key in self.starter_cycle_remaining
+                    and track.cache_key not in self.starter_cycle_reserved
+                )
+            ]
+            if not pool:
+                if self.starter_cycle_remaining and self.starter_cycle_remaining <= self.starter_cycle_reserved:
+                    raise StarterCycleReservationPendingError(
+                        "Starter cycle is waiting for queued tracks to begin playback"
+                    )
+                raise RuntimeError("Playlist has no eligible tracks in the current starter cycle")
+            if self.playlist_source is not None and self.playlist_source.kind == "starter":
+                # Startup supplied one manifest-digest-pinned bag cycle in
+                # playlist order. Honor that order; reserve after queue
+                # admission and consume only at playback start, so a render
+                # failure retries rather than skipping an entry.
+                for starter_track in self.playlist:
+                    if starter_track in pool and starter_track.source == "starter":
+                        return starter_track
 
         # Build all filter/weight data in a single pass over played_tracks.
         # Each track is visited once; sets and counters are accumulated per-index.
@@ -2321,10 +3232,21 @@ class StationState:
         heading_recent_keys: set[str] = set()
         active_heading = self.heading
         if active_heading is not None and active_heading.id:
-            course_keys = {t.cache_key for t in pool if t.heading_id == active_heading.id}
+            # Size the set from what could actually be picked. An explicit course track
+            # under allow_explicit=False is not selectable, so counting it would let the
+            # cooldown exclude every track that is.
+            course_keys = {
+                track.cache_key
+                for track in pool
+                if track.heading_id == active_heading.id and (allow_explicit or not track.explicit)
+            }
             if len(course_keys) > 1:
+                # Match history against course_keys, not the heading id: a course track
+                # that has since been banned or dropped from the pool is not something
+                # the set can cycle back to, so it must not consume a cooldown slot and
+                # let a current track return early.
                 for played in reversed(self.played_tracks):
-                    if played.heading_id != active_heading.id:
+                    if played.cache_key not in course_keys:
                         continue
                     heading_recent_keys.add(played.cache_key)
                     if len(heading_recent_keys) >= len(course_keys) - 1:
@@ -2437,7 +3359,13 @@ class StationState:
         return selected
 
     def after_music(self, track: Track) -> None:
-        """Advance state after successfully queuing a music segment."""
+        """Advance queue-scheduling state after a music segment is admitted.
+
+        Starter-cycle and Jamendo cadence accounting deliberately live in
+        ``commit_music_admission`` because those rights-sensitive facts advance
+        only when playback begins. The remaining counters preserve the
+        producer's established lookahead and pacing semantics.
+        """
         self.played_tracks.append(track)
         self.current_track = track
         heading = self.heading
@@ -2556,7 +3484,8 @@ class Capabilities:
     """Runtime capability flags derived from config + live state.
 
     Three-tier system: Demo Radio → Full AI Radio → Connected Home.
-    Music source is no longer a tier gate (always available via local + yt-dlp + charts).
+    Music source is not an AI tier gate: starter/local music is independent of
+    the optional standalone external-media resolver.
     """
 
     llm: bool = False

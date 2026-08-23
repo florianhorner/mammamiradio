@@ -1,0 +1,12 @@
+{
+  "schema_version": "1",
+  "isrc": "REPLACE_WITH_EXACT_ISRC",
+  "reviewed_at": "REPLACE_WITH_UTC_TIMESTAMP",
+  "reviewer_role": "project-maintainer",
+  "listened_from_start_to_finish": false,
+  "title_and_artist_match": false,
+  "no_unexpected_speech_or_restricted_content": false,
+  "editorially_approved": false,
+  "license_evidence_reviewed": false,
+  "notes": "Keep the tracked decision free of personal names. Set each decision to true only after the complete derivative has been heard and the evidence reviewed."
+}

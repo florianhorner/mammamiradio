@@ -28,6 +28,14 @@ _CREDENTIAL_FIELDS: dict[str, tuple[str, str]] = {
     "elevenlabs_api_key": ("ELEVENLABS_API_KEY", "elevenlabs_api_key"),
 }
 _CREDENTIAL_ENV_TO_FIELD = {env_key: field for field, (env_key, _config_attr) in _CREDENTIAL_FIELDS.items()}
+_JAMENDO_SETTING_ENV_KEYS = frozenset(
+    {
+        "JAMENDO_CLIENT_ID",
+        "MAMMAMIRADIO_JAMENDO_ENABLED",
+        "MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED",
+        "MAMMAMIRADIO_JAMENDO_ACK_REVISION",
+    }
+)
 _ADDON_OPTIONS_LOCK = threading.RLock()
 _ADDON_SECRETS_PATH = Path("/config/secrets.env")
 _SUPERVISOR_API_DEFAULT = "http://supervisor"
@@ -150,6 +158,55 @@ def _save_dotenv(updates: dict[str, str]) -> None:
         # world-readable under a default umask (same hardening as secrets.env).
         _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")
         tmp.replace(env_path)
+
+
+def _save_media_source_settings(
+    updates: dict[str, str],
+    *,
+    addon: bool,
+    dotenv_path: Path = Path(".env"),
+    addon_secrets_path: Path = Path("/config/secrets.env"),
+) -> None:
+    """Atomically persist the complete Jamendo intent before live application.
+
+    Empty values remove a key, which gives the config API real clear semantics
+    without leaving a credential-shaped blank assignment behind. All four facts
+    share one owner-only file and one replace operation.
+    """
+    if set(updates) - _JAMENDO_SETTING_ENV_KEYS:
+        raise ValueError("unsupported media source setting")
+    path = addon_secrets_path if addon else dotenv_path
+    lock = _ADDON_OPTIONS_LOCK if addon else _DOTENV_LOCK
+    safe_updates = {key: _sanitize_credential_value(str(value)) for key, value in updates.items()}
+
+    with lock:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+
+        written: set[str] = set()
+        new_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
+            if candidate and not candidate.startswith("#") and "=" in candidate:
+                key = candidate.split("=", 1)[0].strip()
+                if key in safe_updates:
+                    value = safe_updates[key]
+                    if value:
+                        new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+                    written.add(key)
+                    continue
+            new_lines.append(line)
+
+        for key, value in safe_updates.items():
+            if key not in written and value:
+                new_lines.append(_env_assignment(key, value) if addon else f'{key}="{value}"')
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        _write_owner_only_text(tmp, "\n".join(new_lines) + "\n")
+        tmp.replace(path)
 
 
 def _save_addon_option(key: str, value) -> None:

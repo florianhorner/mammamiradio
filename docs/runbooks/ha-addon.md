@@ -10,9 +10,9 @@ Code change
   → soak on edge
   → chore(release): cut X.Y.Z: bump all three version files, fold both changelogs
   → push/merge to main                                        [cut window opens]
-  → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
+  → addon-build.yml CI validates + builds :sha and :<short-sha> without publishing, proves both images, then publishes and smokes them (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
-  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, and prebuilt :sha checks
+  → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, 20-run HA Green evidence, and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs both per-arch :sha images and proves their host-published ports before stable tags exist
   → addon-release.yml promote: publishes :X.Y.Z and :latest from the prebuilt :sha image for amd64 + aarch64
                                                               [cut window closes]
@@ -159,6 +159,11 @@ they are ever counted as listeners.
    git fetch origin main --tags
    CUT_SHA="$(git rev-parse origin/main)"
    ```
+   The cut must already contain the physical 20-run HA Green receipt set from
+   the exact clean edge source commit, recorded with the commands in
+   [`docs/music-sources.md`](../music-sources.md). Pre-flight fails loud if the
+   evidence is missing, stale, or over its two-second p95, or if the tag/version,
+   release metadata, changelog head, or either per-arch `:sha` image disagrees.
 
 2. **Wait for `addon-build.yml` green** on `$CUT_SHA` (~15-25 min; the PR touches
    `pyproject.toml` and `ha-addon/**`, both in the build's path filter).
@@ -305,9 +310,18 @@ Current config options:
 | `songs_between_ads` | `int(1,60)?` | `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS` |
 | `ad_spots_per_break` | `int(1,5)?` | `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK` |
 | `norm_cache_mb` | `int(200,8000)?` | `MAMMAMIRADIO_MAX_CACHE_MB` (Music cache size; add-on default 1500, standalone 500. Startup computes an effective limit from available disk space. See `docs/operations.md`, "Music cache sizing".) |
-| `jamendo_client_id` | `password?` | `JAMENDO_CLIENT_ID` (advanced optional field) |
 
-Additional Jamendo tuning can be set in `radio.toml` or container env without exposing new Supervisor UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`). Add-on local MP3s live at `/data/music`; `run.sh` exports that path as `MAMMAMIRADIO_MUSIC_DIR` and moves it under the temporary fallback base only when `/data` is not writable.
+Jamendo is not a Supervisor option. The authenticated **Motore → Setup → Music
+sources** flow persists the client ID, enabled intent, current non-commercial
+acknowledgement, and acknowledgement revision in owner-only
+`/config/secrets.env`. A versioned one-time migration recovers a legacy
+Supervisor client ID when possible, but keeps the source disabled until the
+operator reviews and acknowledges the current boundary. Additional candidate
+tuning can be set in `radio.toml` or container env without exposing Supervisor
+UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
+Add-on local MP3s live at `/data/music`; `run.sh` exports that path as
+`MAMMAMIRADIO_MUSIC_DIR` and moves it under the temporary fallback base only
+when `/data` is not writable.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -327,9 +341,11 @@ Configuration surface.
 
 **Provider secrets.** The five AI/TTS provider credentials live in `/config/secrets.env` in add-on
 mode: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
-`ELEVENLABS_API_KEY`. They are no longer add-on schema fields at all (unlike `JAMENDO_CLIENT_ID`,
-which stays as an advanced optional Supervisor option), so a fresh install never exposes them to
-`ha addons info`. Upgraded installs keep their keys through a one-time boot recovery: schema-removed
+`ELEVENLABS_API_KEY`. Jamendo's four private intent facts live in the same owner-only file:
+`JAMENDO_CLIENT_ID`, `MAMMAMIRADIO_JAMENDO_ENABLED`,
+`MAMMAMIRADIO_JAMENDO_NONCOMMERCIAL_ACKNOWLEDGED`, and
+`MAMMAMIRADIO_JAMENDO_ACK_REVISION`. None is an add-on schema field, so a fresh install never
+exposes them to `ha addons info`. Upgraded installs keep their keys through a one-time boot recovery: schema-removed
 keys are absent from the Supervisor-generated, read-only `/data/options.json` startup projection, so
 `run.sh` fetches the values still held in Supervisor's stored settings via the Supervisor API
 (`GET $SUPERVISOR_API/addons/self/info`, token-authenticated, 5s timeout, best-effort) and persists
@@ -337,8 +353,9 @@ them into `secrets.env` — every later boot is file-first. The stored copies re
 `ha addons info` until a successful admin mode/pacing save or a later add-on Configuration save
 replaces stored settings with only current-schema fields. A Configuration save cannot invoke the
 app's credential migration: on an upgraded install, wait for successful startup recovery (or use a
-successful admin mode/pacing save) before changing Configuration. `JAMENDO_CLIENT_ID` and
-`ADMIN_TOKEN` remain Supervisor options. `/config/secrets.env` is plaintext in the add-on config
+successful admin mode/pacing save) before changing Configuration. Jamendo uses its own versioned
+migration marker and remains disabled after migration. `ADMIN_TOKEN` remains a Supervisor option.
+`/config/secrets.env` is plaintext in the add-on config
 storage, not Home Assistant `/config/secrets.yaml`; anyone with host/add-on config access can read it.
 
 Setup treats AI-host and premium-voice readiness separately. Anthropic or
@@ -372,7 +389,27 @@ add-on-specific registry copy. An unknown experimental `--models` candidate in
 the evaluator uses the registry's conservative fallback price and is marked
 unpriced in its JSONL output.
 
-The option extraction in run.sh uses a single guarded Python script that reads keys from Supervisor's generated, read-only `/data/options.json` startup projection and overlays non-empty `/config/secrets.env` values for the five provider keys. Tuple-loop option keys export as UPPER_CASE names (`jamendo_client_id` → `JAMENDO_CLIENT_ID`); behavior toggles with app-specific env vars are mapped explicitly (`enable_home_assistant` → `HA_ENABLED`, an explicitly present `ha_context_enabled` → `MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` → `MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` → `MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` → `MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` → `MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` → `MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` → `MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` → `MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY` defaulting to `balanced`). Missing `ha_context_enabled` is deliberately not exported, preserving the fresh-install privacy gate. Pacing options export only when an integer value is present (`songs_between_banter` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` → `MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` → `MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one bad key cannot drop every export. To add a new non-provider option:
+The option extraction in `run.sh` uses one guarded Python script. It reads
+Supervisor-owned product options from `/data/options.json`, overlays the
+supported owner-only AI/TTS and Jamendo facts from `/config/secrets.env`, and
+forces `MAMMAMIRADIO_ALLOW_YTDLP=false`. Behavior toggles use explicit mappings
+(`enable_home_assistant` → `HA_ENABLED`, `ha_context_enabled` →
+`MAMMAMIRADIO_HA_CONTEXT_ENABLED`, `ha_context_poll_interval` →
+`MAMMAMIRADIO_HA_CONTEXT_POLL_INTERVAL`, `super_italian_mode` →
+`MAMMAMIRADIO_SUPER_ITALIAN`, `chaos_mode_active` →
+`MAMMAMIRADIO_CHAOS_MODE`, `festival_mode` →
+`MAMMAMIRADIO_FESTIVAL_MODE`, `broadcast_chain` →
+`MAMMAMIRADIO_BROADCAST_CHAIN`, `ha_media_player_push` →
+`MAMMAMIRADIO_HA_MEDIA_PLAYER_PUSH`, `guest_host` →
+`MAMMAMIRADIO_GUEST_HOST`, `quality_profile` → `MAMMAMIRADIO_QUALITY`
+defaulting to `balanced`). A missing `ha_context_enabled` is deliberately not
+exported, preserving the fresh-install privacy gate. Pacing options export only
+when an integer value is
+present (`songs_between_banter` →
+`MAMMAMIRADIO_PACING_SONGS_BETWEEN_BANTER`, `songs_between_ads` →
+`MAMMAMIRADIO_PACING_SONGS_BETWEEN_ADS`, `ad_spots_per_break` →
+`MAMMAMIRADIO_PACING_AD_SPOTS_PER_BREAK`); malformed values are skipped so one
+bad key cannot drop every export. To add a new non-provider option:
 
 1. Add to `schema:` in `config.yaml`; also add to `options:` in the same relative order only if it should be visible by default
 2. Add a translation entry in `translations/en.yaml`
@@ -460,7 +497,23 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
-`addon-release.yml` does not rebuild the add-on. It verifies that both per-arch `:${git_sha}` images exist, runs the launch and host-published-port proofs for each native architecture before stable publishing, promotes those exact images to `:X.Y.Z` without changing the source manifest shape, updates `:latest` only when the current tag is the newest stable semver, and then smoke-tests the published amd64 `:X.Y.Z` image. The source `:sha` image is built with `io.hass.version` set to the stable `config.yaml` version, so between releases most `:sha` images carry the last published number rather than the one they would ship as. That is inert, because Supervisor reads `config.yaml` and not the label (see "`io.hass.*` image labels" above). If a previous run published one architecture and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest matches the source `:sha`; mismatched stable tags fail and must be cleaned up manually.
+`addon-release.yml` does not rebuild the add-on. It first validates at least 20
+physical Home Assistant Green cold-launch receipts bound to the tested source
+commit, requires nearest-rank first-byte p95 at or below two seconds, and proves
+that the tagged commit changed nothing after that source except the receipt JSON
+files. It then verifies that both per-arch `:${git_sha}` images exist, runs the
+launch and host-published-port proofs for each native architecture before stable
+publishing, and promotes those exact
+images to `:X.Y.Z` without changing the source manifest shape, updates `:latest`
+only when the current tag is the newest stable semver, and then smoke-tests the
+published amd64 `:X.Y.Z` image. The source `:sha` image is built with
+`io.hass.version` set to the stable `config.yaml` version; between releases most
+`:sha` images therefore carry the last published number. That is inert because
+Supervisor reads `config.yaml`, not the label. If a previous run published one architecture
+and then failed, a rerun is allowed only when the existing `:X.Y.Z` tag digest
+matches the source `:sha`; mismatched stable tags fail and must be cleaned up
+manually. The standalone version-tag workflow runs the same HA Green receipt
+validator before its first registry write.
 
 ## Edge channel (dev releases)
 
@@ -620,11 +673,21 @@ gates" (single source of truth). The short version:
 - Branch protection on `main` has strict status checks (branch must be up to
   date before merging) since 2026-06-12. Dependabot PRs that fall behind get
   an automatic `@dependabot rebase` comment (`dependabot-nudge.yml`) because
-  Dependabot only self-rebases on conflicts. **Live proof pending:** confirm
-  on the first weekly batch that Dependabot honors the nudge comment authored
-  by `github-actions[bot]`; if it ignores it, comment `@dependabot rebase`
-  with your own gh auth (`gh pr comment <PR#> --body "@dependabot rebase"`)
-  and demote the workflow to advisory.
+  Dependabot only self-rebases on conflicts. **Still unproven in the wild:**
+  until 2026-08-20 the nudge had never actually posted a comment — it read
+  GitHub's `mergeStateStatus` seconds after the push, got `UNKNOWN`, and
+  reported "nothing to do" every time (run 32342094107 did this while four
+  PRs were behind). The settle loop fixes the asking; whether Dependabot
+  honors a comment authored by `github-actions[bot]` is still unconfirmed.
+  If it ignores one, comment `@dependabot rebase` with your own gh auth
+  (`gh pr comment <PR#> --body "@dependabot rebase"`) and demote the workflow
+  to advisory.
+- The same workflow also names **human-authored** PRs that have auto-merge
+  armed and a behind branch, as a "PRs stuck behind main" warning and an
+  "Armed but behind" step summary. Those cannot be fixed from CI (a
+  `GITHUB_TOKEN` `update-branch` moves the head without retriggering CI), so
+  land them yourself with `scripts/land-pr.sh <PR#>`, which updates the branch
+  after verifying pre-ship evidence.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
   `allow_auto_merge`, and the required contexts. Run it if landing behaves
@@ -638,6 +701,8 @@ Before merging ANY change that touches addon files:
 - [ ] Version bumped in all three files (if this is a release)
 - [ ] `ruff check . && ruff format --check .` passes
 - [ ] `pytest tests/` passes (200+ tests)
+- [ ] `make media-check` passes; a release also has complete `make media-proof`
+      output and the 20-run Home Assistant Green cold-listen receipt
 - [ ] If new config option: added to config.yaml + run.sh + translations
 - [ ] If store listing touched (`description`, `README.md`, `icon.png`, `logo.png`,
       `url`, `panel_*`): see "Store listing" above — both channels, absolute URLs
@@ -661,7 +726,22 @@ Before merging ANY change that touches addon files:
 3. **`_pick_canned_clip=None` test mock**: at least one test file must mock this to `None`. Tests that return a real file hide the empty-container / missing-packaged-clip scenario that can happen in a broken image.
 4. **`session_stopped` test**: at least one test file must reference `session_stopped`. Covers the post-restart scenario where the HA watchdog restarts the addon with the flag still set.
 5. **HA Green fallback performance gates**: `QUEUE_FALLBACK_WAIT_SECONDS` stays <= 5s, the norm-cache rescue avoids deterministic first-file selection, and the HA Green perf/launch smoke scripts + Make targets exist. The perf smoke skips its stream-byte probe only for a persisted operator stop confirmed independently by `503 stopped` from `/readyz` and `session_stopped: true` from `/public-status`; every other starting or ready state must still produce bytes.
-6. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
+6. **Starter media proof**: `make media-check` validates the canonical manifest,
+   evidence, bytes, and audio quickly. `make media-proof` additionally proves
+   wheel/sdist and amd64/aarch64 image parity, FFprobe facts, add-on extractor
+   absence, and Jamendo transience. While the starter content is absent by
+   design, the PR quality lane's direct step, the release-invariants media
+   section, the add-on build validate job, the add-on build full media-proof
+   job (so the proof remains visible while image publish and the edge channel
+   keep flowing), the edge cut, and
+   local `make media-check` run their proof report-only (verdict plus a
+   missing-content notice, exit 0); the stable promotion media-proof job in
+   `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
+   hard gate on the release path. Stable remains blocked until exactly 12
+   approved derivatives total at least 45 minutes and no more than 75 MiB, every
+   full audition receipt is complete, and 20 cold HA Green runs show p95 first
+   accepted non-silent starter byte at or below two seconds.
+7. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.
 
@@ -679,7 +759,7 @@ A 24-hour minimum gap is enforced between consecutive published releases. The ga
 - Block rule: `prior_release_time + 24h > now` => status check fails, release surfaces red.
 - Bypass: the PR that introduced the tagged commit carries the `hotfix` label. The workflow skips the cooldown check entirely. Intended for P0/P1 regressions the existing release just introduced.
 - Override: `MIN_COOLDOWN_HOURS=<n>` at workflow level (not set by default) tightens or relaxes the window.
-- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on every PR.
+- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on PRs that touch `.github/`, `scripts/`, or `tests/workflows/`, and on every push to `main`.
 
 **Trust model:** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. Acceptable for the current single-maintainer team; revisit if PR volume grows. Day 8 Go/No-Go uses `../stabilization-log.md` to evaluate whether the gate is working.
 
@@ -721,11 +801,39 @@ Use these to tell intentional degradation from a real regression during post-mer
 
 **TTS voice substituted (intentional)**: one `Invalid voice 'X' for backend edge; falling back to it-IT-DiegoNeural` at boot. Zero per-segment `Invalid voice` lines. Dashboard shows `tts_degraded` badge.
 
-**Chart content filter (intentional)**: `INFO Rejecting non-music chart entry: …` and `INFO Chart ingest: filtered N non-music entries` each time the chart is refreshed. Normal values are 0-3 rejections per refresh.
+**Starter catalog admitted (required)**: the boot summary identifies the
+attributed starter/local base and the first `Producing MUSIC:` line follows
+without an external provider download. A manifest, hash, evidence, or audio
+validation error is a release/image regression, not expected degradation.
 
-**Session track denylist (intentional)**: `WARNING Skipping music track due to invalid download (…): …` plus `WARNING Purged rejected cache artifact …` when a download fails validation. If every source key is denied, the producer logs `DEBUG No eligible music tracks remain after excluding session-rejected cache keys` and queues its normal recovery ladder instead of retrying the same sources.
+**Jamendo unavailable (optional)**: The provider logs
+`Jamendo provider preparation started`, followed by `Jamendo provider ready`,
+when preparation succeeds. Retryable failures log
+`Jamendo provider attempt failed` with only a coarse `failure_code`, a bounded
+numeric `provider_code` (or `none`), and `retry_in_seconds`. Blocked attempts
+log `Jamendo provider blocked` with a coarse `failure_code` and bounded numeric
+`provider_code`. Configuration apply, queue cleanup, and manual retry failures
+log `Jamendo provider control failed` with only a `failure_code` set to
+`config_apply_failed`, `queue_cleanup_failed`, or `retry_failed`.
 
-**Queue starvation rescue (intentional)**: `Queue empty Ns - rescuing with canned clip` or `… with norm cache` or `… with demo asset` within 30-60s of silence. A forced-banter `force_next = BANTER` after 60s is the last-resort escape.
+`failure_code=api_failed provider_code=3` means Jamendo rejected the request
+format or one of its parameters, so the provider enters the blocked state.
+Invalid or suspended client IDs also block. Rate limits remain retryable.
+Starter and local music continue while Jamendo is degraded or blocked. Status
+and logs omit the client ID, private audio URL, raw response text, and raw
+provider exception. The provider removes its single-use artifact after
+cancellation, failure, playback, or restart.
+
+**Session track denylist (intentional)**: `WARNING Skipping music track due to
+invalid audio (…): …` plus `WARNING Purged rejected cache artifact …` when an
+eligible local/standalone artifact fails validation. If every source key is
+denied, the producer queues its normal protected recovery ladder instead of
+retrying the same sources.
+
+**Queue starvation rescue (intentional)**: protected packaged recovery, admitted
+non-transient music, a bounded recovery sweeper, or the emergency tone may bridge
+the base queue. Jamendo never appears in norm cache, rescue, or restart handoff.
+A forced-banter `force_next = BANTER` remains the last-resort escape.
 
 **Regression signatures** (these indicate a real problem, not intended behaviour):
 
@@ -774,7 +882,7 @@ rolls back; an update fails to download but leaves a playing station alone.
 | Value | Files |
 |-------|-------|
 | Port 8000 | config.yaml (`ingress_port`), run.sh (`MAMMAMIRADIO_PORT`, `--port`), config.py (default) |
-| `MAMMAMIRADIO_ALLOW_YTDLP=true` | run.sh (hardcoded, required for chart music playback) |
+| `MAMMAMIRADIO_ALLOW_YTDLP=false` | run.sh (hardcoded; both add-ons omit external extraction authority) |
 | `MAMMAMIRADIO_LEDGER_ENABLED=true` | run.sh (hardcoded, enables per-segment provenance ledger in the addon; data stays local at `/data/cache/ledger/`) |
 
 If you change any of these, grep for the old value and update all locations.

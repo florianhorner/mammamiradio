@@ -1,0 +1,33 @@
+keepsakes — test + static gate evidence
+commit:    88f8c727a5160c1425dd0ae06a8f93e25a9b0c9f
+generated: 2026-08-22T21:39:51Z
+command:   make check   (media-check, lint, format-check, typecheck, deadcode, coverage-check)
+
+=== make check verdict ===
+EXIT=0
+All coverage floors held. Total: 92% (floor: 92%)
+All checks passed
+
+=== suite ===
+7555 passed, 4 skipped, 47 deselected in 619.50s (0:10:19)
+
+=== deterministic-order run (pytest-randomly disabled) ===
+7555 passed, 4 skipped, 47 deselected in 368.56s
+(the one intermittent failure under randomized order is
+ tests/scheduling/test_producer_coverage.py::test_time_check_render_trace_records_tts_and_mix,
+ which this branch does not touch — see the PR body)
+
+=== ruff ===
+.venv/bin/ruff check .
+All checks passed!
+.venv/bin/ruff format --check .
+393 files already formatted
+
+=== coverage floors ===
+All coverage floors held. Total: 92% (floor: 92%)
+
+=== keepsake-specific suites ===
+tests/web/test_keep_this.py            54 passed
+tests/scheduling/test_clip.py          20 passed
+tests/web/test_ui_control_contracts.py 113 passed
+tests/addon/test_addon_backup_contract.py 44 passed

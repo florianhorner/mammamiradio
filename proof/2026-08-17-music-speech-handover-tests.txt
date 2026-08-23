@@ -1,0 +1,23 @@
+Exact-once music-to-speech handover — local verification, 2026-08-20
+commit under test: 3002bc866cb160e4fafa704d1a41e3ecb9e4602e
+
+$ .venv/bin/python -m pytest tests/ -q
+7393 passed, 3 skipped, 47 deselected, 1 warning in 303.56s (0:05:03)
+
+$ make check
+All checks passed; all per-module coverage floors held
+
+$ bash scripts/check-release-invariants.sh
+  Passed: 16  Failed: 0
+All invariants passed.
+
+Merged against two landings that touch the same files:
+  Modern Night Drive (#979) retired synthesized ad bumpers
+  (generate_bumper_jingle) for the packaged imaging library
+  (pick_ad_bumper). Main's design kept on every bumper hunk; this
+  branch's exact-once handoff preserved.
+  Seven tests still patched the retired seam: two failed, five passed
+  vacuously. All seven repointed; mutation-checked so the five now bite.
+  The empty-crate recovery fix (#982) touches the same playback loop and
+  merged without conflict; the full suite above is what proves the
+  handoff and the deferred pacer reset compose.

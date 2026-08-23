@@ -1,0 +1,188 @@
+{
+  "schema_version": "1",
+  "receipt_type": "starter-source-acquisition",
+  "status": "source-acquired",
+  "acquisition_window_utc": {
+    "started_at": "2026-08-20T12:51:32Z",
+    "completed_at": "2026-08-20T19:54:52Z"
+  },
+  "scope": "Facts captured from the exact official provider rows and download URLs for every bundled track. This receipt records acquisition only; it is not an editorial audition or a legal-clearance verdict. The audition receipts carry those.",
+  "license_evidence": {
+    "policy": "attribution-only; NonCommercial, NoDerivatives and ShareAlike are refused",
+    "per_track": "see tracks[].license_id"
+  },
+  "official_index": [
+    {
+      "provider": "incompetech",
+      "shared_index_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+    },
+    {
+      "provider": "jamendo",
+      "per_track": "see tracks[].official_index_sha256"
+    }
+  ],
+  "download_evidence": {
+    "all_final_urls_equal_requested_urls": true,
+    "redirects_followed": 0,
+    "content_type": "mixed",
+    "source_bytes_rehashed_after_acquisition": true
+  },
+  "tracks": [
+    {
+      "isrc": "USUAN1100173",
+      "provider": "incompetech",
+      "title": "Long Time Coming",
+      "artist": "Kevin MacLeod",
+      "license_id": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "source_sha256": "2d0d5d087d744221e617f67c8786d940e7b40162f7aaeab49597739a73c3abfd",
+      "source_bytes": 11119655,
+      "official_duration_seconds": 274,
+      "measured_source_duration_seconds": 274.36,
+      "official_index_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+    },
+    {
+      "isrc": "USUAN1900024",
+      "provider": "incompetech",
+      "title": "Realizer",
+      "artist": "Kevin MacLeod",
+      "license_id": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "source_sha256": "6ec41cbd5fef962ec258492693c6cc050c6b27403dbbca1f42dd48af8eba409e",
+      "source_bytes": 12410170,
+      "official_duration_seconds": 310,
+      "measured_source_duration_seconds": 310.15,
+      "official_index_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+    },
+    {
+      "isrc": "USUAN2000024",
+      "provider": "incompetech",
+      "title": "Newer Wave",
+      "artist": "Kevin MacLeod",
+      "license_id": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "source_sha256": "ef26589e066cc2f60f9523f8a3c17e543f57fc9e1145efc3bc46f7e5db92d0bc",
+      "source_bytes": 3494296,
+      "official_duration_seconds": 175,
+      "measured_source_duration_seconds": 174.6,
+      "official_index_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+    },
+    {
+      "isrc": "USUAN1800018",
+      "provider": "incompetech",
+      "title": "Laserpack",
+      "artist": "Kevin MacLeod",
+      "license_id": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "source_sha256": "9da19607351c507328840537491030d2f31e8ee8f87b8921986a5ed11e1e8359",
+      "source_bytes": 8283031,
+      "official_duration_seconds": 186,
+      "measured_source_duration_seconds": 185.68,
+      "official_index_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+    },
+    {
+      "isrc": "USUAN1700080",
+      "provider": "incompetech",
+      "title": "Andreas Theme",
+      "artist": "Kevin MacLeod",
+      "license_id": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "source_sha256": "8b5c57484705b1ffcc69d89da2f57e7159512381b377298eb2dfd4ab3b86dce2",
+      "source_bytes": 6958766,
+      "official_duration_seconds": 217,
+      "measured_source_duration_seconds": 217.39,
+      "official_index_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+    },
+    {
+      "isrc": "USUAN1900042",
+      "provider": "incompetech",
+      "title": "Limit 70",
+      "artist": "Kevin MacLeod",
+      "license_id": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "source_sha256": "b3d2463a32cd6e87a2e0bdb9056113f3702883acbe617a6b029cc14c85561f33",
+      "source_bytes": 12201274,
+      "official_duration_seconds": 302,
+      "measured_source_duration_seconds": 301.66,
+      "official_index_sha256": "2932e71230507d0b1ffb88ed5f8d7e01e9fb5eee20240a20d596fc6a791ff8d9"
+    },
+    {
+      "isrc": "JAMENDO-1317779",
+      "provider": "jamendo",
+      "title": "Stuttgart",
+      "artist": "Portrayal",
+      "license_id": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "source_sha256": "48e65fc42321ec7aca94d52a31d256ecb3a7e10c6b8727f9e804b6eb190e730a",
+      "source_bytes": 2598400,
+      "official_duration_seconds": 215,
+      "measured_source_duration_seconds": 215.38,
+      "official_index_sha256": "7f8c000e065d632b20ebeb19e9ac2d1432b10a69d920189d4322d618ca029952"
+    },
+    {
+      "isrc": "JAMENDO-1608716",
+      "provider": "jamendo",
+      "title": "Smallest - Stories",
+      "artist": "Smallest",
+      "license_id": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "source_sha256": "b61a45f14b2ec62c6b81212c2ce9a4e05334d217a33c33d8dd5a55b05c8d9caf",
+      "source_bytes": 3007488,
+      "official_duration_seconds": 247,
+      "measured_source_duration_seconds": 247.56,
+      "official_index_sha256": "35c92e835241bc1b0ce8b049bc108f6042d9682b5b486606a1b64c980d002da9"
+    },
+    {
+      "isrc": "JAMENDO-1564796",
+      "provider": "jamendo",
+      "title": "The Tide",
+      "artist": "Square a Saw",
+      "license_id": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "source_sha256": "cbcbb663aa66047b19730ac177db254dda375ff17f8a582635ffa4c51e2e6de3",
+      "source_bytes": 2729472,
+      "official_duration_seconds": 224,
+      "measured_source_duration_seconds": 224.75,
+      "official_index_sha256": "9793800bd834f05163bee23cf30de20e2ed468fc41a42806d6de296032d385a3"
+    },
+    {
+      "isrc": "JAMENDO-1215805",
+      "provider": "jamendo",
+      "title": "Dance with me",
+      "artist": "Manhat10",
+      "license_id": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "source_sha256": "f5b1685cf803b9ff0eeb728d18c83328121d769e3e083b049ff1aded9c62ae23",
+      "source_bytes": 2471936,
+      "official_duration_seconds": 204,
+      "measured_source_duration_seconds": 204.1,
+      "official_index_sha256": "6892cb00d06df2ebbeb53a45931372755491cca92ffccb46fd079a316ec64112"
+    },
+    {
+      "isrc": "JAMENDO-1093607",
+      "provider": "jamendo",
+      "title": "Stitches ft. Shane MauX",
+      "artist": "Lilly Wolf",
+      "license_id": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "source_sha256": "e4217d1b8b9bcf9fa650b98c7b6c56042645eb9c27b27aa29745cfc79cf5eab7",
+      "source_bytes": 3270656,
+      "official_duration_seconds": 270,
+      "measured_source_duration_seconds": 270.67,
+      "official_index_sha256": "130065cdbeef26b7130f7dc75b4c49e1ab2794cd3e683f1288186c7ec2abc8cc"
+    },
+    {
+      "isrc": "JAMENDO-1295439",
+      "provider": "jamendo",
+      "title": "Set Me On Fire (feat. Ashley Jana)",
+      "artist": "David Amber",
+      "license_id": "CC-BY-3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0/",
+      "source_sha256": "acef57ff5eb2562961cb98d88f0887cab3b1a081956086b78ed76622f1cf10dd",
+      "source_bytes": 2448896,
+      "official_duration_seconds": 201,
+      "measured_source_duration_seconds": 201.98,
+      "official_index_sha256": "bdaebb981b4759c1c3488b28e831b8ce5bbd770a68a49356bee2e225626774ac"
+    }
+  ]
+}

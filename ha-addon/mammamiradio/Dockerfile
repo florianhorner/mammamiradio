@@ -14,6 +14,12 @@ COPY pyproject.toml ./
 COPY mammamiradio/ ./mammamiradio/
 RUN pip3 install --no-cache-dir --break-system-packages .
 
+# Stable and Edge currently share this exact image. The standalone-only
+# external-media extra must not leak into either add-on as a distribution,
+# importable module, or console executable.
+RUN python3 -c "import importlib.util, shutil; assert importlib.util.find_spec('yt_dlp') is None; assert shutil.which('yt-dlp') is None" \
+    && ! pip3 show yt-dlp >/dev/null 2>&1
+
 # Copy radio.toml default config
 COPY radio.toml ./
 
