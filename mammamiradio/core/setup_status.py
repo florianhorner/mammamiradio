@@ -173,6 +173,26 @@ def _stream_status(config: StationConfig, state: StationState, golden_path: dict
     return "checking" if external_media_enabled(config.allow_ytdlp) else "blocked"
 
 
+def first_listen_continuity_available(
+    config: StationConfig,
+    state: StationState,
+    golden_path: dict | None = None,
+) -> bool:
+    """Project the source evidence that lets a completed first listen continue."""
+    stream_status = _stream_status(config, state, golden_path)
+    source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
+    if not source_readiness:
+        # Older callers only expose the legacy stream projection. Once source
+        # rows exist, continuity must come from explicit primary or recovery
+        # evidence instead of a generic non-blocking flag.
+        return stream_status == "ready"
+    return bool(
+        source_readiness.get("programming_ready", False)
+        or source_readiness.get("recovery_cover_available", False)
+        or source_readiness.get("recovery_on_air", False)
+    )
+
+
 def _legacy_home_context_status(has_llm: bool, availability: HomeContextAvailability) -> str:
     if not has_llm:
         return "waiting_ai"
@@ -230,6 +250,9 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
         if action == "review_home_context":
             primary_action = {"kind": "review_home_context", "label": "Review home context", "target": "setup"}
             break
+        if action == "keep_home_private":
+            primary_action = {"kind": "keep_home_private", "label": "Keep Home private", "target": "setup"}
+            break
         if status in {"ready", "not_configured"}:
             continue
         primary_action = {
@@ -241,6 +264,7 @@ def _build_setup_strip(stages: list[dict[str, Any]]) -> dict[str, Any]:
             },
             "add_ai_key": {"kind": "add_ai_key", "label": "Add AI key", "target": "setup"},
             "find_speaker": {"kind": "find_speaker", "label": "Find speaker", "target": "setup"},
+            "play_here": {"kind": "play_here", "label": "Play here", "target": "setup"},
             "verify_audio": {"kind": "verify_audio", "label": "Did you hear it?", "target": "setup"},
         }.get(action, {"kind": "review_setup", "label": "Review setup", "target": "setup"})
         break
@@ -351,12 +375,11 @@ def first_listen_onboarding_active(
     ha_access_available: bool = True,
     continuity_available: bool = True,
 ) -> bool:
-    """Return whether the operator still needs the speaker-check onboarding sequence."""
-    # Without Home Assistant access the speaker check can never complete, so a
-    # standalone install must not be held in a mandatory sequence (or lose the
-    # AI-key step hidden behind it). The guided path stays offered, not owed.
-    if not ha_access_available:
-        return False
+    """Return whether the operator still needs the transport-neutral First Listen sequence."""
+    # Retain the argument for callers on the existing internal interface. The
+    # add-on stream is now the default proof path, so Home Assistant access no
+    # longer decides whether onboarding can be completed.
+    del ha_access_available
     if install_origin == "existing":
         return False
     # Only a proven pre-feature install gets the compatibility bypass. Treat
@@ -390,17 +413,7 @@ def build_guided_setup(
     home_status = _legacy_home_context_status(has_llm, home_availability)
 
     source_readiness = dict(golden_path.get("source_readiness") or {}) if isinstance(golden_path, dict) else {}
-    source_readiness_present = bool(source_readiness)
-    primary_music_ready = bool(source_readiness.get("programming_ready", False))
-    recovery_available = bool(
-        source_readiness.get("recovery_cover_available", False) or source_readiness.get("recovery_on_air", False)
-    )
-    # A legacy projection without source rows only has the old stream boolean
-    # to work from. Once source evidence exists, do not infer continuity from a
-    # non-blocking flag: fallback and primary readiness are distinct truths.
-    continuity_available = (
-        primary_music_ready or recovery_available or (not source_readiness_present and stream_status == "ready")
-    )
+    continuity_available = first_listen_continuity_available(config, state, golden_path)
 
     stream = {
         "id": "stream",
@@ -489,7 +502,7 @@ def build_guided_setup(
         "healthy": bool(source_readiness.get("programming_ready", False)),
         "continuity_available": continuity_available,
         # Recovery transport truth comes only from on-air source evidence.
-        # Human confirmation proves the selected speaker path, not that the
+        # Human confirmation proves one listening path, not that the
         # recovery ladder is currently carrying audio.
         "transport_audible": bool(source_readiness.get("recovery_on_air", False)),
     }
@@ -518,17 +531,15 @@ def build_guided_setup(
         "status": "verified"
         if audio_complete
         else "accepted"
-        if accepted_attempt_id
-        else "ready"
-        if has_ha_access
-        else "blocked",
-        "label": "Home Assistant speaker",
+        if accepted_attempt_id and selected_entity_id
+        else "ready",
+        "label": "Listening device",
         "selected_entity_id": selected_entity_id,
-        "media_source_uri": "media-source://mammamiradio/live",
+        "media_source_uri": "/stream",
         "homeassistant_access": has_ha_access,
     }
     verification = {
-        "status": "heard" if audio_complete else "waiting" if accepted_attempt_id else "not_started",
+        "status": "heard" if audio_complete else "not_started",
         "attempt_id": accepted_attempt_id,
         "heard": audio_complete,
         "milestone": "First listen achieved" if audio_complete else "Did you hear it?",
@@ -541,11 +552,14 @@ def build_guided_setup(
         else "after_first_listen",
         "enabled": bool(config.homeassistant.context_enabled),
         "reviewed": privacy_complete,
-        "preview_required": not privacy_complete,
+        "preview_required": bool(has_ha_access and not privacy_complete),
         "homeassistant_access": has_ha_access,
         "choice_explicit": context_choice_explicit,
         "copy": (
-            "Enabled locally; no Home context reaches an AI provider unless one is configured."
+            "Home Assistant details are unavailable here. Keep Home private to continue; "
+            "the station does not need them."
+            if not has_ha_access
+            else "Enabled locally; no Home context reaches an AI provider unless one is configured."
             if config.homeassistant.context_enabled
             else "Off until you review a fresh filtered preview and choose Enable."
         ),
@@ -567,9 +581,11 @@ def build_guided_setup(
         }
         speaker_stage = {
             "id": "speaker",
-            "label": "Speaker",
-            "status": "ready" if accepted_attempt_id or audio_complete else "checking" if has_ha_access else "blocked",
-            "action": "find_speaker",
+            "label": "Listen",
+            # An incomplete legacy HA attempt is diagnostic state, not proof
+            # that this transport-neutral step was completed.
+            "status": "ready" if audio_complete else "checking",
+            "action": "play_here",
             "primary_priority": 10,
         }
         verification_stage = {
@@ -583,7 +599,7 @@ def build_guided_setup(
             "id": "privacy",
             "label": "Privacy",
             "status": "ready" if privacy_complete else "checking",
-            "action": "" if privacy_complete else "review_home_context",
+            "action": ("" if privacy_complete else "review_home_context" if has_ha_access else "keep_home_private"),
             "primary_priority": 30,
         }
         strip = _build_setup_strip([source_stage, speaker_stage, verification_stage, privacy_stage])
@@ -956,11 +972,13 @@ def build_setup_status(
         "preflight_checks": preflight_checks,
         "onboarding_steps": onboarding_steps,
         "recommended_next_action": (
-            "Find a Home Assistant speaker and start the live media source."
-            if first_listen_active and not guided_setup["first_listen"]["accepted_attempt_id"]
-            else "Confirm whether you hear Mamma Mi Radio on the selected speaker."
+            "Play Mamma Mi Radio on this device, then confirm what you hear."
             if first_listen_active and not guided_setup["first_listen"]["audio_complete"]
-            else "Review the filtered Home context preview, then enable it or keep it off."
+            else (
+                "Review the filtered Home context preview, then enable it or keep it off."
+                if guided_setup["privacy"]["homeassistant_access"]
+                else "Keep Home private to continue; the station does not need Home Assistant details."
+            )
             if first_listen_active and not guided_setup["first_listen"]["privacy_complete"]
             else "Repair the primary music source; backup audio is keeping the station playing."
             if not stream_ready and guided_setup["source_readiness"].get("continuity_available")

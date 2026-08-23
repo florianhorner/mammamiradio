@@ -38,8 +38,7 @@ To check whether the window is open right now, run `scripts/check-advertised-ver
 
 ## First-listen operator check
 
-After installing the HACS integration and restarting Home Assistant once, open
-the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
 authored 27-second mini-show on deck: an original music bed and a privacy-aware
 Marco/Giulia opening, then a source-aware handoff to the live stream. It needs
 no AI key or Home context. Source readiness is supporting detail under that
@@ -48,12 +47,19 @@ recovery cover are described honestly. The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
 
-Select **Find my speakers**, choose one physical `media_player`, then select
-**Start Mamma Mi Radio**. The dispatch contract is always
-`media-source://mammamiradio/live`. An accepted Home Assistant service call is
-not audible proof: record **Yes — that’s Mamma Mi Radio** only after the opening
-reaches the room, or use the [first-listen repair
-steps](../integrations/ha-integration.md#first-listen-repair).
+Required First Listen proof is hearing the station on this device in the add-on
+Web UI. Select **Play the station**, then **Yes, I hear it** only after you hear
+the opening, or use the [this-device repair
+steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
+
+Home Assistant speakers remain optional and are no longer part of First Listen.
+The add-on has no speaker picker; the route is Home Assistant's own media
+browser after installing the HACS integration: **Media → Mamma Mi Radio → Mamma
+Mi Radio Live**, or **Developer tools → Actions → Play specified media** against
+the speaker with `media-source://mammamiradio/live` and content type `music`.
+An accepted Home Assistant service call is not audible proof; confirm the room
+yourself. See [Optional: play it on a Home Assistant
+speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
@@ -647,23 +653,16 @@ gates" (single source of truth). The short version:
   hook (`scripts/hooks/require-preship-squad.sh`); `--disable-auto`
   (disarming) is allowed. The hook is a local guard, not a security boundary.
 - Branch protection on `main` has strict status checks (branch must be up to
-  date before merging) since 2026-06-12. Dependabot PRs that fall behind get
-  an automatic `@dependabot rebase` comment (`dependabot-nudge.yml`) because
-  Dependabot only self-rebases on conflicts. **Still unproven in the wild:**
-  until 2026-08-20 the nudge had never actually posted a comment — it read
-  GitHub's `mergeStateStatus` seconds after the push, got `UNKNOWN`, and
-  reported "nothing to do" every time (run 32342094107 did this while four
-  PRs were behind). The settle loop fixes the asking; whether Dependabot
-  honors a comment authored by `github-actions[bot]` is still unconfirmed.
-  If it ignores one, comment `@dependabot rebase` with your own gh auth
-  (`gh pr comment <PR#> --body "@dependabot rebase"`) and demote the workflow
-  to advisory.
-- The same workflow also names **human-authored** PRs that have auto-merge
-  armed and a behind branch, as a "PRs stuck behind main" warning and an
-  "Armed but behind" step summary. Those cannot be fixed from CI (a
-  `GITHUB_TOKEN` `update-branch` moves the head without retriggering CI), so
-  land them yourself with `scripts/land-pr.sh <PR#>`, which updates the branch
-  after verifying pre-ship evidence.
+  date before merging) since 2026-06-12. There is deliberately no workflow that
+  posts Dependabot rebase or recreate commands. The retired nudge used a
+  `GITHUB_TOKEN` actor that Dependabot rejected for lacking push access, and
+  batch-wide retries caused repeated comments and CI churn after each merge.
+  Dependabot auto-merge remains opportunistic: a behind PR parks until an
+  authenticated maintainer handles that specific PR. If Dependabot still owns
+  the branch, request its rebase as the maintainer; if the branch was edited,
+  use `@dependabot recreate` and re-review the new head. Human-authored PRs land
+  through `scripts/land-pr.sh <PR#>`, which updates the branch after verifying
+  pre-ship evidence.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
   `allow_auto_merge`, and the required contexts. Run it if landing behaves
