@@ -407,6 +407,7 @@ These UI elements have regressed in past refactors. Always verify they survive a
 - **Station name localStorage** (`mammamiradio/web/static/listener.js`) — reads `stationName` from localStorage. Admin writes it. Broken when dashboard.html was rewritten.
 - **Gold "Mi" accent** (`listener.html`, `admin.html`) — `<span class="mi">` in h1, styled `color: var(--sun)`. Brand signature from hero banner.
 - **Italian tricolor stripe** (`admin.html` uses `.tricolor-stripe`; `listener.html` uses `.tricolor-band`) — present below h1. Must match hero banner.
+- **Station name in copy** (`docs/design/system.md`): Write **Mamma Mi Radio** in prose. Use `mammamiradio` only in URLs, paths, package names, environment variables, entity IDs, and container names. `tests/web/test_ui_copy.py::test_station_brand_name_is_never_misspelled` scans tracked text files, including changelogs. Describe the typo without repeating it.
 - **Admin espresso surface** (`mammamiradio/web/static/tokens.css`) — `--surface` / `--surface-strong` / `--line-strong` must remain at Pi-baseline values (`#251E19` / `#362B25` / `0.16`) so admin reads as espresso warm-brown, not washed-out taupe. Listener cards use the dedicated, brighter `--card` / `--card-strong` / `--card-line` tokens for visibility on the dark page; never raise the admin `--surface*` tokens for listener contrast (that washed admin to taupe in PR #298).
 
 When editing any HTML file, grep for these elements before committing.
