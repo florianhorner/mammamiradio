@@ -21,9 +21,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
-from mammamiradio.core.models import Segment, StationState
+from mammamiradio.core.models import (
+    LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY,
+    LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY,
+    LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
+    Segment,
+    StationState,
+)
 from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR as _DEMO_ASSETS_DIR
 from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.scheduling.handoff import reconcile_handoff_queue_items
@@ -33,7 +39,62 @@ logger = logging.getLogger(__name__)
 QueueDropPredicate = Callable[[Segment], bool]
 
 
-def _drop_moment_receipts(state: StationState, segment: Segment, reason: str) -> None:
+def settle_listener_request_queue_dependencies(
+    dropped: list[Segment],
+    survivors: list[Segment],
+    *,
+    state: StationState,
+) -> tuple[list[Segment], list[Segment]]:
+    """Settle admitted music whose still-queued dedication was discarded.
+
+    Request-exclusive music follows its removed announcement out of the queue.
+    A same-recording pin borrowed from a newer operator remains queued, but loses
+    the older request's admission/link metadata so it cannot masquerade as that
+    dedication or bypass a later listener reservation.
+    """
+    linked_dedication_ids = {
+        str(segment.metadata.get(LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY) or "")
+        for segment in dropped
+        if isinstance(segment.metadata, dict) and segment.metadata.get(LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY)
+    }
+    if linked_dedication_ids:
+        still_surviving: list[Segment] = []
+        for segment in survivors:
+            metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+            if str(metadata.get("queue_id") or "") in linked_dedication_ids:
+                dropped.append(segment)
+            else:
+                still_surviving.append(segment)
+        survivors = still_surviving
+
+    dropped_queue_ids = {
+        queue_id
+        for segment in dropped
+        if isinstance(segment.metadata, dict)
+        and isinstance((queue_id := segment.metadata.get("queue_id")), str)
+        and queue_id
+    }
+    if not dropped_queue_ids:
+        return dropped, survivors
+
+    kept: list[Segment] = []
+    for segment in survivors:
+        metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+        dedication_queue_id = str(metadata.get(LISTENER_REQUEST_DEDICATION_QUEUE_ID_KEY) or "")
+        if dedication_queue_id not in dropped_queue_ids:
+            kept.append(segment)
+            continue
+        if metadata.get(LISTENER_REQUEST_HANDOFF_EXCLUSIVE_KEY):
+            dropped.append(segment)
+            continue
+        state.release_listener_request_admitted_reservation(segment)
+        for key in LISTENER_REQUEST_INTERNAL_METADATA_KEYS:
+            metadata.pop(key, None)
+        kept.append(segment)
+    return dropped, kept
+
+
+def drop_segment_moment_receipts(state: StationState, segment: Segment, reason: str) -> None:
     """Settle any receipt carried by a segment that can no longer air."""
     store = getattr(state, "moment_store", None)
     if store is None or not isinstance(segment.metadata, dict):
@@ -47,7 +108,7 @@ def _drop_moment_receipts(state: StationState, segment: Segment, reason: str) ->
         logger.debug("Moment receipt queue drop failed", exc_info=True)
 
 
-def _unlink_ephemeral_best_effort(segment: Segment) -> None:
+def unlink_ephemeral_best_effort(segment: Segment) -> None:
     """Remove a discarded temporary render while preserving package data."""
     segment.release()
     if not segment.ephemeral or is_packaged_asset(segment.path, _DEMO_ASSETS_DIR):
@@ -58,6 +119,55 @@ def _unlink_ephemeral_best_effort(segment: Segment) -> None:
         # Cleanup is subordinate to restoring the queue. A malformed path or an
         # I/O error must not strand survivors outside the playback queue.
         logger.debug("Ephemeral queue-drop unlink failed for %s", segment.path, exc_info=True)
+
+
+def discard_queued_segment(
+    state: StationState,
+    segment: Segment,
+    *,
+    reason: str,
+    revoke_listener_handoff: bool = True,
+) -> None:
+    """Settle one admitted segment that leaves the queue before it can air.
+
+    The four steps are an ordered sequence, not a bag: the listener promise is
+    revoked while the segment still describes it, the discard is recorded before
+    any best-effort observer runs, the moment receipt is demoted, and only then
+    is the temporary render unlinked. Every queue-mutation site owes all four, so
+    they live here rather than being retyped per caller.
+
+    ``revoke_listener_handoff=False`` is for a caller that already revoked the
+    owning dedication itself (and needs its return value) and is settling only
+    the dependents that followed it out of the queue.
+    """
+    if revoke_listener_handoff:
+        state.revoke_listener_request_handoff_for_discarded_dedication(segment)
+    try:
+        state.record_discard(segment, reason=reason, already_counted_in_produced=True)
+    except Exception:
+        # Discard accounting is telemetry. One broken item must not strand its
+        # own cleanup, its siblings' cleanup, or abort a control action
+        # mid-rewrite.
+        logger.warning("Queue-drop accounting failed for %s; continuing", segment.path, exc_info=True)
+    drop_segment_moment_receipts(state, segment, reason)
+    unlink_ephemeral_best_effort(segment)
+
+
+def discard_queued_segments(
+    state: StationState,
+    segments: Iterable[Segment],
+    *,
+    reason: str,
+    revoke_listener_handoff: bool = True,
+) -> None:
+    """Run the queued-segment discard sequence over every dropped segment."""
+    for segment in segments:
+        discard_queued_segment(
+            state,
+            segment,
+            reason=reason,
+            revoke_listener_handoff=revoke_listener_handoff,
+        )
 
 
 def drop_matching_segments(
@@ -100,10 +210,14 @@ def drop_matching_segments(
             queue.put_nowait(segment)
         raise
 
+    dropped, survivors = settle_listener_request_queue_dependencies(dropped, survivors, state=state)
+
     # A drop can remove either half of a private music/speech handoff pair.
-    # Reconciling against the survivor topology restores a complete unstarted
-    # song when its tail successor was removed, and folds a now-untruthful
-    # successor into the same discard accounting as the predicate's own drops.
+    # Reconciling against the *final* survivor topology — after listener-request
+    # dependents have followed their dedication out — restores a complete
+    # unstarted song when its tail successor was removed, and folds a
+    # now-untruthful successor into the same discard accounting as the
+    # predicate's own drops.
     for segment in reconcile_handoff_queue_items(state, survivors):
         if not any(existing is segment for existing in dropped):
             dropped.append(segment)
@@ -119,14 +233,6 @@ def drop_matching_segments(
     if dropped_ids:
         state.queued_segments = [entry for entry in state.queued_segments if entry.get("id") not in dropped_ids]
 
-    for segment in dropped:
-        try:
-            state.record_discard(segment, reason=reason, already_counted_in_produced=True)
-        except Exception:
-            # Discard accounting is telemetry. One broken item must not strand
-            # its siblings' cleanup or abort the control action mid-rewrite.
-            logger.warning("Queue-drop accounting failed for %s; continuing", segment.path, exc_info=True)
-        _drop_moment_receipts(state, segment, reason)
-        _unlink_ephemeral_best_effort(segment)
+    discard_queued_segments(state, dropped, reason=reason)
 
     return len(dropped)

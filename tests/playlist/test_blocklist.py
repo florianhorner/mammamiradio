@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from mammamiradio.core.models import Track
 from mammamiradio.playlist.blocklist import (
     block_meta,
@@ -39,6 +41,98 @@ def test_filter_blocklisted_drops_banned_keeps_rest():
     titles = [t.title for t in out]
     assert "Volare" not in titles
     assert "Felicità" in titles and "Sarà perché ti amo" in titles
+
+
+def test_filter_blocklisted_drops_exact_equivalent_spelling():
+    """A source refresh cannot reintroduce a ban via punctuation or compact spacing."""
+    refreshed = _track("LItaliano", "TotoCutugno", spotify_id="fresh-source-id")
+    blocklist = {("toto cutugno", "l'italiano"): block_meta("Toto Cutugno - L'Italiano")}
+
+    assert filter_blocklisted([refreshed], blocklist) == []
+
+
+@pytest.mark.parametrize("title", ["LItaliano", "L_Italiano", "L/Italiano"])
+def test_filter_blocklisted_joins_intra_word_identity_punctuation(title):
+    refreshed = _track(title, "TotoCutugno", spotify_id="fresh-punctuation-id")
+    blocklist = {("toto cutugno", "l'italiano"): block_meta("Toto Cutugno - L'Italiano")}
+
+    assert filter_blocklisted([refreshed], blocklist) == []
+
+
+@pytest.mark.parametrize(
+    "artist",
+    [
+        "LucioBattistiVEVO",
+        "Lucio Battisti VEVO",
+        "Lucio Battisti - Topic",
+        "Lucio Battisti Official Channel",
+        "Lucio Battisti Official",
+    ],
+)
+def test_filter_blocklisted_drops_explicit_platform_artist_wrappers(artist):
+    refreshed = _track("Emozioni", artist, spotify_id="fresh-platform-id")
+    blocklist = {("lucio battisti", "emozioni"): block_meta("Lucio Battisti - Emozioni")}
+
+    assert filter_blocklisted([refreshed], blocklist) == []
+
+
+@pytest.mark.parametrize("artist", ["AdeleVEVO", "SiaVEVO", "PinkVEVO", "NeYoVEVO", "U2VEVO", "LPVEVO"])
+def test_filter_blocklisted_drops_short_artist_vevo_wrappers(artist):
+    base_artist = artist.removesuffix("VEVO")
+    refreshed = _track("Song", artist, spotify_id="fresh-short-platform-id")
+    blocklist = {(base_artist.casefold(), "song"): block_meta(f"{base_artist} - Song")}
+
+    assert filter_blocklisted([refreshed], blocklist) == []
+
+
+def test_filter_blocklisted_cleans_platform_wrapper_inside_feature_credit():
+    refreshed = _track("Shallow", "LadyGagaVEVO feat. Bradley Cooper")
+    blocklist = {("lady gaga", "shallow"): block_meta("Lady Gaga - Shallow")}
+
+    assert filter_blocklisted([refreshed], blocklist) == []
+
+
+@pytest.mark.parametrize("artist", ["Devo", "Avevo", "Official Secrets Act", "The Official"])
+def test_filter_blocklisted_preserves_legitimate_artist_suffixes(artist):
+    refreshed = _track("Song", artist)
+    blocklist = {("unrelated", "song"): block_meta("Unrelated - Song")}
+
+    assert filter_blocklisted([refreshed], blocklist) == [refreshed]
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Shallow (feat. Bradley Cooper)",
+        "Shallow [ft Bradley Cooper]",
+        "Shallow - feat Bradley Cooper",
+        "Shallow | featuring Bradley Cooper",
+        "Shallow ft. Bradley Cooper",
+        "Shallow feat. Sia",
+    ],
+)
+def test_filter_blocklisted_drops_title_side_feature_credit_layout(title):
+    refreshed = _track(title, "Lady Gaga", spotify_id="fresh-feature-layout")
+    blocklist = {("lady gaga", "shallow"): block_meta("Lady Gaga - Shallow")}
+
+    assert filter_blocklisted([refreshed], blocklist) == []
+
+
+def test_filter_blocklisted_does_not_treat_title_words_as_feature_credits():
+    pool = [
+        _track("A Feat of Strength", "Artist"),
+        _track("A Feat Beyond Measure", "Artist"),
+        _track("Never Ft Lauderdale", "Artist"),
+        _track("Never Ft. Lauderdale", "Artist"),
+        _track("The Song Featuring Tomorrow", "Artist"),
+    ]
+    blocklist = {
+        ("artist", "a"): block_meta("Artist - A"),
+        ("artist", "never"): block_meta("Artist - Never"),
+        ("artist", "the song"): block_meta("Artist - The Song"),
+    }
+
+    assert filter_blocklisted(pool, blocklist) == pool
 
 
 def test_filter_blocklisted_empty_is_passthrough():

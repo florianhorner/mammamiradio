@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -12,12 +14,14 @@ from fastapi.responses import JSONResponse
 
 from mammamiradio.core.config import JAMENDO_ACK_REVISION
 from mammamiradio.core.models import GenerationWasteReason
+from mammamiradio.playlist.jamendo_transient import JAMENDO_FAILURE_CODES
 from mammamiradio.scheduling.queue_mutations import drop_matching_segments
 from mammamiradio.web.auth import require_admin_access
 from mammamiradio.web.json_body import read_json_object
 from mammamiradio.web.persistence import _save_media_source_settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _JAMENDO_STATES = frozenset(
     {
@@ -35,9 +39,11 @@ _JAMENDO_STATES = frozenset(
         "blocked",
     }
 )
-_JAMENDO_FAILURE_CODES = frozenset(
-    {"", "api_failed", "license_rejected", "invalid_url", "lease_invalid", "late", "cancelled"}
-)
+# Derived from the provider's own code set rather than hand-maintained. This
+# list previously omitted metadata_changed / identity_mismatch / empty_results,
+# and the coercion below turned each of them into "api_failed" — which is why
+# the operator card showed a generic reason for the failures that actually fire.
+_JAMENDO_FAILURE_CODES = frozenset({""}) | JAMENDO_FAILURE_CODES
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
@@ -106,12 +112,34 @@ def safe_jamendo_status(config: object, provider: object | None = None) -> dict[
     rejected = raw.get("rejected_count", 0)
     if isinstance(rejected, bool) or not isinstance(rejected, int) or rejected < 0:
         rejected = 0
+    dominant = str(raw.get("dominant_failure_code_this_attempt") or "")
+    if dominant not in _JAMENDO_FAILURE_CODES:
+        dominant = "api_failed" if dominant else ""
+    raw_breakdown = raw.get("attempt_rejections")
+    breakdown: dict[str, int] = {}
+    if isinstance(raw_breakdown, Mapping):
+        for code, count in raw_breakdown.items():
+            if (
+                code
+                and code in _JAMENDO_FAILURE_CODES
+                and not isinstance(count, bool)
+                and isinstance(count, int)
+                and count > 0
+            ):
+                breakdown[code] = count
+    # Derived from the surviving rows rather than taken raw, so the count and the
+    # breakdown can never disagree. A raw total that still included a code the
+    # filter dropped would leave the card doing arithmetic on two different
+    # populations.
+    attempt_rejected = sum(breakdown.values())
     return {
         "enabled": enabled,
         "state": state,
         "client_id_configured": client_configured,
         "noncommercial_acknowledged": acknowledged,
         "terms_scope": "noncommercial_api_use",
+        # Always "pending" on purpose — Jamendo never clears a station model.
+        # Not the operator's acknowledgement (that is the field above).
         "provider_confirmation": "pending",
         "ready": enabled and client_configured and acknowledged and bool(raw.get("ready", state == "ready")),
         "in_flight": enabled
@@ -121,6 +149,9 @@ def safe_jamendo_status(config: object, provider: object | None = None) -> dict[
         "last_success_age_sec": age,
         "last_failure_code": failure or None,
         "rejected_count": rejected,
+        "rejected_this_attempt": attempt_rejected,
+        "dominant_failure_code_this_attempt": dominant or None,
+        "attempt_rejections": breakdown,
     }
 
 
@@ -186,6 +217,11 @@ def _mark_provider_apply_failure(provider: object | None) -> None:
         # The response-level safe status still fails closed.  Never let a
         # diagnostic hook turn an already-persisted operator choice into a 500.
         pass
+
+
+def _log_provider_control_failure(code: str) -> None:
+    """Log the stable failure code without exception text."""
+    logger.warning("Jamendo provider control failed failure_code=%s", code)
 
 
 def _apply_failure_status(config: object, provider: object | None) -> dict[str, Any]:
@@ -273,9 +309,11 @@ async def _persist_and_apply_jamendo(
                 _drop_queued_jamendo(request)
             except Exception:
                 live_apply_failed = True
+                _log_provider_control_failure("queue_cleanup_failed")
         provider = getattr(request.app.state, "jamendo_provider", None)
         if not await _apply_provider_config(config, provider):
             live_apply_failed = True
+            _log_provider_control_failure("config_apply_failed")
 
         request.app.state.jamendo_apply_failed = live_apply_failed
         if live_apply_failed:
@@ -358,6 +396,7 @@ async def retry_jamendo(request: Request, _: None = Depends(require_admin_access
 
         if bool(getattr(request.app.state, "jamendo_apply_failed", False)):
             if not await _apply_provider_config(config, provider):
+                _log_provider_control_failure("config_apply_failed")
                 _mark_provider_apply_failure(provider)
                 return {
                     "started": False,
@@ -373,6 +412,7 @@ async def retry_jamendo(request: Request, _: None = Depends(require_admin_access
 
         retry = getattr(provider, "retry", None)
         if not callable(retry):
+            _log_provider_control_failure("retry_failed")
             _mark_provider_apply_failure(provider)
             request.app.state.jamendo_apply_failed = True
             return {
@@ -383,6 +423,7 @@ async def retry_jamendo(request: Request, _: None = Depends(require_admin_access
         try:
             started = bool(retry())
         except Exception:
+            _log_provider_control_failure("retry_failed")
             _mark_provider_apply_failure(provider)
             request.app.state.jamendo_apply_failed = True
             return {

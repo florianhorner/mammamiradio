@@ -97,10 +97,15 @@ expect_default_install_guard() {
     CONTRIBUTING.md \
     ha-addon/README.md \
     ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
     docs/architecture.md \
+    docs/conductor.md \
     docs/festival-mode.md \
+    docs/listener-qs-train.md \
     docs/troubleshooting.md \
     docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
     docs/runbooks/ha-addon.md; do
     printf '# Safe\n' > "$fixture_root/$file"
   done
@@ -148,10 +153,15 @@ expect_default_persistence_guard() {
     CONTRIBUTING.md \
     ha-addon/README.md \
     ha-addon/mammamiradio/DOCS.md \
+    docs/REPO_MAP.md \
+    docs/agents.md \
     docs/architecture.md \
+    docs/conductor.md \
     docs/festival-mode.md \
+    docs/listener-qs-train.md \
     docs/troubleshooting.md \
     docs/operations.md \
+    docs/runbooks/parallel-workspaces.md \
     docs/runbooks/ha-addon.md; do
     printf '# Safe\n' > "$fixture_root/$file"
   done

@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -35,6 +36,47 @@ from mammamiradio.core.models import MediaAttribution, Segment, SegmentType, saf
 logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.jamendo.com/v3.0/tracks/"
+_API_INCLUDE = "licenses"
+
+# Single source of truth for every failure code this provider can surface.
+# Three lists used to drift independently: the raise sites here, the sanitizer
+# allowlist in web/media_sources.py, and the operator copy table in admin.html.
+# The middle one silently laundered any code it did not know into "api_failed",
+# so the three codes the edge install reports most often never reached a human.
+# tests/playlist/test_jamendo_failure_code_contract.py asserts all three agree.
+JAMENDO_FAILURE_CODES = frozenset(
+    {
+        "api_auth_failed",
+        "api_failed",
+        "api_malformed",
+        "audio_empty",
+        "audio_fetch_failed",
+        "audio_oversize",
+        "audio_size_invalid",
+        "duration_rejected",
+        "empty_results",
+        "ffmpeg_failed",
+        "ffmpeg_timeout",
+        "ffprobe_failed",
+        "identity_mismatch",
+        "internal_error",
+        "invalid_url",
+        "lease_invalid",
+        "license_rejected",
+        "metadata_changed",
+        "metadata_invalid",
+        "metadata_oversize",
+        "network_timeout",
+        "source_revision_invalid",
+        "temp_root_invalid",
+    }
+)
+# Reasons an attempt can report that are not a rejected candidate. They belong in
+# the breakdown the operator card reads, but must never inflate a count of
+# candidates thrown away: "no usable songs came back" examined nothing.
+_NON_CANDIDATE_REASONS = frozenset({"empty_results"})
+_BLOCKED_PROVIDER_CONTRACT_CODES = frozenset({2, 3, 4, 7, 8, 9, 10, 12, 13})
+_BLOCKED_PROVIDER_AUTH_CODES = frozenset({5, 11})
 _TRACK_ID_RE = re.compile(r"[1-9][0-9]{0,19}")
 _CLIENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,128}")
 _OPERATION_ID_RE = re.compile(r"[0-9a-f]{32}")
@@ -152,9 +194,10 @@ class _StreamWorker(Protocol):
 
 
 class _ProviderError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, provider_code: int | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.provider_code = provider_code
 
 
 class _TransientError(_ProviderError):
@@ -277,6 +320,46 @@ def _candidate_from_exact_result(item: object, expected_id: str) -> _CandidateDa
     }
 
 
+def _stable_admission_identity(candidate: _CandidateData) -> tuple[object, ...]:
+    """Fields compared across discovery and exact-ID revalidation.
+
+    Stream URLs and share-page paths can differ between Jamendo list and id
+    lookups without changing the track, license, or attribution. Comparing the
+    full candidate dict rejected every live candidate after discovery recovered.
+    """
+    return (
+        candidate["provider_track_id"],
+        candidate["title"],
+        candidate["artist"],
+        candidate["license_id"],
+        candidate["license_url"],
+        candidate["duration_sec"],
+    )
+
+
+def _dominant_code(rejections: Mapping[str, int]) -> str | None:
+    """Return the failure code that accounts for most of one attempt's rejections.
+
+    Ties break on the code name so the operator card does not flip between two
+    equally-common reasons on consecutive polls. Returns ``None`` for an attempt
+    with no rejections, which is how the card knows to stay quiet.
+    """
+    if not rejections:
+        return None
+    return max(sorted(rejections), key=lambda code: rejections[code])
+
+
+def _coarse_provider_code(value: object) -> int | None:
+    """Normalize a provider code to an integer from 0 through 9999, or return ``None``."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 <= value <= 9999 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 4:
+        return int(value)
+    return None
+
+
 def _validated_api_results(status_code: int, body: bytes) -> list[object]:
     if status_code in (401, 403):
         raise _BlockedError("api_auth_failed")
@@ -289,8 +372,15 @@ def _validated_api_results(status_code: int, body: bytes) -> list[object]:
     if not isinstance(payload, Mapping):
         raise _TransientError("api_malformed")
     headers = payload.get("headers")
-    if not isinstance(headers, Mapping) or headers.get("status") != "success" or headers.get("code") not in (0, "0"):
+    if not isinstance(headers, Mapping):
         raise _TransientError("api_failed")
+    if headers.get("status") != "success" or headers.get("code") not in (0, "0"):
+        provider_code = _coarse_provider_code(headers.get("code"))
+        if provider_code in _BLOCKED_PROVIDER_AUTH_CODES:
+            raise _BlockedError("api_auth_failed", provider_code=provider_code)
+        if provider_code in _BLOCKED_PROVIDER_CONTRACT_CODES:
+            raise _BlockedError("api_failed", provider_code=provider_code)
+        raise _TransientError("api_failed", provider_code=provider_code)
     results = payload.get("results")
     if not isinstance(results, list):
         raise _TransientError("api_malformed")
@@ -620,6 +710,16 @@ class JamendoStreamProvider:
         self._last_failure_code: str | None = None
         self._last_success_at: float | None = None
         self._rejected_count = 0
+        # Per-attempt rejection breakdown, replaced wholesale at the end of each
+        # discovery pass. The lifetime ``_rejected_count`` above only ever grows,
+        # so it answers "how long has this been broken" and nothing else; the
+        # operator card needs "what is going wrong right now", which is this.
+        # Never rendered as a bare number — it selects which sentence to show.
+        self._attempt_rejections: dict[str, int] = {}
+        # Resolved once per attempt at publish time. The error that ENDED the
+        # attempt outranks the most common rejection, so a pass killed by a
+        # timeout does not report an earlier candidate mismatch as the reason.
+        self._attempt_dominant: str | None = None
         self._configuration_apply_blocked = False
         self._started = False
         self._stopped = False
@@ -649,6 +749,11 @@ class JamendoStreamProvider:
             with self._lock:
                 self._state = JamendoProviderState.BLOCKED
                 self._last_failure_code = exc.code
+            logger.warning(
+                "Jamendo provider blocked failure_code=%s provider_code=%s",
+                exc.code,
+                exc.provider_code if exc.provider_code is not None else "none",
+            )
             return
         await self.apply_config(
             enabled=enabled,
@@ -702,6 +807,7 @@ class JamendoStreamProvider:
             self._retry_index = 0
             self._pending_delay = None
             self._last_failure_code = None
+            self._clear_attempt_reasons_unlocked()
             if self._lease is not None and self._state != JamendoProviderState.PLAYING:
                 self._release_current_unlocked("config_changed")
             playing = self._lease is not None and self._state == JamendoProviderState.PLAYING
@@ -772,6 +878,7 @@ class JamendoStreamProvider:
                     return False
                 self._retry_index = 0
                 self._last_failure_code = None
+                self._clear_attempt_reasons_unlocked()
                 self._state = JamendoProviderState.IDLE
                 self._pending_delay = 0.0
                 self._retry_sleeping = False
@@ -779,6 +886,7 @@ class JamendoStreamProvider:
                 return True
             self._retry_index = 0
             self._last_failure_code = None
+            self._clear_attempt_reasons_unlocked()
             self._state = JamendoProviderState.IDLE
             self._pending_delay = 0.0
             self._ensure_scheduled_unlocked()
@@ -856,6 +964,12 @@ class JamendoStreamProvider:
                 "client_id_configured": bool(self._client_id),
                 "noncommercial_acknowledged": self._acknowledged,
                 "terms_scope": "noncommercial_api_use",
+                # Deliberately always "pending": this reports whether JAMENDO has
+                # cleared the operator's station model, which it never does. It is
+                # not the operator's acknowledgement — that is
+                # ``noncommercial_acknowledged`` above. See
+                # docs/troubleshooting.md "Jamendo stays off or temporarily
+                # unavailable" before changing this.
                 "provider_confirmation": "pending",
                 "ready": self._state == JamendoProviderState.READY,
                 "in_flight": self._state
@@ -868,6 +982,9 @@ class JamendoStreamProvider:
                 "last_success_age_sec": round(success_age, 3) if success_age is not None else None,
                 "last_failure_code": self._last_failure_code,
                 "rejected_count": self._rejected_count,
+                "rejected_this_attempt": sum(self._attempt_rejections.values()),
+                "dominant_failure_code_this_attempt": self._attempt_dominant,
+                "attempt_rejections": dict(self._attempt_rejections),
             }
 
     async def stop(self) -> None:
@@ -942,8 +1059,10 @@ class JamendoStreamProvider:
         task.add_done_callback(self._on_provider_task_done)
 
     def _on_provider_task_done(self, task: asyncio.Task[None]) -> None:
+        retry_delay: float | None = None
         with self._lock:
-            if self._task is task:
+            current_task = self._task is task
+            if current_task:
                 self._task = None
             if task.cancelled():
                 pass
@@ -951,10 +1070,24 @@ class JamendoStreamProvider:
                 try:
                     error = task.exception()
                     if error is not None:
-                        logger.debug("Jamendo provider task ended unexpectedly: %s", type(error).__name__)
+                        if (
+                            current_task
+                            and self._started
+                            and not self._stopped
+                            and self._configuration_valid_unlocked()
+                            and self._lease is None
+                        ):
+                            retry_delay = self._record_transient_failure_unlocked("internal_error")
+                        else:
+                            logger.debug("Jamendo provider task ended unexpectedly: %s", type(error).__name__)
                 except asyncio.CancelledError:
                     logger.debug("Jamendo provider task ended unexpectedly", exc_info=True)
             self._ensure_scheduled_unlocked()
+        if retry_delay is not None:
+            logger.warning(
+                "Jamendo provider attempt failed failure_code=internal_error provider_code=none retry_in_seconds=%d",
+                int(retry_delay),
+            )
 
     async def _run_after(self, delay: float) -> None:
         try:
@@ -985,13 +1118,11 @@ class JamendoStreamProvider:
                     return
                 epoch, fingerprint, source_revision = self._snapshot_current_unlocked()
                 self._state = JamendoProviderState.DISCOVERING
-            try:
-                # Discovery and every serial exact-ID revalidation share this
-                # one wall-clock budget; no candidate can reset the deadline.
-                async with asyncio.timeout(_NETWORK_DEADLINE_SEC):
-                    candidate = await self._discover_candidate(epoch, fingerprint, source_revision)
-            except TimeoutError as exc:
-                raise _TransientError("network_timeout") from exc
+            logger.info("Jamendo provider preparation started")
+            # The shared wall-clock budget lives inside _discover_candidate so
+            # a timeout is already named when the per-attempt breakdown
+            # publishes; it surfaces here as _TransientError("network_timeout").
+            candidate = await self._discover_candidate(epoch, fingerprint, source_revision)
             with self._lock:
                 if not self._still_current_unlocked(epoch, fingerprint, source_revision):
                     raise _StaleOperationError
@@ -1070,6 +1201,7 @@ class JamendoStreamProvider:
                 self._retry_index = 0
                 self._state = JamendoProviderState.READY
                 operation_dir = None
+            logger.info("Jamendo provider ready")
         except asyncio.CancelledError:
             with self._lock:
                 worker_running = (
@@ -1093,26 +1225,180 @@ class JamendoStreamProvider:
             with self._lock:
                 self._last_failure_code = exc.code
                 self._state = JamendoProviderState.BLOCKED
+            logger.warning(
+                "Jamendo provider blocked failure_code=%s provider_code=%s",
+                exc.code,
+                exc.provider_code if exc.provider_code is not None else "none",
+            )
         except _CandidateRejectedError as exc:
             with self._lock:
                 self._rejected_count += 1
-                self._record_transient_failure_unlocked(exc.code)
+                retry_delay = self._record_transient_failure_unlocked(exc.code)
+            logger.warning(
+                "Jamendo provider attempt failed failure_code=%s provider_code=none retry_in_seconds=%d",
+                exc.code,
+                int(retry_delay),
+            )
         except (_TransientError, httpx.HTTPError, OSError) as exc:
             code = exc.code if isinstance(exc, _TransientError) else "api_failed"
+            provider_code = exc.provider_code if isinstance(exc, _TransientError) else None
             with self._lock:
-                self._record_transient_failure_unlocked(code)
+                retry_delay = self._record_transient_failure_unlocked(code)
+            logger.warning(
+                "Jamendo provider attempt failed failure_code=%s provider_code=%s retry_in_seconds=%d",
+                code,
+                provider_code if provider_code is not None else "none",
+                int(retry_delay),
+            )
         finally:
             if operation_dir is not None:
                 _cleanup_operation(operation_dir, self._jamendo_root)
 
+    def _clear_attempt_reasons_unlocked(self) -> None:
+        """Drop the per-attempt reason alongside ``_last_failure_code``.
+
+        The card prefers the dominant code over ``last_failure_code``, so a site
+        that clears only the latter leaves the previous attempt's sentence on
+        screen. That is what an operator sees right after changing settings or
+        pressing Check again, which is exactly when the row must stop explaining
+        the run they just replaced.
+        """
+        self._attempt_rejections = {}
+        self._attempt_dominant = None
+
+    def _publish_attempt_rejections(
+        self,
+        rejections: Mapping[str, int],
+        epoch: int,
+        fingerprint: str,
+        source_revision: int,
+        *,
+        succeeded: bool,
+        terminal_code: str | None = None,
+    ) -> None:
+        """Replace the per-attempt breakdown, and log it once per attempt.
+
+        A superseded attempt publishes nothing: its counts describe a source or
+        configuration the operator has already moved on from, and showing them
+        would explain the wrong thing on the card.
+
+        A *successful* attempt publishes an empty breakdown even when it rejected
+        candidates on the way. Discovery routinely skips a few rows before one
+        works; leaving those counts on the card meant a track that prepared
+        correctly sat in the queue under "Jamendo sent back a different song than
+        expected", and then aired under it.
+
+        ``terminal_code`` names the error that ended the attempt. When it is not
+        itself a candidate rejection — a network timeout on the third exact-ID
+        lookup, say — it wins the dominant slot, because otherwise an attempt
+        killed by a timeout would report "Jamendo sent back a different song than
+        expected" from two earlier rejections while the retry schedule is acting
+        on the timeout.
+
+        The log counts only real candidate rejections. ``empty_results`` means
+        nothing came back to examine, so counting it would report "rejecting 1
+        candidate(s)" for a response that contained none.
+        """
+        candidate_rejections = {code: count for code, count in rejections.items() if code not in _NON_CANDIDATE_REASONS}
+        dominant = _dominant_code(rejections)
+        if terminal_code and terminal_code not in rejections:
+            dominant = terminal_code
+        with self._lock:
+            if not self._still_current_unlocked(epoch, fingerprint, source_revision):
+                return
+            if succeeded:
+                self._attempt_rejections = {}
+                self._attempt_dominant = None
+            else:
+                self._attempt_rejections = dict(rejections)
+                self._attempt_dominant = dominant
+        # or terminal_code: an attempt whose very first call fails rejects no
+        # candidate, so gating on the breakdown alone left the diagnosis channel
+        # silent exactly when the provider is fully down.
+        if rejections or terminal_code:
+            logger.info(
+                "Jamendo attempt %s after rejecting %d candidate(s) breakdown=%s dominant=%s",
+                "succeeded" if succeeded else "failed",
+                sum(candidate_rejections.values()),
+                ",".join(f"{code}:{count}" for code, count in sorted(rejections.items())),
+                None if succeeded else dominant,
+            )
+
     async def _discover_candidate(self, epoch: int, fingerprint: str, source_revision: int) -> _CandidateData:
+        # Built locally rather than reset on the instance: a concurrent attempt
+        # cannot clobber a local Counter, so there is no window where one pass
+        # zeroes another's in-flight tally. Published once, atomically, at exit.
+        attempt_rejections: Counter[str] = Counter()
+
+        def record_rejection(code: str) -> None:
+            with self._lock:
+                self._rejected_count += 1
+            attempt_rejections[code] += 1
+
+        def note_attempt_reason(code: str) -> None:
+            """Name a reason without counting a rejected candidate.
+
+            ``empty_results`` means nothing came back to examine, so it belongs
+            in the breakdown the card reads but not in the lifetime tally of
+            candidates thrown away — those are different facts.
+            """
+            attempt_rejections[code] += 1
+
+        def publish(succeeded: bool, terminal_code: str | None = None) -> None:
+            self._publish_attempt_rejections(
+                attempt_rejections,
+                epoch,
+                fingerprint,
+                source_revision,
+                succeeded=succeeded,
+                terminal_code=terminal_code,
+            )
+
+        try:
+            # Discovery and every serial exact-ID revalidation share this one
+            # wall-clock budget; no candidate can reset the deadline. The budget
+            # lives here rather than in the caller so that the code which ended
+            # the attempt is already known when the breakdown publishes. Wrapped
+            # from outside, a timeout arrived as CancelledError with no terminal
+            # code and was only named afterwards, so the card kept reporting an
+            # earlier candidate rejection while the retry acted on the timeout.
+            async with asyncio.timeout(_NETWORK_DEADLINE_SEC):
+                candidate = await self._discover_candidate_inner(
+                    epoch, fingerprint, source_revision, record_rejection, note_attempt_reason
+                )
+        except TimeoutError as exc:
+            # Must precede OSError: builtin TimeoutError subclasses it.
+            publish(False, "network_timeout")
+            raise _TransientError("network_timeout") from exc
+        except _ProviderError as exc:
+            publish(False, exc.code)
+            raise
+        except (httpx.HTTPError, OSError):
+            # _prepare_once reports these as api_failed; say the same thing here
+            # so the card and the retry schedule cannot disagree.
+            publish(False, "api_failed")
+            raise
+        except BaseException:
+            publish(False)
+            raise
+        publish(True)
+        return candidate
+
+    async def _discover_candidate_inner(
+        self,
+        epoch: int,
+        fingerprint: str,
+        source_revision: int,
+        record_rejection: Callable[[str], None],
+        note_attempt_reason: Callable[[str], None],
+    ) -> _CandidateData:
         params = {
             "client_id": self._client_id,
             "format": "json",
             "limit": str(self._limit),
             "tags": self._tags,
             "audioformat": "mp32",
-            "include": "licenses,musicinfo",
+            "include": _API_INCLUDE,
             "ccnc": "false",
             "ccsa": "false",
             "ccnd": "false",
@@ -1130,59 +1416,62 @@ class JamendoStreamProvider:
         last_rejection: _CandidateRejectedError | None = None
         for item in results:
             if not isinstance(item, Mapping):
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection("metadata_invalid")
                 last_rejection = _CandidateRejectedError("metadata_invalid")
                 continue
             track_id = str(item.get("id", "")).strip()
             if _TRACK_ID_RE.fullmatch(track_id) is None or track_id in seen_ids:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection("identity_mismatch")
                 last_rejection = _CandidateRejectedError("identity_mismatch")
                 continue
             seen_ids.add(track_id)
             try:
                 candidates.append((track_id, _candidate_from_exact_result(item, track_id)))
             except _CandidateRejectedError as exc:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection(exc.code)
                 last_rejection = exc
         if not candidates:
             if last_rejection is not None:
                 raise _TransientError(last_rejection.code)
+            # Noted, not just raised: an attempt that found nothing at all is
+            # the single most useful thing the breakdown can say, and without
+            # this the code could never appear in it or be the dominant reason.
+            note_attempt_reason("empty_results")
             raise _TransientError("empty_results")
         for track_id, discovered_candidate in candidates:
+            # Exact-ID lookup omits discovery license filters. Combining ``id``
+            # with ``ccnc``/``ccsa``/``ccnd`` can return no rows for tracks that
+            # discovery already found. The exact payload still goes through
+            # ``_canonical_license``.
             exact_params = {
                 "client_id": self._client_id,
                 "format": "json",
                 "limit": "1",
                 "id": track_id,
                 "audioformat": "mp32",
-                "include": "licenses,musicinfo",
-                "ccnc": "false",
-                "ccsa": "false",
-                "ccnd": "false",
+                "include": _API_INCLUDE,
             }
             exact_results = await _bounded_api_results(self._http_client, exact_params)
             with self._lock:
                 if not self._still_current_unlocked(epoch, fingerprint, source_revision):
                     raise _StaleOperationError
             if len(exact_results) != 1:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection("identity_mismatch")
                 last_rejection = _CandidateRejectedError("identity_mismatch")
                 continue
             try:
                 exact_candidate = _candidate_from_exact_result(exact_results[0], track_id)
-                if exact_candidate != discovered_candidate:
+                if _stable_admission_identity(exact_candidate) != _stable_admission_identity(discovered_candidate):
                     raise _CandidateRejectedError("metadata_changed")
+                # Use the exact lookup's stream and share URLs, which are the
+                # latest private audio link and attribution page.
                 return exact_candidate
             except _CandidateRejectedError as exc:
-                with self._lock:
-                    self._rejected_count += 1
+                record_rejection(exc.code)
                 last_rejection = exc
         if last_rejection is not None:
             raise _TransientError(last_rejection.code)
+        note_attempt_reason("empty_results")
         raise _TransientError("empty_results")
 
     def _mark_normalizing(self, operation_id: str, epoch: int, fingerprint: str, source_revision: int) -> None:
@@ -1210,12 +1499,13 @@ class JamendoStreamProvider:
                 _cleanup_operation(operation_dir, self._jamendo_root)
             self._ensure_scheduled_unlocked()
 
-    def _record_transient_failure_unlocked(self, code: str) -> None:
+    def _record_transient_failure_unlocked(self, code: str) -> float:
         self._last_failure_code = code
         self._state = JamendoProviderState.DEGRADED
         retry_index = min(self._retry_index, len(self._retry_delays) - 1)
         self._pending_delay = self._retry_delays[retry_index]
         self._retry_index += 1
+        return self._pending_delay
 
     def _expire_ready_lease(self, lease_id: str) -> None:
         with self._lock:

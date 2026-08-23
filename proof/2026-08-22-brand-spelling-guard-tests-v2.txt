@@ -1,0 +1,49 @@
+# Integrated evidence: brand-spelling guard
+# branch: florianhorner/chore/execute-pasted-plan
+# commit: e9eb6e7dc002bbf6225f4809fae6d21933d91fbd
+# date:   2026-08-23
+# python: Python 3.14.3  (CI pins 3.11)
+
+$ pytest tests/web/test_ui_copy.py tests/web/test_admin_first_listen.py tests/scripts/test_validate_audio_asset_pack.py -q
+........................................................................ [ 43%]
+........................................................................ [ 87%]
+....................                                                     [100%]
+164 passed, 6 deselected in 35.36s
+
+$ ADMIN_BROWSER_SMOKE_URL=http://127.0.0.1:8766 pytest tests/web/test_admin_browser_smoke.py -q
+..                                                                       [100%]
+2 passed in 7.43s
+
+$ make player-smoke PLAYER_SMOKE_URL=http://127.0.0.1:8766 PLAYWRIGHT_CLI=$HOME/.codex/skills/playwright/scripts/playwright_cli.sh
+passed
+
+$ pytest tests/web/test_route_smoke.py -q
+..................                                                       [100%]
+18 passed in 0.80s
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+392 files already formatted
+
+$ mypy mammamiradio/ tests/
+Success: no issues found in 348 source files
+
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
+
+$ bash scripts/check-release-invariants.sh
+Passed: 17  Failed: 0
+
+$ make check
+The media, lint, format, type, and dead-code gates passed. The Python 3.14
+coverage run exercised the exact integrated tree and ended with 7,859 passed,
+4 skipped, 47 deselected, 92.20% coverage, and these two failures:
+
+- tests/core/test_spoken_assets.py::test_symlink_loop_fails_closed_instead_of_raising
+- tests/web/test_streamer_routes.py::test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next
+
+Both failures reproduce in isolation. Their implementation and test paths are
+byte-for-byte identical to `origin/main`; hosted CI pins Python 3.11. The merge
+commit contains the same tree tested before the commit was created.

@@ -10,7 +10,7 @@ Code change
   → soak on edge
   → chore(release): cut X.Y.Z: bump all three version files, fold both changelogs
   → push/merge to main                                        [cut window opens]
-  → addon-build.yml CI validates + builds :sha and :<short-sha> (NO :X.Y.Z or :latest)
+  → addon-build.yml CI validates + builds :sha and :<short-sha> without publishing, proves both images, then publishes and smokes them (NO :X.Y.Z or :latest)
   → push matching v* tag: git tag vX.Y.Z && git push origin vX.Y.Z
   → addon-release.yml pre-flight: tag-ref, semver, config.yaml, manifest.json, pyproject.toml, ha-addon CHANGELOG head, 20-run HA Green evidence, and prebuilt :sha checks
   → addon-release.yml smoke-prebuilt: runs both per-arch :sha images and proves their host-published ports before stable tags exist
@@ -706,7 +706,8 @@ Before merging ANY change that touches addon files:
    absence, and Jamendo transience. While the starter content is absent by
    design, the PR quality lane's direct step, the release-invariants media
    section, the add-on build validate job, the add-on build full media-proof
-   job (so image publish and the edge channel keep flowing), the edge cut, and
+   job (so the proof remains visible while image publish and the edge channel
+   keep flowing), the edge cut, and
    local `make media-check` run their proof report-only (verdict plus a
    missing-content notice, exit 0); the stable promotion media-proof job in
    `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
@@ -732,7 +733,7 @@ A 24-hour minimum gap is enforced between consecutive published releases. The ga
 - Block rule: `prior_release_time + 24h > now` => status check fails, release surfaces red.
 - Bypass: the PR that introduced the tagged commit carries the `hotfix` label. The workflow skips the cooldown check entirely. Intended for P0/P1 regressions the existing release just introduced.
 - Override: `MIN_COOLDOWN_HOURS=<n>` at workflow level (not set by default) tightens or relaxes the window.
-- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on every PR.
+- Self-test: `bash tests/workflows/test_cooldown_gate.sh` runs 9 scenarios (1h / 24h boundary / 25h / MIN_COOLDOWN_HOURS override / malformed ISO / clock skew / no-prior). Wired into `quality.yml` — runs on PRs that touch `.github/`, `scripts/`, or `tests/workflows/`, and on every push to `main`.
 
 **Trust model:** the `hotfix` label is not access-controlled beyond the repo's default label permissions. Anyone with triage rights can apply it. Acceptable for the current single-maintainer team; revisit if PR volume grows. Day 8 Go/No-Go uses `../stabilization-log.md` to evaluate whether the gate is working.
 
@@ -779,10 +780,23 @@ attributed starter/local base and the first `Producing MUSIC:` line follows
 without an external provider download. A manifest, hash, evidence, or audio
 validation error is a release/image regression, not expected degradation.
 
-**Jamendo unavailable (optional)**: a coarse `degraded` or `blocked` provider
-state leaves starter/local music on air. Status never includes the client ID,
-private audio URL, or raw provider exception; the single-use artifact is absent
-after cancellation, failure, playback, or restart.
+**Jamendo unavailable (optional)**: The provider logs
+`Jamendo provider preparation started`, followed by `Jamendo provider ready`,
+when preparation succeeds. Retryable failures log
+`Jamendo provider attempt failed` with only a coarse `failure_code`, a bounded
+numeric `provider_code` (or `none`), and `retry_in_seconds`. Blocked attempts
+log `Jamendo provider blocked` with a coarse `failure_code` and bounded numeric
+`provider_code`. Configuration apply, queue cleanup, and manual retry failures
+log `Jamendo provider control failed` with only a `failure_code` set to
+`config_apply_failed`, `queue_cleanup_failed`, or `retry_failed`.
+
+`failure_code=api_failed provider_code=3` means Jamendo rejected the request
+format or one of its parameters, so the provider enters the blocked state.
+Invalid or suspended client IDs also block. Rate limits remain retryable.
+Starter and local music continue while Jamendo is degraded or blocked. Status
+and logs omit the client ID, private audio URL, raw response text, and raw
+provider exception. The provider removes its single-use artifact after
+cancellation, failure, playback, or restart.
 
 **Session track denylist (intentional)**: `WARNING Skipping music track due to
 invalid audio (…): …` plus `WARNING Purged rejected cache artifact …` when an

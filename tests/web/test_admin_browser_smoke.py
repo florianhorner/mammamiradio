@@ -114,6 +114,11 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
     )
     assert "await route.fallback()" in code
     assert "blocked_off_origin_requests" in code
+    listener_failure_helper = "async function exerciseListenerSongFailureRows()"
+    listener_failure_invocation = "await exerciseListenerSongFailureRows();"
+    assert listener_failure_helper in code
+    assert listener_failure_invocation in code
+    assert code.index(listener_failure_helper) < code.index(listener_failure_invocation)
     assert CLI_VERSION == "0.1.17"
     assert 'RUNNER = ROOT / "scripts" / "player-smoke.sh"' in python_code
     assert "subprocess.run" in python_code

@@ -231,12 +231,17 @@ async def test_jamendo_status_is_admin_only_and_now_playing_exposes_only_safe_at
         "client_id_configured": True,
         "noncommercial_acknowledged": True,
         "terms_scope": "noncommercial_api_use",
+        # Stays "pending" even with noncommercial_acknowledged=True: it reports
+        # Jamendo's clearance of the station model, not the operator's tick.
         "provider_confirmation": "pending",
         "ready": True,
         "in_flight": False,
         "last_success_age_sec": 4,
         "last_failure_code": None,
         "rejected_count": 2,
+        "rejected_this_attempt": 0,
+        "dominant_failure_code_this_attempt": None,
+        "attempt_rejections": {},
     }
     for private_value in (
         "private_client_123",
