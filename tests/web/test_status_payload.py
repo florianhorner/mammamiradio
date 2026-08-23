@@ -621,3 +621,33 @@ def test_music_stream_start_maps_each_runtime_source_to_on_air(
         assert payload["advanced"]["status"] == "on_air"
     else:
         assert payload["sources"][projected_kind]["status"] == "on_air"
+
+
+def test_status_now_playback_clamps_progress_to_duration():
+    now_streaming = {
+        "title": "Song",
+        "started": 10.0,
+        "metadata": {
+            "duration_ms": 90_000,
+        },
+    }
+
+    payload = status_payload._status_now_playback(now_streaming, 200.0)
+
+    assert payload["current_duration_sec"] == 90.0
+    assert payload["current_progress_sec"] == payload["current_duration_sec"]
+    assert payload["current_progress_sec"] <= payload["current_duration_sec"]
+
+
+def test_status_now_playback_leaves_progress_unclamped_without_duration():
+    now_streaming = {
+        "title": "Song",
+        "started": 10.0,
+        "metadata": {},
+    }
+
+    payload = status_payload._status_now_playback(now_streaming, 25.3)
+
+    assert payload["current_duration_sec"] is None
+    assert payload["current_progress_sec"] == 15.3
+

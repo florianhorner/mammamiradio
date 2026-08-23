@@ -800,6 +800,8 @@ def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
         }
     started = now_streaming.get("started")
     progress_sec = max(0.0, now_ts - started) if isinstance(started, int | float) and started > 0 else None
+    if progress_sec is not None and duration_sec is not None:
+        progress_sec = min(progress_sec, duration_sec)
     return {
         "now_streaming": public_now_streaming,
         "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
