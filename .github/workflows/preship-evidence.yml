@@ -5,13 +5,15 @@ name: preship-evidence
 # The local enforcement (scripts/hooks/require-preship-squad.sh) is a Claude Code
 # PreToolUse hook — Codex has no hook layer, so ~60% of sessions could open PRs with no
 # squad check at all. This workflow closes that gap server-side by verifying the
-# committed evidence artifact (proof/preship-review.json, written by
-# scripts/emit-review-evidence.sh).
+# committed evidence artifacts. During the compatibility phase, v1's fixed file and
+# v2's immutable content-addressed receipt are evaluated independently.
 #
-# Anti-neutering (same pattern as pr-body-lint.yml): the CHECKER runs from the BASE ref,
-# and only the evidence FILE is read from the PR head via `git show`. Running the head's
-# own copy of the checker would let a PR doctor the checker and approve itself in the
-# same commit — precisely the class of bypass a server-side gate exists to prevent.
+# Data-plane hardening (same pattern as pr-body-lint.yml): the CHECKER runs from the
+# BASE ref, and only evidence DATA comes from the PR head. Running the head's own
+# checker would let a PR doctor the checker and approve itself in the same commit.
+# The pull_request workflow definition itself is still PR-controlled in this
+# report-only phase. Before this becomes a required check, orchestration must move to
+# a base-owned control plane that reports against the exact PR head.
 #
 # Report-only on purpose: it annotates instead of failing, so the baseline of real
 # behavior is observable before anything blocks. Flipping to blocking = fail instead of
@@ -23,7 +25,7 @@ name: preship-evidence
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, ready_for_review]
+    types: [opened, edited, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: read
@@ -31,34 +33,65 @@ permissions:
 jobs:
   evidence:
     name: pre-ship evidence (report-only)
-    if: github.actor != 'dependabot[bot]'
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Base ref: the checker and this job's logic come from code the PR cannot touch.
+          # Base ref: checker files come from code the PR cannot touch. The workflow
+          # definition remains PR-controlled during this report-only bootstrap phase.
           ref: ${{ github.event.pull_request.base.sha }}
           # Full history: the checker walks ancestry (merge-base --is-ancestor), which a
           # shallow clone breaks with a false "not an ancestor".
           fetch-depth: 0
 
-      - name: Check pre-ship review evidence
+      - name: Fetch untrusted PR head data
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          actual_base="$(git rev-parse HEAD)"
+          if [ "$actual_base" != "$BASE_SHA" ]; then
+            echo "::error::Trusted checker checkout is $actual_base, expected base $BASE_SHA."
+            exit 1
+          fi
+          # Fetch objects only. Never check out the PR head or execute code from it.
+          git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Check v1 pre-ship review evidence
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ ! -f scripts/check-preship-evidence.sh ]; then
-            echo "scripts/check-preship-evidence.sh not present on base ref — skipping (activates once merged to base)."
+            echo "::notice::v1 checker is not present on the trusted base; v1 was not evaluated."
             exit 0
           fi
-          # Bring the PR head's objects into this base-ref clone, then read ONLY the
-          # evidence file from it. The head's scripts are never executed.
-          git fetch --no-tags origin "$HEAD_SHA"
-          if ! git show "$HEAD_SHA:proof/preship-review.json" > /tmp/preship-evidence.json 2>/dev/null; then
-            echo "::warning::No proof/preship-review.json on this PR. Run the review squad, then scripts/emit-review-evidence.sh, and commit the artifact. (Report-only — not blocking yet.)"
+          evidence_file="$RUNNER_TEMP/preship-review-v1.json"
+          if ! git show "$HEAD_SHA:proof/preship-review.json" > "$evidence_file" 2>/dev/null; then
+            echo "::warning::No proof/preship-review.json on this PR. Run the review squad, emit v1 evidence, and commit it. (Report-only — not blocking yet.)"
             exit 0
           fi
-          if bash scripts/check-preship-evidence.sh /tmp/preship-evidence.json "$HEAD_SHA"; then
-            echo "::notice::pre-ship review evidence verified for this PR head."
+          if bash scripts/check-preship-evidence.sh "$evidence_file" "$HEAD_SHA"; then
+            echo "::notice::v1 pre-ship review evidence verified for this PR head."
           else
-            echo "::warning::pre-ship review evidence INVALID for this PR (see log above). Re-run the squad on this branch and re-emit. (Report-only — not blocking yet.)"
+            echo "::warning::v1 pre-ship review evidence is invalid (see log above). Re-run the review and re-emit v1. (Report-only — not blocking yet.)"
+          fi
+
+      - name: Check v2 pre-ship review evidence
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ ! -f scripts/landing/__main__.py ]; then
+            echo "::notice::v2 evidence was not evaluated because the trusted base has no v2 verifier; it activates after this bootstrap PR lands."
+            exit 0
+          fi
+          # Invoke the trusted-base package directly. The shell wrapper's venv and
+          # interpreter override are local conveniences; hosted CI intentionally uses
+          # its runner Python with isolated import paths.
+          if PYTHONPATH="$GITHUB_WORKSPACE" python3 -S -P -m scripts.landing evidence verify \
+            --target "$HEAD_SHA" --base "$BASE_SHA" --mode pr; then
+            echo "::notice::v2 pre-ship review evidence verified for this PR head."
+          else
+            echo "::warning::v2 pre-ship review evidence is invalid (see log above). Re-review the exact content and emit v2. (Report-only — not blocking yet.)"
           fi

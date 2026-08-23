@@ -24,10 +24,37 @@
 # lives in the gstack-upgrade clobber zone, and a product repo must not hard-depend on an
 # unversioned third-party binary (see retro/docs/gate-design-comparison.md).
 #
-# Usage: scripts/emit-review-evidence.sh          (run after the pre-ship review squad)
+# Compatibility phase:
+#   scripts/emit-review-evidence.sh               emit legacy v1 current-state evidence
+#   scripts/emit-review-evidence.sh --v2          emit an immutable v2 content receipt
+#
+# The explicit switch keeps existing callers stable while v1 and v2 run side by side.
+# Emit v2 only from a clean, committed tree whose exact content has a clean review.
+#
+# Usage: scripts/emit-review-evidence.sh [--v2 [--target HEAD]]
 # Honors $GSTACK_HOME (default ~/.gstack). Exits 1 with problem/cause/fix if no
 # qualifying entry exists.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ "${1-}" == "--v2" ]]; then
+  shift
+  if [[ -n "${MAMMAMIRADIO_PYTHON:-}" ]]; then
+    PYTHON_BIN="$MAMMAMIRADIO_PYTHON"
+  elif [[ -x "$SOURCE_ROOT/.venv/bin/python" ]]; then
+    PYTHON_BIN="$SOURCE_ROOT/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+  if ! "$PYTHON_BIN" -S -P -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+    echo "emit-review-evidence: v2 requires Python 3.11+ (set MAMMAMIRADIO_PYTHON)" >&2
+    exit 1
+  fi
+  export PYTHONPATH="$SOURCE_ROOT"
+  exec "$PYTHON_BIN" -S -P -m scripts.landing evidence emit "$@"
+fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
