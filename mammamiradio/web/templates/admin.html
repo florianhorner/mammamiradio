@@ -1227,6 +1227,23 @@ input[type="range"]:focus-visible {
 .lg-row .ts { font-family: var(--font-mono); font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .lg-row .tx { color: var(--cream-dk); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lg-row.now .tx { color: var(--cream); font-weight: 600; font-family: var(--font-display); font-style: italic; font-size: 14px; }
+.kept-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 9px 14px; font-size: 12px; border-bottom: 1px solid rgba(245,237,216,0.04); }
+.kept-row:last-child { border-bottom: none; }
+.kept-link { color: var(--cream); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kept-when { font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* Child combinator on purpose: this pads the empty-state line, and `.sub` is
+   also on the timestamp inside a row. Unscoped it indented the timestamp 14px
+   past the title on a narrow screen, breaking the left edge the stacked layout
+   exists to line up. */
+#keptList > .sub { padding: 10px 14px; }
+/* Narrow screens: the title is how the operator recognizes the moment, so it
+   gets its own line rather than being squeezed to a few characters by an
+   auto-width timestamp sitting beside it. */
+@media (max-width: 720px) {
+  .kept-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .kept-link { grid-column: 1 / -1; }
+  .kept-when { grid-column: 1; }
+}
 
 /* 2-column grid */
 .a-row-2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; align-items: start; }
@@ -1947,6 +1964,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <button type="button" id="prefDownNowBtn" class="btn-icon pref-btn down" title="Play this song less often" aria-label="Dislike this song" aria-pressed="false" data-preference-target="now" data-preference-vote="down" style="display:none">
               <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-down"/></svg>
             </button>
+            <button type="button" id="keepNowBtn" class="btn-icon" title="Keep this — save it for good" aria-label="Keep this moment, saved for good" onclick="doKeepThis(this)" style="display:none">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2.5h8v11l-4-3-4 3z"/></svg>
+            </button>
             <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
             </button>
@@ -2287,6 +2307,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
         </div>
       </div>
       <div class="a-log" id="logBody"></div>
+      <div class="card-label" style="margin-top:18px">Kept moments</div>
+      <div class="sub" style="margin-bottom:8px">Saved for good, with no expiry. These play without a password for anyone who can open the link.</div>
+      <div class="a-log" id="keptList"></div>
     </section>
     </section>
 
@@ -3243,6 +3266,10 @@ function showAdminTab(name,{render=true,persist=true}={}){
   // Render the newly-shown panel immediately from cached state so switching
   // tabs doesn't wait up to 3s for the next poll.
   if(render)renderActiveTab();
+  // Kept moments are not in the status poll — they change only when the
+  // operator keeps or removes one, so they are fetched on arrival rather than
+  // every three seconds.
+  if(name==='archivio')refreshKeptMoments();
 }
 function initFirstListenPanelMount(){
   const mount=document.getElementById('firstListenPanelMount');
@@ -3326,6 +3353,101 @@ async function doSkip(el){
     }
     toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
   }catch(_){toast(offlineMsg());}
+}
+// Keep-this stays reachable for a beat after a host break ends, because the
+// moment you want is usually the one that JUST finished — the payoff lands, the
+// segment ends, music starts, and only then do you reach for the button. Mirrors
+// the server's lookback window (CLIP_LOOKBACK_SECONDS).
+const KEEP_GRACE_MS=15000;
+// Mirrors KEEPSAKE_SEGMENT_TYPES in mammamiradio/scheduling/clip.py. The server
+// is the authority; this only decides when offering the press is honest.
+const KEEPABLE_TYPES=new Set(['banter','ad','news_flash','station_id','sweeper','time_check']);
+let _keepGraceUntil=0;
+let _keepPending=false;
+// The station may be reached through Home Assistant ingress, where every page
+// lives under /api/hassio_ingress/<token>/ and a bare /clips/... resolves to the
+// HA host instead of the add-on. `_base` is the prefix the rest of this console
+// already talks through, so the link we hand the operator is one that works
+// from where they are standing.
+function keepShareLink(shareUrl){return new URL(_base+shareUrl,location.href).href}
+async function doKeepThis(el){
+  // Keeping writes a file nothing ever deletes on its own, so a double-click
+  // must not put the same moment on the shelf twice.
+  if(_keepPending)return;
+  _keepPending=true;
+  if(el)el.disabled=true;
+  flash(el);
+  try{
+    const r=await api('POST','/api/clip/keep');
+    if(!(r&&r.ok)){
+      toast((r&&r.message)||wayOut('keep this moment'));
+      return;
+    }
+    const label=r.title?`Kept — ${r.title}`:'Kept — saved for good';
+    const link=keepShareLink(r.share_url);
+    let copied=false;
+    // Say "copied" only once the write actually resolved. Direct LAN admin is
+    // plain HTTP, where the Clipboard API is commonly unavailable, and claiming
+    // a copy that never happened sends the operator to an empty clipboard.
+    try{await navigator.clipboard.writeText(link);copied=true;}catch(e){}
+    if(typeof window.undoableToast==='function'){
+      window.undoableToast(copied?`${label}. Link copied.`:`${label}. Link: ${link}`,async()=>{
+        const u=await api('DELETE',`/api/clip/keep/${r.keepsake_id}`);
+        toast(u&&u.ok?'Removed — that one is not kept after all':((u&&u.message)||wayOut('remove that one')));
+        if(_activeTab==='archivio')refreshKeptMoments();
+      });
+    }else{
+      toast(copied?`${label}. Link copied.`:`${label}. Link: ${link}`);
+    }
+    if(_activeTab==='archivio')refreshKeptMoments();
+  }catch(_){
+    toast(offlineMsg());
+  }finally{
+    _keepPending=false;
+    if(el)el.disabled=false;
+  }
+}
+// ── Kept moments (Archivio) ──
+// A keepsake outlives every retention window and is served without a password,
+// so the operator needs somewhere to see what is kept and remove one. Without
+// this the shelf-full refusal would be naming a folder an add-on operator
+// cannot open.
+async function refreshKeptMoments(){
+  const list=document.getElementById('keptList');
+  if(!list)return;
+  let r;
+  try{r=await api('GET','/api/clip/keep');}catch(_){r=null;}
+  if(!(r&&r.ok)){list.innerHTML='<div class="sub">Couldn\'t read the kept moments — give it a few seconds and try again.</div>';return}
+  const rows=r.keepsakes||[];
+  if(!rows.length){list.innerHTML='<div class="sub">Nothing kept yet. Press Keep on the console while the hosts are talking.</div>';return}
+  list.innerHTML=rows.map(row=>{
+    const title=esc(row.title||(row.segment_type?segmentText(row.segment_type):'')||'A moment');
+    const when=row.created_at?new Date(row.created_at*1000).toLocaleString():'';
+    return `<div class="kept-row"><a class="kept-link" href="${esc(_base+row.share_url)}" target="_blank" rel="noopener">${title}</a>`+
+      `<span class="sub kept-when">${esc(when)}</span>`+
+      // Trash, not the ban glyph: Ban means "never play this song again" a few
+      // rows up in the same console, and one symbol cannot carry both meanings.
+      // Same icon the queue's own remove button uses.
+      `<button type="button" class="btn-icon" title="Remove this kept moment" aria-label="Remove ${title}" data-keepsake-remove="${esc(row.keepsake_id)}">`+
+      `<svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button></div>`;
+  }).join('');
+}
+// Delegated rather than an inline onclick: `esc` escapes for HTML text, and an
+// id inside a JS string inside an attribute is decoded back to a quote before
+// the JS is parsed. A data attribute has no such second parse.
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-keepsake-remove]');
+  if(!button)return;
+  event.preventDefault();
+  doUnkeep(button.dataset.keepsakeRemove,button);
+});
+async function doUnkeep(id,el){
+  flash(el);
+  try{
+    const r=await api('DELETE',`/api/clip/keep/${id}`);
+    toast(r&&r.ok?'Removed — that one is not kept after all':((r&&r.message)||wayOut('remove that one')));
+  }catch(_){toast(offlineMsg());}
+  refreshKeptMoments();
 }
 async function doBanNowPlaying(el){
   // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
@@ -3661,6 +3783,25 @@ function updateNow(ns){
   const onAir=document.getElementById('on-air');
   const isMusic=!!(ns&&ns.type&&segmentTypeKey(ns.type)==='music');
   if(banBtn)banBtn.style.display=isMusic?'':'none';
+  // Keep-this follows the inverse of Ban: it is meaningful while the hosts are
+  // talking, and for KEEP_GRACE_MS after, so the segment that just ended is
+  // still reachable. The server decides what may actually be kept; this only
+  // decides when asking is worth offering.
+  const keepBtn=document.getElementById('keepNowBtn');
+  if(keepBtn){
+    // Match the server's KEEPSAKE_SEGMENT_TYPES rather than testing "not music".
+    // segmentTypeKey passes 'stopped' and 'skipping' through unchanged, so
+    // not-music armed the button and its grace window against a station that is
+    // not on air, inviting a press that can only ever be refused.
+    const nowKey=(ns&&ns.type)?segmentTypeKey(ns.type):'';
+    const isVoiceNow=KEEPABLE_TYPES.has(nowKey);
+    if(isVoiceNow)_keepGraceUntil=Date.now()+KEEP_GRACE_MS;
+    // Stop and Skip end the grace immediately. The lookback the grace stands in
+    // for is cleared server-side on stop, so leaving the button up for another
+    // fifteen seconds only invites a press that is already refused.
+    else if(nowKey==='stopped'||nowKey==='skipping'||!nowKey)_keepGraceUntil=0;
+    keepBtn.style.display=(isVoiceNow||Date.now()<_keepGraceUntil)?'':'none';
+  }
   prefBtns.forEach(btn=>{btn.style.display=isMusic?'':'none';});
   syncNowPreferenceButtons(isMusic?(_st.current_track_preference||0):0);
   if(!ns||!ns.type){
