@@ -2910,7 +2910,9 @@ async function toggleFirstListenGuide(key,button){
   }catch(error){
     if(attempt!==_firstListenGuideAttempt)return;
     console.error('first_listen_guide_audio',error);
-    resetFirstListenGuideSource(audio);
+    // stopFirstListenGuide() resets the source AND resumes any station audio
+    // this attempt paused -- a failed load/play must not strand it paused.
+    stopFirstListenGuide();
     if(container)container.dataset.state='error';
     button.textContent='Try example again';
     button.setAttribute('aria-pressed','false');
@@ -2925,18 +2927,19 @@ function initFirstListenGuideAudio(){
   audio.dataset.ready='true';
   audio.addEventListener('ended',()=>{
     const button=_firstListenUi.guideButton;
+    // Route through stopFirstListenGuide() rather than hand-rolling the same
+    // teardown, so a clip that finishes on its own also resumes the station
+    // audio it paused -- letting a 12-second clip simply finish is the most
+    // common exit, not an edge case.
+    stopFirstListenGuide();
     if(button){button.textContent='Play again';button.setAttribute('aria-pressed','false');}
     const container=firstListenGuideContainer(button);
     if(container)container.dataset.state='ended';
-    _firstListenUi.guideKey='';
-    _firstListenUi.guideButton=null;
-    audio.removeAttribute('src');
-    audio.load();
     renderFirstListenProgress();
   });
   audio.addEventListener('error',()=>{
     const button=_firstListenUi.guideButton;
-    resetFirstListenGuideSource(audio);
+    stopFirstListenGuide();
     if(button){button.textContent='Try example again';button.setAttribute('aria-pressed','false');}
     const container=firstListenGuideContainer(button);
     if(container)container.dataset.state='error';

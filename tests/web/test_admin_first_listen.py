@@ -676,10 +676,12 @@ def test_guide_audio_is_click_only_local_and_cannot_advance_first_listen() -> No
     assert "audio.src=`${_base}/static/audio/first_listen/${guide.file}?v=${guide.version}`" in guide_code
     assert "audio.load()" in guide_code
     toggle = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
-    assert "resetFirstListenGuideSource(audio)" in toggle.split("}catch(error){", 1)[1]
+    # A failed load/play must not strand a station audio paused for this guide --
+    # see test_every_guide_narration_exit_can_resume_the_station.
+    assert "stopFirstListenGuide()" in toggle.split("}catch(error){", 1)[1]
     init = _function("initFirstListenGuideAudio", "initFirstListenTechnicalDetails")
     error_handler = init.split("audio.addEventListener('error',()=>{", 1)[1]
-    assert "resetFirstListenGuideSource(audio)" in error_handler
+    assert "stopFirstListenGuide()" in error_handler
     assert "document.addEventListener('visibilitychange'" in guide_code
     assert "if(!document.hidden)return" in guide_code
     assert "stopFirstListenGuide()" in guide_code
@@ -982,9 +984,8 @@ def test_a_superseded_guide_clip_never_tidies_up_the_shared_player() -> None:
     success_guard = toggle.index("if(attempt!==_firstListenGuideAttempt)return;")
     assert success_guard < toggle.index("container.dataset.state='playing'")
     assert toggle.index("}catch(error){") < toggle.rindex("if(attempt!==_firstListenGuideAttempt)return;")
-    assert toggle.rindex("if(attempt!==_firstListenGuideAttempt)return;") < toggle.index(
-        "resetFirstListenGuideSource(audio)"
-    )
+    last_guard = toggle.rindex("if(attempt!==_firstListenGuideAttempt)return;")
+    assert last_guard < toggle.index("stopFirstListenGuide()", last_guard)
 
 
 def test_leaving_first_listen_releases_the_station_audio_element() -> None:
@@ -1122,3 +1123,24 @@ def test_active_setup_csrf_stale_403_is_structured_not_a_bare_string() -> None:
     assert src.count("detail=_active_setup_csrf_stale_detail()") == 2
     assert '"code": "active_setup_csrf_stale"' in src
     assert '"action": "Reload /admin, then continue First Listen."' in src
+
+
+def test_every_guide_narration_exit_can_resume_the_station() -> None:
+    """The 'ended' and 'error' events on the guide <audio> element, and the
+
+    play()/timeout catch inside toggleFirstListenGuide, must route through
+    stopFirstListenGuide() rather than hand-roll the same teardown -- letting
+    a 12-second clip simply finish is the ordinary case, not an edge case,
+    and a hand-rolled exit silently strands the station paused with no
+    recovery at steps 4-5 (no Play control there).
+    """
+    init_guide_audio = _function("initFirstListenGuideAudio", "initFirstListenTechnicalDetails")
+    ended_handler = init_guide_audio.split("addEventListener('ended',()=>{", 1)[1]
+    assert "stopFirstListenGuide()" in ended_handler.split("});", 1)[0]
+    error_handler = init_guide_audio.split("addEventListener('error',()=>{", 1)[1]
+    assert "stopFirstListenGuide()" in error_handler.split("});", 1)[0]
+
+    toggle_guide = _function("toggleFirstListenGuide", "initFirstListenGuideAudio")
+    assert "}catch(error){" in toggle_guide
+    catch_body = toggle_guide[toggle_guide.index("}catch(error){") :]
+    assert "stopFirstListenGuide()" in catch_body
