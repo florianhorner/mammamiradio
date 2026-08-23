@@ -356,16 +356,12 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
         if name != "startFirstListen":
             assert "const resp=payload&&typeof payload==='object'?payload:{}" in block
         guard_text = {
-            "startFirstListen": "}catch(error){",
+            "startFirstListen": "}else if(!response.ok){",
             "loadHomeContextPreview": "if(!detachedPreview){",
             "chooseFirstListenPrivacy": "if(!choiceSaved){",
         }.get(name, "if(!response.ok||resp?.ok!==true")
-        if name == "startFirstListen":
-            assert state_advance in block
-            assert block.index("}catch(error){") < block.index("_firstListenUi.dispatch='rejected'")
-        else:
-            guard = block.index(guard_text)
-            assert guard < block.index(state_advance)
+        guard = block.index(guard_text)
+        assert guard < block.index(state_advance)
 
     privacy = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert "api('PATCH','/api/setup/home-context-choice'" not in privacy
@@ -1121,6 +1117,22 @@ def test_guide_narration_pauses_the_station_instead_of_tearing_it_down() -> None
 
     stop_station = _function("stopFirstListenStationAudio", "firstListenStationPlaying")
     assert "stationPausedForGuide=false" in stop_station
+
+
+def test_guide_resume_playing_event_does_not_replay_a_confirmed_sound_check() -> None:
+    """stopFirstListenGuide() resumes the station element with play(), firing
+
+    the same 'playing' listener a genuine start does. Regression: it
+    unconditionally reset verification to 'awaiting' and stole focus back to
+    the sound-check heading, knocking an already-confirmed listener back from
+    the privacy or success step on every guide clip played afterward.
+    """
+    playing = _function("firstListenStationPlaying", "initFirstListenStationAudio")
+    assert "const freshStart=_firstListenUi.dispatch==='starting';" in playing
+    guard = playing.index("const freshStart=_firstListenUi.dispatch==='starting';")
+    assert guard < playing.index("_firstListenUi.dispatch='accepted';")
+    assert "if(freshStart)_firstListenUi.verification='awaiting';" in playing
+    assert "if(freshStart)document.getElementById('firstListenVerifyHeading')?.focus();" in playing
 
 
 def test_leaving_the_setup_tab_by_any_route_stops_the_station_audio() -> None:

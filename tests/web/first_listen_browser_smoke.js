@@ -145,6 +145,15 @@ async (page) => {
 
   page.on('pageerror', (error) => pageErrors.push(error.message || String(error)));
   await page.addInitScript(() => {
+    // Force Start asks for confirmation before rebuilding the station with no
+    // playable runway. A real modal suspends the page and takes the driving
+    // session down with it, so stand in for it here and record the asking —
+    // the prompt existing at all is part of what this smoke proves.
+    window.__firstListenConfirms = [];
+    window.confirm = (message) => {
+      window.__firstListenConfirms.push(String(message ?? ''));
+      return true;
+    };
     const nativeSetInterval = window.setInterval.bind(window);
     window.__firstListenSmokeIntervals = [];
     window.setInterval = (handler, delay, ...args) => {
@@ -401,6 +410,13 @@ async (page) => {
     if (nextResumeResponse === 'force_available') {
       nextResumeResponse = '';
       await fulfillJson(route, { ok: false, force_available: true }, RECEIPT_FAILURE_STATUS);
+      return;
+    }
+    if (route.request().url().includes('force=true')) {
+      // Mirror the real force-recovery reply. Onboarding checks this as
+      // strictly as the producer desk does, so an {ok:true} without the
+      // recovery evidence is refused rather than treated as a start.
+      await fulfillJson(route, { ok: true, recovering: true, runway_source: 'none' });
       return;
     }
     await fulfillJson(route, { ok: true });
@@ -1016,7 +1032,9 @@ async (page) => {
       verifies: verifyRequests.length,
       previews: previewRequests.length,
     };
-    await resetUi(setupProjection({ fresh: false, onboardingRequired: true, sources: false }));
+    const existingNoSources = setupProjection({ fresh: false, onboardingRequired: true, sources: false });
+    setupStatusProjection = existingNoSources;
+    await resetUi(existingNoSources);
     await assertUnfinished('firstListenPrivacyStep', 'firstListenKeepOffBtn');
     assert(await page.locator('#firstListenSpeakerStep').getAttribute('data-state') === 'complete', 'existing install was forced through speaker choice');
     assert(await page.locator('#firstListenVerifyStep').getAttribute('data-state') === 'complete', 'existing install was forced through audible proof');

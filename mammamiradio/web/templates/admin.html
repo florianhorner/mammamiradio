@@ -2423,8 +2423,8 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 </div>
                 <div class="guide-audio" data-guide="welcome">
                   <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Hear Marco and Giulia</button>
-                    <p class="guide-audio-copy" id="guideWelcomeNote"><strong>12 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
-                  <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti. Five small steps, and Mamma Mi Radio is in your room. <strong>Giulia:</strong> He means your speaker. Nothing personal and nothing automatic. You stay in charge.</p></details>
+                    <p class="guide-audio-copy" id="guideWelcomeNote"><strong>16 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
+                  <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. <strong>Giulia:</strong> Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.</p></details>
                 </div>
                 <p class="progress-line" id="firstListenProgressLine">Step 1 of 5. Next: play it on this device.</p>
               </header>
@@ -2486,8 +2486,8 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   </div>
                   <div class="guide-audio" data-guide="sound-check">
                     <button type="button" class="guide-audio-play" data-guide-key="sound-check" aria-describedby="guideSoundNote" onclick="toggleFirstListenGuide('sound-check',this)">Hear why we ask</button>
-                    <p class="guide-audio-copy" id="guideSoundNote"><strong>9 seconds on this device</strong><span>This example cannot complete the listening check.</span></p>
-                    <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> We sent the station. If you can hear us, say yes. <strong>Giulia:</strong> Home Assistant can confirm the request, not the sound in your room. That part is yours.</p></details>
+                    <p class="guide-audio-copy" id="guideSoundNote"><strong>14 seconds on this device</strong><span>This example cannot complete the listening check.</span></p>
+                    <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> We are on! Right now, out of that little speaker in your hand. If you can hear me, and you should, say yes. <strong>Giulia:</strong> The machine knows it pressed play. It cannot hear your room. That part is yours, not his.</p></details>
                   </div>
                   <div class="first-listen-actions" id="firstListenVerifyActions" style="margin-top:0">
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenHeardBtn" data-stopped-exempt onclick="verifyFirstListen(true,this)" disabled>Yes, I hear it</button>
@@ -2499,8 +2499,8 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                     <p>The station already started on this device. Restore the missing sound check without playing it again.</p>
                     <div class="guide-audio" data-guide="receipt-recovery">
                       <button type="button" class="guide-audio-play" data-guide-key="receipt-recovery" aria-describedby="guideReceiptNote" onclick="toggleFirstListenGuide('receipt-recovery',this)">Hear Giulia explain it</button>
-                      <p class="guide-audio-copy" id="guideReceiptNote"><strong>7 seconds on this device</strong><span>This will not replay the station.</span></p>
-                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Giulia:</strong> Home Assistant already sent the station. <strong>Marco:</strong> This only restores the listening check. It will not play us again.</p></details>
+                      <p class="guide-audio-copy" id="guideReceiptNote"><strong>10 seconds on this device</strong><span>This will not replay the station.</span></p>
+                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Giulia:</strong> You already heard us. The station just forgot to write it down. Embarrassing. <strong>Marco:</strong> This only saves the sound check. It does not put me back on air. Tragico.</p></details>
                     </div>
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenSaveAttemptBtn" data-stopped-exempt onclick="saveFirstListenAttempt(this)">Restore sound check</button>
                   </div>
@@ -2508,8 +2508,8 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                     <h4 class="benefit-heading">Get this device playing.</h4>
                     <div class="guide-audio" data-guide="not-yet">
                       <button type="button" class="guide-audio-play" data-guide-key="not-yet" aria-describedby="guideNotYetNote" onclick="toggleFirstListenGuide('not-yet',this)">Hear the hosts help</button>
-                      <p class="guide-audio-copy" id="guideNotYetNote"><strong>9 seconds on this device</strong><span>This device stays the listening path.</span></p>
-                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> No sound? Va bene. We are not blaming the speaker. <strong>Giulia:</strong> Check mute and volume, then try the same room again. We saved your place.</p></details>
+                      <p class="guide-audio-copy" id="guideNotYetNote"><strong>12 seconds on this device</strong><span>This device stays the listening path.</span></p>
+                      <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Niente? Va bene. Nobody is blaming anybody. Certainly not me. <strong>Giulia:</strong> Check the mute switch and the volume, then play it again here. We saved your place. Take your time.</p></details>
                     </div>
                     <ol>
                       <li>Wait a few seconds, then check mute and volume on this device.</li>
@@ -2546,7 +2546,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                     </div>
                     <div class="guide-audio" data-guide="privacy">
                       <button type="button" class="guide-audio-play" data-guide-key="privacy" aria-describedby="guidePrivacyNote" onclick="toggleFirstListenGuide('privacy',this)">Hear the example</button>
-                      <p class="guide-audio-copy" id="guidePrivacyNote"><strong>9 seconds on this device</strong><span>The clip uses fictional weather, not your Home data.</span></p>
+                      <p class="guide-audio-copy" id="guidePrivacyNote"><strong>8 seconds on this device</strong><span>The clip uses fictional weather, not your Home data.</span></p>
                       <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Give me the weather and I will make it radio. <strong>Giulia:</strong> Only after you preview the exact details. Keep Home private and we read nothing.</p></details>
                     </div>
                     <div class="ha-preview" id="haContextPreview"><div class="empty">No Home Assistant data has been requested for this preview.</div></div>
@@ -2665,8 +2665,8 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openListener()">Open full listener</button><button type="button" class="btn btn-util first-listen-action" onclick="openFirstListenStation()">Station controls</button><button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Repair music source</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
                 <div class="guide-audio" data-guide="success">
                   <button type="button" class="guide-audio-play" data-guide-key="success" aria-describedby="guideSuccessNote" onclick="toggleFirstListenGuide('success',this)">Play the celebration</button>
-                  <p class="guide-audio-copy" id="guideSuccessNote"><strong>9 seconds on this device</strong><span>This celebration plays only on this device.</span></p>
-                  <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Siamo in onda! Your first broadcast is live. <strong>Giulia:</strong> Speaker checked, privacy saved. Mamma Mi Radio is yours now.</p></details>
+                  <p class="guide-audio-copy" id="guideSuccessNote"><strong>11 seconds on this device</strong><span>This celebration plays only on this device.</span></p>
+                  <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Siamo in onda! Your first broadcast is live and I was magnificent. <strong>Giulia:</strong> Sound checked, privacy saved. Mamma Mi Radio is yours now. He was adequate.</p></details>
                 </div>
               </div>
             </section>
@@ -2830,13 +2830,13 @@ const _firstListenUi={
 };
 
 const FIRST_LISTEN_GUIDES={
-  welcome:{file:'welcome.mp3',version:'b184b5d50c6e'},
-  'sound-check':{file:'sound-check.mp3',version:'bbbff207124b'},
-  'not-yet':{file:'not-yet.mp3',version:'a2560cf4a4ad'},
-  'receipt-recovery':{file:'receipt-recovery.mp3',version:'5a3f7b1fa358'},
-  privacy:{file:'privacy.mp3',version:'224f4452eeda'},
-  ai:{file:'ai.mp3',version:'3342f2aafbe5'},
-  success:{file:'success.mp3',version:'00ff13f5a775'},
+  welcome:{file:'welcome.mp3',version:'1971b4d1bc72'},
+  'sound-check':{file:'sound-check.mp3',version:'c536e915090d'},
+  'not-yet':{file:'not-yet.mp3',version:'4b1dd8838a00'},
+  'receipt-recovery':{file:'receipt-recovery.mp3',version:'7c5baaceebb8'},
+  privacy:{file:'privacy.mp3',version:'3565eea7e613'},
+  ai:{file:'ai.mp3',version:'9a0975774b35'},
+  success:{file:'success.mp3',version:'17b854587398'},
 };
 // One <audio> serves the remaining First Listen clips, so a click that supersedes an in-flight
 // one must not let the older attempt tidy up the shared element underneath it.
@@ -5657,14 +5657,20 @@ function stopFirstListenStationAudio(){
   audio.load();
 }
 function firstListenStationPlaying(){
+  // stopFirstListenGuide() resumes this element with play() on every guide
+  // exit, firing this same 'playing' event. Only a genuine start/retest sets
+  // dispatch to 'starting' first, so that alone tells a fresh attempt apart
+  // from a background resume — otherwise an already-confirmed listener gets
+  // knocked back to the sound check and loses focus to its heading.
+  const freshStart=_firstListenUi.dispatch==='starting';
   _firstListenUi.selectionDirty=false;
   _firstListenUi.dispatch='accepted';
-  _firstListenUi.verification='awaiting';
+  if(freshStart)_firstListenUi.verification='awaiting';
   _firstListenUi.repairOpen=false;
   _firstListenUi.selectedName=_firstListenUi.selectedName||'this device';
   firstListenSetStatus('firstListenSpeakerStatus','The station is playing on this device. Say whether you hear it.','ready');
   renderFirstListenProgress();
-  document.getElementById('firstListenVerifyHeading')?.focus();
+  if(freshStart)document.getElementById('firstListenVerifyHeading')?.focus();
 }
 function initFirstListenStationAudio(){
   const audio=firstListenStationAudio();
@@ -5718,6 +5724,10 @@ async function startFirstListen(el){
         _firstListenUi.dispatch='idle';
         return;
       }
+    }else if(!response.ok){
+      _firstListenUi.dispatch='rejected';
+      firstListenSetStatus('firstListenSpeakerStatus',firstListenErrorMessage(payload),'blocked');
+      return;
     }
     stopFirstListenStationAudio();
     audio.src=`${_base}${FIRST_LISTEN_STREAM}`;

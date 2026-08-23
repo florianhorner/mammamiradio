@@ -1,9 +1,10 @@
-First Listen: browser-local proof, replaces speaker-first onboarding — test runtime proof
+First Listen: browser-local proof, replaces speaker-first onboarding
+test and gate runtime proof
 2026-08-23
 
 === Full suite, clean run (no concurrent load) ===
-$ python -m pytest tests/ -q --timeout=120
-7554 passed, 4 skipped, 47 deselected in 460.92s (0:07:40)
+$ python -m pytest tests/
+8058 passed, 4 skipped, 47 deselected in 585.12s (0:09:45)
 exit: 0
 
 === Lint / format / typecheck ===
@@ -11,14 +12,38 @@ $ ruff check .
 All checks passed!
 
 $ ruff format --check .
-393 files already formatted
+400 files already formatted
 
 $ mypy mammamiradio/ tests/
-Success: no issues found in 349 source files
+Success: no issues found in 356 source files
 
 === Release gates ===
 $ bash scripts/check-release-invariants.sh
+Passed: 17  Failed: 0
 All invariants passed.
 
 $ bash scripts/check-changelog-lint.sh
 Changelog lint clean.
+
+=== Packaged narration pack (rewritten and re-recorded) ===
+$ python scripts/validate-spoken-assets.py --browser-assets-root mammamiradio/web/static/audio
+spoken-assets: browser manifest, canonical receipt, hashes, transcripts,
+admin metadata, media format, loudness, routes, and bundle size are valid
+
+The seven guide clips were re-rendered through the canonical ElevenLabs
+voices after the dialogue rewrite. Each clip was confirmed to carry real
+speech rather than silence, measured with ffmpeg volumedetect at roughly
+-21 to -22 dB mean and -2 dB peak, and the pack totals 1.9 MB. The
+manifest transcripts, sha256 hashes and durations, the admin page's
+inline transcripts, its cache-busting version prefixes, and its visible
+clip lengths were all regenerated from the manifest so those surfaces
+cannot drift apart.
+
+=== Real-browser First Listen journey ===
+$ python -m pytest tests/web/test_first_listen_browser_smoke.py
+2 passed (25 scenarios), run three times against a server started on an
+empty cache directory, no failures.
+
+The full browser-smoke sequence CI runs was reproduced locally in order:
+make player-smoke (pass), tests/web/test_admin_browser_smoke.py (2
+passed), tests/web/test_first_listen_browser_smoke.py (2 passed).

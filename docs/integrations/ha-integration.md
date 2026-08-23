@@ -139,24 +139,26 @@ disposable HAOS/add-on test.
 
 ### First-listen repair
 
-If Home Assistant accepted the show but First Listen says the listening check
-was not saved, select **Save this listening check**. That action only retries
-the local receipt write; it does not discover speakers, resume the station, or
-send another playback request. A refresh in the same app process restores that
-recovery choice. If the app restarted and the unsaved proof is gone, First
-Listen says so and asks you to explicitly start the selected speaker once more.
+If First Listen says the listening check was not saved, select **Restore sound
+check**. That action only retries the local receipt write; it does not replay
+the station or send another playback request. A refresh in the same app process
+restores that recovery choice. If the app restarted and the unsaved proof is
+gone, First Listen says so and asks you to refresh, then play the station on
+this device once more.
 
 If the privacy choice takes effect but its setup review is not saved, the live
-choice remains in force. For the private choice, select **Save private review
+choice remains in force. For the private choice, select **Save private choice
 again**; this does not fetch Home state. For an enabled choice, make the required
-fresh filtered preview, then select **Save review again**. Optional AI setup
-stays locked until that local review receipt is saved.
+fresh filtered preview, then select **Save shared choice again**. Optional AI
+setup stays locked until that local review receipt is saved.
 
-If Home Assistant accepted playback but the room is quiet:
+If Home Assistant accepted playback but the room is quiet — this only applies
+to the optional physical-speaker route above, not the current-device stream:
 
 1. Give the speaker a few seconds, then check its mute and volume in Home
    Assistant. Mamma Mi Radio does not change either setting.
-2. Confirm that the selected entity is the physical speaker you intended.
+2. Confirm you targeted the physical speaker you intended, not
+   `media_player.mammamiradio`.
 3. In **Developer tools → Actions**, choose **Play specified media**, target that
    speaker, and use `media-source://mammamiradio/live` with content type
    `music`. You can also browse **Media → Mamma Mi Radio → Mamma Mi Radio
@@ -166,9 +168,10 @@ If Home Assistant accepted playback but the room is quiet:
    the required Home Assistant restart, recheck the HACS install and add-on
    connection.
 
-Then return to **First Listen** and use **Retry on same speaker**, or select
-**Choose another speaker** before starting again. For wider add-on connectivity
-problems, follow the [Home Assistant app recovery
+If the room stays quiet, repeat step 3 with a different target speaker. First
+Listen's own device controls are unrelated to this optional route and cannot
+select or retry a physical speaker. For wider add-on connectivity problems,
+follow the [Home Assistant app recovery
 steps](../troubleshooting.md#home-assistant-app).
 
 > Migration note: if you have automations that read the old pushed

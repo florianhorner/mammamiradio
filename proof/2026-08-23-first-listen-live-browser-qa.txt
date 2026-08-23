@@ -49,3 +49,34 @@ watches templates; the edit restarted the process, rotating the
 per-process CSRF token (main.py:791) underneath an already-open tab. A
 fresh page load resolved it. Dev-loop artifact, not a product defect --
 would never occur in a deployed install.
+
+=== Re-verified after the narration rewrite and re-record ===
+
+The QA above predates the guide-narration rewrite, the re-recorded audio
+pack, and the resume/playing-handler fixes, so both surfaces were checked
+again on the current tree against a server started on an empty cache dir.
+
+Admin (/admin), real browser, zero console errors:
+  Setup tab auto-opens on a fresh install (onboarding entry intact).
+  All seven guide blocks render the new transcripts, and each declared
+  duration matches its clip: welcome 16s, sound-check 14s, not-yet 12s,
+  receipt-recovery 10s, privacy 8s, ai 12s, success 11s.
+  FIRST_LISTEN_GUIDES cache-busting hashes equal the manifest sha256
+  prefixes for all seven entries.
+  Welcome clip played for real, not asserted from strings:
+    src=welcome.mp3?v=1971b4d1bc72 paused=false currentTime=2.20
+    duration=16.46 (manifest declares 16.464) container state 'playing'.
+  stopFirstListenGuide() torn down cleanly afterwards: container 'idle',
+  element paused, guideKey cleared, stationPausedForGuide false.
+  Brand elements intact: gold .mi accent in h1, tricolor stripe present.
+
+Listener (/listen), real browser, zero console errors:
+  Play control present and enabled, .mi accent renders rgb(244, 208, 72)
+  (#F4D048), tricolor band present, /public-status answers with live keys.
+  listener.html is untouched by this branch.
+
+Real-browser First Listen journey: all 25 scenarios pass end to end
+(tests/web/test_first_listen_browser_smoke.py), run three times against a
+clean server with no failures. The full browser-smoke job sequence that CI
+runs (make player-smoke, admin browser smoke, First Listen browser smoke)
+was reproduced locally and passes in full.
