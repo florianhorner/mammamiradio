@@ -1,0 +1,72 @@
+Test, lint and build evidence — explainer link previews + publish guards
+Captured 2026-08-22T01:38:44Z
+Code under test: f75549448b5a764fa1664979e064113070a23e62 (merge of origin/main, which brought #1008)
+Base:            1467adb9a5ca0e26c765cdd9739be718e568390c
+
+This file is committed after the code it describes, so it can never name
+its own commit. It names the last commit that changed code. Every commit
+after this one on the branch touches proof/ only, which is checkable:
+  git diff --name-only f75549448b5a764fa1664979e064113070a23e62..HEAD | grep -v '^proof/'
+must print nothing.
+
+== tests: Python suite, on the merged state ==
+Command actually run: pytest tests/ -q --no-header
+The 47 deselected tests are dropped by addopts = "-m 'not requires_ffmpeg'" in
+pyproject.toml:73, not by a flag on the command line.
+FAILED tests/core/test_spoken_assets.py::test_symlink_loop_fails_closed_instead_of_raising
+FAILED tests/web/test_streamer_routes.py::test_handoff_normal_head_eof_keeps_successor_ahead_of_air_next
+2 failed, 7477 passed, 3 skipped, 47 deselected, 1 warning in 412.02s (0:06:52)
+
+== tests: the 47 deselected FFmpeg tests, run separately ==
+Command actually run: pytest tests/ -m requires_ffmpeg -q --no-header
+Against ffmpeg 8.1.2 (/opt/homebrew/bin/ffmpeg).
+47 passed, 7482 deselected, 1 warning in 175.06s (0:02:55)
+
+Together these two runs cover every test in tests/. Review correctly pointed out
+that the first run alone is not the full suite; the gap is now closed by running
+the remainder rather than only disclosing it.
+   Both failures reproduce on pristine origin/main (7e2bec29) in a clean
+   worktree with none of this branch applied. This branch changes no Python
+   outside tests/repo/. Passing count rose from 7450 to 7477 because the
+   merge brought in the tests that landed with #1008.
+
+== tests: repo guards ==
+313 passed in 35.01s
+
+== tests: publish-boundary guard, itemised ==
+   tests/repo/test_explainer_pages_workflow.py::test_the_publish_workflow_triggers_on_its_own_path PASSED [ 20%]
+   tests/repo/test_explainer_pages_workflow.py::test_publish_permissions_stay_on_the_deploy_job PASSED [ 40%]
+   tests/repo/test_explainer_pages_workflow.py::test_operations_doc_states_the_gate_the_workflow_carries PASSED [ 60%]
+   tests/repo/test_explainer_pages_workflow.py::test_only_the_deploy_job_is_scoped_to_main PASSED [ 80%]
+   tests/repo/test_explainer_pages_workflow.py::test_changing_the_publish_workflow_runs_the_explainer_suite PASSED [100%]
+
+== tests: explainer suite ==
+   ℹ tests 31
+   ℹ pass 31
+   ℹ fail 0
+
+== tests: mutation checks — each guard was broken and observed to fail ==
+   twitter:title edited away from og:title ............ 30 pass / 1 fail
+   runtime asset pinned to the deployed origin ........ 29 pass / 2 fail
+   twitter:image:alt deleted .......................... 30 pass / 1 fail
+   og:image:type set to image/jpeg .................... 30 pass / 1 fail
+   PNG signature byte 0 + trailer corrupted ........... 30 pass / 1 fail
+   share card truncated to 20 bytes ................... 30 pass / 1 fail
+   deploy job `if:` guard stripped .................... 3 pass / 2 fail (pytest)
+   workflow removed from its own path filter .......... 4 pass / 1 fail (pytest)
+   restored ........................................... all green
+
+   The corrupted-signature case passed the earlier 3-byte check and fails
+   the 8-byte one, so the review objection that prompted it is confirmed
+   rather than taken on faith.
+
+== build ==
+   Built local static site in dist/ (2 browser module(s) verified)
+
+== lint ==
+   All checks passed!
+   1 file already formatted
+   Success: no issues found in 1 source file
+   actionlint: clean
+   Documentation safety lint clean.
+   Docs-safety lint self-test passed.

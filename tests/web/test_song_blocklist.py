@@ -25,7 +25,7 @@ import pytest
 from fastapi import FastAPI
 
 from mammamiradio.core.config import load_config
-from mammamiradio.core.models import Segment, SegmentType, StationState, Track
+from mammamiradio.core.models import ListenerRequestHandoff, Segment, SegmentType, StationState, Track
 from mammamiradio.web import status_payload, streamer
 from mammamiradio.web.streamer import LiveStreamHub, _admin_track_id, _apply_ban, router
 
@@ -147,6 +147,226 @@ async def test_ban_clears_matching_pin(tmp_path):
     state.pinned_track = pinned
     _apply_ban(state, app.state.config, [pinned], queue=app.state.queue)
     assert state.pinned_track is None
+
+
+def test_ban_releases_matching_listener_retry_reservation(tmp_path):
+    banned = _track("Volare", "Modugno", "banned-retry")
+    retained = _track("Felicità", "Al Bano", "retained-retry")
+    app = _make_app(tmp_path, [banned, retained])
+    state = app.state.station_state
+    state.listener_request_retry_handoffs.extend(
+        (
+            ListenerRequestHandoff(token="banned", request_id="r1", track=banned),
+            ListenerRequestHandoff(token="retained", request_id="r2", track=retained),
+        )
+    )
+
+    _apply_ban(state, app.state.config, [banned], queue=app.state.queue)
+
+    assert list(state.listener_request_retry_handoffs) == [
+        ListenerRequestHandoff(token="retained", request_id="r2", track=retained)
+    ]
+    assert state.listener_track_reservations().reserves_track(banned) is False
+    assert state.listener_track_reservations().reserves_track(retained) is True
+
+
+def test_ban_revokes_playback_owned_admitted_reservation(tmp_path):
+    """A promise already claimed by playback has left the queue.
+
+    ``drop_matching_segments`` cannot see it, so nothing releases its admitted
+    token. Left behind, a pre-first-byte failure re-arms the banned promise as a
+    retry after the retry filter has already run — a stuck exclusive promise the
+    producer can only answer with BLOCKLIST_GATE — and the identity keeps
+    suppressing cache and recovery audio.
+    """
+    banned = _track("Volare", "Modugno", "banned-admitted")
+    retained = _track("Felicità", "Al Bano", "retained-admitted")
+    app = _make_app(tmp_path, [banned, retained])
+    state = app.state.station_state
+    for track, token in ((banned, "banned"), (retained, "retained")):
+        assert state.arm_listener_request_handoff({"request_id": f"req-{token}"}, track)
+        segment = Segment(
+            type=SegmentType.MUSIC,
+            path=tmp_path / f"{token}.mp3",
+            duration_sec=180.0,
+            metadata={
+                "artist": track.artist,
+                "title_only": track.title,
+                **state.listener_request_handoff_metadata(track),
+            },
+        )
+        state.admit_listener_request_handoff(segment)
+        # Playback has claimed the segment: it is no longer in the queue.
+        if track is banned:
+            banned_segment = segment
+    assert len(state.listener_request_admitted_reservations) == 2
+
+    _apply_ban(state, app.state.config, [banned], queue=app.state.queue)
+
+    assert [handoff.track for handoff in state.listener_request_admitted_reservations.values()] == [retained]
+    assert state.listener_track_reservations().reserves_track(banned) is False
+    assert state.listener_track_reservations().reserves_track(retained) is True
+    # The banned promise can no longer be resurrected as a retry.
+    assert state.restore_listener_request_handoff_before_first_byte(banned_segment) is False
+    assert list(state.listener_request_retry_handoffs) == []
+
+
+def test_ban_after_listener_download_terminalizes_request_without_repin(tmp_path):
+    from mammamiradio.hosts.scriptwriter import _plan_listener_request_block
+    from mammamiradio.scheduling.producer import _select_accepted_music_track
+    from mammamiradio.web.listener_requests import _public_song_status
+
+    requested = Track(
+        title="Requested Song",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="listener-request-source",
+    )
+    ban_target = Track(
+        title=requested.title,
+        artist=requested.artist,
+        duration_ms=requested.duration_ms,
+        youtube_id="different-source-same-canonical-song",
+    )
+    unrelated_request_track = Track(
+        title="Unrelated Request",
+        artist="Other Artist",
+        duration_ms=180_000,
+        youtube_id="unrelated-request-source",
+    )
+    ordinary = _track("Ordinary Rotation", "Rotation Artist", "ordinary-source")
+    app = _make_app(tmp_path, [requested, unrelated_request_track, ordinary])
+    state = app.state.station_state
+    request_record = {
+        "request_id": "banned-listener-request",
+        "public_token": "banned-listener-token",
+        "name": "Luca",
+        "message": "Play Requested Song by Listener Artist",
+        "type": "song_request",
+        "status": "queued",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": True,
+        "song_track": requested.display,
+        "song_track_obj": requested,
+    }
+    unrelated_request = {
+        "request_id": "unrelated-listener-request",
+        "name": "Giulia",
+        "message": "Play Unrelated Request by Other Artist",
+        "type": "song_request",
+        "status": "queued",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+        "song_track": unrelated_request_track.display,
+        "song_track_obj": unrelated_request_track,
+    }
+    unrelated_before = dict(unrelated_request)
+    state.pending_requests.extend([request_record, unrelated_request])
+    state.pinned_track = requested
+
+    result = _apply_ban(state, app.state.config, [ban_target], queue=app.state.queue)
+
+    assert result["removed"] == 1
+    assert requested not in state.playlist
+    assert state.pinned_track is None
+    assert request_record["song_found"] is False
+    assert request_record["song_error"] is True
+    assert request_record["song_error_reason"] == "banned"
+    assert request_record["song_pinned"] is False
+    assert request_record["song_track_obj"] is None
+    assert request_record in state.pending_requests
+    assert unrelated_request == unrelated_before
+    assert _public_song_status(request_record) == {
+        "ok": True,
+        "type": "song_request",
+        "song_resolution": "not_matched",
+        "song_track": None,
+        "outcome_reason": "not_playable",
+    }
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST (SONG UNAVAILABLE):" in prompt
+    assert commit is not None
+    assert state.pinned_track is None
+    assert _select_accepted_music_track(state, app.state.config, app.state.queue) is ordinary
+
+    # The ordinary unavailable acknowledgement archives the public receipt;
+    # the banned recording never regains a playable object or pin.
+    commit.apply(state)
+    assert request_record not in state.pending_requests
+    receipt = state.recently_consumed_requests[-1]
+    assert receipt["status"] == "song_not_found"
+    assert _public_song_status(receipt)["song_resolution"] == "not_matched"
+    assert _public_song_status(receipt)["outcome_reason"] == "not_playable"
+
+
+@pytest.mark.asyncio
+async def test_bulk_ban_keeps_distinct_same_cache_alias_in_floor_queue_and_request(tmp_path):
+    banned_track = Track(
+        title="Requested Song",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="shared-recording-source",
+    )
+    canonical_alias = Track(
+        title="Requested Song (Radio Edit)",
+        artist="Listener Artist",
+        duration_ms=180_000,
+        youtube_id="shared-recording-source",
+    )
+    assert banned_track.cache_key == canonical_alias.cache_key
+    assert banned_track.normalized_key != canonical_alias.normalized_key
+
+    app = _make_app(tmp_path, [banned_track, canonical_alias])
+    state = app.state.station_state
+    alias_request = {
+        "request_id": "same-cache-alias-request",
+        "name": "Giulia",
+        "message": "Play the radio edit",
+        "type": "song_request",
+        "status": "queued",
+        "song_found": True,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_pinned": False,
+        "song_track": canonical_alias.display,
+        "song_track_obj": canonical_alias,
+    }
+    state.pending_requests.append(alias_request)
+    alias_request_before = dict(alias_request)
+    alias_path = tmp_path / "same-cache-alias.mp3"
+    alias_path.write_bytes(b"alias")
+    queued_alias = Segment(
+        type=SegmentType.MUSIC,
+        path=alias_path,
+        metadata={
+            "queue_id": "same-cache-alias",
+            "title": canonical_alias.display,
+            "title_only": canonical_alias.title,
+            "artist": canonical_alias.artist,
+        },
+    )
+    app.state.queue.put_nowait(queued_alias)
+    state.queued_segments.append({"id": "same-cache-alias", "type": "music", "label": canonical_alias.display})
+
+    async with _client(app) as client:
+        response = await client.post("/api/track/ban", json={"indices": [0]})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["removed"] == 1
+    # The already-small two-song pool is allowed to lose one canonical row but
+    # must not fall through its one-song floor because a media cache key happens
+    # to be shared by a differently named operator row.
+    assert state.playlist == [canonical_alias]
+    assert list(app.state.queue._queue) == [queued_alias]
+    assert state.queued_segments[0]["id"] == "same-cache-alias"
+    assert alias_request == alias_request_before
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,15 @@
+# Pre-push verification — florianhorner/fix/jamendo-still-failing
+# commit: 8452e1fdc9fe7b9ba10ff76bc547a6bbe6b0c508
+# date: 2026-08-22T22:50:48Z
+
+## pytest tests/
+7504 passed, 4 skipped, 47 deselected
+
+## ruff check
+All checks passed!
+
+## ruff format --check
+349 files already formatted
+
+## mypy
+Success: no issues found in 349 source files

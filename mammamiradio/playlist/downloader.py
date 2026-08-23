@@ -11,10 +11,12 @@ import re
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from functools import partial
 from itertools import islice
 from pathlib import Path
 from types import ModuleType
+from typing import Literal
 
 from mammamiradio.audio.admission import ffmpeg_slot
 from mammamiradio.core.models import Track
@@ -423,6 +425,19 @@ def _load_external_media_module() -> ModuleType:
         ) from exc
 
 
+def _external_media_opted_in(configured: bool | None = None) -> bool:
+    """Return the operator opt-in half of the gate, without probing the module.
+
+    ``external_media_enabled`` is the effective gate and stays the answer to
+    "may this process resolve external media". This is only its first half, so
+    a caller that reports *why* the gate is shut can tell an operator setting
+    apart from a missing optional install instead of blaming the setting.
+    """
+    if configured is None:
+        return os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in _TRUTHY
+    return bool(configured)
+
+
 def external_media_enabled(configured: bool | None = None) -> bool:
     """Return the effective extractor gate for this process.
 
@@ -430,10 +445,7 @@ def external_media_enabled(configured: bool | None = None) -> bool:
     otherwise the environment is read directly. Opt-in is necessary but not
     sufficient: the standalone-only optional module must also be installed.
     """
-    opted_in = (
-        os.getenv("MAMMAMIRADIO_ALLOW_YTDLP", "false").lower() in _TRUTHY if configured is None else bool(configured)
-    )
-    if not opted_in:
+    if not _external_media_opted_in(configured):
         return False
     try:
         _load_external_media_module()
@@ -563,19 +575,43 @@ def _download_external_sync(track: Track, cache_dir: Path, music_dir: Path) -> P
     return _download_ytdlp(track, cache_dir)
 
 
-def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
-    """Search yt-dlp for tracks matching query, returning metadata without downloading.
+YtdlpSearchStatus = Literal["ok", "disabled", "unavailable", "failed"]
 
-    Uses extract_flat so only lightweight playlist-level info is fetched.
-    Returns a list of dicts with youtube_id, title, artist, duration_ms, display.
-    Returns [] if yt-dlp is unavailable or the search fails.
+
+@dataclass(frozen=True)
+class YtdlpSearchOutcome:
+    """Strict yt-dlp metadata-search result for callers that need honest state."""
+
+    status: YtdlpSearchStatus
+    results: list[dict]
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status == "ok"
+
+
+def search_ytdlp_metadata_outcome(query: str, max_results: int = 5) -> YtdlpSearchOutcome:
+    """Search yt-dlp while preserving empty, unavailable, and failed outcomes.
+
+    ``status='ok'`` with no results is a genuine empty search.  The other
+    statuses let interactive callers avoid reporting infrastructure failures as
+    catalogue misses.  ``search_ytdlp_metadata`` remains the compatibility API
+    for best-effort callers that intentionally collapse every failure to ``[]``.
     """
     if not _ytdlp_enabled():
-        return []
+        # The effective gate is shut for two reasons that mean different things
+        # to a listener: the operator never opted in (a settings choice), or the
+        # opt-in is on and the standalone-only extractor cannot load (a broken
+        # install). Collapsing the second into "disabled" would tell a listener
+        # to change a setting that is already correct.
+        if _external_media_opted_in():
+            return YtdlpSearchOutcome(status="unavailable", results=[])
+        return YtdlpSearchOutcome(status="disabled", results=[])
     try:
         yt_dlp = _load_external_media_module()
     except RuntimeError:
-        return []
+        # Gate passed, module vanished between that check and this load.
+        return YtdlpSearchOutcome(status="unavailable", results=[])
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -618,15 +654,27 @@ def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
                     "youtube_id": e["id"],
                     "title": title,
                     "artist": artist,
+                    # Additive identity evidence for strict relevance callers.
+                    # ``artist`` above intentionally retains its legacy
+                    # uploader/channel meaning for existing API consumers.
+                    "track_title": e.get("track") or "",
+                    "track_artist": e.get("artist") or e.get("creator") or "",
+                    "uploader": e.get("uploader") or "",
+                    "channel": e.get("channel") or "",
                     "duration_ms": duration_ms,
                     "album_art": thumbnail,
                     "display": display,
                 }
             )
-        return results
+        return YtdlpSearchOutcome(status="ok", results=results)
     except Exception:
         logger.debug("yt-dlp metadata search failed", exc_info=True)
-        return []
+        return YtdlpSearchOutcome(status="failed", results=[])
+
+
+def search_ytdlp_metadata(query: str, max_results: int = 5) -> list[dict]:
+    """Compatibility search API that collapses unavailable/failure to ``[]``."""
+    return search_ytdlp_metadata_outcome(query, max_results).results
 
 
 async def download_track(

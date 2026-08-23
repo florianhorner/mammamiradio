@@ -135,6 +135,10 @@ even when a receipt fails. Use unit tests—not a paid run—as CI enforcement.
 
 - `tmp/` rendered segments and temp assets
 - `cache/` downloaded track assets
+- `cache/keepsakes/` moments the operator kept. Nothing reclaims this
+  directory and `_disk_safe_cache_ceiling_mb` does not count it as
+  reclaimable, so budget for it separately: `KEEPSAKE_MAX_SAVED` (200) at
+  roughly 4 MB each is about 800 MB on the same volume as the norm cache
 
 ### Music cache sizing
 
@@ -344,8 +348,11 @@ Public:
 - `GET /sw.js`, `GET /static/{filename:path}` (PWA assets)
 - `POST /api/clip` (rate-limited; music sharing is available only for a
   complete single bundled-track window)
-- `GET /clips/{id}.mp3` (no auth, for sharing)
+- `GET /clips/{id}.mp3` (no auth, for sharing). Serves shared clips, which
+  expire after 24 hours, and kept moments, which do not expire at all
+- `GET /clips/{id}` (share landing page for the same two)
 - `POST /api/listener-request`, `GET /public-listener-requests` (sanitized feed for the on-page sidebar)
+- `GET /public-listener-requests/{public_token}` (one sanitized, read-only song-request receipt)
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
@@ -372,6 +379,9 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 
 - `GET /admin`, `GET /dashboard`
 - `GET /status`, `GET /api/capabilities`
+- `POST /api/clip/keep` (keep the airing voice segment durably; voice-only),
+  `GET /api/clip/keep` (list what is kept), `DELETE /api/clip/keep/{id}`
+  (remove one kept moment)
 - `PUT /api/media-sources/jamendo`, `POST /api/media-sources/jamendo/retry`
 - `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
@@ -390,8 +400,17 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 `GET /status` includes a redacted top-level `jamendo` object with `enabled`,
 the detailed provider `state`, `client_id_configured`, current
 `noncommercial_acknowledged`, `terms_scope`, `provider_confirmation`,
-`ready`, `in_flight`, last-success age, a coarse last-failure code, and rejected
-count. It never contains the client ID, private stream URL, or raw exception.
+`ready`, `in_flight`, last-success age, a coarse last-failure code, the lifetime
+rejected count, and three fields describing the most recently completed
+discovery pass: `rejected_this_attempt`, `dominant_failure_code_this_attempt`,
+and an `attempt_rejections` breakdown keyed by code. The per-pass fields clear
+on success, on a settings change, and on Check again, so a prepared track never
+carries a failure reason and a replaced run stops being explained. The dominant
+code names whatever ended the pass, so it can name a timeout or provider failure
+that appears in no breakdown key, and can be set while the count is zero. Every code is
+checked against the provider's own `JAMENDO_FAILURE_CODES` set; an unrecognized
+one degrades to `api_failed` rather than passing through. It never contains the
+client ID, private stream URL, or raw exception.
 The source row maps that detail to the five operational UI states documented in
 [music-sources.md](music-sources.md#admin-states).
 
@@ -962,6 +981,40 @@ action:
 ```
 
 **Note:** REST-pushed entities appear in Developer Tools → States but not in the HA entity registry (Integrations page). HA Assist, Repairs, diagnostics, and media-source browsing require the HACS integration for registry visibility.
+
+## Explainer page deployment
+
+The interactive explainer (`docs/explainer/`) publishes to GitHub Pages at
+`https://florianhorner.github.io/mammamiradio/` via
+`.github/workflows/explainer-pages.yml`: on any `main` push touching
+`docs/explainer/**`, the workflow tests, builds `dist/`, and deploys it.
+The one-time setup (**Settings → Pages → Source: "GitHub Actions"**) is
+already done; it is listed here because a deploy job fails with a
+Pages-not-enabled error if it is ever switched back. The deploy job also
+carries `if: github.ref == 'refs/heads/main'`, so a `workflow_dispatch` from
+any other ref builds and tests but does not publish. The page is static, reads
+no Home Assistant data, and streams nothing — it is not the live station.
+
+**The trigger is a path filter, so a change outside it publishes nothing.**
+The filter is `docs/explainer/**` plus the workflow's own path, matching
+`explainer.yml`. A commit touching neither lands on `main` without redeploying,
+which is usually right, and is a trap exactly once: when the page and its
+publish workflow arrive in separate pull requests, whichever lands second does
+not match the filter and the site stays a 404 until someone dispatches by hand.
+That is how this site first went live. After a change of that shape, run the
+dispatch button against `main` and confirm
+`https://florianhorner.github.io/mammamiradio/` answers 200. A green workflow
+list with no run in it looks identical to a site that published.
+
+The canonical link and the link-preview tags (`<link rel="canonical">` plus the
+`og:` / `twitter:` tags in `docs/explainer/index.html`) are the one place the
+deployed origin is written as an absolute URL, because scrapers fetch an
+`og:image` verbatim instead of resolving it against the page.
+`tests/rendered-html.test.mjs` asserts those four URLs agree, that no runtime
+asset is pinned to the origin, that the og: and twitter: copy cannot drift
+apart, that the card ships in `dist/`, and that the declared width and height
+match the real PNG. `tests/repo/test_explainer_pages_workflow.py` holds the
+main-only deploy gate and the path filter, and runs on every pull request.
 
 ## What is still not documented because it does not exist yet
 

@@ -151,9 +151,11 @@ copyright status.
 | `degraded` | transient provider failure | Base music continues; use **Check again** when useful. |
 | `blocked` | provider-wide configuration or contract rejection | The candidate cannot be used; check again or turn Jamendo off. |
 
-Individual rejected candidates only increment the coarse rejected count while
-discovery continues. Status and logs never expose the client ID, private stream
-URL, or raw provider exception.
+Individual rejected candidates increment the coarse lifetime rejected count and
+a per-pass breakdown keyed by failure code, while discovery continues. The
+breakdown is what the admin row turns into a plain-language reason; it is
+cleared when a pass succeeds, and each pass logs its own tally once. Status and
+logs never expose the client ID, private stream URL, or raw provider exception.
 
 ### Configuration API
 
