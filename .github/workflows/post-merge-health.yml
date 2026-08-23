@@ -1,0 +1,48 @@
+name: post-merge-health
+
+# Advisory rollup on main pushes: surfaces post-merge workflows (addon image
+# build, etc.) on the merged PR so operators see failures that only run after
+# squash-merge. Not a merge blocker.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  annotate:
+    name: post-merge health comment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Post advisory rollup on the merged PR
+        env:
+          HEAD_SHA: ${{ github.sha }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          pr="$(printf '%s' "$HEAD_MSG" | sed -n 's/.*(#\([0-9][0-9]*\)).*/\1/p' | tail -1)"
+          if [ -z "$pr" ]; then
+            echo "No PR number in merge commit message — skipping advisory comment."
+            exit 0
+          fi
+          body="Post-merge health advisory for ${HEAD_SHA:0:12} (squash-merged via PR #${pr}):"
+          for workflow in quality.yml pi-smoke.yml addon-build.yml; do
+            run_id="$(gh run list --workflow="$workflow" --branch=main --commit="$HEAD_SHA" --limit 1 --json databaseId,status,conclusion --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+            if [ -z "$run_id" ]; then
+              body="${body}
+- \`${workflow}\`: no run found yet for this commit"
+              continue
+            fi
+            verdict="$(gh run view "$run_id" --json status,conclusion --jq '"\(.status) / \(.conclusion // "pending")"' 2>/dev/null || echo "unknown")"
+            body="${body}
+- [\`${workflow}\`](https://github.com/${{ github.repository }}/actions/runs/${run_id}): ${verdict}"
+          done
+          body="${body}
+
+This is advisory only — merge already completed. Investigate any non-success rows before cutting a release."
+          gh pr comment "$pr" --body "$body" 2>/dev/null || echo "Could not comment on PR #${pr} (permissions or PR not found)."
