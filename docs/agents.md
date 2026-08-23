@@ -62,21 +62,24 @@ Hard rules agents must not invent around:
 
 - Start with `gh pr list` state, current head SHAs/checks, and a clean tracked
   worktree. After every Dependabot merge, expect the rest of the batch to become
-  stale and rerun `bash scripts/nudge-dependabot-rebase.sh` instead of manually
-  rebasing bot branches.
+  stale. Do not fan out automated rebase comments across the batch; handle the
+  next PR only when it is actually ready to land.
 - Let pure patch/minor Python Dependabot PRs with auto-merge armed land through
-  Dependabot after fresh required checks pass. If quality fails on an unrelated
-  one-test timeout, verify the focused test locally before treating it as a
-  rerunnable flake; stop on any deterministic dependency break.
+  Dependabot when they remain current and fresh required checks pass. A stale
+  PR parks until an authenticated maintainer updates it; this is deliberate. If
+  quality fails on an unrelated one-test timeout, verify the focused test
+  locally before treating it as a rerunnable flake; stop on any deterministic
+  dependency break.
 - Treat semver-major GitHub Actions PRs as manual landings: inspect the fresh
   rebased diff, confirm required checks are green, include HA integration checks
   when workflow changes touch the Home Assistant surface, write review-log
   coverage for the exact head, then run `scripts/land-pr.sh <pr>`.
 - If Dependabot says it cannot rebase a PR because the branch was edited, or a
   dependency PR becomes conflict-dirty after another dependency merge, use
-  `@dependabot recreate` and re-review the recreated head. If a
-  `github-actions` nudge is rejected because the actor lacks push access, post
-  the `@dependabot rebase` comment from the authenticated user account.
+  `@dependabot recreate` from an authenticated maintainer account and re-review
+  the recreated head. GitHub Actions must not post Dependabot rebase or recreate
+  commands: its bot actor is rejected, and batch-wide nudges create repeated
+  comment and CI churn under strict up-to-date checks.
 
 ## Integration Trains
 

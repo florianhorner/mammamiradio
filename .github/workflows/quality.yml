@@ -184,9 +184,9 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
         run: bash tests/workflows/test_land_pr.sh
 
-      - name: Dependabot nudge self-test
+      - name: Dependabot automation guard
         if: needs.changes.outputs.workflows == 'true'
-        run: bash tests/workflows/test_dependabot_nudge.sh
+        run: bash tests/workflows/test_dependabot_automation_guard.sh
 
       - name: Merge-gate drift check self-test
         if: needs.changes.outputs.workflows == 'true'
