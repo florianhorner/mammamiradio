@@ -9,7 +9,10 @@
 # Checks: file exists, parses, skill is review/adversarial-review, and the pinned commit
 # is the target head or an ancestor of it. This legacy ancestry rule works for later
 # commits on the same history, but rebase, amend, and squash can orphan the reviewed
-# commit. V2 replaces that fragile relationship with a content digest.
+# commit. V2 PR verification still requires the reviewed commit object, so a
+# rewrite of reviewed history requires a fresh review and receipt. Main-mode
+# verification uses the surviving content digest, so squash/GC does not break
+# the landed receipt.
 #
 # NO freshness window here, deliberately: the local hook's ±2h window exists because it
 # reads a mutable laptop ledger. A committed artifact is immutable at a commit; wall-clock

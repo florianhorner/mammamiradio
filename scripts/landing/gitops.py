@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from collections.abc import Iterable
+import tempfile
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, cast
@@ -13,6 +15,8 @@ from typing import BinaryIO, cast
 from .errors import GitError
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
+_GIT_READ_CHUNK_BYTES = 64 * 1024
+_GIT_STDERR_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -55,22 +59,76 @@ class GitRepository:
         return cls(Path(os.fsdecode(raw_root)))
 
     @staticmethod
+    def _environment() -> dict[str, str]:
+        # Git exports repository/configuration variables while running hooks, and
+        # callers can inject command-scope config with GIT_CONFIG_COUNT. Neither
+        # may redirect policy plumbing away from the repository passed here.
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_NO_REPLACE_OBJECTS"] = "1"
+        env["LC_ALL"] = "C"
+        return env
+
+    @staticmethod
     def _invoke(
         args: Iterable[str],
         *,
         cwd: Path | None,
         input_bytes: bytes | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
-        env = os.environ.copy()
-        env["GIT_NO_REPLACE_OBJECTS"] = "1"
-        return subprocess.run(
-            ["git", "--no-replace-objects", *args],
-            cwd=cwd,
-            env=env,
-            input=input_bytes,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            return subprocess.run(
+                ["git", "--no-replace-objects", *args],
+                cwd=cwd,
+                env=GitRepository._environment(),
+                input=input_bytes,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitError(f"cannot run git: {exc}") from exc
+
+    @contextmanager
+    def _streaming_process(
+        self,
+        args: Iterable[str],
+        *,
+        operation: str,
+    ) -> Iterator[tuple[subprocess.Popen[bytes], BinaryIO, BinaryIO]]:
+        command = ["git", "--no-replace-objects", *args]
+        try:
+            stderr_file = tempfile.TemporaryFile()
+        except OSError as exc:
+            raise GitError(f"cannot create bounded stderr buffer for {operation}: {exc}") from exc
+        try:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.root,
+                    env=self._environment(),
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                )
+            except OSError as exc:
+                raise GitError(f"cannot start {operation}: {exc}") from exc
+
+            stdout = cast(BinaryIO, process.stdout)
+            try:
+                yield process, stdout, stderr_file
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                stdout.close()
+        finally:
+            stderr_file.close()
+
+    @staticmethod
+    def _stderr_detail(stderr_file: BinaryIO) -> str:
+        stderr_file.flush()
+        stderr_file.seek(0)
+        return stderr_file.read(_GIT_STDERR_BYTES).decode("utf-8", errors="replace").strip()
 
     def run(
         self,
@@ -137,33 +195,120 @@ class GitRepository:
     def status_bytes(self) -> bytes:
         return self.run(("status", "--porcelain=v2", "--untracked-files=all", "-z"))
 
-    def tree_entries(self, commit: str) -> tuple[TreeEntry, ...]:
-        resolved = self.resolve_commit(commit)
-        output = self.run(("ls-tree", "-r", "-z", "--full-tree", resolved))
-        if not output:
-            return ()
-        if not output.endswith(b"\0"):
-            raise GitError("git ls-tree returned a non-NUL-terminated record stream")
+    def tree_entries(
+        self,
+        commit: str,
+        *,
+        max_record_bytes: int,
+    ) -> Iterator[TreeEntry]:
+        """Yield recursive tree records using bounded reads and record storage."""
 
-        entries: list[TreeEntry] = []
-        for raw in output[:-1].split(b"\0"):
-            metadata, separator, path = raw.partition(b"\t")
-            if not separator:
-                raise GitError("git ls-tree returned a record without a path separator")
-            fields = metadata.split(b" ")
-            if len(fields) != 3:
-                raise GitError("git ls-tree returned malformed entry metadata")
-            mode, kind, raw_oid = fields
+        if max_record_bytes < 1:
+            raise GitError("tree record limit must be non-zero")
+        resolved = self.resolve_commit(commit)
+        args = ("ls-tree", "-r", "-z", "--full-tree", resolved)
+        pending = b""
+        with self._streaming_process(args, operation="git ls-tree") as (process, stdout, stderr_file):
             try:
-                oid = raw_oid.decode("ascii").lower()
-            except UnicodeDecodeError as exc:
-                raise GitError("git ls-tree returned a non-ASCII object ID") from exc
-            if len(oid) != self.oid_length or _HEX_RE.fullmatch(oid) is None:
-                raise GitError(f"git ls-tree returned malformed object ID {oid!r}")
-            if not path:
-                raise GitError("git ls-tree returned an empty path")
-            entries.append(TreeEntry(raw=raw, mode=mode, kind=kind, oid=oid, path=path))
-        return tuple(entries)
+                while chunk := stdout.read(_GIT_READ_CHUNK_BYTES):
+                    pending += chunk
+                    records = pending.split(b"\0")
+                    pending = records.pop()
+                    for raw in records:
+                        if not raw:
+                            raise GitError("git ls-tree returned an empty record")
+                        if len(raw) > max_record_bytes:
+                            raise GitError(f"git ls-tree returned a record longer than {max_record_bytes} bytes")
+                        metadata, separator, path = raw.partition(b"\t")
+                        if not separator:
+                            raise GitError("git ls-tree returned a record without a path separator")
+                        fields = metadata.split(b" ")
+                        if len(fields) != 3:
+                            raise GitError("git ls-tree returned malformed entry metadata")
+                        mode, kind, raw_oid = fields
+                        try:
+                            oid = raw_oid.decode("ascii").lower()
+                        except UnicodeDecodeError as exc:
+                            raise GitError("git ls-tree returned a non-ASCII object ID") from exc
+                        if len(oid) != self.oid_length or _HEX_RE.fullmatch(oid) is None:
+                            raise GitError(f"git ls-tree returned malformed object ID {oid!r}")
+                        if not path:
+                            raise GitError("git ls-tree returned an empty path")
+                        yield TreeEntry(raw=raw, mode=mode, kind=kind, oid=oid, path=path)
+                    if len(pending) > max_record_bytes:
+                        raise GitError(f"git ls-tree returned a record longer than {max_record_bytes} bytes")
+
+                returncode = process.wait()
+                detail = self._stderr_detail(stderr_file)
+                if returncode != 0:
+                    suffix = f": {detail}" if detail else ""
+                    raise GitError(f"git ls-tree failed with exit {returncode}{suffix}")
+                if pending:
+                    raise GitError("git ls-tree returned a non-NUL-terminated record stream")
+            except OSError as exc:
+                raise GitError(f"cannot read git ls-tree output: {exc}") from exc
+
+    def diff_paths(
+        self,
+        base: str,
+        target: str,
+        *,
+        pathspec: str,
+        diff_filter: str,
+        max_paths: int,
+        max_path_bytes: int,
+    ) -> tuple[bytes, ...]:
+        """Return at most ``max_paths + 1`` filtered paths using bounded reads."""
+
+        if max_paths < 0 or max_path_bytes < 1:
+            raise GitError("diff-path limits must be non-negative and non-zero")
+        if diff_filter not in {"A", "a"}:
+            raise GitError(f"unsupported diff filter {diff_filter!r}")
+        base_oid = self.resolve_commit(base)
+        target_oid = self.resolve_commit(target)
+        args = [
+            "diff",
+            "--no-renames",
+            f"--diff-filter={diff_filter}",
+            "--name-only",
+            "-z",
+            base_oid,
+            target_oid,
+            "--",
+            pathspec,
+        ]
+        paths: list[bytes] = []
+        pending = b""
+        with self._streaming_process(args, operation="git diff for added-path preflight") as (
+            process,
+            stdout,
+            stderr_file,
+        ):
+            try:
+                while chunk := stdout.read(_GIT_READ_CHUNK_BYTES):
+                    pending += chunk
+                    records = pending.split(b"\0")
+                    pending = records.pop()
+                    if any(not record for record in records):
+                        raise GitError("git diff returned an empty added path")
+                    if any(len(record) > max_path_bytes for record in records):
+                        raise GitError(f"git diff returned a path longer than {max_path_bytes} bytes")
+                    paths.extend(records)
+                    if len(pending) > max_path_bytes:
+                        raise GitError(f"git diff returned a path longer than {max_path_bytes} bytes")
+                    if len(paths) > max_paths:
+                        return tuple(paths[: max_paths + 1])
+
+                returncode = process.wait()
+                detail = self._stderr_detail(stderr_file)
+                if returncode != 0:
+                    suffix = f": {detail}" if detail else ""
+                    raise GitError(f"git diff added-path preflight failed with exit {returncode}{suffix}")
+                if pending:
+                    raise GitError("git diff returned a non-NUL-terminated path stream")
+                return tuple(paths)
+            except OSError as exc:
+                raise GitError(f"cannot read git diff added-path preflight: {exc}") from exc
 
     def count_added_paths(
         self,
@@ -176,73 +321,16 @@ class GitRepository:
     ) -> int:
         """Count added paths up to ``max_paths + 1`` without buffering the diff."""
 
-        if max_paths < 0 or max_path_bytes < 1:
-            raise GitError("added-path limits must be non-negative and non-zero")
-        base_oid = self.resolve_commit(base)
-        target_oid = self.resolve_commit(target)
-        env = os.environ.copy()
-        env["GIT_NO_REPLACE_OBJECTS"] = "1"
-        command = [
-            "git",
-            "--no-replace-objects",
-            "diff",
-            "--no-renames",
-            "--diff-filter=A",
-            "--name-only",
-            "-z",
-            base_oid,
-            target_oid,
-            "--",
-            pathspec,
-        ]
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=self.root,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+        return len(
+            self.diff_paths(
+                base,
+                target,
+                pathspec=pathspec,
+                diff_filter="A",
+                max_paths=max_paths,
+                max_path_bytes=max_path_bytes,
             )
-        except OSError as exc:
-            raise GitError(f"cannot start git diff for added-path preflight: {exc}") from exc
-
-        stdout = cast(BinaryIO, process.stdout)
-        stderr = cast(BinaryIO, process.stderr)
-        count = 0
-        pending = b""
-        try:
-            while chunk := stdout.read(64 * 1024):
-                pending += chunk
-                records = pending.split(b"\0")
-                pending = records.pop()
-                if any(not record for record in records):
-                    raise GitError("git diff returned an empty added path")
-                if any(len(record) > max_path_bytes for record in records):
-                    raise GitError(f"git diff returned a path longer than {max_path_bytes} bytes")
-                count += len(records)
-                if len(pending) > max_path_bytes:
-                    raise GitError(f"git diff returned a path longer than {max_path_bytes} bytes")
-                if count > max_paths:
-                    process.kill()
-                    process.wait()
-                    return count
-
-            detail = stderr.read().decode("utf-8", errors="replace").strip()
-            returncode = process.wait()
-            if returncode != 0:
-                suffix = f": {detail}" if detail else ""
-                raise GitError(f"git diff added-path preflight failed with exit {returncode}{suffix}")
-            if pending:
-                raise GitError("git diff returned a non-NUL-terminated path stream")
-            return count
-        except OSError as exc:
-            raise GitError(f"cannot read git diff added-path preflight: {exc}") from exc
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-            stdout.close()
-            stderr.close()
+        )
 
     def read_blobs(
         self,

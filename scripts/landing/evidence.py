@@ -8,7 +8,7 @@ import os
 import re
 import secrets
 import stat
-from collections.abc import Iterator
+from collections.abc import Iterator, Set
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -33,6 +33,9 @@ MAX_RECEIPT_BATCH_BYTES = MAX_RECEIPT_BYTES * RECEIPT_READ_BATCH_SIZE
 MAX_NEW_RECEIPTS = 32
 MAX_RECEIPT_PATH_BYTES = 16 * 1024
 MAX_LEDGER_LINE_BYTES = 256 * 1024
+MAX_TREE_ENTRIES = 250_000
+MAX_TREE_BYTES = 256 * 1024 * 1024
+MAX_TREE_RECORD_BYTES = 64 * 1024
 
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 _RECEIPT_PATH_RE = re.compile(rb"^proof/preship-reviews/v2/([0-9a-f]{64})/([0-9a-f]{64})\.json$")
@@ -153,8 +156,6 @@ def repository_identity(repo: GitRepository) -> str:
 @dataclass(frozen=True)
 class Receipt:
     path: bytes
-    entry: TreeEntry
-    payload: dict[str, Any]
     reviewed_content_sha256: str
     receipt_sha256: str
     reviewed_commit: str
@@ -164,7 +165,8 @@ class Receipt:
 class TreeSnapshot:
     commit: str
     content_sha256: str
-    entries: dict[bytes, TreeEntry]
+    # Callers choose the minimal receipt subset they need. Ordinary tree records
+    # and validated historical receipts are never retained by production paths.
     receipts: dict[bytes, Receipt]
 
 
@@ -248,45 +250,32 @@ def _validate_receipt(
 
     return Receipt(
         path=entry.path,
-        entry=entry,
-        payload=payload,
         reviewed_content_sha256=content_digest,
         receipt_sha256=actual_receipt_digest,
         reviewed_commit=reviewed_commit,
     )
 
 
-def snapshot_tree(repo: GitRepository, commit: str, *, repository: str | None = None) -> TreeSnapshot:
-    """Validate a tree's reserved namespace and hash every non-receipt record."""
+def snapshot_tree(
+    repo: GitRepository,
+    commit: str,
+    *,
+    repository: str | None = None,
+    receipt_paths: Set[bytes] = frozenset(),
+    retain_all_receipts: bool = False,
+    retain_matching_receipts: bool = False,
+) -> TreeSnapshot:
+    """Validate a tree, hash ordinary entries, and retain only requested receipts."""
 
+    if retain_all_receipts and retain_matching_receipts:
+        raise EvidenceError("receipt retention modes are mutually exclusive")
     resolved = repo.resolve_commit(commit)
     expected_repository = repository or repository_identity(repo)
-    entries = repo.tree_entries(resolved)
-    by_path: dict[bytes, TreeEntry] = {}
-    reserved: list[TreeEntry] = []
+    retained: dict[bytes, Receipt] = {}
 
-    for entry in entries:
-        if entry.path in by_path:
-            raise GitError(f"git ls-tree returned duplicate path {_display_path(entry.path)}")
-        by_path[entry.path] = entry
-        if entry.path == RECEIPT_NAMESPACE_BYTES or entry.path.startswith(RECEIPT_ROOT_BYTES):
-            if _RECEIPT_PATH_RE.fullmatch(entry.path) is None:
-                raise EvidenceError(f"unknown entry in reserved v2 namespace: {_display_path(entry.path)}")
-            if entry.mode != b"100644" or entry.kind != b"blob":
-                mode = entry.mode.decode("ascii", errors="replace")
-                kind = entry.kind.decode("ascii", errors="replace")
-                raise EvidenceError(
-                    f"v2 receipt {_display_path(entry.path)} must be a non-executable regular blob, got {mode} {kind}"
-                )
-            reserved.append(entry)
-
-    receipts: dict[bytes, Receipt] = {}
-    # The namespace is append-only, so a permanent total-count or total-byte
-    # ceiling would eventually make every legal PR impossible. Bound each Git
-    # read instead: old receipts are validated in fixed-size batches, while PR
-    # verification separately caps how many new receipts one change may add.
-    for offset in range(0, len(reserved), RECEIPT_READ_BATCH_SIZE):
-        batch = reserved[offset : offset + RECEIPT_READ_BATCH_SIZE]
+    def validate_batch(batch: list[TreeEntry], *, keep_all: bool) -> None:
+        if not batch:
+            return
         blobs = repo.read_blobs(
             (entry.oid for entry in batch),
             max_bytes=MAX_RECEIPT_BYTES,
@@ -299,17 +288,59 @@ def snapshot_tree(repo: GitRepository, commit: str, *, repository: str | None = 
                 entry=entry,
                 raw=blobs[entry.oid],
             )
-            receipts[entry.path] = receipt
+            if keep_all or entry.path in receipt_paths:
+                retained[entry.path] = receipt
 
     digest = hashlib.sha256()
-    for entry in entries:
-        if entry.path not in receipts:
-            digest.update(entry.raw_with_nul)
+    previous_path: bytes | None = None
+    ordinary_entries = 0
+    ordinary_bytes = 0
+    receipt_batch: list[TreeEntry] = []
+    for entry in repo.tree_entries(resolved, max_record_bytes=MAX_TREE_RECORD_BYTES):
+        if entry.path == previous_path:
+            raise GitError(f"git ls-tree returned duplicate path {_display_path(entry.path)}")
+        previous_path = entry.path
+        if entry.path == RECEIPT_NAMESPACE_BYTES or entry.path.startswith(RECEIPT_ROOT_BYTES):
+            if _RECEIPT_PATH_RE.fullmatch(entry.path) is None:
+                raise EvidenceError(f"unknown entry in reserved v2 namespace: {_display_path(entry.path)}")
+            if entry.mode != b"100644" or entry.kind != b"blob":
+                mode = entry.mode.decode("ascii", errors="replace")
+                kind = entry.kind.decode("ascii", errors="replace")
+                raise EvidenceError(
+                    f"v2 receipt {_display_path(entry.path)} must be a non-executable regular blob, got {mode} {kind}"
+                )
+            receipt_batch.append(entry)
+            if len(receipt_batch) == RECEIPT_READ_BATCH_SIZE:
+                validate_batch(receipt_batch, keep_all=retain_all_receipts)
+                receipt_batch = []
+            continue
+
+        ordinary_entries += 1
+        if ordinary_entries > MAX_TREE_ENTRIES:
+            raise GitError(f"git ls-tree returned more than {MAX_TREE_ENTRIES} ordinary entries")
+        ordinary_bytes += len(entry.raw_with_nul)
+        if ordinary_bytes > MAX_TREE_BYTES:
+            raise GitError(f"git ls-tree returned more than {MAX_TREE_BYTES} ordinary bytes")
+        digest.update(entry.raw_with_nul)
+    validate_batch(receipt_batch, keep_all=retain_all_receipts)
+
+    content_digest = digest.hexdigest()
+    if retain_matching_receipts:
+        matching_prefix = RECEIPT_ROOT_BYTES + content_digest.encode("ascii") + b"/"
+        matching_batch: list[TreeEntry] = []
+        for entry in repo.tree_entries(resolved, max_record_bytes=MAX_TREE_RECORD_BYTES):
+            if not entry.path.startswith(matching_prefix):
+                continue
+            matching_batch.append(entry)
+            if len(matching_batch) == RECEIPT_READ_BATCH_SIZE:
+                validate_batch(matching_batch, keep_all=True)
+                matching_batch = []
+        validate_batch(matching_batch, keep_all=True)
+
     return TreeSnapshot(
         commit=resolved,
-        content_sha256=digest.hexdigest(),
-        entries=by_path,
-        receipts=receipts,
+        content_sha256=content_digest,
+        receipts=retained,
     )
 
 
@@ -780,32 +811,36 @@ def verify_v2(
             raise EvidenceError(
                 f"base {base_commit} is not an ancestor of target {target_commit}; update the branch and review again"
             )
-        added_path_count = repo.count_added_paths(
+        added_paths = repo.diff_paths(
             base_commit,
             target_commit,
             pathspec=RECEIPT_ROOT,
+            diff_filter="A",
             max_paths=MAX_NEW_RECEIPTS,
             max_path_bytes=MAX_RECEIPT_PATH_BYTES,
         )
-        if added_path_count > MAX_NEW_RECEIPTS:
+        if len(added_paths) > MAX_NEW_RECEIPTS:
             raise EvidenceError(f"PR adds more than {MAX_NEW_RECEIPTS} entries in the reserved v2 namespace")
-        target_snapshot = snapshot_tree(repo, target_commit, repository=repository)
-        base_snapshot = snapshot_tree(repo, base_commit, repository=repository)
+        changed_base_paths = repo.diff_paths(
+            base_commit,
+            target_commit,
+            pathspec=RECEIPT_ROOT,
+            diff_filter="a",
+            max_paths=0,
+            max_path_bytes=MAX_RECEIPT_PATH_BYTES,
+        )
+        if changed_base_paths:
+            raise EvidenceError(f"base v2 receipt {_display_path(changed_base_paths[0])} was deleted or modified")
+        target_snapshot = snapshot_tree(
+            repo,
+            target_commit,
+            repository=repository,
+            receipt_paths=frozenset(added_paths),
+        )
 
-        for path, base_receipt in base_snapshot.receipts.items():
-            target_entry = target_snapshot.entries.get(path)
-            if target_entry is None:
-                raise EvidenceError(f"base v2 receipt {_display_path(path)} was deleted")
-            if target_entry.raw != base_receipt.entry.raw:
-                raise EvidenceError(f"base v2 receipt {_display_path(path)} was modified")
-
-        new_receipts = [
-            receipt for path, receipt in target_snapshot.receipts.items() if path not in base_snapshot.receipts
-        ]
+        new_receipts = list(target_snapshot.receipts.values())
         if not new_receipts:
             raise EvidenceError("PR adds no new v2 review receipt")
-        if len(new_receipts) > MAX_NEW_RECEIPTS:
-            raise EvidenceError(f"PR adds {len(new_receipts)} v2 review receipts; maximum is {MAX_NEW_RECEIPTS}")
 
         digest_cache: dict[str, str] = {}
         for receipt in new_receipts:
@@ -816,6 +851,39 @@ def verify_v2(
                     f"new v2 receipt {_display_path(receipt.path)} pins an unavailable reviewed commit"
                 ) from exc
             if reviewed_commit not in digest_cache:
+                if not repo.is_ancestor(base_commit, reviewed_commit) or not repo.is_ancestor(
+                    reviewed_commit, target_commit
+                ):
+                    raise EvidenceError(
+                        f"new v2 receipt {_display_path(receipt.path)} pins a reviewed commit "
+                        "outside base-to-target history"
+                    )
+                reviewed_added_paths = repo.diff_paths(
+                    base_commit,
+                    reviewed_commit,
+                    pathspec=RECEIPT_ROOT,
+                    diff_filter="A",
+                    max_paths=MAX_NEW_RECEIPTS,
+                    max_path_bytes=MAX_RECEIPT_PATH_BYTES,
+                )
+                if len(reviewed_added_paths) > MAX_NEW_RECEIPTS:
+                    raise EvidenceError(
+                        f"reviewed commit {reviewed_commit} adds more than {MAX_NEW_RECEIPTS} entries "
+                        "in the reserved v2 namespace"
+                    )
+                reviewed_changed_paths = repo.diff_paths(
+                    base_commit,
+                    reviewed_commit,
+                    pathspec=RECEIPT_ROOT,
+                    diff_filter="a",
+                    max_paths=0,
+                    max_path_bytes=MAX_RECEIPT_PATH_BYTES,
+                )
+                if reviewed_changed_paths:
+                    raise EvidenceError(
+                        f"reviewed commit {reviewed_commit} deletes or modifies base v2 receipt "
+                        f"{_display_path(reviewed_changed_paths[0])}"
+                    )
                 digest_cache[reviewed_commit] = snapshot_tree(
                     repo,
                     reviewed_commit,
@@ -830,7 +898,12 @@ def verify_v2(
 
         matching = new_receipts
     else:
-        target_snapshot = snapshot_tree(repo, target_commit, repository=repository)
+        target_snapshot = snapshot_tree(
+            repo,
+            target_commit,
+            repository=repository,
+            retain_matching_receipts=True,
+        )
         matching = _matching_receipts(target_snapshot)
         if not matching:
             raise EvidenceError("no surviving v2 receipt matches the main-tree content")

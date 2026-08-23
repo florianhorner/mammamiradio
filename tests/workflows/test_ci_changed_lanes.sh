@@ -77,6 +77,8 @@ pass "quality.yml edits re-run browser, media, and workflow self-tests"
 
 for landing_coverage_input in \
   tests/repo/test_preship_evidence_v2.py \
+  sitecustomize.py \
+  pytest.py \
   conftest.py \
   tests/conftest.py \
   tests/repo/conftest.py \

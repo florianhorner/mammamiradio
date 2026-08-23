@@ -86,6 +86,9 @@ jobs:
             echo "::notice::v2 evidence was not evaluated because the trusted base has no v2 verifier; it activates after this bootstrap PR lands."
             exit 0
           fi
+          # Invoke the trusted-base package directly. The shell wrapper's venv and
+          # interpreter override are local conveniences; hosted CI intentionally uses
+          # its runner Python with isolated import paths.
           if PYTHONPATH="$GITHUB_WORKSPACE" python3 -S -P -m scripts.landing evidence verify \
             --target "$HEAD_SHA" --base "$BASE_SHA" --mode pr; then
             echo "::notice::v2 pre-ship review evidence verified for this PR head."

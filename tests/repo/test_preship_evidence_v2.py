@@ -23,12 +23,11 @@ from scripts.landing.evidence import (
     MAX_NEW_RECEIPTS,
     MAX_RECEIPT_BATCH_BYTES,
     MAX_RECEIPT_BYTES,
+    MAX_TREE_RECORD_BYTES,
     RECEIPT_KIND,
     RECEIPT_READ_BATCH_SIZE,
     RECEIPT_ROOT,
     SCHEMA_VERSION,
-    Receipt,
-    TreeSnapshot,
     VerificationResult,
     _iter_ledger_records,
     _ledger_files,
@@ -71,11 +70,14 @@ class _FakeProcess:
         *,
         stdout: bytes = b"",
         stderr: bytes = b"",
+        stderr_after_wait: bytes = b"",
         returncode: int = 0,
         stdout_stream: Any | None = None,
     ) -> None:
         self.stdout = stdout_stream or io.BytesIO(stdout)
-        self.stderr = io.BytesIO(stderr)
+        self.stderr_bytes = stderr
+        self.stderr_after_wait = stderr_after_wait
+        self.stderr_stream: Any | None = None
         self.returncode = returncode
         self.killed = False
         self._status: int | None = None
@@ -86,11 +88,25 @@ class _FakeProcess:
 
     def wait(self) -> int:
         if self._status is None:
+            if self.stderr_stream is not None and self.stderr_after_wait:
+                self.stderr_stream.write(self.stderr_after_wait)
+                self.stderr_stream.flush()
             self._status = self.returncode
         return self._status
 
     def poll(self) -> int | None:
         return self._status
+
+
+def _popen_factory(process: _FakeProcess) -> Any:
+    def start(*args: Any, stderr: Any, **kwargs: Any) -> _FakeProcess:
+        assert stderr is not subprocess.PIPE
+        process.stderr_stream = stderr
+        stderr.write(process.stderr_bytes)
+        stderr.flush()
+        return process
+
+    return start
 
 
 def _git(
@@ -266,7 +282,7 @@ def test_raw_recursive_tree_digest_survives_receipt_commit_and_squash(repo: GitR
     assert before.content_sha256 == hashlib.sha256(raw_tree).hexdigest()
 
     receipt_path, _ = _add_receipt(repo, reviewed_commit=reviewed)
-    after = snapshot_tree(repo, "HEAD")
+    after = snapshot_tree(repo, "HEAD", retain_all_receipts=True)
     assert after.content_sha256 == before.content_sha256
     assert os.fsencode(receipt_path.as_posix()) in after.receipts
 
@@ -329,8 +345,14 @@ def test_path_bytes_with_tabs_newlines_unicode_and_non_utf8_are_preserved(repo: 
     snapshot = snapshot_tree(repo, "HEAD")
     raw_tree = repo.run(("ls-tree", "-r", "-z", "--full-tree", snapshot.commit))
     assert snapshot.content_sha256 == hashlib.sha256(raw_tree).hexdigest()
+    entries = tuple(
+        repo.tree_entries(
+            snapshot.commit,
+            max_record_bytes=MAX_TREE_RECORD_BYTES,
+        )
+    )
     for name in names:
-        assert any(entry.path == name for entry in snapshot.entries.values())
+        assert any(entry.path == name for entry in entries)
 
 
 def test_git_replacement_refs_do_not_change_content_identity(repo: GitRepository) -> None:
@@ -360,6 +382,12 @@ def test_git_repository_rejects_empty_discovery_result(monkeypatch: pytest.Monke
         GitRepository.discover()
 
 
+def test_git_repository_wraps_process_start_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gitops_module.subprocess, "run", Mock(side_effect=OSError("git missing")))
+    with pytest.raises(GitError, match="cannot run git: git missing"):
+        GitRepository.discover()
+
+
 @pytest.mark.parametrize(
     "object_format, expected_length",
     [(b"sha1\n", 40), (b"sha256\n", 64)],
@@ -381,6 +409,49 @@ def test_git_repository_rejects_unknown_object_format(
     monkeypatch.setattr(GitRepository, "run", Mock(return_value=b"future\n"))
     with pytest.raises(GitError, match="unsupported Git object format"):
         GitRepository(tmp_path)
+
+
+def test_git_repository_ignores_inherited_git_environment(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = _init_repo(other_root)
+    (other.root / "other.txt").write_text("other\n")
+    _commit(other.root, "other")
+    monkeypatch.setenv("GIT_DIR", str(other.root / ".git"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "remote.origin.url")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/attacker/example.git")
+    monkeypatch.setenv("GIT_TRACE", "1")
+
+    assert repo.head() != other.head()
+    assert repo.origin_url() == ORIGIN
+    env = repo._environment()
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert env["LC_ALL"] == "C"
+    assert "GIT_DIR" not in env
+    assert "GIT_CONFIG_COUNT" not in env
+    assert "GIT_TRACE" not in env
+
+
+def test_streaming_git_wraps_temporary_file_errors(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gitops_module.tempfile, "TemporaryFile", Mock(side_effect=OSError("no temp space")))
+    with pytest.raises(GitError, match="cannot create bounded stderr buffer"):
+        repo.count_added_paths(
+            "HEAD",
+            "HEAD",
+            pathspec=RECEIPT_ROOT,
+            max_paths=1,
+            max_path_bytes=16,
+        )
 
 
 @pytest.mark.parametrize(
@@ -444,16 +515,120 @@ def test_tree_entries_rejects_malformed_git_output(
     output: bytes,
     expected: str,
 ) -> None:
+    process = _FakeProcess(stdout=output)
     monkeypatch.setattr(repo, "resolve_commit", Mock(return_value="a" * repo.oid_length))
-    monkeypatch.setattr(repo, "run", Mock(return_value=output))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
     with pytest.raises(GitError, match=expected):
-        repo.tree_entries("HEAD")
+        tuple(
+            repo.tree_entries(
+                "HEAD",
+                max_record_bytes=256,
+            )
+        )
 
 
 def test_tree_entries_accepts_empty_tree(repo: GitRepository, monkeypatch: pytest.MonkeyPatch) -> None:
+    process = _FakeProcess()
     monkeypatch.setattr(repo, "resolve_commit", Mock(return_value="a" * repo.oid_length))
-    monkeypatch.setattr(repo, "run", Mock(return_value=b""))
-    assert repo.tree_entries("HEAD") == ()
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
+    assert (
+        tuple(
+            repo.tree_entries(
+                "HEAD",
+                max_record_bytes=256,
+            )
+        )
+        == ()
+    )
+
+
+def test_tree_entries_rejects_invalid_limits(
+    repo: GitRepository,
+) -> None:
+    with pytest.raises(GitError, match="tree record limit"):
+        tuple(
+            repo.tree_entries(
+                "HEAD",
+                max_record_bytes=0,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "output,returncode,max_record_bytes,expected",
+    [
+        (b"too-long\0", 0, 3, "record longer"),
+        (b"\0", 0, 10, "empty record"),
+        (b"unterminated", 0, 3, "record longer"),
+        (b"unterminated", 0, 32, "non-NUL-terminated"),
+        (b"", 2, 32, "exit 2: boom"),
+    ],
+)
+def test_tree_entries_enforces_stream_bounds_and_process_result(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    output: bytes,
+    returncode: int,
+    max_record_bytes: int,
+    expected: str,
+) -> None:
+    process = _FakeProcess(stdout=output, stderr=b"boom", returncode=returncode)
+    monkeypatch.setattr(repo, "resolve_commit", Mock(return_value="a" * repo.oid_length))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
+
+    with pytest.raises(GitError, match=expected):
+        tuple(
+            repo.tree_entries(
+                "HEAD",
+                max_record_bytes=max_record_bytes,
+            )
+        )
+
+    assert process.poll() is not None
+
+
+def test_tree_entries_preserves_records_split_across_chunks(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oid = b"a" * repo.oid_length
+    stdout = Mock()
+    stdout.read.side_effect = [b"100644 blob " + oid + b"\todd", b" path\0", b""]
+    stdout.close = Mock()
+    process = _FakeProcess(stdout_stream=stdout)
+    monkeypatch.setattr(repo, "resolve_commit", Mock(return_value="a" * repo.oid_length))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
+
+    entries = tuple(
+        repo.tree_entries(
+            "HEAD",
+            max_record_bytes=128,
+        )
+    )
+
+    assert [entry.path for entry in entries] == [b"odd path"]
+    assert all(call.args == (gitops_module._GIT_READ_CHUNK_BYTES,) for call in stdout.read.call_args_list)
+    stdout.close.assert_called_once()
+
+
+def test_tree_entries_wraps_stream_read_errors_and_reaps_process(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broken_stdout = Mock()
+    broken_stdout.read.side_effect = OSError("read failed")
+    process = _FakeProcess(stdout_stream=broken_stdout)
+    monkeypatch.setattr(repo, "resolve_commit", Mock(return_value="a" * repo.oid_length))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
+
+    with pytest.raises(GitError, match="cannot read git ls-tree"):
+        tuple(
+            repo.tree_entries(
+                "HEAD",
+                max_record_bytes=128,
+            )
+        )
+    assert process.killed
 
 
 def test_added_path_preflight_counts_and_stops_after_limit(repo: GitRepository) -> None:
@@ -493,13 +668,25 @@ def test_added_path_preflight_rejects_invalid_limits(
     max_paths: int,
     max_path_bytes: int,
 ) -> None:
-    with pytest.raises(GitError, match="added-path limits"):
+    with pytest.raises(GitError, match="diff-path limits"):
         repo.count_added_paths(
             "HEAD",
             "HEAD",
             pathspec=RECEIPT_ROOT,
             max_paths=max_paths,
             max_path_bytes=max_path_bytes,
+        )
+
+
+def test_diff_path_preflight_rejects_unknown_filter(repo: GitRepository) -> None:
+    with pytest.raises(GitError, match="unsupported diff filter"):
+        repo.diff_paths(
+            "HEAD",
+            "HEAD",
+            pathspec=RECEIPT_ROOT,
+            diff_filter="M",
+            max_paths=1,
+            max_path_bytes=16,
         )
 
 
@@ -543,7 +730,7 @@ def test_added_path_preflight_rejects_malformed_or_failed_streams(
     process = _FakeProcess(stdout=stdout, stderr=stderr, returncode=returncode)
     head = repo.head()
     monkeypatch.setattr(repo, "resolve_commit", Mock(return_value=head))
-    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
     with pytest.raises(GitError, match=expected):
         repo.count_added_paths(
             "HEAD",
@@ -551,6 +738,47 @@ def test_added_path_preflight_rejects_malformed_or_failed_streams(
             pathspec=RECEIPT_ROOT,
             max_paths=4,
             max_path_bytes=max_path_bytes,
+        )
+
+
+def test_added_path_preflight_redirects_large_stderr_without_deadlock(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _FakeProcess(stderr=b"boom\n" + (b"x" * (256 * 1024)), returncode=2)
+    head = repo.head()
+    monkeypatch.setattr(repo, "resolve_commit", Mock(return_value=head))
+    popen = Mock(side_effect=_popen_factory(process))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", popen)
+
+    with pytest.raises(GitError, match="exit 2: boom"):
+        repo.count_added_paths(
+            "HEAD",
+            "HEAD",
+            pathspec=RECEIPT_ROOT,
+            max_paths=4,
+            max_path_bytes=32,
+        )
+
+    assert popen.call_args.kwargs["stderr"] is not subprocess.PIPE
+
+
+def test_streaming_git_reads_diagnostics_after_process_exit(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _FakeProcess(stderr_after_wait=b"late diagnostic", returncode=2)
+    head = repo.head()
+    monkeypatch.setattr(repo, "resolve_commit", Mock(return_value=head))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
+
+    with pytest.raises(GitError, match="exit 2: late diagnostic"):
+        repo.count_added_paths(
+            "HEAD",
+            "HEAD",
+            pathspec=RECEIPT_ROOT,
+            max_paths=4,
+            max_path_bytes=32,
         )
 
 
@@ -563,7 +791,7 @@ def test_added_path_preflight_wraps_stream_read_errors_and_reaps_process(
     process = _FakeProcess(stdout_stream=broken_stdout)
     head = repo.head()
     monkeypatch.setattr(repo, "resolve_commit", Mock(return_value=head))
-    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(gitops_module.subprocess, "Popen", Mock(side_effect=_popen_factory(process)))
 
     with pytest.raises(GitError, match="cannot read git diff"):
         repo.count_added_paths(
@@ -587,6 +815,48 @@ def test_snapshot_rejects_duplicate_tree_path(repo: GitRepository, monkeypatch: 
     monkeypatch.setattr(repo, "tree_entries", Mock(return_value=(entry, entry)))
     with pytest.raises(GitError, match="duplicate path"):
         snapshot_tree(repo, "HEAD", repository=EXPECTED_REPOSITORY)
+
+
+@pytest.mark.parametrize(
+    "constant,expected",
+    [("MAX_TREE_ENTRIES", "ordinary entries"), ("MAX_TREE_BYTES", "ordinary bytes")],
+)
+def test_snapshot_bounds_ordinary_tree_without_retaining_entries(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    constant: str,
+    expected: str,
+) -> None:
+    assert snapshot_tree(repo, "HEAD").receipts == {}
+    monkeypatch.setattr(evidence_module, constant, 0)
+    with pytest.raises(GitError, match=expected):
+        snapshot_tree(repo, "HEAD")
+
+
+def test_snapshot_validates_history_but_retains_only_requested_receipts(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_path, _ = _add_receipt(repo, timestamp="2026-08-23T09:00:00Z")
+    second_path, _ = _add_receipt(
+        repo,
+        reviewed_commit=repo.head(),
+        timestamp="2026-08-23T10:00:00Z",
+        source_digest=hashlib.sha256(b"second source").hexdigest(),
+    )
+    first = os.fsencode(first_path.as_posix())
+    second = os.fsencode(second_path.as_posix())
+    monkeypatch.setattr(evidence_module, "MAX_TREE_ENTRIES", 1)
+
+    assert snapshot_tree(repo, "HEAD").receipts == {}
+    assert set(snapshot_tree(repo, "HEAD", receipt_paths={first}).receipts) == {first}
+    assert set(snapshot_tree(repo, "HEAD", retain_all_receipts=True).receipts) == {first, second}
+    assert set(snapshot_tree(repo, "HEAD", retain_matching_receipts=True).receipts) == {first, second}
+
+
+def test_snapshot_rejects_conflicting_receipt_retention_modes(repo: GitRepository) -> None:
+    with pytest.raises(EvidenceError, match="mutually exclusive"):
+        snapshot_tree(repo, "HEAD", retain_all_receipts=True, retain_matching_receipts=True)
 
 
 @pytest.mark.parametrize(
@@ -914,7 +1184,7 @@ def test_receipt_namespace_is_validated_in_bounded_batches(
     monkeypatch.setattr(repo, "read_blobs", read_blobs)
     monkeypatch.setattr(evidence_module, "RECEIPT_READ_BATCH_SIZE", 1)
 
-    snapshot = snapshot_tree(repo, "HEAD")
+    snapshot = snapshot_tree(repo, "HEAD", retain_all_receipts=True)
 
     assert len(snapshot.receipts) == 2
     assert read_blobs.call_count == 2
@@ -1741,7 +2011,7 @@ def test_pr_verification_requires_current_base(repo: GitRepository) -> None:
 def test_pr_rejects_deleted_base_receipt(repo: GitRepository) -> None:
     _add_receipt(repo)
     base = repo.head()
-    base_receipt = next(iter(snapshot_tree(repo, base).receipts))
+    base_receipt = next(iter(snapshot_tree(repo, base, retain_all_receipts=True).receipts))
     (repo.root / os.fsdecode(base_receipt)).unlink()
     reviewed = _commit(repo.root, "delete base receipt")
     _add_receipt(
@@ -1751,51 +2021,29 @@ def test_pr_rejects_deleted_base_receipt(repo: GitRepository) -> None:
     )
     target = repo.head()
 
-    with pytest.raises(EvidenceError, match="was deleted"):
+    with pytest.raises(EvidenceError, match="was deleted or modified"):
         verify_v2(repo, target=target, base=base, mode="pr")
 
 
 def test_pr_rejects_modified_base_receipt_mode(repo: GitRepository) -> None:
     _add_receipt(repo)
     base = repo.head()
-    base_receipt = next(iter(snapshot_tree(repo, base).receipts))
+    base_receipt = next(iter(snapshot_tree(repo, base, retain_all_receipts=True).receipts))
     (repo.root / os.fsdecode(base_receipt)).chmod(0o755)
     target = _commit(repo.root, "modify base receipt mode")
 
-    with pytest.raises(EvidenceError, match="non-executable regular blob"):
+    with pytest.raises(EvidenceError, match="was deleted or modified"):
         verify_v2(repo, target=target, base=base, mode="pr")
 
 
-def test_pr_verifier_defensively_rejects_changed_base_receipt_tree_record(
+def test_pr_verifier_defensively_rejects_non_additive_namespace_diff(
     repo: GitRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = b"proof/preship-reviews/v2/" + (b"a" * 64) + b"/" + (b"b" * 64) + b".json"
-    base_entry = TreeEntry(raw=b"base", mode=b"100644", kind=b"blob", oid="a" * 40, path=path)
-    target_entry = TreeEntry(raw=b"target", mode=b"100644", kind=b"blob", oid="b" * 40, path=path)
-    receipt = Receipt(
-        path=path,
-        entry=base_entry,
-        payload={},
-        reviewed_content_sha256="a" * 64,
-        receipt_sha256="b" * 64,
-        reviewed_commit=repo.head(),
-    )
-    base_snapshot = TreeSnapshot(
-        commit=repo.head(),
-        content_sha256="a" * 64,
-        entries={path: base_entry},
-        receipts={path: receipt},
-    )
-    target_snapshot = TreeSnapshot(
-        commit=repo.head(),
-        content_sha256="a" * 64,
-        entries={path: target_entry},
-        receipts={path: receipt},
-    )
-    monkeypatch.setattr(evidence_module, "snapshot_tree", Mock(side_effect=[target_snapshot, base_snapshot]))
+    monkeypatch.setattr(repo, "diff_paths", Mock(side_effect=[(), (path,)]))
 
-    with pytest.raises(EvidenceError, match="was modified"):
+    with pytest.raises(EvidenceError, match="was deleted or modified"):
         verify_v2(repo, target="HEAD", base="HEAD", mode="pr")
 
 
@@ -1838,19 +2086,6 @@ def test_pr_rejects_new_receipt_count_above_bound(
     assert MAX_NEW_RECEIPTS >= 1
 
 
-def test_pr_defensively_rechecks_new_receipt_count_after_preflight(
-    repo: GitRepository,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    base = repo.head()
-    _add_receipt(repo)
-    monkeypatch.setattr(repo, "count_added_paths", Mock(return_value=0))
-    monkeypatch.setattr(evidence_module, "MAX_NEW_RECEIPTS", 0)
-
-    with pytest.raises(EvidenceError, match="PR adds 1 v2 review receipts"):
-        verify_v2(repo, target="HEAD", base=base, mode="pr")
-
-
 def test_append_only_history_stays_landable_across_read_batches(
     repo: GitRepository,
     monkeypatch: pytest.MonkeyPatch,
@@ -1890,6 +2125,74 @@ def test_pr_rejects_unavailable_reviewed_commit_while_main_accepts(repo: GitRepo
     assert verify_v2(repo, target=target, base=None, mode="main").content_sha256 == content_digest
 
 
+def test_pr_rejects_reviewed_commit_outside_base_to_target_history(repo: GitRepository) -> None:
+    base = repo.head()
+    content_digest = snapshot_tree(repo, base).content_sha256
+    tree = _git(repo.root, "rev-parse", f"{base}^{{tree}}").stdout.decode().strip()
+    side_commit = _git(repo.root, "commit-tree", tree, input_bytes=b"side\n").stdout.decode().strip()
+    _add_receipt(repo, reviewed_commit=side_commit, content_digest=content_digest)
+
+    with pytest.raises(EvidenceError, match="outside base-to-target history"):
+        verify_v2(repo, target="HEAD", base=base, mode="pr")
+
+
+def test_pr_bounds_transient_receipts_before_scanning_reviewed_commit(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = repo.head()
+    content_digest = snapshot_tree(repo, base).content_sha256
+    first, _ = _add_receipt(repo, reviewed_commit=base, content_digest=content_digest)
+    second, _ = _add_receipt(
+        repo,
+        reviewed_commit=base,
+        content_digest=content_digest,
+        timestamp="2026-08-23T10:01:00Z",
+        source_digest=hashlib.sha256(b"transient second").hexdigest(),
+    )
+    reviewed = repo.head()
+    (repo.root / first).unlink()
+    (repo.root / second).unlink()
+    _commit(repo.root, "remove transient receipts")
+    _add_receipt(
+        repo,
+        reviewed_commit=reviewed,
+        content_digest=content_digest,
+        timestamp="2026-08-23T10:02:00Z",
+        source_digest=hashlib.sha256(b"final").hexdigest(),
+    )
+    monkeypatch.setattr(evidence_module, "MAX_NEW_RECEIPTS", 1)
+    real_snapshot_tree = evidence_module.snapshot_tree
+    snapshot_spy = Mock(wraps=real_snapshot_tree)
+    monkeypatch.setattr(evidence_module, "snapshot_tree", snapshot_spy)
+
+    with pytest.raises(EvidenceError, match=r"reviewed commit .* adds more than 1 entries"):
+        verify_v2(repo, target="HEAD", base=base, mode="pr")
+
+    assert all(call.args[1] != reviewed for call in snapshot_spy.call_args_list)
+
+
+def test_pr_rejects_reviewed_commit_that_temporarily_modifies_base_receipt(repo: GitRepository) -> None:
+    base_path, _ = _add_receipt(repo)
+    base = repo.head()
+    content_digest = snapshot_tree(repo, base).content_sha256
+    receipt_file = repo.root / base_path
+    receipt_file.chmod(0o755)
+    reviewed = _commit(repo.root, "temporarily modify base receipt")
+    receipt_file.chmod(0o644)
+    _commit(repo.root, "restore base receipt")
+    _add_receipt(
+        repo,
+        reviewed_commit=reviewed,
+        content_digest=content_digest,
+        timestamp="2026-08-23T10:01:00Z",
+        source_digest=hashlib.sha256(b"final after restore").hexdigest(),
+    )
+
+    with pytest.raises(EvidenceError, match="deletes or modifies base v2 receipt"):
+        verify_v2(repo, target="HEAD", base=base, mode="pr")
+
+
 def test_main_verifies_surviving_digest_without_reopening_reviewed_commits(
     repo: GitRepository,
     monkeypatch: pytest.MonkeyPatch,
@@ -1926,6 +2229,16 @@ def test_main_verifies_surviving_digest_without_reopening_reviewed_commits(
     assert snapshot_spy.call_count == 1
 
 
+def test_main_validates_but_does_not_retain_stale_receipts(repo: GitRepository) -> None:
+    _add_receipt(repo)
+    (repo.root / "seed.txt").write_text("changed after review\n")
+    _commit(repo.root, "change reviewed content")
+
+    assert snapshot_tree(repo, "HEAD", retain_matching_receipts=True).receipts == {}
+    with pytest.raises(EvidenceError, match="no surviving v2 receipt"):
+        verify_v2(repo, target="HEAD", base=None, mode="main")
+
+
 def test_pr_rejects_receipt_whose_full_hex_name_is_only_a_ref(repo: GitRepository) -> None:
     base = repo.head()
     fake_full_id = "d" * repo.oid_length
@@ -1939,9 +2252,10 @@ def test_pr_rejects_receipt_whose_full_hex_name_is_only_a_ref(repo: GitRepositor
 
 
 def test_pr_rejects_receipt_that_pins_different_resolvable_content(repo: GitRepository) -> None:
-    wrong_reviewed_commit = repo.head()
+    base = repo.head()
+    wrong_reviewed_commit = base
     (repo.root / "feature.txt").write_text("feature\n")
-    base = _commit(repo.root, "feature base")
+    _commit(repo.root, "feature")
     content_digest = snapshot_tree(repo, "HEAD").content_sha256
     _add_receipt(repo, reviewed_commit=wrong_reviewed_commit, content_digest=content_digest)
 

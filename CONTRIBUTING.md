@@ -329,6 +329,10 @@ ruff format --check . # format check (CI mode)
 mypy mammamiradio/ tests/  # type check
 ```
 
+`scripts/ruff.toml` extends the root Ruff policy and ignores only `N999`:
+`scripts` is importable for the landing CLI, while its existing hyphenated
+command filenames remain stable shell entry points rather than Python modules.
+
 To install pre-commit hooks locally:
 
 ```bash
