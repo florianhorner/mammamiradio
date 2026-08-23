@@ -43,8 +43,22 @@ if [[ -z "$PR_BODY" ]]; then
   exit 0
 fi
 
-# Require at least one checked item in the Admin Panel Standards section
-if echo "$PR_BODY" | grep -qF -- "- [x]"; then
+# Require at least one checked item in the Admin Panel Standards section.
+# Extract only that section: heading (any ATX level) through the next heading or EOF.
+# awk always exits 0, so this is safe under set -e even when the heading is absent.
+SECTION=$(printf '%s\n' "$PR_BODY" | awk '
+  /^[[:space:]]*#+[[:space:]]*Admin Panel Standards[[:space:]]*$/ { grabbing = 1 }
+  grabbing && /^[[:space:]]*#+[[:space:]]/ && !/^[[:space:]]*#+[[:space:]]*Admin Panel Standards[[:space:]]*$/ { exit }
+  grabbing { print }
+')
+
+if [[ -z "$SECTION" ]]; then
+  echo "::error::Admin panel files changed but the PR body is missing the Admin Panel Standards checklist."
+  echo "::error::Copy the checklist from docs/design/admin-panel.md and check the applicable items before merging."
+  exit 1
+fi
+
+if printf '%s\n' "$SECTION" | grep -qF -- "- [x]"; then
   echo "Admin Panel Standards section contains checked items — OK."
   exit 0
 fi
