@@ -30,7 +30,7 @@ case "$*" in
     ;;
   *"branches/main/protection"*)
     [ -n "${GH_MOCK_PROT_FULL_FAIL:-}" ] && exit 1
-    printf '%s\n' "${GH_MOCK_PROT_FULL:-{\"required_conversation_resolution\":{\"enabled\":true}}}"
+    printf '%s\n' "${GH_MOCK_PROT_FULL:?}"
     ;;
   *"repos/{owner}/{repo}"*)
     [ -n "${GH_MOCK_REPO_FAIL:-}" ] && exit 1
@@ -43,11 +43,13 @@ chmod +x "$MOCK_BIN/gh"
 
 GOOD_REPO='{"allow_update_branch":true,"allow_auto_merge":true}'
 GOOD_PROT='{"strict":true,"contexts":["quality","pi-smoke","pre-ship evidence"]}'
+GOOD_PROT_FULL='{"required_conversation_resolution":{"enabled":true}}'
 
 run_gate() { # [env overrides...]
   RUN_RC=0
   RUN_OUT="$(env -u CI PATH="$MOCK_BIN:$PATH" \
       GH_MOCK_REPO="$GOOD_REPO" GH_MOCK_PROT="$GOOD_PROT" \
+      GH_MOCK_PROT_FULL="$GOOD_PROT_FULL" \
       "$@" bash "$GATE" 2>&1)" || RUN_RC=$?
 }
 
