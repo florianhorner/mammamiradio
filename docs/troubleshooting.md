@@ -95,6 +95,23 @@ For the supplied Docker image or Home Assistant app, local MP3s belong in the
   a running Home Assistant app container. A source checkout instead reads
   repo-local `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
 
+**"Clear pool" does not delete local music files, and the songs come back.**
+This is by design and is not a bug in the button. `POST /api/playlist/purge`
+empties the in-memory rotation only. On the next producer pass with an empty
+crate, `_recover_local_rotation` in `scheduling/producer.py` re-scans the music
+directory and loads whatever MP3s it finds, so operator-supplied songs return
+within one cycle. Local music also outranks the bundled starter catalog at
+startup (`playlist.py`), so a stale `/data/music` can shadow the starter set
+entirely and make the station look like it is ignoring the bundled crate.
+To stop specific songs permanently, use the per-row **✕ Ban** button, which
+writes a durable blocklist honored at every ingest doorway including norm-cache
+rescue. To remove the files themselves, delete them from the music directory
+through the deployment's storage tooling and restart, or switch to an explicit
+source. Confirm the starter catalog is ready in Motore first: emptying the music
+directory while no other source is available leaves the crate to the recovery
+ladder until the next restart, because no runtime path refills rotation from the
+starter catalog once the station is already running.
+
 When listeners are connected, `/readyz` flips back to `503 starting` if playback
 has been truly silent for more than 30 seconds — silent means no listener queue
 accepted audio, not merely that a file was selected. A station bridging an empty
@@ -129,11 +146,37 @@ Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
 - **Finish Jamendo setup** means the client ID or current non-commercial
   acknowledgement is missing. A migrated ID remains disabled until reviewed.
 - **Preparing one Jamendo track** is normal. Starter/local music continues and
-  a Jamendo miss never delays the next music slot.
+  a Jamendo miss never delays the next music slot. When the attempt in progress
+  is rejecting candidates, the row states the reason for that attempt in plain
+  language instead of a running total, so a provider that keeps failing no
+  longer reads as healthy.
 - **Jamendo temporarily unavailable** is a transient provider/network/audio
-  failure. Use **Check again** once; concurrent retries are coalesced.
+  failure, and the row names the dominant reason for the last attempt. Use
+  **Check again** once; concurrent retries are coalesced.
 - **Jamendo track could not be used** is a provider-wide configuration or
-  contract rejection. Check the saved configuration or turn Jamendo off.
+  contract rejection, and the row names the reason. This is where a rejected
+  client ID and an unusable working folder appear. Check the saved
+  configuration or turn Jamendo off.
+
+Every reason line either says the station is retrying, states explicitly that no
+action is needed, or names a step to take. Two carry a real operator lever: a
+client ID Jamendo will not accept, and a working folder the station cannot use.
+Both are reported as blocking failures, so they appear on the **Jamendo track
+could not be used** row, which never claims a retry is coming because a blocked
+provider schedules none.
+
+`rejected_this_attempt`, `dominant_failure_code_this_attempt` and
+`attempt_rejections` on the admin `/status` payload describe the most recently
+completed discovery pass; they are cleared when a pass succeeds, when settings
+change, and when Check again is pressed, so a prepared track never airs under a
+failure reason and a replaced run stops being explained. They still hold the
+previous pass's values while a new one is running. The dominant code names the
+error that ended the pass, which may be a timeout or a provider failure that
+appears in no candidate breakdown, so it can be set while the rejection count is
+zero. The lifetime `rejected_count` remains for
+support and is deliberately never rendered as a bare number. Each pass logs its
+breakdown once, carrying codes and counts only — never client IDs, private audio
+URLs, or provider response text.
 
 Keep the running app and live cache intact; there is no downloaded Jamendo file
 to recover. The integration writes at most one single-use artifact under its boot
@@ -228,7 +271,7 @@ The denylist is process-local — it clears on restart so a track that was trans
 
 A listener song request was pinned to the "play next" slot from two places: once by the background download (`_commit_external_download`) when the file finished, and again by the dedication banter (`_plan_listener_request_block`) the next time a host break was produced — because the request lingers in `state.pending_requests` until that banter's deferred commit applies. Each pin is consumed by `select_next_track` *before* the repeat-cooldown filter runs, so the song aired a second time a few minutes later (the 2026-06-19 "double Linkin Park").
 
-The fix marks the request `song_pinned` at whichever site pins first (set synchronously, so it is also safe against two banters peeking the same pending request in the lookahead window), and the dedication banter no longer re-pins an already-pinned request. A requested song now airs exactly once. If you still see a repeat, check that both pin sites consult `req["song_pinned"]` and that `select_next_track`'s pinned-track short-circuit (`core/models.py`) hasn't been changed to skip the marker.
+The current ownership chain marks the initial claim with `song_pinned`, reserves every pending matched recording at producer admission and playback, then transfers the exact promised source into a one-shot `ListenerRequestHandoff` after the dedication queues. Queue admission marks that segment and releases the handoff, so later equivalent requests still cannot steal it or make it play anonymously. If you see a repeat, trace the complete reservation → dedication commit → handoff admission chain described in `docs/architecture.md`, including the producer and playback reservation gates; the pin marker alone is no longer the full invariant.
 
 ## The stream works but banter or ads are bland
 

@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
     SOURCE_READINESS_KINDS,
+    URGENT_INTERRUPT_PRIORITY_KEY,
     Heading,
     PlaylistSource,
     SourceReadinessEntry,
@@ -716,6 +718,8 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         # Public status keeps its pre-feature segment schema unchanged.
         "listener_session_epoch",
         "listener_session_cue",
+        *LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
+        URGENT_INTERRUPT_PRIORITY_KEY,
         "memory_extraction",
         "ritual_recipe_match",
         "ritual_recipe_matches",

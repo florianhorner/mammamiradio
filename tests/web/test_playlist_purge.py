@@ -26,6 +26,7 @@ from fastapi import FastAPI
 from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.playlist import PERSISTED_SOURCE_FILENAME, write_persisted_source
+from mammamiradio.scheduling.producer import _reserve_music_segment
 from mammamiradio.web.streamer import LiveStreamHub, router
 
 TOML_PATH = str(Path(__file__).resolve().parents[2] / "radio.toml")
@@ -107,10 +108,19 @@ async def test_purge_pool_preserves_ready_head_when_replacement_is_unavailable(t
     tail_path = tmp_path / "pool-tail.mp3"
     head_path.write_bytes(b"head")
     tail_path.write_bytes(b"tail")
-    head = Segment(type=SegmentType.MUSIC, path=head_path, duration_sec=180.0, metadata={"title": "Head"})
+    head = Segment(
+        type=SegmentType.MUSIC,
+        path=head_path,
+        duration_sec=180.0,
+        metadata={"title": "Head", "queue_id": "pool-head-q"},
+    )
     tail = Segment(type=SegmentType.BANTER, path=tail_path, duration_sec=10.0, metadata={"title": "Tail"})
     app.state.queue.put_nowait(head)
     app.state.queue.put_nowait(tail)
+    # Real produced music holds a music admission reservation until playback
+    # commits it. Purging the pool is deliberately not a reason to cut the air,
+    # so the head it preserves has to remain startable.
+    _reserve_music_segment(state, state.playlist[0], head)
     state.queued_segments = [{"type": "music", "label": "Head"}, {"type": "banter", "label": "Tail"}]
     state.continuity_epoch = 8
 
@@ -128,6 +138,7 @@ async def test_purge_pool_preserves_ready_head_when_replacement_is_unavailable(t
     assert state.continuity_epoch == 9
     assert head_path.exists()
     assert not tail_path.exists()
+    assert head.mark_playback_started() is True
 
 
 @pytest.mark.asyncio

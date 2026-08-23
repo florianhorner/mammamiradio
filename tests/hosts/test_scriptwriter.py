@@ -18,11 +18,14 @@ import mammamiradio.hosts.scriptwriter as scriptwriter_module
 from mammamiradio.core.config import DEFAULT_ROLE, _empty_models, load_config, resolve_model
 from mammamiradio.core.listener_session import CompanionshipDurationBucket, CompanionshipPromptContext
 from mammamiradio.core.models import (
+    LISTENER_REQUEST_FORCE_REVISION_KEY,
+    LISTENER_REQUEST_PIN_REVISION_KEY,
     LLM_COST_CATEGORIES,
     ChaosSubtype,
     DialogueLine,
     Heading,
     HostPersonality,
+    Segment,
     SegmentType,
     StationState,
     Track,
@@ -4698,6 +4701,34 @@ async def test_write_banter_keeps_interrupt_directive_until_producer_queues(conf
 
 
 @pytest.mark.asyncio
+async def test_write_banter_keeps_safety_retry_directive_until_producer_queues(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    config.super_italian_mode = True
+    state.ha_pending_directive = "La pasta scotta. Interrompi tutto."
+    state.chaos_pending = None
+    state.urgent_interrupt_force_next_revision = state.set_force_next(SegmentType.BANTER)
+
+    captured = {}
+
+    async def _fake_generate_json_response(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return {
+            "lines": [{"host": config.hosts[0].name, "text": "Muoviti."}],
+            "new_joke": None,
+            "persona_updates": {"new_theories": [], "new_jokes": [], "callbacks_used": []},
+        }
+
+    with patch("mammamiradio.hosts.scriptwriter._generate_json_response", side_effect=_fake_generate_json_response):
+        result, _ = await write_banter(state, config)
+
+    assert result == [DialogueLine(config.hosts[0], "Muoviti.")]
+    assert "HIGH PRIORITY" in captured["prompt"]
+    assert "La pasta scotta" in captured["prompt"]
+    assert state.ha_pending_directive == "La pasta scotta. Interrompi tutto."
+
+
+@pytest.mark.asyncio
 async def test_write_banter_prompt_excludes_connection_arrival_block(config, state):
     config.homeassistant.enabled = True
     config.homeassistant.context_enabled = True
@@ -4780,6 +4811,137 @@ async def test_write_banter_defers_listener_request_mutation_until_commit(config
     listener_request_commit.apply(state)
 
     assert state.pending_requests == []
+
+
+@pytest.mark.asyncio
+async def test_write_banter_generation_fallback_keeps_truthful_listener_commit(config, state):
+    requested_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="failed-listener-plan",
+    )
+    request = {
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("provider unavailable"),
+    ):
+        lines, commit = await write_banter(state, config)
+
+    assert requested_track.display in lines[0].text
+    assert "coming up" in lines[0].text
+    assert commit is not None
+    assert request in state.pending_requests
+    assert request["song_pinned"] is True
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
+
+    commit.apply(state, config, queue_id="provider-fallback-dedication")
+
+    assert request not in state.pending_requests
+    assert state.listener_request_handoff is not None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_llm_matches_and_settles_listener_song(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.super_italian_mode = True
+    requested_track = Track(
+        title="Albachiara",
+        artist="Vasco Rossi",
+        duration_ms=120000,
+        youtube_id="demo-listener-plan",
+    )
+    request = {
+        "request_id": "demo-listener-request",
+        "name": "Giulia",
+        "message": "metti Albachiara",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    lines, commit = await write_banter(state, config)
+
+    assert requested_track.display in lines[0].text
+    assert "Arriva tra poco" in lines[0].text
+    assert commit is not None
+    commit.apply(state, config, queue_id="demo-dedication")
+    assert request not in state.pending_requests
+    assert state.listener_request_handoff is not None
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_llm_advances_inflight_listener_lookup(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    request = {
+        "request_id": "demo-inflight-request",
+        "name": "Luca",
+        "message": "play Imagine",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    lines, commit = await write_banter(state, config)
+
+    assert lines
+    assert commit is not None
+    assert "Imagine" not in " ".join(line.text for line in lines)
+    commit.apply(state)
+    assert request["banter_cycles_missed"] == 1
+    assert request in state.pending_requests
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_llm_terminal_song_copy_stays_neutral(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    request = {
+        "request_id": "demo-failed-request",
+        "name": "Luca",
+        "message": "play Imagine",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": True,
+        "song_error_reason": "downloads_disabled",
+        "song_track": None,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(request)
+
+    lines, commit = await write_banter(state, config)
+
+    spoken = " ".join(line.text for line in lines).casefold()
+    assert "thanks for writing" in spoken
+    assert all(word not in spoken for word in ("catalogue", "unavailable", "not found", "disabled"))
+    assert commit is not None
+    commit.apply(state)
+    assert request not in state.pending_requests
+    assert state.recently_consumed_requests[0]["status"] == "song_not_found"
 
 
 def test_plan_listener_request_block_empty_queue(state):
@@ -4894,12 +5056,14 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_fi
         "song_error_reason": "",
         "song_track": None,
         "banter_cycles_missed": 4,
+        "public_token": "listener-token",
     }
     state.pending_requests.append(req)
 
     prompt, commit = _plan_listener_request_block(state)
 
-    assert "SONG NOT FOUND" in prompt
+    assert "LOOKUP STILL PENDING" in prompt
+    assert "Non dare alcun esito" in prompt
     assert commit is not None
     assert commit.consume is True
     assert commit.mark_song_error is True
@@ -4909,8 +5073,134 @@ def test_plan_listener_request_block_song_still_downloading_marks_error_after_fi
     # Request moves to recently_consumed with song_not_found status
     assert len(state.recently_consumed_requests) == 1
     assert state.recently_consumed_requests[0]["status"] == "song_not_found"
-    assert state.recently_consumed_requests[0]["song_error_reason"] == "not_found"
+    assert state.recently_consumed_requests[0]["song_error_reason"] == "lookup_timed_out"
     assert state.recently_consumed_requests[0]["name"] == "Luca"
+    assert state.recently_consumed_requests[0]["public_token"] == "listener-token"
+    assert state.recently_consumed_requests[0]["song_error"] is True
+
+
+def test_listener_timeout_commit_defers_late_match_until_it_is_announced(state):
+    requested_track = Track(
+        title="Più bella cosa",
+        artist="Eros Ramazzotti",
+        duration_ms=240000,
+        youtube_id="late-match",
+    )
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": None,
+        "banter_cycles_missed": 4,
+        "public_token": "listener-token",
+    }
+    state.pending_requests.append(req)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LOOKUP STILL PENDING" in prompt
+    assert commit is not None and commit.mark_song_error is True
+    # The background task commits while the deferred banter is rendering.
+    req["song_found"] = True
+    req["song_track"] = "Eros Ramazzotti \u2013 Pi\u00f9 bella cosa"
+    req["song_track_obj"] = requested_track
+    commit.apply(state)
+
+    assert req["song_error"] is False
+    assert req["song_error_reason"] == ""
+    assert req in state.pending_requests
+    assert state.recently_consumed_requests == []
+
+    # The timeout banter explicitly withheld the lookup outcome. The next
+    # banter must announce the late match before the receipt can claim it was
+    # sent to the hosts.
+    announcement, announcement_commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in announcement
+    assert "La canzone che stai per suonare" in announcement
+    assert "Eros Ramazzotti \u2013 Pi\u00f9 bella cosa" in announcement
+    assert announcement_commit is not None
+    assert state.pinned_track is requested_track
+    assert state.force_next == SegmentType.MUSIC
+    assert req["song_pinned"] is True
+    announcement_commit.apply(state)
+
+    assert req not in state.pending_requests
+    receipt = state.recently_consumed_requests[0]
+    assert receipt["status"] == "sent_to_hosts"
+    assert receipt["song_found"] is True
+    assert receipt["song_error"] is False
+    assert receipt["song_error_reason"] == ""
+
+
+def test_listener_timeout_late_queued_match_preserves_occupied_pin(state):
+    operator_pick = Track(
+        title="Operator Pick",
+        artist="Operator",
+        duration_ms=180000,
+        youtube_id="operator-pick",
+    )
+    requested_track = Track(
+        title="Più bella cosa",
+        artist="Eros Ramazzotti",
+        duration_ms=240000,
+        youtube_id="late-queued-match",
+    )
+    req = {
+        "name": "Luca",
+        "message": "metti Eros Ramazzotti",
+        "type": "song_request",
+        "song_found": False,
+        "song_error": False,
+        "song_error_reason": "",
+        "song_track": None,
+        "song_pinned": False,
+        "banter_cycles_missed": 4,
+        "public_token": "listener-token",
+    }
+    state.pending_requests.append(req)
+    state.pinned_track = operator_pick
+
+    prompt, timeout_commit = _plan_listener_request_block(state)
+
+    assert "LOOKUP STILL PENDING" in prompt
+    assert timeout_commit is not None and timeout_commit.mark_song_error is True
+
+    # Rendering yields long enough for the lookup to finish. Its commit returns
+    # ``queued`` because the operator pin is occupied, so it joins rotation but
+    # must remain unpinned until that earlier choice has played.
+    state.playlist.append(requested_track)
+    req["song_found"] = True
+    req["song_track"] = "Eros Ramazzotti – Più bella cosa"
+    req["song_track_obj"] = requested_track
+    timeout_commit.apply(state)
+
+    assert req in state.pending_requests
+    assert state.recently_consumed_requests == []
+    assert state.pinned_track is operator_pick
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is None
+    assert state.pinned_track is operator_pick
+    assert req["song_pinned"] is False
+    assert req in state.pending_requests
+
+    state.pinned_track = None
+    announcement, announcement_commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in announcement
+    assert announcement_commit is not None and announcement_commit.consume is True
+    assert state.pinned_track is requested_track
+    assert req["song_pinned"] is True
+    announcement_commit.apply(state)
+
+    assert req not in state.pending_requests
+    assert state.recently_consumed_requests[0]["status"] == "sent_to_hosts"
 
 
 def test_plan_listener_request_block_background_failure_consumes_song_not_found(state):
@@ -4985,10 +5275,7 @@ def test_plan_listener_request_block_song_found_announcement(state):
 
 
 def test_plan_listener_request_block_does_not_repin_already_pinned_song(state):
-    """A request whose song was already pinned at download time (song_pinned) must
-    NOT be re-pinned by the dedication banter — re-pinning aired the song a SECOND
-    time (the 2026-06-19 Linkin Park double-play). The dedication still airs and the
-    request still consumes; only the duplicate pin is suppressed."""
+    """A live download-owned pin remains the request's single handoff."""
     requested_track = Track(
         title="Somewhere I Belong",
         artist="Linkin Park",
@@ -5007,6 +5294,8 @@ def test_plan_listener_request_block_does_not_repin_already_pinned_song(state):
         "banter_cycles_missed": 0,
     }
     state.pending_requests.append(req)
+    state.pinned_track = requested_track
+    state.force_next = SegmentType.MUSIC
 
     prompt, commit = _plan_listener_request_block(state)
 
@@ -5014,8 +5303,8 @@ def test_plan_listener_request_block_does_not_repin_already_pinned_song(state):
     assert "Linkin Park - Somewhere I Belong" in prompt
     assert commit is not None
     assert commit.consume is True
-    assert state.pinned_track is None
-    assert state.force_next is None
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
 
 
 def test_plan_listener_request_block_pins_once_and_is_race_safe(state):
@@ -5048,13 +5337,237 @@ def test_plan_listener_request_block_pins_once_and_is_race_safe(state):
     # Locks the immediate-play contract: the dedication forces the next slot to music.
     assert state.force_next is not None and state.force_next.value == "music"
 
-    # Simulate the next music slot consuming the pin (request still pending — the
-    # deferred commit has not applied), then a second banter peeking the same req.
+    # A second banter peek before the deferred commit applies recognizes the
+    # same live ownership token and cannot create another pin.
+    _plan_listener_request_block(state)
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
+
+
+def test_plan_listener_request_block_recovers_download_pin_replaced_by_operator(state):
+    requested_track = Track(
+        title="Somewhere I Belong",
+        artist="Linkin Park",
+        duration_ms=200000,
+        youtube_id="listener-pick",
+    )
+    operator_pick = Track(
+        title="Operator Pick",
+        artist="Operator",
+        duration_ms=180000,
+        youtube_id="operator-pick",
+    )
+    req = {
+        "name": "fanfan",
+        "message": "play some Linkin Park",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": requested_track.display,
+        "song_track_obj": requested_track,
+        "song_pinned": True,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+    state.pinned_track = operator_pick
+    state.force_next = SegmentType.MUSIC
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is None
+    assert req["song_pinned"] is False
+    assert state.pinned_track is operator_pick
+    assert state.force_next is SegmentType.MUSIC
+
+    # Once the operator pick is consumed, the listener request can reclaim its
+    # own pin and produce copy that passes the exact admission snapshot.
     state.pinned_track = None
     state.force_next = None
-    _plan_listener_request_block(state)
-    assert state.pinned_track is None  # not re-pinned -> no double-play
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None and commit.is_plan_current(state)
+    assert req["song_pinned"] is True
+    assert state.pinned_track is requested_track
+    assert state.force_next is SegmentType.MUSIC
+
+
+def test_plan_listener_request_block_waits_for_occupied_pin(state):
+    operator_pick = Track(
+        title="Operator Pick",
+        artist="Operator",
+        duration_ms=180000,
+        youtube_id="operator-pick",
+    )
+    requested_track = Track(
+        title="Somewhere I Belong",
+        artist="Linkin Park",
+        duration_ms=200000,
+        youtube_id="listener-pick",
+    )
+    req = {
+        "name": "fanfan",
+        "message": "play some Linkin Park",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": "Linkin Park - Somewhere I Belong",
+        "song_track_obj": requested_track,
+        # The download returned ``queued`` because this slot was occupied.
+        "song_pinned": False,
+        "banter_cycles_missed": 0,
+    }
+    state.pending_requests.append(req)
+    state.pinned_track = operator_pick
+    state.force_next = SegmentType.BANTER
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert prompt == ""
+    assert commit is None
+    assert state.pinned_track is operator_pick
+    assert state.force_next == SegmentType.BANTER
+    assert req["song_pinned"] is False
+    assert req in state.pending_requests
+
+    # Once the earlier pin has been consumed, the listener track can claim the
+    # slot and only then be announced/consumed.
+    state.pinned_track = None
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "LISTENER REQUEST:" in prompt
+    assert commit is not None and commit.consume is True
+    assert state.pinned_track is requested_track
+    # Do not overwrite an independent operator force-next directive.
+    assert state.force_next == SegmentType.BANTER
+    assert req["song_pinned"] is True
+
+
+def test_plan_listener_request_block_keeps_fifo_when_pin_belongs_to_later_request(state):
+    first_track = Track(
+        title="First Request",
+        artist="First Artist",
+        duration_ms=180000,
+        youtube_id="listener-first",
+    )
+    later_track = Track(
+        title="Later Request",
+        artist="Later Artist",
+        duration_ms=180000,
+        youtube_id="listener-later",
+    )
+    first_req = {
+        "name": "Luca",
+        "message": "play First Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": first_track.display,
+        "song_track_obj": first_track,
+        "song_pinned": False,
+    }
+    later_req = {
+        "name": "Giulia",
+        "message": "play Later Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": later_track.display,
+        "song_track_obj": later_track,
+        "song_pinned": False,
+    }
+    state.pending_requests.extend([first_req, later_req])
+    later_req["song_pinned"] = True
+    later_req[LISTENER_REQUEST_PIN_REVISION_KEY] = state.set_pinned_track(later_track)
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "First Request" in prompt
+    assert commit is not None
+    assert state.pinned_track is first_track
+    assert first_req["song_pinned"] is True
+    assert later_req["song_pinned"] is False
+
+    # Once the first handoff is committed and consumed, the later request still
+    # owns its reserved recording and reclaims the shared pin on its own turn.
+    commit.apply(state)
+    state.set_pinned_track(None)
+    state.set_force_next(None)
+    assert _plan_listener_request_block(state) == ("", None)
+    handoff_segment = Segment(
+        type=SegmentType.MUSIC,
+        path=Path("/tmp/first-listener-request.mp3"),
+        metadata={
+            "artist": first_track.artist,
+            "title_only": first_track.title,
+            **state.listener_request_handoff_metadata(first_track),
+        },
+    )
+    state.admit_listener_request_handoff(handoff_segment)
+    later_prompt, later_commit = _plan_listener_request_block(state)
+    assert "Later Request" in later_prompt
+    assert later_commit is not None
+    assert state.pinned_track is later_track
+    assert later_req["song_pinned"] is True
+
+
+def test_fifo_pin_handover_transfers_owned_music_force_to_head_plan(state):
+    first_track = Track(
+        title="First Request",
+        artist="First Artist",
+        duration_ms=180000,
+        youtube_id="listener-first-force",
+    )
+    later_track = Track(
+        title="Later Request",
+        artist="Later Artist",
+        duration_ms=180000,
+        youtube_id="listener-later-force",
+    )
+    first_req = {
+        "name": "Luca",
+        "message": "play First Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": first_track.display,
+        "song_track_obj": first_track,
+        "song_pinned": False,
+    }
+    later_req = {
+        "name": "Giulia",
+        "message": "play Later Request",
+        "type": "song_request",
+        "song_found": True,
+        "song_error": False,
+        "song_track": later_track.display,
+        "song_track_obj": later_track,
+        "song_pinned": True,
+    }
+    state.pending_requests.extend([first_req, later_req])
+    later_req[LISTENER_REQUEST_PIN_REVISION_KEY] = state.set_pinned_track(later_track)
+    later_force_revision = state.set_force_next(SegmentType.MUSIC)
+    later_req[LISTENER_REQUEST_FORCE_REVISION_KEY] = later_force_revision
+
+    prompt, commit = _plan_listener_request_block(state)
+
+    assert "First Request" in prompt
+    assert commit is not None
+    assert state.pinned_track is first_track
+    assert state.force_next is SegmentType.MUSIC
+    assert state.force_next_revision > later_force_revision
+    assert first_req[LISTENER_REQUEST_FORCE_REVISION_KEY] == state.force_next_revision
+    assert later_req[LISTENER_REQUEST_PIN_REVISION_KEY] is None
+    assert later_req[LISTENER_REQUEST_FORCE_REVISION_KEY] is None
+
+    commit.abandon(state)
+
+    assert state.pinned_track is None
     assert state.force_next is None
+    assert first_req["song_pinned"] is False
+    assert first_req[LISTENER_REQUEST_PIN_REVISION_KEY] is None
+    assert first_req[LISTENER_REQUEST_FORCE_REVISION_KEY] is None
 
 
 def test_plan_listener_request_block_ignores_ready_second_song_until_it_reaches_head(state):
@@ -5108,7 +5621,8 @@ def test_plan_listener_request_block_song_error_branch(state):
 
     prompt, commit = _plan_listener_request_block(state)
 
-    assert "SONG NOT FOUND" in prompt
+    assert "SONG UNAVAILABLE" in prompt
+    assert "Non dire che la canzone non esiste o che non \u00e8 stata trovata" in prompt
     assert commit is not None
     assert commit.consume is True
 

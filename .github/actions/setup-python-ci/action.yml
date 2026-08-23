@@ -1,0 +1,38 @@
+name: Setup Python CI
+description: Python 3.11 with pip cache, editable install, and optional FFmpeg.
+
+inputs:
+  install-ffmpeg:
+    description: Install apt ffmpeg before Python setup.
+    required: false
+    default: "false"
+  cache-playwright:
+    description: Restore Playwright browsers from cache using .playwright-cli-version.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install ffmpeg
+      if: inputs.install-ffmpeg == 'true'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: "3.11"
+        cache: pip
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        pip install -e .
+        pip install -r requirements-dev.txt
+
+    - name: Cache Playwright browsers
+      if: inputs.cache-playwright == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-${{ hashFiles('.playwright-cli-version') }}

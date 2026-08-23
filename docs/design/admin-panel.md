@@ -47,8 +47,10 @@ is pinned to the top and never scrolls away. It carries the whole live glance in
 one block:
 
 - **Left:** now-playing (segment type `.status-chip`, title, artist, progress),
-  Skip / Stop, and the compact token cost counter. There is no "session N" counter
-  — that number meant nothing to an operator.
+  Skip / Stop, the compact token cost counter, and two context-sensitive controls:
+  Ban (songs only) and Keep this (voice segments only, plus a short grace after a
+  break ends). There is no "session N" counter — that number meant nothing to an
+  operator.
 - **Right:** the four **air-next** triggers (Banter / Ad break / News flash / More
   chaos) and the live **In Produzione** "cooking now" feed (per-segment phase +
   label). This is the only place an operator sees work in flight, so it stays in
@@ -87,9 +89,13 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    survives the 3s status poll (it used to be wiped on every rebuild).
 4. **Conduttori** — host personality config. Active preset chips carry a checkmark
    shape cue alongside the gold fill (colorblind safety).
-5. **Archivio** — filterable segment history. Search box + type chips
-   (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available). Filter
-   state persists via sessionStorage (`mmr.admin.archivio.filters`).
+5. **Archivio** — two sections. Filterable segment history: search box + type
+   chips (All/Music/Hosts/Ads/News) + time chips (Last hour/Today/All available),
+   filter state persisted via sessionStorage (`mmr.admin.archivio.filters`).
+   Below it, **Kept moments**: what the operator saved with Keep this, each row a
+   play link plus a remove button. Fetched on arrival at the tab rather than on
+   the 3s status poll, since it changes only when the operator keeps or removes
+   one.
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
    context), `Costi` (token cost counter + cost split + segment counts — always visible),
    `Configurazione` (AI Quality and On-Air Sound controls), and `Setup` (a

@@ -58,7 +58,7 @@ def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
     above keeps release blocked."""
 
     build = _read(".github/workflows/addon-build.yml")
-    quality = _job(_read(".github/workflows/quality.yml"), "quality")
+    quality = _job(_read(".github/workflows/quality.yml"), "media-report")
     validate = _job(build, "validate")
     build_proof = _job(build, "media-proof")
     invariants = _read("scripts/check-release-invariants.sh")
@@ -83,10 +83,11 @@ def test_pr_lanes_and_local_check_run_media_proof_report_only() -> None:
 
 
 def test_addon_publish_and_stable_promotion_require_both_image_proof() -> None:
-    """Publish still waits for the full both-image proof to run before any
-    docker push (the job is report-only on missing starter content — see the
-    lane split above), and the stable promotion proof in addon-release.yml
-    stays strict: a media-proof failure there fails the job, never a notice."""
+    """Publish waits for the full both-image proof before either push.
+
+    The job is report-only on missing starter content — see the lane split
+    above — and the stable promotion proof in addon-release.yml stays strict:
+    a media-proof failure there fails the job, never a notice."""
 
     build = _read(".github/workflows/addon-build.yml")
     build_image = _job(build, "build")
@@ -101,9 +102,11 @@ def test_addon_publish_and_stable_promotion_require_both_image_proof() -> None:
     assert "needs: [validate, build]" in build_proof
     assert "--amd64-image" in build_proof and "--aarch64-image" in build_proof
     assert "needs: [validate, media-proof]" in publish
+    assert "packages: write" in publish
+    assert 'docker push "$SHA_REF"' in publish
+    assert 'docker push "$SHORT_REF"' in publish
     assert "docker push" not in build_image
-    assert "docker push" in publish
-
+    assert "push: true" not in build_image
     assert 'docker pull --platform linux/amd64 "$AMD64_IMAGE"' in release_proof
     assert 'docker pull --platform linux/arm64 "$AARCH64_IMAGE"' in release_proof
     assert "--amd64-image" in release_proof and "--aarch64-image" in release_proof

@@ -140,6 +140,26 @@ First Listen mini-show makes the station identity and both stock hosts audible
 immediately; the bundled recovery clip covers thin-queue moments but is not a
 rotation.
 
+### Keeping a moment
+
+Everything the station records is on a timer: a shared clip is deleted after a
+day, and the written record of what was said after two weeks. **Keep this** is
+the exception. The button sits on the on-air console in **Diretta**, next to
+Skip, and appears while the hosts are talking and for a few seconds after a
+break ends, while the music is back on. Pressing it saves that piece for good
+and copies a link to it.
+
+A song cannot be kept, and neither can a break that opens over the end of one:
+those recordings belong to whoever made them, and a kept link has no expiry.
+Everything you have kept is listed under **Archivio → Kept moments**, where you
+can play one or remove it. The shelf holds 200; kept audio lives in
+`/data/cache/keepsakes/` and survives a backup and restore.
+
+Kept audio plays without a password, but the link the button copies is the one
+you are browsing on. When you reach the control room through Home Assistant, that
+link works for anyone with access to your Home Assistant. To send it further,
+copy the address from the station's own port instead.
+
 ### Optional Jamendo music
 
 Open **Motore → Setup → Music sources** to configure Jamendo. It is off by
@@ -177,6 +197,7 @@ HA Supervisor
   |
   +-- /data/ (persistent across restarts)
         +-- cache/   (eligible local/generated audio — survives restarts)
+        |     +-- keepsakes/ (moments kept with "Keep this" — never expire)
         +-- music/   (operator-supplied MP3s)
         +-- tmp/     (rendered segments — ephemeral)
 ```
@@ -198,7 +219,8 @@ playing.
 
 - **Keeps playing:** the app does not stop for a backup.
 - **Stays with you:** app settings, provider keys, station memory and state,
-  retained history, and files stored in `/data/music`.
+  retained history, moments you kept with **Keep this**, and files stored in
+  `/data/music`.
 - **Builds again:** temporary renders, downloaded and normalized cache audio,
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.

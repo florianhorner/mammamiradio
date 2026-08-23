@@ -1227,6 +1227,23 @@ input[type="range"]:focus-visible {
 .lg-row .ts { font-family: var(--font-mono); font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .lg-row .tx { color: var(--cream-dk); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lg-row.now .tx { color: var(--cream); font-weight: 600; font-family: var(--font-display); font-style: italic; font-size: 14px; }
+.kept-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 9px 14px; font-size: 12px; border-bottom: 1px solid rgba(245,237,216,0.04); }
+.kept-row:last-child { border-bottom: none; }
+.kept-link { color: var(--cream); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kept-when { font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* Child combinator on purpose: this pads the empty-state line, and `.sub` is
+   also on the timestamp inside a row. Unscoped it indented the timestamp 14px
+   past the title on a narrow screen, breaking the left edge the stacked layout
+   exists to line up. */
+#keptList > .sub { padding: 10px 14px; }
+/* Narrow screens: the title is how the operator recognizes the moment, so it
+   gets its own line rather than being squeezed to a few characters by an
+   auto-width timestamp sitting beside it. */
+@media (max-width: 720px) {
+  .kept-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .kept-link { grid-column: 1 / -1; }
+  .kept-when { grid-column: 1; }
+}
 
 /* 2-column grid */
 .a-row-2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; align-items: start; }
@@ -1947,6 +1964,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <button type="button" id="prefDownNowBtn" class="btn-icon pref-btn down" title="Play this song less often" aria-label="Dislike this song" aria-pressed="false" data-preference-target="now" data-preference-vote="down" style="display:none">
               <svg class="ic" aria-hidden="true"><use href="#ic-thumbs-down"/></svg>
             </button>
+            <button type="button" id="keepNowBtn" class="btn-icon" title="Keep this — save it for good" aria-label="Keep this moment, saved for good" onclick="doKeepThis(this)" style="display:none">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 2.5h8v11l-4-3-4 3z"/></svg>
+            </button>
             <button type="button" id="banNowBtn" class="btn-icon btn-icon-ban" title="Ban this song" aria-label="Ban this song and skip it" onclick="doBanNowPlaying(this)" style="display:none">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/></svg>
             </button>
@@ -2152,7 +2172,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               <button type="button" class="btn btn-chip" id="banlistToggle" onclick="toggleBanlist()" title="Songs you've banned for good" aria-expanded="false">Banned<span class="ban-count" id="banlistCount" style="display:none"></span></button>
             </div>
             <div class="library-tools-danger">
-              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation — sources can be re-added">Clear pool</button>
+              <button type="button" class="btn btn-chip btn-chip-danger" id="purgePoolBtn" onclick="purgePool(this)" title="Remove all tracks from rotation. Your own music files stay where they are and come back on their own — delete them from the music folder to stop that.">Clear pool</button>
             </div>
           </section>
         </div>
@@ -2287,6 +2307,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
         </div>
       </div>
       <div class="a-log" id="logBody"></div>
+      <div class="card-label" style="margin-top:18px">Kept moments</div>
+      <div class="sub" style="margin-bottom:8px">Saved for good, with no expiry. These play without a password for anyone who can open the link.</div>
+      <div class="a-log" id="keptList"></div>
     </section>
     </section>
 
@@ -2750,7 +2773,7 @@ const FIRST_LISTEN_ERRORS={
   ha_access_missing:{title:'Home Assistant access is not ready',message:'The station cannot reach Home Assistant yet.',action:'Check the add-on connection, then try again.'},
   ha_auth_failed:{title:'Home Assistant did not accept access',message:'Home Assistant did not accept the station’s access details.',action:'Repair the add-on or token access, then try again.'},
   ha_unreachable:{title:'We can’t reach Home Assistant',message:'The station could not connect in time.',action:'Check that Home Assistant is online, then try again.'},
-  media_source_missing:{title:'Mamma Mi Radio Live is not loaded',message:'Home Assistant cannot see the exact Mamma Mi Radio Live media source yet.',action:'Confirm the Mammami Radio integration is loaded, then try again.'},
+  media_source_missing:{title:'Mamma Mi Radio Live is not loaded',message:'Home Assistant cannot see the exact Mamma Mi Radio Live media source yet.',action:'Confirm the Mamma Mi Radio integration is loaded, then try again.'},
   ambiguous_station:{title:'More than one station is connected',message:'The stable Live source cannot safely choose between multiple Mamma Mi Radio entries.',action:'Keep one active integration entry, then try again.'},
   no_players:{title:'No ready speaker was found',message:'No other media player currently reports that it can play media.',action:'Bring a speaker online in Home Assistant, then try again.'},
   player_unavailable:{title:'That speaker is not available now',message:'The selected player changed or went offline.',action:'Choose an available target, then try again.'},
@@ -3283,6 +3306,10 @@ function showAdminTab(name,{render=true,persist=true}={}){
   // Render the newly-shown panel immediately from cached state so switching
   // tabs doesn't wait up to 3s for the next poll.
   if(render)renderActiveTab();
+  // Kept moments are not in the status poll — they change only when the
+  // operator keeps or removes one, so they are fetched on arrival rather than
+  // every three seconds.
+  if(name==='archivio')refreshKeptMoments();
 }
 function initFirstListenPanelMount(){
   const mount=document.getElementById('firstListenPanelMount');
@@ -3366,6 +3393,101 @@ async function doSkip(el){
     }
     toast(r.bridged?'Skip prepared — a track is coming':'Skip — moving to the next segment');
   }catch(_){toast(offlineMsg());}
+}
+// Keep-this stays reachable for a beat after a host break ends, because the
+// moment you want is usually the one that JUST finished — the payoff lands, the
+// segment ends, music starts, and only then do you reach for the button. Mirrors
+// the server's lookback window (CLIP_LOOKBACK_SECONDS).
+const KEEP_GRACE_MS=15000;
+// Mirrors KEEPSAKE_SEGMENT_TYPES in mammamiradio/scheduling/clip.py. The server
+// is the authority; this only decides when offering the press is honest.
+const KEEPABLE_TYPES=new Set(['banter','ad','news_flash','station_id','sweeper','time_check']);
+let _keepGraceUntil=0;
+let _keepPending=false;
+// The station may be reached through Home Assistant ingress, where every page
+// lives under /api/hassio_ingress/<token>/ and a bare /clips/... resolves to the
+// HA host instead of the add-on. `_base` is the prefix the rest of this console
+// already talks through, so the link we hand the operator is one that works
+// from where they are standing.
+function keepShareLink(shareUrl){return new URL(_base+shareUrl,location.href).href}
+async function doKeepThis(el){
+  // Keeping writes a file nothing ever deletes on its own, so a double-click
+  // must not put the same moment on the shelf twice.
+  if(_keepPending)return;
+  _keepPending=true;
+  if(el)el.disabled=true;
+  flash(el);
+  try{
+    const r=await api('POST','/api/clip/keep');
+    if(!(r&&r.ok)){
+      toast((r&&r.message)||wayOut('keep this moment'));
+      return;
+    }
+    const label=r.title?`Kept — ${r.title}`:'Kept — saved for good';
+    const link=keepShareLink(r.share_url);
+    let copied=false;
+    // Say "copied" only once the write actually resolved. Direct LAN admin is
+    // plain HTTP, where the Clipboard API is commonly unavailable, and claiming
+    // a copy that never happened sends the operator to an empty clipboard.
+    try{await navigator.clipboard.writeText(link);copied=true;}catch(e){}
+    if(typeof window.undoableToast==='function'){
+      window.undoableToast(copied?`${label}. Link copied.`:`${label}. Link: ${link}`,async()=>{
+        const u=await api('DELETE',`/api/clip/keep/${r.keepsake_id}`);
+        toast(u&&u.ok?'Removed — that one is not kept after all':((u&&u.message)||wayOut('remove that one')));
+        if(_activeTab==='archivio')refreshKeptMoments();
+      });
+    }else{
+      toast(copied?`${label}. Link copied.`:`${label}. Link: ${link}`);
+    }
+    if(_activeTab==='archivio')refreshKeptMoments();
+  }catch(_){
+    toast(offlineMsg());
+  }finally{
+    _keepPending=false;
+    if(el)el.disabled=false;
+  }
+}
+// ── Kept moments (Archivio) ──
+// A keepsake outlives every retention window and is served without a password,
+// so the operator needs somewhere to see what is kept and remove one. Without
+// this the shelf-full refusal would be naming a folder an add-on operator
+// cannot open.
+async function refreshKeptMoments(){
+  const list=document.getElementById('keptList');
+  if(!list)return;
+  let r;
+  try{r=await api('GET','/api/clip/keep');}catch(_){r=null;}
+  if(!(r&&r.ok)){list.innerHTML='<div class="sub">Couldn\'t read the kept moments — give it a few seconds and try again.</div>';return}
+  const rows=r.keepsakes||[];
+  if(!rows.length){list.innerHTML='<div class="sub">Nothing kept yet. Press Keep on the console while the hosts are talking.</div>';return}
+  list.innerHTML=rows.map(row=>{
+    const title=esc(row.title||(row.segment_type?segmentText(row.segment_type):'')||'A moment');
+    const when=row.created_at?new Date(row.created_at*1000).toLocaleString():'';
+    return `<div class="kept-row"><a class="kept-link" href="${esc(_base+row.share_url)}" target="_blank" rel="noopener">${title}</a>`+
+      `<span class="sub kept-when">${esc(when)}</span>`+
+      // Trash, not the ban glyph: Ban means "never play this song again" a few
+      // rows up in the same console, and one symbol cannot carry both meanings.
+      // Same icon the queue's own remove button uses.
+      `<button type="button" class="btn-icon" title="Remove this kept moment" aria-label="Remove ${title}" data-keepsake-remove="${esc(row.keepsake_id)}">`+
+      `<svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg></button></div>`;
+  }).join('');
+}
+// Delegated rather than an inline onclick: `esc` escapes for HTML text, and an
+// id inside a JS string inside an attribute is decoded back to a quote before
+// the JS is parsed. A data attribute has no such second parse.
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-keepsake-remove]');
+  if(!button)return;
+  event.preventDefault();
+  doUnkeep(button.dataset.keepsakeRemove,button);
+});
+async function doUnkeep(id,el){
+  flash(el);
+  try{
+    const r=await api('DELETE',`/api/clip/keep/${id}`);
+    toast(r&&r.ok?'Removed — that one is not kept after all':((r&&r.message)||wayOut('remove that one')));
+  }catch(_){toast(offlineMsg());}
+  refreshKeptMoments();
 }
 async function doBanNowPlaying(el){
   // Capture the airing song identity BEFORE the ban so Undo can lift it by key —
@@ -3701,6 +3823,25 @@ function updateNow(ns){
   const onAir=document.getElementById('on-air');
   const isMusic=!!(ns&&ns.type&&segmentTypeKey(ns.type)==='music');
   if(banBtn)banBtn.style.display=isMusic?'':'none';
+  // Keep-this follows the inverse of Ban: it is meaningful while the hosts are
+  // talking, and for KEEP_GRACE_MS after, so the segment that just ended is
+  // still reachable. The server decides what may actually be kept; this only
+  // decides when asking is worth offering.
+  const keepBtn=document.getElementById('keepNowBtn');
+  if(keepBtn){
+    // Match the server's KEEPSAKE_SEGMENT_TYPES rather than testing "not music".
+    // segmentTypeKey passes 'stopped' and 'skipping' through unchanged, so
+    // not-music armed the button and its grace window against a station that is
+    // not on air, inviting a press that can only ever be refused.
+    const nowKey=(ns&&ns.type)?segmentTypeKey(ns.type):'';
+    const isVoiceNow=KEEPABLE_TYPES.has(nowKey);
+    if(isVoiceNow)_keepGraceUntil=Date.now()+KEEP_GRACE_MS;
+    // Stop and Skip end the grace immediately. The lookback the grace stands in
+    // for is cleared server-side on stop, so leaving the button up for another
+    // fifteen seconds only invites a press that is already refused.
+    else if(nowKey==='stopped'||nowKey==='skipping'||!nowKey)_keepGraceUntil=0;
+    keepBtn.style.display=(isVoiceNow||Date.now()<_keepGraceUntil)?'':'none';
+  }
   prefBtns.forEach(btn=>{btn.style.display=isMusic?'':'none';});
   syncNowPreferenceButtons(isMusic?(_st.current_track_preference||0):0);
   if(!ns||!ns.type){
@@ -4339,6 +4480,9 @@ function updateRuntimeStatus(st){
         air_next_overflow:'queue overflow',
         egress_stale:'stale on air',
         blocklist_gate:'banned song',
+        listener_request_reserved:'held for its dedication',
+        playback_file_error:'audio unavailable before air',
+        playback_admission_denied:'source withdrew it before air',
         operator_ban:'banned song',
         operator_stop:'operator stop',
         operator_panic:'panic stop',
@@ -4442,16 +4586,45 @@ const JAMENDO_ERROR_COPY={
   jamendo_client_id_required:'Add a Jamendo client ID before enabling live rotation.',
   jamendo_ack_required:'Confirm non-commercial API use before enabling Jamendo.',
   jamendo_retry_disabled:'Jamendo is off. Enable it before checking again.',
-  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check add-on storage and try again.',
+  jamendo_config_save_failed:'Jamendo settings were not saved. Starter and local music continue. Check that the station storage has free space and is writable, then try again.',
 };
+// Covers every code in JAMENDO_FAILURE_CODES (playlist/jamendo_transient.py).
+// test_jamendo_failure_code_contract.py fails if the provider gains a code that
+// has no sentence here. Each line says what happened AND whether the operator
+// must act — a bare reason fragment is a log line, not product copy.
+// Two codes here carry a real operator lever: api_auth_failed (their client ID)
+// and temp_root_invalid (their storage). Everything else ends in "no action
+// needed" or says the station is retrying, so the operator can stop looking.
+// The blocked row adds a third lever of its own, because a state that never
+// recovers unaided cannot be described by any sentence in this table.
+// There is deliberately no "try different music tags" line: jamendo_tags is a
+// radio.toml key with no env override, no add-on option and no admin field, so
+// on the add-on that advice would name a step the reader cannot take.
 function jamendoFailureHint(code){
   return {
-    api_failed:'provider response unavailable',
-    license_rejected:'license did not match the accepted CC BY policy',
-    invalid_url:'provider returned an unusable link',
-    lease_invalid:'prepared audio did not pass admission',
-    late:'preparation finished after its slot',
-    cancelled:'preparation was cancelled after a newer choice',
+    api_auth_failed:"Jamendo isn't accepting the client ID — check it in your Jamendo account and enter it again.",
+    temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
+    api_failed:"Jamendo didn't respond — retrying automatically.",
+    api_malformed:"Jamendo sent a reply the station couldn't read — retrying automatically.",
+    network_timeout:'Jamendo took too long to answer — retrying automatically.',
+    metadata_oversize:"Jamendo's reply was too large to read — retrying automatically.",
+    metadata_invalid:"Jamendo sent song details the station couldn't read — retrying automatically.",
+    metadata_changed:"A song's details changed between checks — this resolves on its own, no action needed.",
+    identity_mismatch:'Jamendo sent back a different song than expected — retrying automatically.',
+    empty_results:"Jamendo isn't returning any usable songs right now — retrying automatically.",
+    license_rejected:"That song's license doesn't qualify — skipping it, no action needed.",
+    duration_rejected:'That song is too short or too long for a break — skipping it, no action needed.',
+    invalid_url:'Jamendo sent a broken link — skipping it, no action needed.',
+    audio_fetch_failed:"The song wouldn't download — retrying automatically.",
+    audio_empty:'The downloaded song was empty — skipping it, no action needed.',
+    audio_oversize:'That song is too large to prepare — skipping it, no action needed.',
+    audio_size_invalid:"The song's download size didn't add up — skipping it, no action needed.",
+    ffmpeg_failed:"That song couldn't be prepared for air — skipping it, no action needed.",
+    ffmpeg_timeout:'Preparing that song took too long — skipping it, no action needed.',
+    ffprobe_failed:"The station couldn't inspect that song's audio — skipping it, no action needed.",
+    lease_invalid:'The prepared track failed a safety check — skipping it, no action needed.',
+    source_revision_invalid:'The music source changed while a song was being prepared — no action needed.',
+    internal_error:'Something went wrong inside the station while preparing a song — retrying automatically.',
   }[code]||'';
 }
 function jamendoPresentation(status){
@@ -4461,27 +4634,73 @@ function jamendoPresentation(status){
   if(!s.enabled||internal==='disabled')return{state:'idle',shape:'○',label:'Jamendo off',detail:'Starter and local music continue.',actions:['setup'],announcement:''};
   if(internal==='needs_config')return{state:'blocked',shape:'✗',label:'Finish Jamendo setup',detail:'Add a client ID and confirm non-commercial use.',actions:['setup'],announcement:'Jamendo setup needed'};
   if(['idle','discovering','fetching','normalizing','queued','playing','consumed'].includes(internal)){
+    // No candidate count here by design. A lifetime total ("823 candidates
+    // skipped") reads as catastrophic, says nothing about whether the attempt
+    // running right now is healthy, and gives the operator nothing to do. The
+    // sentence for THIS attempt's dominant failure does all three jobs.
     let detail='Starter and local music continue.';
-    const rejected=Number(s.rejected_count||0);
-    if(rejected>0){
-      const reason=jamendoFailureHint(s.last_failure_code);
-      detail+=` ${rejected} candidate${rejected===1?'':'s'} skipped${reason?' — '+reason:''}.`;
+    let announcement='Preparing one Jamendo track';
+    const dominantCode=s.dominant_failure_code_this_attempt||s.last_failure_code;
+    if(Number(s.rejected_this_attempt||0)>0&&dominantCode){
+      const reason=jamendoFailureHint(dominantCode);
+      if(reason){
+        detail=reason+' Starter and local music continue.';
+        // The announcement has to change as well, and the dedup key it feeds
+        // must include it — see renderJamendoStatus. Keying on state and label
+        // alone made this line dead: both are constants in this branch.
+        announcement=reason;
+      }
     }
-    return{state:'working',shape:'●',label:'Preparing one Jamendo track',detail,actions:[],announcement:'Preparing one Jamendo track'};
+    return{state:'working',shape:'●',label:'Preparing one Jamendo track',detail,actions:[],announcement};
   }
   if(internal==='ready')return{state:'ready',shape:'✓',label:'One Jamendo track ready',detail:'Single use; deleted after play.',actions:[],announcement:'One Jamendo track ready'};
-  if(internal==='degraded')return{state:'degraded',shape:'△',label:'Jamendo temporarily unavailable',detail:'Starter and local music continue.',actions:['retry'],announcement:'Jamendo temporarily unavailable'};
-  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:'Starter and local music continue.',actions:['retry','off'],announcement:''};
+  if(internal==='degraded'){
+    // Between retries is exactly when the operator reads the card, so this is
+    // the most valuable place to name the reason rather than repeat "temporarily
+    // unavailable" — which says nothing they can act on.
+    const degradedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
+    return{state:'degraded',shape:'△',label:'Jamendo temporarily unavailable',detail:degradedReason?degradedReason+' Starter and local music continue.':'Starter and local music continue.',actions:['retry'],announcement:degradedReason||'Jamendo temporarily unavailable'};
+  }
+  // Blocked is where the two codes an operator can actually fix land:
+  // api_auth_failed and temp_root_invalid are raised as blocking errors, so a
+  // branch that never called jamendoFailureHint left their wording as dead code
+  // and told the operator nothing on the one failure that is theirs to fix.
+  // Blocked schedules no retry, so any sentence promising one is wrong here.
+  // Jamendo's non-retryable contract rejections surface as api_failed, whose
+  // normal copy says "retrying automatically" — that would tell the operator to
+  // wait for something that will never happen.
+  let blockedReason=jamendoFailureHint(s.dominant_failure_code_this_attempt||s.last_failure_code);
+  // Screens BOTH wrong-on-blocked shapes. source_revision_invalid is raised
+  // as a blocking error and its copy says 'no action needed', which on a row
+  // that will never recover unaided is just as misleading as promising a retry.
+  if(!blockedReason||blockedReason.indexOf('retrying automatically')!==-1||blockedReason.indexOf('no action needed')!==-1){
+    blockedReason="Jamendo turned the station away and isn't trying again — check the Jamendo settings, or turn it off.";
+  }
+  return{state:'blocked',shape:'✗',label:'Jamendo track could not be used',detail:blockedReason+' Starter and local music continue.',actions:['retry','off'],announcement:blockedReason};
+}
+// The chip's CSS class stays the machine state; the visible and spoken text
+// does not. "working" / "degraded" / "blocked" are enum values — they tell an
+// operator nothing, which is the same defect as the raw candidate count.
+const MEDIA_SOURCE_STATE_WORDS={
+  ready:'ready',
+  working:'starting up',
+  degraded:'having trouble',
+  blocked:'needs you',
+  idle:'off',
+};
+function mediaSourceStateWord(state){
+  return MEDIA_SOURCE_STATE_WORDS[state]||state;
 }
 function mediaSourceStatusChip(state,shape){
   const chip=document.createElement('span');
+  const word=mediaSourceStateWord(state);
   chip.className='status-chip '+state;
-  chip.setAttribute('aria-label','status: '+state);
+  chip.setAttribute('aria-label','status: '+word);
   const mark=document.createElement('span');
   mark.className='shape';
   mark.setAttribute('aria-hidden','true');
   mark.textContent=shape;
-  chip.append(mark,document.createTextNode(state));
+  chip.append(mark,document.createTextNode(word));
   return chip;
 }
 function renderStarterCatalogStatus(status){
@@ -4512,13 +4731,17 @@ function renderStarterCatalogStatus(status){
 }
 function jamendoStatusChip(presentation){
   const chip=document.createElement('span');
+  // Class keeps the machine state for styling; text and aria-label do not.
+  // This is the chip the Jamendo row actually renders — mediaSourceStatusChip
+  // serves the starter row only, so a fix applied there alone never lands here.
+  const word=mediaSourceStateWord(presentation.state);
   chip.className='status-chip '+presentation.state;
-  chip.setAttribute('aria-label','status: '+presentation.state);
+  chip.setAttribute('aria-label','status: '+word);
   const shape=document.createElement('span');
   shape.className='shape';
   shape.setAttribute('aria-hidden','true');
   shape.textContent=presentation.shape;
-  chip.append(shape,document.createTextNode(presentation.state));
+  chip.append(shape,document.createTextNode(word));
   return chip;
 }
 function jamendoAction(label,handler){
@@ -4548,7 +4771,11 @@ function renderJamendoStatus(status){
     else if(action==='retry')actions.appendChild(jamendoAction('Check again',retryJamendo));
     else if(action==='off')actions.appendChild(jamendoAction('Turn off',turnOffJamendo));
   });
-  const announcementKey=presentation.state+':'+presentation.label;
+  // The reason belongs in the key. State and label are both constant across the
+  // whole working branch, so keying on them alone meant a provider that started
+  // failing mid-attempt never re-announced, and a degraded row kept speaking the
+  // previous retry's reason while showing the current one.
+  const announcementKey=presentation.state+':'+presentation.label+':'+(presentation.announcement||'');
   if(_lastJamendoAnnouncementKey&&announcementKey!==_lastJamendoAnnouncementKey&&presentation.announcement){
     const live=document.getElementById('jamendoStateAnnouncement');
     if(live)live.textContent=presentation.announcement;
@@ -6254,10 +6481,14 @@ async function shufflePlaylist(el){
   await refreshFast();
 }
 async function purgePool(el){
-  if(!confirm('Clear the rotation pool? Every track will be removed from rotation.\nMusic resumes as soon as you add a source.'))return;
+  // Say plainly that this does not touch files on disk. Clearing the pool empties
+  // the rotation in memory; the station then reloads any MP3s it finds in the
+  // music folder on its next pass, so an operator who wants those songs gone was
+  // left thinking the button was broken.
+  if(!confirm('Clear the rotation pool? Every track will be removed from rotation.\nMusic resumes as soon as you add a source.\n\nYour own music files are not deleted. Songs in the music folder come back into rotation on their own — remove the files from that folder if you want them gone for good.'))return;
   flash(el);
   const r=await api('POST','/api/playlist/purge',{});
-  if(r&&r.ok){toast(r.persisted===false?'Rotation pool cleared for now — I could not save that, so it may come back after a restart':'Rotation pool cleared');await refreshFast();}
+  if(r&&r.ok){toast(r.persisted===false?'Rotation pool cleared for now — I could not save that, so it may come back after a restart':'Rotation pool cleared. Your own music files stay put and can return on their own.');await refreshFast();}
   else toast(r?.error||wayOut('empty the rotation'));
 }
 async function enrichPlaylistSource(kind,el){
@@ -7177,14 +7408,20 @@ async function applyHostPreset(n,presetName){
 
 // ── Listener Requests ──
 const LISTENER_SONG_ERROR_TEXT={
-  longform_audio:['not a single-track song','Not a single-track song'],
-  non_music_audio:['not a song','Not a song'],
-  banned:['banned song','Banned song'],
-  download_failed:['download failed','Download failed'],
-  download_cancelled:['cancelled','Cancelled'],
+  low_confidence:['needs exact title + artist','Try exact title + artist'],
+  not_found:['no match — try title + artist','No match — try title + artist'],
+  longform_audio:['too long — choose one song','Too long — choose one song'],
+  non_music_audio:['not playable — choose another','Not playable — choose another'],
+  banned:['blocked — unban or choose another','Blocked — unban or choose another'],
+  downloads_disabled:['song requests are off — enable them','Song requests off — enable them'],
+  lookup_failed:['catalogue unavailable — retry later','Catalogue unavailable — retry later'],
+  lookup_timed_out:['no catalogue answer — retry','No catalogue answer — retry'],
+  source_changed:['music changed — submit again','Music changed — submit again'],
+  download_failed:['could not prepare track — retry or add it','Could not prepare track — retry or add it'],
+  download_cancelled:['preparation stopped — retry','Preparation stopped — retry'],
 };
-function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['not found'])[0];}
-function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'Song not found'])[1];}
+function listenerSongErrorLabel(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||['no match — try title + artist'])[0];}
+function listenerSongErrorBadge(reason){return (LISTENER_SONG_ERROR_TEXT[reason]||[null,'No match — try title + artist'])[1];}
 function updateListenerRequests(reqs,consumed){
   const el=document.getElementById('lrBody');
   const meta=document.getElementById('lrMeta');
@@ -7207,7 +7444,6 @@ function updateListenerRequests(reqs,consumed){
     if(r.type==='song_request'){
       if(r.song_found){
         status=statusInline('ready',r.song_track||'ready');
-        actions+=`<button class="lr-btn lr-btn-queue" onclick="lrQueueNext(${i})">&#10003; Done</button>`;
       } else if(r.song_error){
         status=statusInline('blocked',listenerSongErrorLabel(r.song_error_reason));
       } else {
@@ -7228,7 +7464,9 @@ function updateListenerRequests(reqs,consumed){
     html+=consumed.map(r=>{
       const age=formatRequestAge(r.age_s);
       const badge=r.status==='source_changed'
-        ?'<span class="lr-badge lr-badge-warn">&#8635; Playlist changed</span>'
+        ?'<span class="lr-badge lr-badge-warn">&#8635; Music changed — submit again</span>'
+        :r.status==='dismissed'
+        ?'<span class="lr-badge lr-badge-warn">&#10005; Dismissed — resubmit if still wanted</span>'
         :r.status==='song_not_found'
         ?`<span class="lr-badge lr-badge-warn">&#9888; ${esc(listenerSongErrorBadge(r.song_error_reason))}</span>`
         :'<span class="lr-badge lr-badge-ok">&#10003; Sent to hosts</span>';
@@ -7248,14 +7486,6 @@ async function lrDismiss(id){
   if(!r||r.ok===false){toast(wayOut('remove that request'));return;}
   if(r.removed>0)toast('Request removed');
   else toast('Already removed');
-}
-async function lrQueueNext(i){
-  const req=_lrReqs[i];if(!req)return;
-  if(req.type==='song_request'&&req.song_found){
-    const r=await api('POST','/api/listener-requests/dismiss',{id:req.id});
-    if(!r||r.ok===false){toast(wayOut('handle that request'));return;}
-    toast(r.removed>0?'Request handled: '+esc(req.song_track||req.name):'Already consumed');
-  }
 }
 
 // ── Log / Archivio ──
