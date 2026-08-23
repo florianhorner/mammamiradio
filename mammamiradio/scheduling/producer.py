@@ -4431,7 +4431,13 @@ def _shape_fields_for_final_banter(
         # selected shape or an explicit exclusion.  A missing commit means the
         # writer caught a generation failure and substituted stock dialogue.
         return None, "script_fallback"
-    return _shape_fields_from_commit(commit)
+    shape_id, skip_reason = _shape_fields_from_commit(commit)
+    if shape_id is None and skip_reason is None:
+        # Demo/no-LLM listener-request copy can carry its own deferred lifecycle
+        # commit without ever entering the shape selector. Keep Tier-2 evidence
+        # explicit instead of leaving an aired generated row ambiguous.
+        return None, "script_fallback"
+    return shape_id, skip_reason
 
 
 def _banter_ledger_segment_id(

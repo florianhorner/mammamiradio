@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+from mammamiradio.hosts.scriptwriter import ListenerRequestCommit
 from mammamiradio.scheduling.producer import _shape_fields_for_final_banter
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,3 +50,12 @@ def test_stock_script_fallback_is_an_explicit_compliance_exclusion() -> None:
     assert summary["eligible_segments"] == 0
     assert summary["excluded_by_reason"] == {"script_fallback": 1}
     assert summary["evidence_errors"] == []
+
+
+def test_commit_without_shape_metadata_is_an_explicit_compliance_exclusion() -> None:
+    shape_id, skip_reason = _shape_fields_for_final_banter(
+        ListenerRequestCommit(request={}),
+        truth_changed=False,
+    )
+    assert shape_id is None
+    assert skip_reason == "script_fallback"
