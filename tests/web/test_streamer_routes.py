@@ -149,6 +149,21 @@ def _packets_to_fill_lead(pacer: StreamPacer, chunk_bytes: int) -> int:
 # ---------------------------------------------------------------------------
 
 
+# Every route behind `_require_active_setup_access`. Shared by both rebinding
+# tests so the credential-less and password-configured cases can never drift.
+ACTIVE_SETUP_ROUTE_CASES = [
+    ("POST", "/api/setup/recheck", {}),
+    ("POST", "/api/setup/provider-check", {}),
+    ("POST", "/api/setup/save-keys", {"ANTHROPIC_API_KEY": "attacker-key"}),
+    (
+        "PATCH",
+        "/api/homeassistant/entity-policy",
+        {"entity_id": "switch.coffee_machine", "muted": False},
+    ),
+    ("POST", "/api/setup/first-listen/listener-confirm", {"heard": True}),
+]
+
+
 def _make_test_app(
     *,
     admin_password: str = "",
@@ -4962,6 +4977,232 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
 
 
 @pytest.mark.asyncio
+async def test_stopped_first_listen_stream_waits_for_explicit_resume_then_plays_prelude(tmp_path):
+    """The current-device request observes Start; the stream GET never starts the station."""
+    from mammamiradio.core.first_listen import FirstListenReceiptLoadStatus
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    app.state.first_listen_receipt_load_status = FirstListenReceiptLoadStatus.MISSING
+    state = app.state.station_state
+    state.session_stopped = True
+    state.resume_event.clear()
+    (tmp_path / "session_stopped.flag").touch()
+    cached = tmp_path / "norm_first_listen_resume_192k.mp3"
+    cached.write_bytes(b"warm-cache-audio" * 1024)
+    (tmp_path / "norm_first_listen_resume_192k.mp3.json").write_text(
+        '{"title":"Warm Song","artist":"Cache Artist","duration_ms":180000}'
+    )
+    state.immediate_audio_index[cached] = 180.0
+
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"current-device-prelude")
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch(
+            "mammamiradio.web.streamer.iter_first_listen_show_chunks",
+            return_value=iter([b"current-device-prelude"]),
+        ),
+        patch("mammamiradio.web.streamer.probe_duration_sec") as probe,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        first_chunk = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while mock_request.is_disconnected.await_count == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("First Listen stream did not enter the explicit-resume wait")
+            await asyncio.sleep(0)
+
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resumed = await client.post("/api/resume")
+
+        assert resumed.status_code == 200
+        assert await asyncio.wait_for(first_chunk, timeout=1.0) == b"current-device-prelude"
+        await generator.aclose()
+
+    assert state.session_stopped is False
+    assert state.resume_event.is_set()
+    assert app.state.station_state.listeners_active == 0
+    probe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stopped_first_listen_stream_without_resume_ends_before_subscribing():
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.resume_event.clear()
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.FIRST_LISTEN_RESUME_WAIT_SECONDS", 0.01),
+        patch("mammamiradio.web.streamer.first_listen_show_required") as show_required,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(generator), timeout=0.5)
+
+    assert state.session_stopped is True
+    assert app.state.station_state.listeners_active == 0
+    show_required.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_disconnected_first_listen_stream_does_not_wait_or_subscribe():
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.station_state.session_stopped = True
+    app.state.station_state.resume_event.clear()
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    generator = _audio_generator(mock_request, first_listen=True)
+    with pytest.raises(StopAsyncIteration):
+        await anext(generator)
+
+    assert app.state.station_state.session_stopped is True
+    assert app.state.station_state.listeners_active == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_enables_resume_wait_only_for_exact_first_listen_query():
+    from mammamiradio.web.streamer import stream
+
+    async def empty_audio():
+        if False:  # pragma: no cover - keeps this an async generator
+            yield b""
+
+    for query_value, expected_kwargs in (
+        ("1", {"first_listen": True}),
+        ("true", {}),
+        ("01", {}),
+        ("", {}),
+    ):
+        app = _make_test_app()
+        mock_request = MagicMock()
+        mock_request.app = app
+        mock_request.query_params = {"first_listen": query_value}
+        with patch("mammamiradio.web.streamer._audio_generator", return_value=empty_audio()) as generator:
+            response = await stream(mock_request)
+
+        generator.assert_called_once_with(mock_request, **expected_kwargs)
+        await response.body_iterator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_first_listen_stream_without_packaged_show_or_cache_still_yields_audio():
+    """Scenario 2: empty container. No packaged show, no warm cache, still audio.
+
+    The other ``first_listen=True`` tests mock ``approved_first_listen_show_path``
+    into returning a file they wrote themselves, which is exactly the shape that
+    hides this bug class: the real add-on image can ship without the show, and
+    ``?first_listen=1`` is a path that can end a 200 response with zero bytes.
+    Here the approval returns ``None`` like a container with nothing packaged,
+    ``immediate_audio_index`` is empty, and the requirement is only that the
+    generator still reaches the live hub instead of returning silently.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = False
+    state.resume_event.set()
+    state.immediate_audio_index.clear()
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True),
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=None),
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks") as chunks,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        live_chunk = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("empty-container First Listen stream never reached the live hub")
+            await asyncio.sleep(0)
+
+        await app.state.stream_hub.broadcast(b"live-station")
+        assert await asyncio.wait_for(live_chunk, timeout=1.0) == b"live-station"
+        await generator.aclose()
+
+    chunks.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_first_listen_stream_treats_a_stale_resume_signal_as_no_start():
+    """A set resume_event while still stopped is stale, and must not subscribe.
+
+    The producer loop and the playback loop both clear this event about once a
+    second while the station is stopped, so observing it set-but-still-stopped
+    is a real interleaving rather than a theoretical one. The stream is
+    read-only: it must end rather than treat the stale signal as permission.
+    """
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    state = app.state.station_state
+    state.session_stopped = True
+    state.resume_event.set()
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with patch("mammamiradio.web.streamer.first_listen_show_required") as show_required:
+        generator = _audio_generator(mock_request, first_listen=True)
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(generator), timeout=1.0)
+
+    assert state.session_stopped is True
+    assert app.state.station_state.listeners_active == 0
+    show_required.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path", "payload"), ACTIVE_SETUP_ROUTE_CASES)
+async def test_password_configured_active_setup_still_rejects_a_rebound_host_without_credentials(method, path, payload):
+    """The Basic-credential path must not widen the rebinding hole it sits beside.
+
+    ``_require_active_setup_access`` returns early for verified Basic
+    credentials, which is what makes a custom hostname usable at all. Every
+    other rebinding test runs with ``admin_password=""``, where that branch
+    short-circuits to False and is never exercised. This runs the same rebound
+    host in the configuration where the branch is live, with no credentials
+    presented, and requires the refusal to hold.
+    """
+    app = _make_test_app(admin_password="s3cret")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    rebound_headers = {
+        "Host": "attacker.example",
+        "Origin": "http://attacker.example",
+        "X-Radio-CSRF-Token": TEST_CSRF_TOKEN,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://attacker.example") as client:
+        response = await client.request(method, path, headers=rebound_headers, json=payload)
+
+    assert response.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
 async def test_first_listen_show_read_failure_falls_through_to_live_audio(tmp_path):
     """A truncated packaged mini-show must hand off to live audio, never silence."""
     from mammamiradio.web.streamer import _audio_generator
@@ -5501,6 +5742,8 @@ async def test_setup_status_returns_onboarding_payload():
 @pytest.mark.asyncio
 async def test_setup_status_joins_background_first_listen_state_before_projecting():
     app = _make_test_app()
+    app.state.first_listen_bootstrap_snapshot_authoritative = False
+    app.state.first_listen_bootstrap_wired = True
     app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.UNKNOWN)
     app.state.first_listen_receipt = None
     release = asyncio.Event()
@@ -5515,11 +5758,14 @@ async def test_setup_status_joins_background_first_listen_state_before_projectin
 
     app.state.first_listen_origin_task = asyncio.create_task(resolve_origin())
     app.state.first_listen_receipt_task = asyncio.create_task(resolve_receipt())
-    release.set()
 
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS)
+        request_task = asyncio.create_task(client.get("/api/setup/status", headers=ACTIVE_SETUP_HEADERS))
+        await asyncio.sleep(0)
+        assert not request_task.done()
+        release.set()
+        response = await request_task
 
     assert response.status_code == 200
     first_listen = response.json()["guided_setup"]["first_listen"]
@@ -5560,19 +5806,23 @@ async def test_active_setup_recheck_requires_csrf_and_exact_empty_json_on_loopba
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "path", "payload"),
-    [
-        ("POST", "/api/setup/recheck", {}),
-        ("POST", "/api/setup/provider-check", {}),
-        ("POST", "/api/setup/save-keys", {"ANTHROPIC_API_KEY": "attacker-key"}),
-        (
-            "PATCH",
-            "/api/homeassistant/entity-policy",
-            {"entity_id": "switch.coffee_machine", "muted": False},
-        ),
-    ],
-)
+async def test_active_setup_named_loopback_peer_still_requires_dashboard_csrf():
+    app = _make_test_app()
+    transport = httpx.ASGITransport(app=app, client=("localhost", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        blocked = await client.get("/api/setup/status")
+        accepted = await client.get(
+            "/api/setup/status",
+            headers={"X-Radio-CSRF-Token": TEST_CSRF_TOKEN},
+        )
+
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "active_setup_csrf_stale"
+    assert accepted.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path", "payload"), ACTIVE_SETUP_ROUTE_CASES)
 async def test_active_setup_rejects_dns_rebinding_host_even_with_page_csrf_token(method, path, payload):
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
@@ -5623,6 +5873,46 @@ async def test_setup_status_rejects_dns_rebinding_host_even_with_page_csrf_token
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("is_addon", "expected_title", "expected_action"),
+    [
+        (
+            True,
+            "Open Mamma Mi Radio from Home Assistant",
+            "In Home Assistant, open Mamma Mi Radio from the sidebar, then continue First Listen there.",
+        ),
+        (
+            False,
+            "Open this setup from a trusted address",
+            "Reopen /admin using this machine's local IP, or configure ADMIN_PASSWORD and sign in, "
+            "then continue First Listen.",
+        ),
+    ],
+)
+async def test_passwordless_hostname_explains_the_safe_first_listen_entry(is_addon, expected_title, expected_action):
+    """A direct custom hostname must fail coherently instead of half-running setup."""
+    app = _make_test_app(is_addon=is_addon)
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 12345))
+    headers = {
+        "Host": "homeassistant.local:8000",
+        "Origin": "http://homeassistant.local:8000",
+        "X-Radio-CSRF-Token": TEST_CSRF_TOKEN,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://homeassistant.local:8000") as client:
+        admin = await client.get("/admin")
+        setup = await client.get("/api/setup/status", headers=headers)
+
+    assert admin.status_code == 200
+    assert setup.status_code == 403
+    assert setup.json()["detail"] == {
+        "code": "active_setup_host_untrusted",
+        "title": expected_title,
+        "message": "This direct hostname can show the producer desk, but it cannot securely save First Listen choices.",
+        "action": expected_action,
+    }
+
+
+@pytest.mark.asyncio
 async def test_active_setup_admin_token_allows_intentional_custom_hostname_automation():
     app = _make_test_app(admin_token="operator-token")
     transport = httpx.ASGITransport(app=app, client=("203.0.113.10", 12345))
@@ -5634,6 +5924,52 @@ async def test_active_setup_admin_token_allows_intentional_custom_hostname_autom
         )
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_listener_confirm_accepts_verified_basic_auth_on_custom_hostname(tmp_path):
+    """A browser-authenticated hostname must not dead-end after playback."""
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+
+    app = _make_test_app(admin_password="operator-password")
+    app.state.config.cache_dir = tmp_path
+    app.state.first_listen_store = FirstListenReceiptStore(tmp_path)
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.50", 12345))
+    headers = {
+        "Host": "radio.local",
+        "Origin": "http://radio.local",
+        "X-Radio-CSRF-Token": TEST_CSRF_TOKEN,
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://radio.local") as client:
+        missing_auth = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            headers=headers,
+            json={"heard": True},
+        )
+        wrong_auth = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            headers=headers,
+            auth=("admin", "wrong"),
+            json={"heard": True},
+        )
+        missing_csrf = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            headers={"Host": "radio.local", "Origin": "http://radio.local"},
+            auth=("admin", "operator-password"),
+            json={"heard": True},
+        )
+        confirmed = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            headers=headers,
+            auth=("admin", "operator-password"),
+            json={"heard": True},
+        )
+
+    assert missing_auth.status_code == 401
+    assert wrong_auth.status_code == 401
+    assert missing_csrf.status_code == 403
+    assert confirmed.status_code == 200
+    assert confirmed.json()["first_listen_achieved"] is True
 
 
 @pytest.mark.asyncio
@@ -8884,9 +9220,9 @@ async def test_admin_first_paint_seeds_running_state_for_direct_and_ingress_rout
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("origin", "receipt", "expected"),
+    ("origin", "receipt", "continuity_available", "expected"),
     [
-        (FirstListenInstallOriginStatus.FRESH, None, "required"),
+        (FirstListenInstallOriginStatus.FRESH, None, False, "required"),
         (
             FirstListenInstallOriginStatus.FRESH,
             FirstListenReceiptV1(
@@ -8896,16 +9232,33 @@ async def test_admin_first_paint_seeds_running_state_for_direct_and_ingress_rout
                 heard_at=101.0,
                 privacy_reviewed_at=102.0,
             ),
+            True,
             "complete",
         ),
-        (FirstListenInstallOriginStatus.EXISTING, None, "complete"),
-        (FirstListenInstallOriginStatus.UNKNOWN, None, "required"),
+        (
+            FirstListenInstallOriginStatus.FRESH,
+            FirstListenReceiptV1(
+                selected_entity_id=None,
+                accepted_attempt_id="listener_no-continuity-1234",
+                accepted_at=100.0,
+                heard_at=101.0,
+                privacy_reviewed_at=102.0,
+            ),
+            False,
+            "required",
+        ),
+        (FirstListenInstallOriginStatus.EXISTING, None, False, "complete"),
+        (FirstListenInstallOriginStatus.UNKNOWN, None, False, "required"),
     ],
 )
-async def test_admin_first_paint_selects_first_listen_only_for_fresh_unfinished_install(origin, receipt, expected):
+async def test_admin_first_paint_selects_first_listen_only_for_fresh_unfinished_install(
+    origin, receipt, continuity_available, expected
+):
     app = _make_test_app()
     app.state.first_listen_install_origin = FirstListenInstallOriginV1(origin)
     app.state.first_listen_receipt = receipt
+    if continuity_available:
+        app.state.station_state.source_readiness.mark_playable("local")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -10120,6 +10473,35 @@ async def test_audio_generator_does_not_auto_resume_stopped_session(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ordinary_stopped_stream_never_receives_first_listen_prelude(tmp_path):
+    """Only the explicit current-device query may wait for a Start transaction."""
+    from mammamiradio.core.first_listen import FirstListenReceiptLoadStatus
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    app.state.first_listen_receipt_load_status = FirstListenReceiptLoadStatus.MISSING
+    app.state.station_state.session_stopped = True
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"must-not-air")
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=True)
+
+    with (
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show) as approve,
+        patch("mammamiradio.web.streamer.iter_first_listen_show_chunks") as chunks,
+    ):
+        async for _chunk in _audio_generator(mock_request):
+            raise AssertionError("ordinary stopped stream unexpectedly yielded audio")
+
+    assert app.state.station_state.session_stopped is True
+    approve.assert_not_called()
+    chunks.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_audio_generator_leaves_flag_until_explicit_resume(tmp_path):
     """A stream connection must not remove session_stopped.flag."""
     from mammamiradio.web.streamer import _audio_generator
@@ -10938,6 +11320,497 @@ async def test_first_listen_play_and_matching_heard_confirmation_persist(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_listener_confirm_persists_current_device_hearing_without_ha_io(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    store = FirstListenReceiptStore(tmp_path)
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = None
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    with patch("mammamiradio.web.streamer._ha_playback_service") as ha_service:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            confirmed = await client.post(
+                "/api/setup/first-listen/listener-confirm",
+                json={"heard": True},
+            )
+            confirmed_again = await client.post(
+                "/api/setup/first-listen/listener-confirm",
+                json={"heard": True},
+            )
+
+    assert confirmed.status_code == 200
+    assert confirmed.json() == {
+        "ok": True,
+        "heard": True,
+        "first_listen_achieved": True,
+        "receipt_persisted": True,
+        "attempt_id": confirmed.json()["attempt_id"],
+    }
+    assert confirmed.json()["attempt_id"].startswith("listener_")
+    assert confirmed_again.json()["attempt_id"] == confirmed.json()["attempt_id"]
+    receipt = await store.load()
+    assert receipt is not None
+    assert receipt.audio_complete is True
+    assert receipt.selected_entity_id is None
+    assert app.state.first_listen_receipt == receipt
+    ha_service.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_listener_confirm_keeps_completed_legacy_ha_receipt(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    store = FirstListenReceiptStore(tmp_path)
+    accepted = await store.record_accepted("media_player.kitchen", accepted_at=100.0)
+    completed = await store.verify(
+        accepted.accepted_attempt_id,
+        heard=True,
+        verified_at=101.0,
+    )
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = completed
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        response = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": True},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "heard": True,
+        "first_listen_achieved": True,
+        "receipt_persisted": True,
+        "attempt_id": completed.accepted_attempt_id,
+    }
+    assert not response.json()["attempt_id"].startswith("listener_")
+    assert await store.load() == completed
+    assert app.state.first_listen_receipt == completed
+
+
+@pytest.mark.asyncio
+async def test_listener_completion_wins_over_older_ha_persistence_callback():
+    from mammamiradio.web.streamer import _ha_playback_service
+
+    older_ha_receipt = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="older-ha-attempt",
+        accepted_at=90.0,
+    )
+    listener_receipt = FirstListenReceiptV1(
+        accepted_attempt_id="listener_current-device-attempt",
+        accepted_at=100.0,
+        heard_at=100.0,
+    )
+    ha_persistence_started = asyncio.Event()
+    release_ha_persistence = asyncio.Event()
+
+    async def delayed_ha_receipt(_entity_id):
+        ha_persistence_started.set()
+        await release_ha_persistence.wait()
+        return older_ha_receipt
+
+    store = SimpleNamespace(
+        record_accepted=AsyncMock(side_effect=delayed_ha_receipt),
+        record_listener_heard=AsyncMock(return_value=listener_receipt),
+    )
+    app = _make_test_app()
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = None
+    service = _ha_playback_service(app.state)
+    older_ha_callback = asyncio.create_task(service._persist_accepted_attempt("media_player.kitchen"))
+    await ha_persistence_started.wait()
+
+    try:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers=ACTIVE_SETUP_HEADERS,
+        ) as client:
+            confirmed = await client.post(
+                "/api/setup/first-listen/listener-confirm",
+                json={"heard": True},
+            )
+    finally:
+        release_ha_persistence.set()
+
+    callback_attempt_id = await older_ha_callback
+
+    assert confirmed.status_code == 200
+    assert confirmed.json()["attempt_id"] == listener_receipt.accepted_attempt_id
+    assert callback_attempt_id == listener_receipt.accepted_attempt_id
+    assert app.state.first_listen_receipt is listener_receipt
+
+
+@pytest.mark.asyncio
+async def test_privacy_completion_wins_over_older_ha_persistence_callback():
+    from mammamiradio.web.streamer import _ha_playback_service
+
+    older_ha_receipt = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="older-ha-attempt",
+        accepted_at=90.0,
+    )
+    privacy_complete_receipt = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="current-ha-attempt",
+        accepted_at=100.0,
+        heard_at=105.0,
+        privacy_reviewed_at=110.0,
+    )
+    ha_persistence_started = asyncio.Event()
+    release_ha_persistence = asyncio.Event()
+
+    async def delayed_ha_receipt(_entity_id):
+        ha_persistence_started.set()
+        await release_ha_persistence.wait()
+        return older_ha_receipt
+
+    app = _make_test_app()
+    app.state.first_listen_store = SimpleNamespace(record_accepted=AsyncMock(side_effect=delayed_ha_receipt))
+    app.state.first_listen_receipt = None
+    service = _ha_playback_service(app.state)
+    older_ha_callback = asyncio.create_task(service._persist_accepted_attempt("media_player.kitchen"))
+    await ha_persistence_started.wait()
+
+    app.state.first_listen_receipt = privacy_complete_receipt
+    release_ha_persistence.set()
+    callback_attempt_id = await older_ha_callback
+
+    assert callback_attempt_id == privacy_complete_receipt.accepted_attempt_id
+    assert app.state.first_listen_receipt is privacy_complete_receipt
+
+
+def test_first_listen_receipt_cache_adoption_preserves_ha_retest_semantics():
+    from mammamiradio.web.streamer import _adopt_first_listen_receipt
+
+    completed_ha_receipt = FirstListenReceiptV1(
+        selected_entity_id="media_player.kitchen",
+        accepted_attempt_id="completed-ha-attempt",
+        accepted_at=90.0,
+        heard_at=100.0,
+    )
+    newer_ha_attempt = FirstListenReceiptV1(
+        selected_entity_id="media_player.bedroom",
+        accepted_attempt_id="newer-ha-attempt",
+        accepted_at=110.0,
+    )
+    app_state = SimpleNamespace(first_listen_receipt=completed_ha_receipt)
+
+    adopted = _adopt_first_listen_receipt(app_state, newer_ha_attempt)
+
+    assert adopted is newer_ha_attempt
+    assert app_state.first_listen_receipt is newer_ha_attempt
+
+
+@pytest.mark.asyncio
+async def test_listener_not_yet_never_mutates_or_clears_completion(tmp_path):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore, first_listen_receipt_path
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    store = FirstListenReceiptStore(tmp_path)
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = None
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        not_yet = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": False},
+        )
+        assert not first_listen_receipt_path(tmp_path).exists()
+
+        confirmed = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": True},
+        )
+        completed_receipt = await store.load()
+        not_yet_after_completion = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": False},
+        )
+
+    assert not_yet.status_code == 200
+    assert not_yet.json()["first_listen_achieved"] is False
+    repair = not_yet.json()["repair"]
+    assert repair["title"] == "Let's try this device again"
+    assert any("Retry on this device" in step for step in repair["steps"])
+    assert "hacs" not in str(repair).lower()
+    assert "speaker" not in str(repair).lower()
+    assert confirmed.status_code == 200
+    assert not_yet_after_completion.status_code == 200
+    assert not_yet_after_completion.json()["heard"] is False
+    assert not_yet_after_completion.json()["first_listen_achieved"] is True
+    assert await store.load() == completed_receipt
+    assert app.state.first_listen_receipt == completed_receipt
+
+
+@pytest.mark.asyncio
+async def test_listener_not_yet_reports_durable_incomplete_without_downgrading_listener_cache():
+    from mammamiradio.core.first_listen import FirstListenReceiptLoadResult, FirstListenReceiptLoadStatus
+
+    completed = FirstListenReceiptV1(
+        accepted_attempt_id="listener_completed-attempt",
+        accepted_at=100.0,
+        heard_at=100.0,
+    )
+    app = _make_test_app()
+    app.state.first_listen_receipt = completed
+    app.state.first_listen_store = SimpleNamespace(
+        load_result=AsyncMock(
+            return_value=FirstListenReceiptLoadResult(
+                FirstListenReceiptLoadStatus.PRESENT,
+                FirstListenReceiptV1(),
+            )
+        ),
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        response = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": False},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["first_listen_achieved"] is False
+    assert app.state.first_listen_receipt is completed
+    app.state.first_listen_store.load_result.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable_state", ["missing", "malformed"])
+async def test_listener_not_yet_fails_closed_when_completed_receipt_is_not_durable(tmp_path, durable_state):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore, first_listen_receipt_path
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    store = FirstListenReceiptStore(tmp_path)
+    completed = await store.record_listener_heard()
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = completed
+    receipt_path = first_listen_receipt_path(tmp_path)
+    if durable_state == "missing":
+        receipt_path.unlink()
+    else:
+        receipt_path.write_text("{malformed", encoding="utf-8")
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        response = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": False},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["first_listen_achieved"] is False
+    assert app.state.first_listen_receipt is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable_state", ["missing", "malformed"])
+async def test_first_listen_audio_gate_fails_closed_when_completed_receipt_is_not_durable(tmp_path, durable_state):
+    from mammamiradio.core.first_listen import FirstListenReceiptStore, first_listen_receipt_path
+    from mammamiradio.web.streamer import _first_listen_audio_gate_open
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    store = FirstListenReceiptStore(tmp_path)
+    completed = await store.record_listener_heard()
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = completed
+    receipt_path = first_listen_receipt_path(tmp_path)
+    if durable_state == "missing":
+        receipt_path.unlink()
+    else:
+        receipt_path.write_text("{malformed", encoding="utf-8")
+
+    assert await _first_listen_audio_gate_open(app.state) is False
+    assert app.state.first_listen_receipt is None
+
+
+@pytest.mark.asyncio
+async def test_receipt_read_error_fails_closed_for_audio_gate_and_listener_not_yet():
+    from mammamiradio.web.streamer import _first_listen_audio_gate_open
+
+    completed = FirstListenReceiptV1(
+        accepted_attempt_id="listener_completed-attempt",
+        accepted_at=100.0,
+        heard_at=100.0,
+    )
+    store = SimpleNamespace(load_result=AsyncMock(side_effect=OSError("receipt unreadable")))
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_store = store
+    app.state.first_listen_receipt = completed
+
+    assert await _first_listen_audio_gate_open(app.state) is False
+    assert app.state.first_listen_receipt is None
+
+    app.state.first_listen_receipt = completed
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        response = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": False},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["first_listen_achieved"] is False
+    assert app.state.first_listen_receipt is None
+    assert store.load_result.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_listener_not_yet_missing_read_does_not_erase_concurrent_cache_replacement():
+    from mammamiradio.core.first_listen import FirstListenReceiptLoadResult, FirstListenReceiptLoadStatus
+
+    cached = FirstListenReceiptV1(
+        accepted_attempt_id="listener_cached-attempt",
+        accepted_at=100.0,
+        heard_at=100.0,
+    )
+    replacement = FirstListenReceiptV1(
+        accepted_attempt_id="listener_concurrent-attempt",
+        accepted_at=110.0,
+        heard_at=110.0,
+    )
+    read_started = asyncio.Event()
+    release_read = asyncio.Event()
+
+    async def delayed_missing_result():
+        read_started.set()
+        await release_read.wait()
+        return FirstListenReceiptLoadResult(FirstListenReceiptLoadStatus.MISSING)
+
+    app = _make_test_app()
+    app.state.first_listen_receipt = cached
+    app.state.first_listen_store = SimpleNamespace(load_result=AsyncMock(side_effect=delayed_missing_result))
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        request_task = asyncio.create_task(
+            client.post(
+                "/api/setup/first-listen/listener-confirm",
+                json={"heard": False},
+            )
+        )
+        await read_started.wait()
+        app.state.first_listen_receipt = replacement
+        release_read.set()
+        response = await request_task
+
+    assert response.status_code == 200
+    assert response.json()["first_listen_achieved"] is False
+    assert app.state.first_listen_receipt is replacement
+
+
+@pytest.mark.asyncio
+async def test_listener_confirm_persistence_failure_keeps_cached_receipt_for_retry():
+    from mammamiradio.core.first_listen import FirstListenReceiptUnavailableError
+
+    app = _make_test_app()
+    cached = FirstListenReceiptV1(privacy_reviewed_at=100.0)
+    app.state.first_listen_receipt = cached
+    app.state.first_listen_store = SimpleNamespace(
+        record_listener_heard=AsyncMock(side_effect=FirstListenReceiptUnavailableError("receipt write failed"))
+    )
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=ACTIVE_SETUP_HEADERS,
+    ) as client:
+        response = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": True},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "receipt_unavailable"
+    assert response.json()["accepted"] is True
+    assert response.json()["receipt_persisted"] is False
+    assert "without replaying" in response.json()["error"]["message"]
+    assert response.json()["error"]["help_url"].endswith(
+        "docs/troubleshooting.md#first-listen-does-not-play-on-this-device"
+    )
+    assert app.state.first_listen_receipt is cached
+    app.state.first_listen_store.record_listener_heard.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        (b'{"heard":true,"extra":1}', "application/json"),
+        (b'{"heard":"yes"}', "application/json"),
+        (b"{}", "application/json"),
+        (b"{bad", "application/json"),
+        (b'{"heard":true}', "text/plain"),
+    ],
+)
+async def test_listener_confirm_requires_active_setup_and_exact_json(content, content_type):
+    app = _make_test_app()
+    store = SimpleNamespace(record_listener_heard=AsyncMock(), load_result=AsyncMock())
+    app.state.first_listen_store = store
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        unauthorized = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            json={"heard": True},
+        )
+        invalid = await client.post(
+            "/api/setup/first-listen/listener-confirm",
+            content=content,
+            headers={**ACTIVE_SETUP_HEADERS, "Content-Type": content_type},
+        )
+
+    assert unauthorized.status_code in {401, 403}
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "invalid_request"
+    store.record_listener_heard.assert_not_awaited()
+    store.load_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_first_listen_routes_return_safe_errors_for_ha_and_receipt_failures(tmp_path):
     from mammamiradio.core.first_listen import FirstListenReceiptUnavailableError
     from mammamiradio.home.ha_playback import (
@@ -10978,6 +11851,7 @@ async def test_first_listen_routes_return_safe_errors_for_ha_and_receipt_failure
         ) as client:
             discovery_failed = await client.post("/api/setup/first-listen/players", json={})
             receipt_read_failed = await client.post("/api/setup/first-listen/players", json={})
+            invalid_play = await client.post("/api/setup/first-listen/play", json={})
             playback_failed = await client.post(
                 "/api/setup/first-listen/play",
                 json={"entity_id": "media_player.kitchen"},
@@ -10998,6 +11872,8 @@ async def test_first_listen_routes_return_safe_errors_for_ha_and_receipt_failure
     assert discovery_failed.json()["error"]["code"] == "ha_unreachable"
     assert receipt_read_failed.status_code == 200
     assert receipt_read_failed.json()["selected_entity_id"] == ""
+    assert invalid_play.status_code == 422
+    assert invalid_play.json()["error"]["code"] == "invalid_request"
     assert playback_failed.status_code == 502
     assert playback_failed.json()["error"]["code"] == "service_rejected"
     assert playback_failed.json()["station_resumed"] is True
@@ -11039,6 +11915,12 @@ async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
                     entity_id="media_player.kitchen",
                     accepted=True,
                     station_resumed=True,
+                    receipt_persisted=False,
+                ),
+                HAPlayResult(
+                    entity_id="media_player.kitchen",
+                    accepted=True,
+                    station_resumed=True,
                     receipt_persisted=True,
                     attempt_id="saved-listening-check",
                 ),
@@ -11064,6 +11946,10 @@ async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
                 "/api/setup/first-listen/receipt/retry",
                 json={"entity_id": "media_player.kitchen"},
             )
+            still_missing_attempt = await client.post(
+                "/api/setup/first-listen/receipt/retry",
+                json={"entity_id": "media_player.kitchen"},
+            )
             recovered = await client.post(
                 "/api/setup/first-listen/receipt/retry",
                 json={"entity_id": "media_player.kitchen"},
@@ -11077,11 +11963,14 @@ async def test_first_listen_receipt_retry_persists_without_replaying(tmp_path):
     assert still_unavailable.status_code == 503
     assert still_unavailable.json()["accepted"] is True
     assert still_unavailable.json()["receipt_persisted"] is False
+    assert still_missing_attempt.status_code == 503
+    assert still_missing_attempt.json()["accepted"] is True
+    assert still_missing_attempt.json()["receipt_persisted"] is False
     assert recovered.status_code == 200
     assert recovered.json()["attempt_id"] == "saved-listening-check"
     assert "No playback request was sent again" in recovered.json()["message"]
     service.play.assert_awaited_once_with("media_player.kitchen")
-    assert service.persist_pending_receipt.await_count == 2
+    assert service.persist_pending_receipt.await_count == 3
 
 
 @pytest.mark.asyncio

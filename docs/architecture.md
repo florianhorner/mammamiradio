@@ -6,11 +6,13 @@ One background task stays ahead and produces segments. Another reads the next re
 
 A fresh install awaiting audible First Listen proof has one client-local step
 in front of that shared timeline: `/stream` emits a reviewed, packaged mini-show
-and only then subscribes that client to `LiveStreamHub`. The asset starts with
-ready MP3 bytes, so it adds no startup render or network dependency. Because it
-never enters `asyncio.Queue[Segment]`, existing listeners, now-playing state,
-and the producer remain untouched. Completed and pre-feature installs go
-straight to the live hub.
+and only then subscribes that client to `LiveStreamHub`. Required proof is
+hearing that stream on this device; Home Assistant speaker dispatch stays an
+optional later route. The asset starts with ready MP3 bytes, so it adds no
+startup render or network dependency. Because it never enters
+`asyncio.Queue[Segment]`, existing listeners, now-playing state, and the
+producer remain untouched. Completed and pre-feature installs go straight to
+the live hub.
 
 ## Runtime overview
 
@@ -88,20 +90,30 @@ First Listen keeps setup progress separate from runtime authorization and from
 the shared audio queue:
 
 - `core/first_listen.py` stores policy-free facts in
-  `cache/state/first_listen_receipt_v1.json`: the selected speaker, one opaque
-  Home Assistant-accepted attempt, the human audible confirmation bound to that
-  attempt, and completion of the privacy review. The privacy choice itself is
-  stored by the normal configuration path, never in this receipt.
-- Speaker acceptance is compare-and-swap state. Verification must present the
-  current attempt id; a newer playback supersedes older proof. If acceptance
-  reached Home Assistant but the receipt write failed, the app keeps only a
-  process-local recovery handle so **Save this listening check** can retry the
+  `cache/state/first_listen_receipt_v1.json`: the human audible confirmation,
+  the attempt it is bound to, and completion of the privacy review. The privacy
+  choice itself is stored by the normal configuration path, never in this
+  receipt.
+- The receipt carries two proof kinds in one unchanged v1 shape. Required proof
+  is **browser-local**: `record_listener_heard` writes a `listener_*` attempt
+  with no selected entity, where acceptance and hearing are the same moment.
+  The **Home Assistant** kind remains readable for installs that completed
+  onboarding before browser-local proof existed: a selected speaker plus an
+  opaque HA-accepted attempt, with the human confirmation bound to it.
+- Home Assistant acceptance is compare-and-swap state: verification must
+  present the current attempt id, and a newer playback supersedes older proof.
+  A completed listener proof is terminal and is never superseded, so a later
+  Home Assistant playback cannot overwrite it
+  (`record_accepted_playback` returns early on `is_complete_listener_proof`).
+  Browser-local confirmation presents no attempt id at all.
+- If the audible moment happened but the receipt write failed, the app keeps
+  only a process-local recovery handle so **Restore sound check** can retry the
   same fact without replaying audio.
 - Feature-era install origin uses two agreeing witnesses: the owner-only
   `cache/state/first_listen_install_origin_v1.json` sidecar and the private
   `_mammamiradio_first_listen_install_origin_v1` SQLite table. Missing, corrupt,
   or disagreeing evidence projects to `unknown`; only a proven pre-feature
-  install bypasses the speaker/privacy onboarding.
+  install bypasses the listening/privacy onboarding.
 - Origin migration and receipt loading run as background tasks after the
   producer and playback tasks are scheduled. Filesystem work runs off the event
   loop, and a failure leaves setup incomplete/narrow without delaying audio.
@@ -1309,7 +1321,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/sw.js` | GET | Public | PWA service worker |
 | `/static/{filename:path}` | GET | Public | PWA static assets (manifest, icons) |
 | `/favicon.ico` | GET | Public | Browser default favicon path; serves the station icon SVG |
-| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub |
+| `/stream` | GET | Public | Infinite MP3 stream; a fresh install without audible proof receives the packaged First Listen mini-show before joining the shared live hub. `?first_listen=1` additionally waits up to `FIRST_LISTEN_RESUME_WAIT_SECONDS` (8s) for an explicit `/api/resume` and returns an empty body if the station stays stopped |
 | `/healthz` | GET | Public | Runtime-health probe with process uptime; prolonged silence with active listeners returns `503`, while an intentional Stop remains healthy |
 | `/readyz` | GET | Public | Readiness probe with queue depth and explicit `ready`, `starting`, or `stopped` status; listener-accepted audio proves readiness even during startup grace, while a persisted operator stop returns `503 stopped` |
 | `/public-status` | GET | Public | Current segment, recent log, the real queued segments only (`upcoming_mode` is `queued` when render-ready audio exists and `building` when no render-ready segment exists yet), process-local `ad_experiment` completion counts, `playback_actions.skip_would_bridge` (whether cutting the current segment right now would have to bridge to forced music — true whenever no immediately playable queued or reserved audio remains, which can diverge from `upcoming_mode` since a queued segment can be render-ready but not itself playable, e.g. banned or stale), and `stream.audio_format` (the canonical encoding contract — see "Stream audio format metadata" below) |
@@ -1320,6 +1332,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/setup/first-listen/play` | POST | Admin (active setup) | Ask one selected player to start `media-source://mammamiradio/live` and record the accepted attempt |
 | `/api/setup/first-listen/receipt/retry` | POST | Admin (active setup) | Persist the server-owned accepted attempt after a receipt failure; never sends another playback request |
 | `/api/setup/first-listen/verify` | POST | Admin (active setup) | Record the operator's heard/not-yet result for the current accepted attempt |
+| `/api/setup/first-listen/listener-confirm` | POST | Admin (active setup) | Record browser-local audible proof as a `listener_*` attempt; this is the route that completes First Listen |
 | `/api/setup/home-context-preview` | POST | Admin (active setup) | Fetch a fresh detached, filtered Home context preview without publishing it into host scripts |
 | `/api/setup/home-context-choice` | PATCH | Admin (active setup) | Apply the explicit Home-context choice and record completion of the privacy review; enabling requires a fresh preview |
 | `/api/setup/provider-check` | POST | Admin (active setup) | Active, secret-safe Anthropic/OpenAI/Azure Speech/ElevenLabs connectivity check |
@@ -1409,12 +1422,23 @@ In standalone mode, a non-loopback bind without a credential is rejected during 
 
 Mutating admin requests (POST/PUT/PATCH/DELETE) over non-loopback networks must pass a CSRF check. The dashboard injects a per-session token via `__MAMMAMIRADIO_CSRF_TOKEN__` placeholder replacement. Requests are allowed if any of: the CSRF token header matches, the Origin or Referer is same-origin, the request uses token auth (`X-Radio-Admin-Token`), or the request comes through HA ingress. Loopback clients are exempt.
 
-First Listen, setup credential actions, and Home entity privacy controls use an
-additional DNS-rebinding boundary. Their setup-status read and active routes
-accept the browser CSRF token only with a literal local/private IP Host or
-genuine HA ingress; custom hostnames must use `X-Radio-Admin-Token`. This
-stricter rule is implemented by `_require_active_setup_access` and does not
-change the legacy admin matrix for unrelated endpoints.
+First Listen, setup credential actions, speaker playback, and Home entity
+privacy controls use an additional DNS-rebinding boundary. Their setup-status
+read and active routes accept, checked in this order: `X-Radio-Admin-Token`
+alone (automation; returns before the CSRF token is even read, since a
+caller-supplied secret is not what CSRF defends); verified HTTP Basic admin
+credentials plus the injected CSRF token (the supported browser path when
+`ADMIN_PASSWORD` is configured, including on a custom hostname, because a
+credential is a secret a rebound page cannot manufacture); or a literal
+local/private IP Host or genuine HA ingress plus the CSRF token. A custom
+hostname with no configured password and no admin token is refused with a
+structured `403` (`{"code": "active_setup_host_untrusted", "title", "message",
+"action"}`) that names the fix; a missing or stale CSRF token on the other two
+paths gets the same shape under `active_setup_csrf_stale`. This stricter rule
+is implemented by `_require_active_setup_access` and does not change the
+legacy admin matrix for unrelated endpoints. `docs/operations.md` "Admin
+access model" is the SSOT; the
+two must change together.
 
 ### Source switch concurrency
 

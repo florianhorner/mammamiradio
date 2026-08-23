@@ -135,6 +135,9 @@ scripts/first-listen-lab.sh replay
 open http://127.0.0.1:8000/admin
 ```
 
+Required First Listen proof is hearing the station on this device in `/admin`.
+This lab remains the way to exercise the optional Home Assistant speaker path.
+
 Then, in **First Listen** (the automatic fresh-install landing):
 
 1. Confirm that the opening card leads with the authored 27-second mini-show:
@@ -143,14 +146,15 @@ Then, in **First Listen** (the automatic fresh-install landing):
    station after the opening** only as supporting detail. Local music should be
    ready; charts and Jamendo are intentionally unavailable; recovery/demo audio
    must be described as a limitation rather than a music source.
-2. Select **Find my speakers**, choose **Mac Lab Speaker**, and select **Start
-   Mamma Mi Radio**.
-3. Mute the Mac before confirming, select **Not yet**, and check that the repair
-   guidance mentions volume/mute, the chosen entity, and retrying the same
-   speaker.
-4. Unmute, select **Retry on same speaker**, and listen for the music bed,
+2. Mute the machine before confirming, select **Play the station**, then **Not
+   yet**, and check that the repair guidance names this device's volume and mute
+   and offers to try again here.
+3. Unmute, select **Try this device again**, and listen for the music bed,
    Mamma Mi Radio identity, and the Marco/Giulia exchange.
-5. Only after hearing the opening, select **Yes — that’s Mamma Mi Radio**.
+4. Only after hearing the opening, select **Yes, I hear it**.
+5. Separately, exercise the optional speaker route outside First Listen: in
+   Home Assistant, **Media → Mamma Mi Radio → Mamma Mi Radio Live** to **Mac Lab
+   Speaker**, and confirm the room by ear.
 6. Select **Keep private and continue** without opening the preview. Confirm
    First Listen says that no Home Assistant data was requested and that AI
    hosts remain optional.
@@ -159,9 +163,10 @@ Then, in **First Listen** (the automatic fresh-install landing):
    with **Keep private and continue** recommended. Do not enable it for the
    acceptance path.
 
-This is real HA service discovery, `media_player.play_media`, the custom Media
-Source, the signed HA proxy, a real `media_player`, and human audible
-confirmation. Browser playback does not count. The mini-show is client-local:
+First Listen proof here is browser playback in `/admin` plus human audible
+confirmation. Step 5 additionally exercises `media_player.play_media`, the
+custom Media Source, the signed HA proxy, and a real `media_player`, but that
+route is optional and no longer gates setup. The mini-show is client-local:
 it does not enter the shared queue, change live now-playing, or reach existing
 and already-completed installs. Once it finishes, that client joins the normal
 live stream.

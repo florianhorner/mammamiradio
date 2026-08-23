@@ -379,12 +379,22 @@ Voice validation now runs at config load, not at synthesis time:
 - When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
-## First Listen cannot find any speakers
+## First Listen does not play on this device
 
-Speaker discovery asks Home Assistant for its `media_player` entities, so it
-finds nothing when the station has no Home Assistant connection. Check
+Required First Listen proof is hearing the station in the add-on Web UI on this
+device. If **Play the station** is quiet, check mute and volume on this tab,
+confirm the sound is coming from this browser and not another app, then try
+**Play the station** again. Technical details under the journey name the stream
+URL. Home Assistant speakers are an optional later route, not this step.
+
+## First Listen: the optional Home Assistant speaker route is quiet
+
+First Listen no longer discovers or plays to speakers; it proves the station on
+the device you are reading it on. The Home Assistant speaker route is optional
+and lives in Home Assistant's own media browser, so it needs a working Home
+Assistant connection and the HACS integration installed. Check
 `/api/capabilities`: `ha: false` and `homeassistant_access: false` mean there is
-nothing to search.
+no connection to send audio over.
 
 On a standalone station (anything not run as the Home Assistant add-on), set
 `HA_URL` and `HA_TOKEN` in `.env` and restart. `HA_TOKEN` is a long-lived access

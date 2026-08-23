@@ -383,7 +383,7 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
   `GET /api/clip/keep` (list what is kept), `DELETE /api/clip/keep/{id}`
   (remove one kept moment)
 - `PUT /api/media-sources/jamendo`, `POST /api/media-sources/jamendo/retry`
-- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
+- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/first-listen/listener-confirm`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
 - `GET /api/pacing`, `PATCH /api/pacing`
 - `GET /api/hosts`, `PATCH /api/hosts/{host_name}/personality`, `POST /api/hosts/{host_name}/personality/reset`
@@ -865,12 +865,31 @@ the Supervisor network. To require a credential on the add-on, set `admin_token`
 in the add-on options; a configured token is then enforced even on the LAN.
 
 The active First Listen/setup surface is stricter than the general matrix:
-`GET /api/setup/status` plus setup recheck, speaker playback, privacy preview,
-privacy choice, entity privacy controls, provider check, and key-save actions
-require the injected CSRF token and either a literal local/private IP host or
-genuine Home Assistant ingress. This prevents DNS-rebinding pages from using
-the token they can read from a rebound dashboard. Automation through a custom
-hostname must use `X-Radio-Admin-Token`.
+`GET /api/setup/status` plus setup recheck, listener confirmation, speaker
+playback, privacy preview, privacy choice, entity privacy controls, provider
+check, and key-save actions accept one of three proofs of origin, checked in
+this order:
+
+1. **`X-Radio-Admin-Token`**, for automation. Checked first and returns
+   immediately on a match — no CSRF token is read or required on this path,
+   because it is a caller-supplied secret, not a browser mechanism CSRF
+   defends.
+2. **Verified HTTP Basic admin credentials** (`ADMIN_PASSWORD` configured),
+   **plus** the injected CSRF token. A credential is an unguessable secret a
+   rebound page cannot manufacture, so this is the supported browser path for
+   a custom hostname; CSRF is still required as a second proof the write came
+   from this dashboard.
+3. **A literal local/private IP host, or genuine Home Assistant ingress,
+   plus** the injected CSRF token. This is the credential-less path, and it is
+   host-restricted precisely because a per-process CSRF secret is no defense
+   once an attacker can fetch a page from the rebound host and read the
+   embedded token.
+
+A custom hostname with no `ADMIN_PASSWORD` and no admin token is refused with a
+`403` whose body is a structured object (`{"code":
+"active_setup_host_untrusted", "title", "message", "action"}`) naming the fix,
+rather than a bare string. A missing or stale CSRF token on paths 2-3 gets the
+same structured shape under `active_setup_csrf_stale`.
 
 ## Docker
 
