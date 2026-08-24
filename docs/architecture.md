@@ -344,11 +344,11 @@ ceiling. The admission gate caps gated call sites at 2 ordinary/background jobs 
 1 rescue render in the steady state; that rescue cap is best-effort, not hard — a
 wedged rescue render lets every subsequent rescue call proceed ungated too, so
 concurrent rescue jobs aren't bounded at 1 for the duration of the wedge (see
-`mammamiradio/audio/admission.py`). The transient Jamendo provider bounds the
-HTTP response in memory before taking a background admission slot, then writes
-those bytes through a nonblocking pipe to its single FFmpeg worker and normalized
-partial file. This keeps paced network waits outside shared admission. A
-standalone `yt-dlp` extract-audio
+`mammamiradio/audio/admission.py`). The transient Jamendo provider buffers the
+size-capped HTTP response before taking a background admission slot. It then
+sends that buffer through a nonblocking pipe to its FFmpeg worker and normalized
+partial file. Paced network waits stay outside shared admission. A standalone
+`yt-dlp` extract-audio
 FFmpeg remains outside that gate because wrapping its network fetch would hold a
 slot across download; it can add one transient process only when the operator has
 installed and enabled `external-media`. Neither add-on has that process surface.

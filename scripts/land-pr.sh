@@ -61,9 +61,8 @@ iso_to_epoch() {
   local ts="$1" normalized
   [ -n "$ts" ] || return 0
 
-  # GitHub committedDate values may include fractional seconds (for example,
-  # 2026-08-23T23:14:31.300Z). Normalize them to the second-precision form
-  # accepted consistently by both BSD and GNU date.
+  # GitHub committedDate values may include fractional seconds, such as
+  # 2026-08-23T23:14:31.300Z. Strip the fraction before calling date.
   normalized="$(printf '%s' "$ts" | sed -E 's/\.[0-9]+Z$/Z/')" || return 0
   date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" +%s 2>/dev/null \
     || date -u -d "$normalized" +%s 2>/dev/null \

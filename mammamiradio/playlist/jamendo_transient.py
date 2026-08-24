@@ -436,7 +436,7 @@ def _hash_file(path: Path) -> str:
 
 
 def _active_transfer_timeout_sec(duration_sec: float) -> float:
-    """Bound one admitted audio transfer using its validated track duration."""
+    """Set the transfer timeout from the validated track duration."""
     return min(
         max(duration_sec + _ACTIVE_TRANSFER_HEADROOM_SEC, _MIN_ACTIVE_TRANSFER_TIMEOUT_SEC),
         _MAX_ACTIVE_TRANSFER_TIMEOUT_SEC,
@@ -444,12 +444,12 @@ def _active_transfer_timeout_sec(duration_sec: float) -> float:
 
 
 def _monotonic() -> float:
-    """Narrow clock seam for deterministic transfer deadline tests."""
+    """Provide a clock seam for deterministic deadline tests."""
     return time.monotonic()
 
 
 def _wait_for_pipe_writable(file_descriptor: int, timeout_sec: float) -> bool:
-    """Wait briefly for FFmpeg's nonblocking stdin pipe to accept bytes."""
+    """Wait for FFmpeg's nonblocking stdin pipe to accept bytes."""
     _, writable, _ = select.select([], [file_descriptor], [], timeout_sec)
     return bool(writable)
 
@@ -466,7 +466,7 @@ def _raise_if_write_expired(
     *,
     deadline_code: str = "network_timeout",
 ) -> None:
-    """Choose the earliest expired deadline; an exact tie belongs to transfer."""
+    """Raise for the first expired deadline; transfer wins ties."""
     if now >= active_deadline and active_deadline <= pipe_deadline:
         raise _TransientError(deadline_code)
     if now >= pipe_deadline:
@@ -483,7 +483,7 @@ def _write_all_nonblocking(
     *,
     deadline_code: str = "network_timeout",
 ) -> None:
-    """Write one complete chunk while bounding both transfer and pipe progress."""
+    """Write a chunk while enforcing transfer and pipe-progress deadlines."""
     view = memoryview(chunk)
     offset = 0
     pipe_deadline = _monotonic() + _PIPE_PROGRESS_TIMEOUT_SEC
@@ -522,11 +522,11 @@ def _write_all_nonblocking(
 
 
 def _debug_cleanup_failure(phase: str, error: BaseException) -> None:
-    logger.debug("Jamendo worker cleanup failed phase=%s error=%s", phase, type(error).__name__)
+    logger.debug("Jamendo worker cleanup failed: phase=%s error=%s", phase, type(error).__name__)
 
 
 def _classify_worker_error(error: BaseException) -> BaseException:
-    """Map expected worker failures without hiding unexpected programming errors."""
+    """Map expected worker failures and preserve unexpected errors."""
     if isinstance(error, _ProviderError):
         return error
     if isinstance(error, subprocess.TimeoutExpired):
@@ -666,9 +666,9 @@ def _stream_and_normalize(
             if content_length < 0 or content_length > _MAX_AUDIO_BYTES:
                 raise _CandidateRejectedError("audio_oversize")
 
-            # Keep the bounded response in memory so a paced provider transfer
-            # never occupies shared FFmpeg admission, and never stage raw audio
-            # as a file outside the single normalized artifact.
+            # Keep the size-capped response in memory. This avoids holding shared
+            # FFmpeg admission during paced network waits and avoids staging raw
+            # audio outside the normalized artifact.
             for chunk in response.iter_bytes(64 * 1024):
                 _raise_if_active_transfer_expired(active_deadline)
                 byte_count += len(chunk)

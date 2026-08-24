@@ -765,9 +765,9 @@ async def test_disable_during_worker_discards_late_result_before_replacement(tmp
         assert provider.retry() is False
         allow_worker.set()
         for _ in range(300):
-            # Worker completion and stale-operation cleanup are separate loop
-            # callbacks, so wait for the owned directory rather than treating
-            # the status transition as a filesystem barrier.
+            # Worker completion and stale-operation cleanup use separate
+            # callbacks. Wait for the owned directory to disappear before
+            # treating the operation as complete.
             if not provider.status()["in_flight"] and calls and not calls[0].exists():
                 break
             await asyncio.sleep(0.005)
