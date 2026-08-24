@@ -48,7 +48,7 @@ command -v jq >/dev/null 2>&1 || die "jq not found. Install jq, then re-run."
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
 # The head pin is the core safety guarantee — refuse to run on a gh too old
 # to support it rather than silently landing without the pin.
-gh pr merge --help 2>/dev/null | grep -q -- '--match-head-commit' \
+gh pr merge --help 2>/dev/null | grep -- '--match-head-commit' >/dev/null \
   || die "this gh CLI does not support --match-head-commit (needs gh >= 2.49). Upgrade gh, then re-run."
 
 [ "$#" -ge 1 ] || die "usage: scripts/land-pr.sh <pr-number> [<pr-number>...]"

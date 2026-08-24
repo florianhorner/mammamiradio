@@ -45,6 +45,7 @@ fi
 #   GH_MOCK_HEAD          headRefOid (default real repo HEAD)
 #   GH_MOCK_HEAD_AFTER    headRefOid returned after `pr update-branch` ran
 #   GH_MOCK_COMMIT_DATE   committedDate of the newest PR commit (default NOW)
+#   GH_MOCK_HELP_LINES    emit a large help stream for the capability probe
 #   GH_MOCK_UPDATE_FAIL   non-empty => `pr update-branch` exits 1
 # Every invocation is appended to $GH_MOCK_LOG for assertions.
 MOCK_BIN="$TMPDIR_T/bin"
@@ -54,7 +55,11 @@ cat > "$MOCK_BIN/gh" <<'MOCK'
 # The capability probe (`pr merge --help`) is answered without logging so the
 # never-merged assertions only see real merge attempts.
 if [[ "$*" == *"--help"* ]]; then
-  echo "--match-head-commit"
+  printf '%s\n' "--match-head-commit"
+  if [ -n "${GH_MOCK_HELP_LINES:-}" ]; then
+    seq 1 "$GH_MOCK_HELP_LINES"
+    exit $?
+  fi
   exit 0
 fi
 echo "$*" >> "$GH_MOCK_LOG"
@@ -123,6 +128,12 @@ run_land() {
 
 merged_with() { grep -q "pr merge 7 --squash --auto --match-head-commit $1" "$GH_MOCK_LOG"; }
 never_merged() { ! grep -q "pr merge" "$GH_MOCK_LOG"; }
+
+# Case 0: drain a large help stream so grep does not SIGPIPE the gh producer.
+run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_HELP_LINES=100000
+[ "$RUN_RC" -eq 0 ] || fail "large gh help output should not trip the capability probe"
+merged_with "$HEAD_FULL" || fail "large gh help output should still arm auto-merge"
+pass "capability probe drains gh help output"
 
 # Case 1: CLEAN PR + fresh squad entry at HEAD => arms with pinned real head
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")"
