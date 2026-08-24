@@ -37,6 +37,10 @@ This file supplements the global instructions for the `mammamiradio` repository.
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, present real alternatives and their trade-offs, then
   recommend one and explain why it is superior for this repository.
+- Target every human or feature PR below 1,000 changed lines, measured as
+  additions plus deletions in the complete PR diff. Treat a projection near the
+  ceiling as a slicing trigger before implementation; do not preserve the budget
+  by dropping regression tests, required documentation, or review evidence.
 
 ## Parallel workspaces
 
