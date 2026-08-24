@@ -48,7 +48,7 @@ command -v jq >/dev/null 2>&1 || die "jq not found. Install jq, then re-run."
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
 # The head pin is the core safety guarantee — refuse to run on a gh too old
 # to support it rather than silently landing without the pin.
-gh pr merge --help 2>/dev/null | grep -q -- '--match-head-commit' \
+gh pr merge --help 2>/dev/null | grep -- '--match-head-commit' >/dev/null \
   || die "this gh CLI does not support --match-head-commit (needs gh >= 2.49). Upgrade gh, then re-run."
 
 [ "$#" -ge 1 ] || die "usage: scripts/land-pr.sh <pr-number> [<pr-number>...]"
@@ -58,10 +58,14 @@ gh pr merge --help 2>/dev/null | grep -q -- '--match-head-commit' \
 # Empty input is rejected up front: GNU `date -d ""` silently returns
 # midnight today instead of failing, which would bless missing timestamps.
 iso_to_epoch() {
-  local ts="$1"
+  local ts="$1" normalized
   [ -n "$ts" ] || return 0
-  date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null \
-    || date -u -d "$ts" +%s 2>/dev/null \
+
+  # GitHub committedDate values may include fractional seconds, such as
+  # 2026-08-23T23:14:31.300Z. Strip the fraction before calling date.
+  normalized="$(printf '%s' "$ts" | sed -E 's/\.[0-9]+Z$/Z/')" || return 0
+  date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" +%s 2>/dev/null \
+    || date -u -d "$normalized" +%s 2>/dev/null \
     || true
 }
 

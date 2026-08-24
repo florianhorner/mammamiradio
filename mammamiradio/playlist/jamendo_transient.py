@@ -9,12 +9,14 @@ file through the queued segment's release hook.
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import select
 import shutil
 import subprocess
 import time
@@ -23,8 +25,9 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from io import BytesIO
 from pathlib import Path
-from threading import Event, RLock, Timer
+from threading import RLock
 from typing import Protocol, TypedDict
 from urllib.parse import urlparse
 
@@ -85,8 +88,14 @@ _ALLOWED_LICENSES = {
     "https://creativecommons.org/licenses/by/4.0/": "CC-BY-4.0",
 }
 _CONNECT_READ_TIMEOUT_SEC = 10.0
-_NETWORK_DEADLINE_SEC = 30.0
-_FFMPEG_DEADLINE_SEC = 180.0
+_DISCOVERY_DEADLINE_SEC = 30.0
+_ACTIVE_TRANSFER_HEADROOM_SEC = 60.0
+_MIN_ACTIVE_TRANSFER_TIMEOUT_SEC = 120.0
+_MAX_ACTIVE_TRANSFER_TIMEOUT_SEC = 780.0
+_PIPE_PROGRESS_TIMEOUT_SEC = 10.0
+_PIPE_POLL_INTERVAL_SEC = 0.25
+_FFMPEG_FINALIZE_TIMEOUT_SEC = 30.0
+_PROCESS_CLEANUP_TIMEOUT_SEC = 5.0
 _MAX_METADATA_RESPONSE_BYTES = 1024 * 1024
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
 _MIN_DURATION_SEC = 60.0
@@ -426,6 +435,114 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _active_transfer_timeout_sec(duration_sec: float) -> float:
+    """Set the transfer timeout from the validated track duration."""
+    return min(
+        max(duration_sec + _ACTIVE_TRANSFER_HEADROOM_SEC, _MIN_ACTIVE_TRANSFER_TIMEOUT_SEC),
+        _MAX_ACTIVE_TRANSFER_TIMEOUT_SEC,
+    )
+
+
+def _monotonic() -> float:
+    """Provide a clock seam for deterministic deadline tests."""
+    return time.monotonic()
+
+
+def _wait_for_pipe_writable(file_descriptor: int, timeout_sec: float) -> bool:
+    """Wait for FFmpeg's nonblocking stdin pipe to accept bytes."""
+    _, writable, _ = select.select([], [file_descriptor], [], timeout_sec)
+    return bool(writable)
+
+
+def _raise_if_active_transfer_expired(deadline: float) -> None:
+    if _monotonic() >= deadline:
+        raise _TransientError("network_timeout")
+
+
+def _raise_if_write_expired(
+    now: float,
+    active_deadline: float,
+    pipe_deadline: float,
+    *,
+    deadline_code: str = "network_timeout",
+) -> None:
+    """Raise for the first expired deadline; transfer wins ties."""
+    if now >= active_deadline and active_deadline <= pipe_deadline:
+        raise _TransientError(deadline_code)
+    if now >= pipe_deadline:
+        raise _TransientError("ffmpeg_timeout")
+    if now >= active_deadline:
+        raise _TransientError(deadline_code)
+
+
+def _write_all_nonblocking(
+    process: subprocess.Popen[bytes],
+    file_descriptor: int,
+    chunk: bytes,
+    active_deadline: float,
+    *,
+    deadline_code: str = "network_timeout",
+) -> None:
+    """Write a chunk while enforcing transfer and pipe-progress deadlines."""
+    view = memoryview(chunk)
+    offset = 0
+    pipe_deadline = _monotonic() + _PIPE_PROGRESS_TIMEOUT_SEC
+    while offset < len(view):
+        now = _monotonic()
+        _raise_if_write_expired(now, active_deadline, pipe_deadline, deadline_code=deadline_code)
+        if process.poll() is not None:
+            raise _TransientError("ffmpeg_failed")
+        wait_sec = max(
+            0.0,
+            min(_PIPE_POLL_INTERVAL_SEC, active_deadline - now, pipe_deadline - now),
+        )
+        try:
+            if not _wait_for_pipe_writable(file_descriptor, wait_sec):
+                continue
+        except InterruptedError:
+            continue
+        now = _monotonic()
+        _raise_if_write_expired(now, active_deadline, pipe_deadline, deadline_code=deadline_code)
+        if process.poll() is not None:
+            raise _TransientError("ffmpeg_failed")
+        try:
+            written = os.write(file_descriptor, view[offset:])
+        except (BlockingIOError, InterruptedError):
+            continue
+        except BrokenPipeError as exc:
+            raise _TransientError("ffmpeg_failed") from exc
+        except OSError as exc:
+            if exc.errno == errno.EPIPE:
+                raise _TransientError("ffmpeg_failed") from exc
+            raise
+        if written <= 0:
+            raise _TransientError("ffmpeg_failed")
+        offset += written
+        pipe_deadline = _monotonic() + _PIPE_PROGRESS_TIMEOUT_SEC
+
+
+def _debug_cleanup_failure(phase: str, error: BaseException) -> None:
+    logger.debug("Jamendo worker cleanup failed: phase=%s error=%s", phase, type(error).__name__)
+
+
+def _classify_worker_error(error: BaseException) -> BaseException:
+    """Map expected worker failures and preserve unexpected errors."""
+    if isinstance(error, _ProviderError):
+        return error
+    if isinstance(error, subprocess.TimeoutExpired):
+        failure = _TransientError("ffmpeg_timeout")
+    elif isinstance(error, httpx.TimeoutException):
+        failure = _TransientError("network_timeout")
+    elif isinstance(error, httpx.HTTPError):
+        failure = _TransientError("audio_fetch_failed")
+    elif isinstance(error, OSError):
+        failure = _TransientError("ffmpeg_failed")
+    else:
+        return error
+    failure.__cause__ = error
+    return failure
+
+
 def _cleanup_operation(operation_dir: Path, jamendo_root: Path) -> None:
     """Remove only a recognized provider-owned operation directory."""
     try:
@@ -484,13 +601,25 @@ def _stream_and_normalize(
     """Stream one provider response into FFmpeg and publish one normalized file."""
     partial = operation_dir / "normalized.part"
     final = operation_dir / "normalized.mp3"
-    started = time.monotonic()
+    audio_buffer = BytesIO()
+    client: httpx.Client | None = None
+    response: httpx.Response | None = None
     process: subprocess.Popen[bytes] | None = None
-    process_timer: Timer | None = None
-    process_timed_out = Event()
-    network_timer: Timer | None = None
-    network_timed_out = Event()
+    stdin_open = False
     byte_count = 0
+    normalized_duration_sec: float | None = None
+    primary_error: BaseException | None = None
+    published = False
+
+    def remember_cleanup_failure(phase: str, error: Exception, failure_code: str) -> None:
+        nonlocal primary_error
+        if primary_error is None:
+            failure = _TransientError(failure_code)
+            failure.__cause__ = error
+            primary_error = failure
+        else:
+            _debug_cleanup_failure(phase, error)
+
     try:
         timeout = httpx.Timeout(
             _CONNECT_READ_TIMEOUT_SEC,
@@ -499,10 +628,35 @@ def _stream_and_normalize(
             write=_CONNECT_READ_TIMEOUT_SEC,
             pool=_CONNECT_READ_TIMEOUT_SEC,
         )
-        with (
-            httpx.Client(timeout=timeout, follow_redirects=False) as client,
-            client.stream("GET", candidate["audio_url"]) as response,
-        ):
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            "pipe:0",
+            "-vn",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-b:a",
+            "192k",
+            "-af",
+            "loudnorm=I=-16:TP=-1.5:LRA=11",
+            "-write_xing",
+            "0",
+            "-f",
+            "mp3",
+            str(partial),
+        ]
+        try:
+            active_deadline = _monotonic() + _active_transfer_timeout_sec(candidate["duration_sec"])
+            client = httpx.Client(timeout=timeout, follow_redirects=False)
+            request = client.build_request("GET", candidate["audio_url"])
+            response = client.send(request, stream=True)
+            _raise_if_active_transfer_expired(active_deadline)
             if response.status_code != 200:
                 raise _TransientError("audio_fetch_failed")
             try:
@@ -512,152 +666,165 @@ def _stream_and_normalize(
             if content_length < 0 or content_length > _MAX_AUDIO_BYTES:
                 raise _CandidateRejectedError("audio_oversize")
 
-            def terminate_timed_out_network() -> None:
-                network_timed_out.set()
+            # Keep the size-capped response in memory. This avoids holding shared
+            # FFmpeg admission during paced network waits and avoids staging raw
+            # audio outside the normalized artifact.
+            for chunk in response.iter_bytes(64 * 1024):
+                _raise_if_active_transfer_expired(active_deadline)
+                byte_count += len(chunk)
+                if byte_count > _MAX_AUDIO_BYTES:
+                    raise _CandidateRejectedError("audio_oversize")
+                audio_buffer.write(chunk)
+            _raise_if_active_transfer_expired(active_deadline)
+            if byte_count == 0:
+                raise _CandidateRejectedError("audio_empty")
+            audio_buffer.seek(0)
+        except BaseException as exc:
+            primary_error = _classify_worker_error(exc)
+        finally:
+            if response is not None:
                 try:
                     response.close()
-                except (httpx.HTTPError, OSError):
-                    pass
-                if process is not None and process.poll() is None:
-                    try:
-                        process.kill()
-                    except OSError:
-                        pass
-
-            network_remaining = max(0.001, _NETWORK_DEADLINE_SEC - (time.monotonic() - started))
-            network_timer = Timer(network_remaining, terminate_timed_out_network)
-            network_timer.daemon = True
-            network_timer.start()
-            command = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                "pipe:0",
-                "-vn",
-                "-ar",
-                "48000",
-                "-ac",
-                "2",
-                "-b:a",
-                "192k",
-                "-af",
-                "loudnorm=I=-16:TP=-1.5:LRA=11",
-                "-write_xing",
-                "0",
-                "-f",
-                "mp3",
-                str(partial),
-            ]
-            with ffmpeg_slot(background=True):
-                if network_timed_out.is_set():
-                    raise _TransientError("network_timeout")
-                process = subprocess.Popen(
-                    command,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-
-                def terminate_timed_out_process() -> None:
-                    process_timed_out.set()
-                    if process is not None and process.poll() is None:
-                        try:
-                            process.kill()
-                        except OSError:
-                            pass
-
-                process_timer = Timer(_FFMPEG_DEADLINE_SEC, terminate_timed_out_process)
-                process_timer.daemon = True
-                process_timer.start()
-                if process.stdin is None:
-                    raise _TransientError("ffmpeg_failed")
+                    response = None
+                except Exception as exc:
+                    remember_cleanup_failure("response_close", exc, "audio_fetch_failed")
+            if client is not None:
                 try:
-                    for chunk in response.iter_bytes(64 * 1024):
-                        if time.monotonic() - started > _NETWORK_DEADLINE_SEC:
-                            raise _TransientError("network_timeout")
-                        byte_count += len(chunk)
-                        if byte_count > _MAX_AUDIO_BYTES:
-                            raise _CandidateRejectedError("audio_oversize")
-                        process.stdin.write(chunk)
-                        if network_timed_out.is_set():
-                            raise _TransientError("network_timeout")
-                        if process_timed_out.is_set():
-                            raise _TransientError("ffmpeg_timeout")
-                    if byte_count == 0:
-                        raise _CandidateRejectedError("audio_empty")
-                    network_timer.cancel()
-                    if network_timed_out.is_set():
-                        raise _TransientError("network_timeout")
-                    process.stdin.close()
-                    on_normalizing()
-                    returncode = process.wait(timeout=_FFMPEG_DEADLINE_SEC)
-                except BaseException:
-                    if process.poll() is None:
-                        process.kill()
-                    process.wait(timeout=5)
-                    raise
-                if process_timed_out.is_set():
-                    raise _TransientError("ffmpeg_timeout")
-                if returncode != 0 or not partial.is_file() or partial.is_symlink() or partial.stat().st_size <= 0:
-                    raise _TransientError("ffmpeg_failed")
-                try:
-                    probe = subprocess.run(
-                        [
-                            "ffprobe",
-                            "-v",
-                            "error",
-                            "-show_entries",
-                            "format=duration",
-                            "-of",
-                            "default=noprint_wrappers=1:nokey=1",
-                            str(partial),
-                        ],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        timeout=10,
-                    )
-                except (OSError, subprocess.TimeoutExpired) as exc:
-                    raise _TransientError("ffprobe_failed") from exc
-                if probe.returncode != 0:
-                    raise _TransientError("ffprobe_failed")
-                duration_sec = _parse_duration(probe.stdout.strip())
-        artifact_hash = _hash_file(partial)
-        os.replace(partial, final)
-        return _PreparedArtifact(final, artifact_hash, duration_sec, byte_count)
-    except subprocess.TimeoutExpired as exc:
-        raise _TransientError("ffmpeg_timeout") from exc
-    except httpx.TimeoutException as exc:
-        raise _TransientError("network_timeout") from exc
-    except httpx.HTTPError as exc:
-        if network_timed_out.is_set():
-            raise _TransientError("network_timeout") from exc
-        raise _TransientError("audio_fetch_failed") from exc
-    except (OSError, BrokenPipeError) as exc:
-        if network_timed_out.is_set():
-            raise _TransientError("network_timeout") from exc
-        if process_timed_out.is_set():
-            raise _TransientError("ffmpeg_timeout") from exc
-        raise _TransientError("ffmpeg_failed") from exc
-    finally:
-        if network_timer is not None:
-            network_timer.cancel()
-        if process_timer is not None:
-            process_timer.cancel()
-        if process is not None and process.poll() is None:
-            process.kill()
-            try:
-                process.wait(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+                    client.close()
+                    client = None
+                except Exception as exc:
+                    remember_cleanup_failure("client_close", exc, "audio_fetch_failed")
+        if primary_error is not None:
+            raise primary_error
+
         try:
-            partial.unlink(missing_ok=True)
-        except OSError:
-            pass
-        if not final.exists():
+            with ffmpeg_slot(background=True):
+                try:
+                    _raise_if_active_transfer_expired(active_deadline)
+                    process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        bufsize=0,
+                    )
+                    if process.stdin is None:
+                        raise _TransientError("ffmpeg_failed")
+                    stdin_open = True
+                    file_descriptor = process.stdin.fileno()
+                    os.set_blocking(file_descriptor, False)
+                    ffmpeg_deadline = _monotonic() + _FFMPEG_FINALIZE_TIMEOUT_SEC
+                    write_deadline = min(active_deadline, ffmpeg_deadline)
+                    write_deadline_code = "network_timeout" if active_deadline <= ffmpeg_deadline else "ffmpeg_timeout"
+                    while chunk := audio_buffer.read(64 * 1024):
+                        _write_all_nonblocking(
+                            process,
+                            file_descriptor,
+                            chunk,
+                            write_deadline,
+                            deadline_code=write_deadline_code,
+                        )
+                    process.stdin.close()
+                    stdin_open = False
+                    on_normalizing()
+                    returncode = process.wait(timeout=_FFMPEG_FINALIZE_TIMEOUT_SEC)
+                    process = None
+                    if returncode != 0 or not partial.is_file() or partial.is_symlink() or partial.stat().st_size <= 0:
+                        raise _TransientError("ffmpeg_failed")
+                    try:
+                        probe = subprocess.run(
+                            [
+                                "ffprobe",
+                                "-v",
+                                "error",
+                                "-show_entries",
+                                "format=duration",
+                                "-of",
+                                "default=noprint_wrappers=1:nokey=1",
+                                str(partial),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=10,
+                        )
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        raise _TransientError("ffprobe_failed") from exc
+                    if probe.returncode != 0:
+                        raise _TransientError("ffprobe_failed")
+                    normalized_duration_sec = _parse_duration(probe.stdout.strip())
+                except BaseException as exc:
+                    primary_error = _classify_worker_error(exc)
+                finally:
+                    if stdin_open and process is not None and process.stdin is not None:
+                        try:
+                            process.stdin.close()
+                            stdin_open = False
+                        except Exception as exc:
+                            remember_cleanup_failure("stdin_close", exc, "ffmpeg_failed")
+                    if process is not None:
+                        try:
+                            running = process.poll() is None
+                        except Exception as exc:
+                            remember_cleanup_failure("process_poll", exc, "ffmpeg_failed")
+                            running = True
+                        if running:
+                            try:
+                                process.kill()
+                            except Exception as exc:
+                                remember_cleanup_failure("process_kill", exc, "ffmpeg_failed")
+                            try:
+                                process.wait(timeout=_PROCESS_CLEANUP_TIMEOUT_SEC)
+                            except Exception as exc:
+                                remember_cleanup_failure("process_reap", exc, "ffmpeg_failed")
+        except Exception as exc:
+            if primary_error is None:
+                failure = _TransientError("ffmpeg_failed")
+                failure.__cause__ = exc
+                primary_error = failure
+            else:
+                _debug_cleanup_failure("slot_release", exc)
+        if primary_error is not None:
+            raise primary_error
+        if normalized_duration_sec is None:
+            raise RuntimeError("Jamendo worker completed without a normalized duration")
+        artifact_hash = _hash_file(partial)
+        prepared = _PreparedArtifact(final, artifact_hash, normalized_duration_sec, byte_count)
+        os.replace(partial, final)
+        published = True
+        return prepared
+    except BaseException as exc:
+        classified = _classify_worker_error(exc)
+        if classified is exc:
+            raise
+        raise classified from exc
+    finally:
+        if stdin_open and process is not None and process.stdin is not None:
+            try:
+                process.stdin.close()
+            except Exception as exc:
+                _debug_cleanup_failure("stdin_close", exc)
+        if process is not None:
+            try:
+                running = process.poll() is None
+            except Exception as exc:
+                _debug_cleanup_failure("process_poll", exc)
+                running = True
+            if running:
+                try:
+                    process.kill()
+                except Exception as exc:
+                    _debug_cleanup_failure("process_kill", exc)
+                try:
+                    process.wait(timeout=_PROCESS_CLEANUP_TIMEOUT_SEC)
+                except Exception as exc:
+                    _debug_cleanup_failure("process_reap", exc)
+        if not published:
+            try:
+                partial.unlink(missing_ok=True)
+                final.unlink(missing_ok=True)
+            except OSError:
+                pass
             _cleanup_operation(operation_dir, operation_dir.parent.parent)
 
 
@@ -1316,9 +1483,10 @@ class JamendoStreamProvider:
         # candidate, so gating on the breakdown alone left the diagnosis channel
         # silent exactly when the provider is fully down.
         if rejections or terminal_code:
+            event = "Jamendo discovery selected a candidate" if succeeded else "Jamendo attempt failed"
             logger.info(
-                "Jamendo attempt %s after rejecting %d candidate(s) breakdown=%s dominant=%s",
-                "succeeded" if succeeded else "failed",
+                "%s after rejecting %d candidate(s) breakdown=%s dominant=%s",
+                event,
                 sum(candidate_rejections.values()),
                 ",".join(f"{code}:{count}" for code, count in sorted(rejections.items())),
                 None if succeeded else dominant,
@@ -1362,7 +1530,7 @@ class JamendoStreamProvider:
             # from outside, a timeout arrived as CancelledError with no terminal
             # code and was only named afterwards, so the card kept reporting an
             # earlier candidate rejection while the retry acted on the timeout.
-            async with asyncio.timeout(_NETWORK_DEADLINE_SEC):
+            async with asyncio.timeout(_DISCOVERY_DEADLINE_SEC):
                 candidate = await self._discover_candidate_inner(
                     epoch, fingerprint, source_revision, record_rejection, note_attempt_reason
                 )

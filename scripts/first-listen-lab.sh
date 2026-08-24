@@ -616,11 +616,11 @@ validate_colima_ssh_config() {
         -o ProxyCommand=none -o ProxyJump=none -o PermitLocalCommand=no \
         -o BatchMode=yes "$COLIMA_SSH_HOST" 2>/dev/null)" || die \
         "could not resolve the isolated Colima SSH configuration"
-    hostname="$(printf '%s\n' "$resolved" | awk '$1 == "hostname" { print $2; exit }')"
-    batch_mode="$(printf '%s\n' "$resolved" | awk '$1 == "batchmode" { print $2; exit }')"
-    control_master="$(printf '%s\n' "$resolved" | awk '$1 == "controlmaster" { print $2; exit }')"
-    control_persist="$(printf '%s\n' "$resolved" | awk '$1 == "controlpersist" { print $2; exit }')"
-    control_path="$(printf '%s\n' "$resolved" | awk '$1 == "controlpath" { print $2; exit }')"
+    hostname="$(printf '%s\n' "$resolved" | awk '$1 == "hostname" && !found { print $2; found = 1 }')"
+    batch_mode="$(printf '%s\n' "$resolved" | awk '$1 == "batchmode" && !found { print $2; found = 1 }')"
+    control_master="$(printf '%s\n' "$resolved" | awk '$1 == "controlmaster" && !found { print $2; found = 1 }')"
+    control_persist="$(printf '%s\n' "$resolved" | awk '$1 == "controlpersist" && !found { print $2; found = 1 }')"
+    control_path="$(printf '%s\n' "$resolved" | awk '$1 == "controlpath" && !found { print $2; found = 1 }')"
     [ "$hostname" = "127.0.0.1" ] || die \
         "isolated Colima SSH host resolved outside loopback: $hostname"
     [ "$batch_mode" = "yes" ] || die "isolated Colima SSH must use batch mode"
