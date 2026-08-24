@@ -1051,6 +1051,7 @@ async (page) => {
     assert(await page.locator('#tab-setup').isHidden(), 'completed return left First Listen in the tab bar');
     assert(await page.locator('#tab-motore').getAttribute('aria-selected') === 'true', 'completed return did not land in Motore');
     assert(await page.locator('#setupGroup > summary').isVisible(), 'Motore lost its Setup disclosure after onboarding');
+    assert((await page.locator('#setupGroup > summary').boundingBox()).height >= 43.5, 'Motore Setup disclosure fell below 44px');
     assert(!(await page.evaluate(() => adminTabsForNav().some((tab) => tab.dataset.tab === 'setup'))), 'hidden First Listen remained in keyboard navigation');
     await page.locator('#tab-scaletta').click();
     await page.locator('#tab-scaletta').press('ArrowLeft');
