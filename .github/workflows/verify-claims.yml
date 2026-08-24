@@ -16,6 +16,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: florianhorner/gh-workflows/.github/workflows/verify-claims.yml@f93889a64ff7b501182e5c988b992672ca857ea9 # v1.3
+    uses: florianhorner/gh-workflows/.github/workflows/verify-claims.yml@fde64f42deb15511c2c71cb9798c2d6685379e38 # v1.5
     with:
       owned_repos: "florianhorner/mammamiradio"
