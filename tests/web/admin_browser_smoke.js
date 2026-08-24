@@ -163,6 +163,11 @@ async (page) => {
   // own tab navigation (render-free, exactly like initTabs' landing call).
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
   await exerciseListenerSongFailureRows();
+  const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Ready','ready'],['Checking','checking'],['Unknown','mystery'],['Blocked','blocked'],['Idle','not_configured']].map(([label,status])=>({label,status,display_status:status,shape:'BAD'}))}}};
+  const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent}))},setupStatusFixture);
+  assert(setupChips.map(({state})=>state).join('|')==='ready|working|degraded|blocked|idle'&&setupChips.every(({children,text})=>children===0&&!text.includes('BAD')),`setup status chips lost semantic mapping: ${JSON.stringify(setupChips)}`);
+  await page.emulateMedia({forcedColors:'active'});const forcedGlyphs=await page.evaluate(()=>[...setupStripChips.children].map((el)=>getComputedStyle(el,'::before').content));assert(forcedGlyphs.every((glyph)=>!['none','normal','""'].includes(glyph)),`forced colors hid setup status glyphs: ${JSON.stringify(forcedGlyphs)}`);
+  await page.emulateMedia({forcedColors:'none'});await page.evaluate(()=>renderGuidedSetupStrip({}));
 
   const seededStoppedFirstPaint = await page.evaluate(() => {
     document.body.setAttribute('data-stopped', 'true');

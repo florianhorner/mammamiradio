@@ -1843,9 +1843,6 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-tabpanel{display:none}
 .mmr-tabpanel.is-active{display:block}
 .mmr-tabpanel:focus-visible{outline:none;box-shadow:inset 0 0 0 2px rgba(244,208,72,0.38),inset 0 1px 0 rgba(245,237,216,0.06),0 8px 24px -12px rgba(0,0,0,0.55)}
-/* First Listen is a gated first-run phase, not a permanent producer tab.
-   While required it owns the work area; after completion repair lives in
-   Motore → Setup and the tab leaves the chrome. */
 body[data-active-admin-tab="setup"] .mmr-console,
 body[data-active-admin-tab="setup"] .setup-strip{display:none!important}
 body[data-first-listen-entry="required"]:not([data-active-admin-tab]) .mmr-console,
@@ -2077,8 +2074,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
 
     <div class="mmr-tabpanels">
 
-    <!-- First Listen mounts the shared Setup DOM here only while entry is
-         required. After onboarding, Setup stays under Motore for repair. -->
     <section class="a-panel producer-zone mmr-tabpanel first-listen-panel" id="first-listen-panel" data-panel="setup" role="tabpanel" aria-labelledby="tab-setup" tabindex="0">
       <header class="mmr-panel-head">
         <div>
@@ -2418,16 +2413,16 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
           </div>
         </div>
 
-        <!-- Group 3: Setup (collapsible — auto-collapses when all-ready). The
-             stable styling boundary moves with Setup during onboarding. -->
+        <!-- Group 3: Setup (collapsible — auto-collapses when all-ready) -->
         <div class="first-listen-panel first-listen-context" id="firstListenSetupContext">
         <details class="drawer-subgroup setup-group" role="group" aria-labelledby="eg-setup-h" id="setupGroup">
           <summary class="setup-summary">
-            <span class="ttl-eyebrow" id="eg-setup-h">Setup</span>
+            <h3 class="ttl-eyebrow" id="eg-setup-h">Setup</h3>
             <span class="setup-ready-badge" id="setupReadyBadge" style="display:none">&#10003; All ready</span>
             <span class="drawer-arrow" aria-hidden="true">&#8250;</span>
           </summary>
           <div class="setup-group-body">
+            <div class="setup-note safety-note" id="setupAccessError" role="alert" hidden></div>
             <div class="sr-only" aria-live="polite" aria-atomic="true">
               <span id="setupHeadline">Checking your station.</span>
               <span id="setupMeta"></span>
@@ -5075,6 +5070,9 @@ function firstListenErrorMessage(response){
   const copy=firstListenErrorCopy(response);
   return `${copy.title}. ${copy.message} ${copy.action}`;
 }
+function showSetupRequestError(response=null){
+  const el=document.getElementById('setupAccessError');if(!el)return;el.hidden=!response;el.textContent=response?firstListenErrorMessage(response).replace(/First Listen/g,'Setup'):'';
+}
 const FIRST_LISTEN_STEP_KEYS={
   firstListenSourceStep:'source',
   firstListenSpeakerStep:'speaker',
@@ -6028,7 +6026,9 @@ async function chooseFirstListenPrivacy(enabled,el){
     _firstListenUi.reviewStep='';
     _firstListenUi.optionalStep='';
     _firstListenUi.reviewTrigger=null;
-    _firstListenUi.showSuccess=celebrate;
+    const showCelebration=celebrate&&_activeTab==='setup';
+    if(celebrate){document.body.dataset.firstListenEntry=showCelebration?'completing':'complete';syncFirstListenSetupMount();}
+    _firstListenUi.showSuccess=showCelebration;
     firstListenSetStatus('firstListenPrivacyStatus',requestedEnabled?'Marco and Giulia may use the Home details you approved.':'Home stays private.','ready');
     renderFirstListenProgress();
     if(!celebrate){
@@ -6248,7 +6248,6 @@ function renderSetup(setup){
   const needsAction=setup.onboarding_required===true;
   const alertDot=document.getElementById('engineAlertDot');
   if(alertDot)alertDot.style.display=needsAction?'inline-block':'none';
-  // First Listen tab alert only applies while the gated onboarding tab exists.
   const tabAlert=document.getElementById('firstListenTabAlert');
   if(tabAlert){
     const show=needsAction&&document.body.dataset.firstListenEntry==='required';
@@ -8125,8 +8124,8 @@ async function fetchSlowJson(path,deadlineMs=SLOW_POLL_DEADLINE_MS){
   const deadline=setTimeout(()=>controller.abort(),deadlineMs);
   try{
     const response=await fetch(_base+path,{headers:H(),signal:controller.signal});
-    if(!response.ok)throw new Error(`${path} returned ${response.status}`);
-    const payload=await response.json();
+    const payload=await response.json().catch(()=>null);
+    if(!response.ok){const error=new Error(`${path} returned ${response.status}`);error.payload=payload;throw error;}
     if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error(`${path} returned an invalid payload`);
     return payload;
   }finally{clearTimeout(deadline);}
@@ -8156,10 +8155,11 @@ async function refreshSlow(){
   const setupPromise=fetchSlowJson('/api/setup/status')
     .then(setup=>{
       if(generation!==_slowPollGeneration)return;
-      renderSetup(setup);
+      showSetupRequestError();renderSetup(setup);
     })
     .catch(e=>{
       if(generation!==_slowPollGeneration)return;
+      if(e.payload)showSetupRequestError(e.payload);
       console.error('refreshSlow setup',e);
     });
   await Promise.all([capabilitiesPromise,setupPromise]);

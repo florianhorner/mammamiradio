@@ -263,8 +263,6 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   padding: var(--space-5) var(--space-6) var(--space-6);
 }
 
-/* The old diagnostic wrapper flattens only inside the onboarding takeover.
- * Under Motore it remains a real, named disclosure for later repair. */
 #first-listen-panel .setup-group {
   margin: 0;
   padding: 0;
@@ -359,7 +357,6 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   background: var(--sun2);
   box-shadow: inset 0 0 0 var(--space-1) color-mix(in srgb, var(--bg) 12%, transparent);
 }
-
 .first-listen-panel .program-mark img {
   display: block;
   width: 1.5rem;
@@ -397,8 +394,6 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
 .first-listen-panel .progress-line strong {
   color: var(--cream);
 }
-
-/* ── Continuous four-step rail ──────────────────────────────────────────── */
 
 .first-listen-panel .first-listen {
   display: block;

@@ -648,7 +648,7 @@ def test_admin_has_h1_with_brand_accent() -> None:
     h1 = html[html.index('<h1 class="wm">') : html.index("</h1>")]
     assert 'class="mi"' in h1, "the gold Mi accent must live inside the <h1>."
     assert html.count("<h1") == 1 and html.count("<h2") == 7
-    for hid in ("dg-modes-h", "dg-quick-h", "dg-pacing-h", "eg-status-h", "eg-costs-h", "eg-config-h"):
+    for hid in ("dg-modes-h", "dg-quick-h", "dg-pacing-h", "eg-status-h", "eg-costs-h", "eg-config-h", "eg-setup-h"):
         assert f'<h3 class="ttl-eyebrow" id="{hid}">' in html
     technical = html[html.index('id="setupAdvancedDetails"') : html.index('id="setupCachedContextDiagnostics"')]
     assert technical.count("<h4>") == 6 and "<h3>" not in technical

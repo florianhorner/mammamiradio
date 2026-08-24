@@ -9,7 +9,7 @@ These have regressed in past refactors. Verify each protected element survives e
 
 | Element | File | How to check |
 |---|---|---|
-| Token cost counter + split | `admin.html` Engine Room | Grep for `api_cost_estimate_usd` and `cost_breakdown`; verify the rendered Costi group shows the session total and category split |
+| Token cost counter + split | `admin.html` Engine Room | Grep for `api_cost_estimate_usd` and `cost_breakdown`; verify the rendered Costs group shows the session total and category split |
 | Play button blue state | `static/base.css` | `.play-btn.playing` uses `var(--ok)` (blue `#2563EB`), never `var(--sun2)` (golden) |
 | Station name from localStorage | `static/listener.js` | JS reads `localStorage.getItem('stationName')`; admin panel writes it |
 | Gold "Mi" accent | `admin.html`, `listener.html` | `<span class="mi">` present in `<h1>`, styled `color: var(--sun)` |
@@ -100,8 +100,8 @@ at a time, choice persisted in `sessionStorage['adminTab']`:
    the 3s status poll, since it changes only when the operator keeps or removes
    one.
 6. **Motore** (diagnostics) — `Status` (systems, runtime health, capabilities, HA
-   context), `Costi` (token cost counter + cost split + segment counts — always visible),
-   `Configurazione` (AI Quality and On-Air Sound controls), and `Setup` (a
+   context), `Costs` (token cost counter + cost split + segment counts — always visible),
+   `Configuration` (AI Quality and On-Air Sound controls), and `Setup` (a
    collapsible `<details>` that auto-collapses when every readiness item is
    ready; shows an `All ready ✓` blue badge when collapsed).
 

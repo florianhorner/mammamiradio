@@ -117,34 +117,24 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
 
 def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() -> None:
     html = _html()
-    assert 'body[data-first-listen-entry="pending"] #tab-setup' in html
-    assert 'body[data-first-listen-entry="complete"] #tab-setup' in html
-    assert 'body[data-first-listen-entry="pending"] #first-listen-panel' in html
-    assert 'body[data-first-listen-entry="complete"] #first-listen-panel' in html
-
-    show = _function("showAdminTab", "syncFirstListenSetupMount")
-    assert "!['required','completing'].includes(document.body.dataset.firstListenEntry)" in show
-    assert "if(name!=='setup')finalizeFirstListenCompletion()" in show
-
-    init = _function("initTabs", "initProgrammeActions")
-    assert "adminTabsForNav()" in init
-    assert "if(initTab==='setup')initTab='scaletta'" in init
-
-    setup = _function("renderSetup", "setupRecheck")
-    assert "firstListenEntry==='required'" in setup
-    assert "firstListenTabAlert" in setup
-
-    finalize = _function("finalizeFirstListenCompletion", "showAdminTab")
-    assert "firstListenEntry!=='completing'" in finalize
-    assert "stopFirstListenGuide()" in finalize
-    assert "stopFirstListenStationAudio()" in finalize
-    assert "firstListenEntry='complete'" in finalize
-    assert "syncFirstListenSetupMount()" in finalize
-
-    resolve = _function("resolveFirstListenLanding", "renderGuidedSetupStrip")
-    assert "_activeTab==='setup'&&_firstListenUi.showSuccess" in resolve
-    assert "previous==='completing'" in resolve
-    assert "preserveSuccess?'completing':required?'required':'complete'" in resolve
+    for state in ("pending", "complete"):
+        assert f'body[data-first-listen-entry="{state}"] #tab-setup' in html
+        assert f'body[data-first-listen-entry="{state}"] #first-listen-panel' in html
+    sections = (
+        ("showAdminTab", "syncFirstListenSetupMount",
+         ("!['required','completing'].includes", "if(name!=='setup')finalizeFirstListenCompletion()")),
+        ("initTabs", "initProgrammeActions", ("adminTabsForNav()", "if(initTab==='setup')initTab='scaletta'")),
+        ("renderSetup", "setupRecheck", ("firstListenEntry==='required'", "firstListenTabAlert")),
+        ("finalizeFirstListenCompletion", "showAdminTab",
+         ("firstListenEntry!=='completing'", "stopFirstListenGuide()", "stopFirstListenStationAudio()",
+          "firstListenEntry='complete'", "syncFirstListenSetupMount()")),
+        ("resolveFirstListenLanding", "renderGuidedSetupStrip",
+         ("_activeTab==='setup'&&_firstListenUi.showSuccess", "previous==='completing'",
+          "preserveSuccess?'completing':required?'required':'complete'")),
+    )  # fmt: skip
+    for start, end, needles in sections:
+        body = _function(start, end)
+        assert all(needle in body for needle in needles)
 
 
 def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
@@ -162,11 +152,9 @@ def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
     assert html.index('data-tab="setup"') < html.index('data-tab="scaletta"')
 
     mount = _function("syncFirstListenSetupMount", "initTabs")
-    assert "entry==='required'" in mount
-    assert "firstListenSetupContext" in mount
-    assert "target.appendChild(context)" in mount
-    assert "entry==='completing'" in mount
-    assert "const hide=!guided" in mount
+    for needle in ("entry==='required'", "firstListenSetupContext", "target.appendChild(context)",
+                   "entry==='completing'", "const hide=!guided"):  # fmt: skip
+        assert needle in mount
     assert 'id="firstListenSetupContext"' in html
     assert 'class="first-listen-panel first-listen-context"' in html
     css = _css()
@@ -421,7 +409,7 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
     privacy = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert "api('PATCH','/api/setup/home-context-choice'" not in privacy
     assert "if(!choiceSaved){" in privacy
-    assert privacy.index("if(!choiceSaved){") < privacy.index("_firstListenUi.showSuccess=celebrate")
+    assert privacy.index("if(!choiceSaved){") < privacy.index("_firstListenUi.showSuccess=showCelebration")
 
 
 def test_first_listen_side_effect_responses_are_bound_to_the_exact_request() -> None:
@@ -690,26 +678,19 @@ def test_first_listen_controls_have_accessible_busy_and_mobile_contracts() -> No
 def test_first_listen_uses_truthful_action_copy() -> None:
     html = _html()
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-
-    assert "Preview 16-second welcome" in html
-    assert "Start sound check" in html
-    assert "Start sound check again" in progress
+    for copy in ("Preview 16-second welcome", "Start sound check", "Review opening", "Review playback",
+                 "Review sound check", "Review privacy choice", "Review AI setup"):  # fmt: skip
+        assert copy in html
+    for copy in ("Start sound check again", "firstListenSetChip('firstListenSpeakerChip','working','Start here')",
+                 "Tap Start sound check to hear it on this device."):  # fmt: skip
+        assert copy in progress
     assert "Play the station" not in html
-    assert "Review opening" in html
-    assert "Review playback" in html
-    assert "Review sound check" in html
-    assert "Review privacy choice" in html
-    assert "Review AI setup" in html
-    assert "firstListenSetChip('firstListenSpeakerChip','working','Start here')" in progress
-    assert "Tap Start sound check to hear it on this device." in progress
 
 
 def test_first_listen_program_mark_reuses_canonical_favicon() -> None:
     html = _html()
     mark = html[html.index('class="program-mark"') : html.index("program-label")]
-    assert 'src="/static/favicon.svg"' in mark
-    assert 'alt=""' in mark
-    assert "aria-hidden" in mark
+    assert all(needle in mark for needle in ('src="/static/favicon.svg"', 'alt=""', "aria-hidden"))
     assert ">Mi<" not in mark
     wordmark = html[html.index('<h1 class="wm">') : html.index("</h1>")]
     assert 'class="mi">Mi</span>' in wordmark
@@ -902,7 +883,7 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
     assert "const priorInstall=projection.legacy||projection.first.install_origin==='existing'" in choice
     assert "const reviewingPrivacy=_firstListenUi.reviewStep==='privacy'" in choice
     assert "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy" in choice
-    assert "_firstListenUi.showSuccess=celebrate" in choice
+    assert "_firstListenUi.showSuccess=showCelebration" in choice
 
 
 def test_setup_alert_uses_canonical_onboarding_requirement_not_optional_ai_todos() -> None:

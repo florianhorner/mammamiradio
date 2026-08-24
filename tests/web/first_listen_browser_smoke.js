@@ -31,6 +31,10 @@ async (page) => {
   let discardNextConfirmResponse = false;
   let nextVerifyResponse = '';
   let nextPreviewResponse = '';
+  let privacyResponseGate = null;
+  let setupResponseGate = null;
+  let nextSetupStatusError = null;
+  function responseGate(){let arrive,release;return{arrived:new Promise((resolve)=>{arrive=resolve;}),wait:new Promise((resolve)=>{release=resolve;}),arrive,release};}
 
   const sourceRows = ({ primary = 'playable', recovery = 'cover_only' } = {}) => [
     { kind: 'charts', label: 'Live charts', status: primary, detail: 'Live chart evidence' },
@@ -254,6 +258,7 @@ async (page) => {
   await page.route('**/api/setup/home-context-choice', async (route) => {
     const body = bodyOf(route);
     privacyRequests.push(body);
+    if(privacyResponseGate){const gate=privacyResponseGate;privacyResponseGate=null;gate.arrive();await gate.wait;}
     if (nextPrivacyChoiceFailure) {
       const responseMode = nextPrivacyChoiceFailure;
       nextPrivacyChoiceFailure = '';
@@ -431,6 +436,8 @@ async (page) => {
     await fulfillJson(route, { ok: true });
   });
   await page.route('**/api/setup/status', async (route) => {
+    if(setupResponseGate){const gate=setupResponseGate;setupResponseGate=null;gate.arrive();await gate.wait;}
+    if(nextSetupStatusError){const payload=nextSetupStatusError;nextSetupStatusError=null;await fulfillJson(route,payload,403);return;}
     await fulfillJson(route, setupStatusProjection);
   });
   await page.route('**/api/capabilities', async (route) => {
@@ -692,6 +699,17 @@ async (page) => {
     assert((await page.locator('#firstListenSourceSummary').innerText()).includes('Backup audio'), 'degraded source did not explain what the listener gets');
     assert((await page.locator('#firstListenSourceRepair').innerText()).includes('continue'), 'degraded source blocked an otherwise usable First Listen');
 
+    const assertEarlyCompletionExit=async(beforeSave)=>{
+      const ready=setupProjection({audio:true}),gate=responseGate();await resetUi(ready,audioReadyOverrides());
+      if(beforeSave)privacyResponseGate=gate;else setupResponseGate=gate;
+      await page.locator('#firstListenKeepOffBtn').click();await gate.arrived;
+      if(!beforeSave)await page.waitForFunction(()=>_firstListenUi.showSuccess&&document.body.dataset.firstListenEntry==='completing');
+      await page.evaluate(()=>openFirstListenStation());gate.release();
+      await page.waitForFunction(()=>!_firstListenUi.privacySaving&&document.body.dataset.firstListenEntry==='complete');
+      const state=await page.evaluate(()=>({tab:_activeTab,success:_firstListenUi.showSuccess,mount:firstListenSetupContext.parentElement?.id}));
+      assert(state.tab==='scaletta'&&!state.success&&state.mount!=='firstListenPanelMount',`${beforeSave?'pre-save':'pre-status'} exit left stale success: ${JSON.stringify(state)}`);
+    };await assertEarlyCompletionExit(true);await assertEarlyCompletionExit(false);
+
     const fallbackCompletion = setupProjection({ primary: 'unavailable', recovery: 'cover_only', audio: true });
     setupStatusProjection = fallbackCompletion;
     await resetUi(fallbackCompletion, audioReadyOverrides());
@@ -699,46 +717,17 @@ async (page) => {
     await page.locator('#firstListenKeepOffBtn').click();
     await page.waitForFunction(() => _firstListenUi.showSuccess === true && !_firstListenUi.privacySaving);
     assert(await page.locator('#firstListenSuccess').isVisible(), 'backup audio did not allow First Listen to complete');
-    const successHandoff = await page.evaluate(() => ({
-      entry: document.body.dataset.firstListenEntry,
-      activeTab: _activeTab,
-      setupTabOwned: !document.getElementById('tab-setup')?.hidden && document.getElementById('tab-setup')?.getAttribute('aria-selected') === 'true',
-      takeoverClean: ['.producer-clock', '.mmr-console', '.mmr-deck', '#setupMusicSources'].every((selector) => !document.querySelector(selector)?.getClientRects().length),
-      panelVisible: Boolean(document.getElementById('first-listen-panel')?.getClientRects().length),
-      mountId: document.getElementById('firstListenSetupContext')?.parentElement?.id,
-      focusId: document.activeElement?.id,
-    }));
-    assert(
-      successHandoff.entry === 'completing' && successHandoff.activeTab === 'setup'
-        && successHandoff.setupTabOwned && successHandoff.takeoverClean && successHandoff.panelVisible
-        && successHandoff.mountId === 'firstListenPanelMount'
-        && successHandoff.focusId === 'firstListenSuccessTitle',
-      `completion did not hold its one-time success surface: ${JSON.stringify(successHandoff)}`,
-    );
+    const successHandoff=await page.evaluate(()=>({entry:document.body.dataset.firstListenEntry,tab:_activeTab,owned:!document.getElementById('tab-setup').hidden&&document.getElementById('tab-setup').getAttribute('aria-selected')==='true',clean:['.producer-clock','.mmr-console','.mmr-deck','#setupMusicSources'].every((s)=>!document.querySelector(s)?.getClientRects().length),panel:Boolean(document.getElementById('first-listen-panel').getClientRects().length),mount:firstListenSetupContext.parentElement?.id,focus:document.activeElement?.id}));
+    assert(successHandoff.entry==='completing'&&successHandoff.tab==='setup'&&successHandoff.owned&&successHandoff.clean&&successHandoff.panel&&successHandoff.mount==='firstListenPanelMount'&&successHandoff.focus==='firstListenSuccessTitle',`completion did not hold its one-time success surface: ${JSON.stringify(successHandoff)}`);
     assert((await page.locator('#firstListenSuccessCopy').innerText()).includes('Backup audio is keeping the station playing'), 'backup completion hid the continuity explanation');
     assert((await page.locator('#firstListenSuccessCopy').innerText()).includes('primary music still needs attention'), 'backup completion hid the repair follow-up');
     assert(await page.locator('#firstListenSuccessRepair').isVisible(), 'backup completion hid its primary-music repair action');
     assert((await page.locator('#firstListenSuccess .btn-trigger').innerText()) === 'Open full listener', 'success page lost Open full listener');
-    await page.evaluate(() => {
-      document.getElementById('firstListenGuideAudio')?.setAttribute('src', 'smoke-guide.mp3');
-      document.getElementById('firstListenStationAudio')?.setAttribute('src', 'smoke-station.mp3');
-    });
+    await page.evaluate(()=>{document.getElementById('firstListenGuideAudio').src='smoke-guide.mp3';document.getElementById('firstListenStationAudio').src='smoke-station.mp3';});
     await page.getByRole('button', { name: 'Review choices' }).click();
     await page.waitForFunction(() => document.activeElement?.getAttribute('data-review-step') === 'privacy');
-    const reviewHandoff = await page.evaluate(() => ({
-      entry: document.body.dataset.firstListenEntry,
-      activeTab: _activeTab,
-      setupTabHidden: document.getElementById('tab-setup')?.hidden,
-      inMotore: Boolean(document.getElementById('firstListenSetupContext')?.closest('#drawer-diagnostics')),
-      guideSrc: document.getElementById('firstListenGuideAudio')?.getAttribute('src'),
-      stationSrc: document.getElementById('firstListenStationAudio')?.getAttribute('src'),
-    }));
-    assert(
-      reviewHandoff.entry === 'complete' && reviewHandoff.activeTab === 'motore'
-        && reviewHandoff.setupTabHidden && reviewHandoff.inMotore
-        && reviewHandoff.guideSrc === null && reviewHandoff.stationSrc === null,
-      `success did not finalize into Motore safely: ${JSON.stringify(reviewHandoff)}`,
-    );
+    const reviewHandoff=await page.evaluate(()=>({entry:document.body.dataset.firstListenEntry,tab:_activeTab,hidden:document.getElementById('tab-setup').hidden,inMotore:Boolean(firstListenSetupContext.closest('#drawer-diagnostics')),guide:document.getElementById('firstListenGuideAudio').getAttribute('src'),station:document.getElementById('firstListenStationAudio').getAttribute('src')}));
+    assert(reviewHandoff.entry==='complete'&&reviewHandoff.tab==='motore'&&reviewHandoff.hidden&&reviewHandoff.inMotore&&reviewHandoff.guide===null&&reviewHandoff.station===null,`success did not finalize into Motore safely: ${JSON.stringify(reviewHandoff)}`);
 
     const noContinuity = setupProjection({ primary: 'unavailable', recovery: 'unavailable', audio: true });
     setupStatusProjection = noContinuity;
@@ -1052,6 +1041,11 @@ async (page) => {
     assert(await page.locator('#tab-motore').getAttribute('aria-selected') === 'true', 'completed return did not land in Motore');
     assert(await page.locator('#setupGroup > summary').isVisible(), 'Motore lost its Setup disclosure after onboarding');
     assert((await page.locator('#setupGroup > summary').boundingBox()).height >= 43.5, 'Motore Setup disclosure fell below 44px');
+    nextSetupStatusError={detail:{code:'active_setup_csrf_stale',title:'Reload the dashboard',message:'The security check expired.',action:'Reload /admin, then continue First Listen.'}};await page.evaluate(()=>refreshSlow());
+    assert(await page.locator('#setupAccessError').isVisible(), 'completed Setup swallowed its authorization recovery');
+    const setupAccessCopy=await page.locator('#setupAccessError').innerText();
+    assert(setupAccessCopy.includes('continue Setup')&&!setupAccessCopy.includes('continue First Listen'),`completed recovery copy was not Setup-neutral: ${setupAccessCopy}`);
+    await page.evaluate(()=>refreshSlow());assert(await page.locator('#setupAccessError').isHidden(), 'successful Setup refresh retained stale authorization recovery');
     assert(!(await page.evaluate(() => adminTabsForNav().some((tab) => tab.dataset.tab === 'setup'))), 'hidden First Listen remained in keyboard navigation');
     await page.locator('#tab-scaletta').click();
     await page.locator('#tab-scaletta').press('ArrowLeft');
@@ -1235,9 +1229,7 @@ async (page) => {
           const title = head.querySelector(':scope > .first-listen-heading');
           const status = head.querySelector(':scope > .status-chip');
           const review = head.querySelector(':scope > .first-listen-review');
-          const pairs = [[title, status], [title, review], [status, review]].filter((pair) => (
-            pair[0]?.getClientRects().length && pair[1]?.getClientRects().length
-          ));
+          const pairs = [[title, status], [title, review], [status, review]].filter(([a,b]) => a?.getClientRects().length&&b?.getClientRects().length);
           return pairs.flatMap(([left, right]) => {
             const a = left.getBoundingClientRect();
             const b = right.getBoundingClientRect();
@@ -1248,10 +1240,7 @@ async (page) => {
             return overlaps ? [head.closest('.first-listen-step')?.id || 'unknown'] : [];
           });
         });
-        const titles = [...surface.querySelectorAll('.first-listen-heading')].filter((element) => element.getClientRects().length).map((element) => ({
-          id: element.id,
-          width: element.getBoundingClientRect().width,
-        }));
+        const titles=[...surface.querySelectorAll('.first-listen-heading')].filter((el)=>el.getClientRects().length).map((el)=>({id:el.id,width:el.getBoundingClientRect().width}));
         const escapedRects = [...surface.querySelectorAll('*')].filter((element) => {
           if (!element.getClientRects().length || element.classList.contains('sr-only')) return false;
           const rect = element.getBoundingClientRect();
@@ -1283,16 +1272,12 @@ async (page) => {
       assert(geometry.escapedRects.length === 0, `${label} ${width}px visible journey content escaped its surface: ${JSON.stringify(geometry.escapedRects)}`);
       assert(geometry.titles.every((title) => title.width >= 48), `${label} ${width}px title collapsed: ${JSON.stringify(geometry.titles)}`);
       assert(geometry.smallTargets.length === 0, `${label} ${width}px exposed a target below 44px: ${JSON.stringify(geometry.smallTargets)}`);
-      assert(
-        geometry.touchTargetProbes.every((target) => target.width >= 43.5 && target.height >= 43.5),
-        `${label} ${width}px stylesheet touch target fell below 44px: ${JSON.stringify(geometry.touchTargetProbes)}`,
-      );
+      assert(geometry.touchTargetProbes.every((target)=>target.width>=43.5&&target.height>=43.5),`${label} ${width}px stylesheet touch target fell below 44px: ${JSON.stringify(geometry.touchTargetProbes)}`);
     };
     for (const [width, height] of journeyViewports) {
       await page.setViewportSize({ width, height });
       const geometry = await measureJourneyGeometry();
-      viewportResults.push({ state: 'active', width, ...geometry });
-      assertJourneyGeometry(width, geometry, 'active');
+      viewportResults.push({ state: 'active', width, ...geometry });assertJourneyGeometry(width, geometry, 'active');
     }
 
     await resetUi(completed);
@@ -1300,8 +1285,7 @@ async (page) => {
     for (const [width, height] of journeyViewports) {
       await page.setViewportSize({ width, height });
       const geometry = await measureJourneyGeometry();
-      viewportResults.push({ state: 'completed', width, ...geometry });
-      assertJourneyGeometry(width, geometry, 'completed');
+      viewportResults.push({ state: 'completed', width, ...geometry });assertJourneyGeometry(width, geometry, 'completed');
     }
 
     await resetUi(setupProjection());
@@ -1327,9 +1311,7 @@ async (page) => {
     assertJourneyGeometry(320, activeZoomJourneyGeometry, 'active 200% zoom');
 
     await resetUi(completed);
-    await page.evaluate(() => {
-      document.documentElement.style.fontSize = '200%';
-    });
+    await page.evaluate(() => {document.documentElement.style.fontSize = '200%';});
     const completedZoomJourneyGeometry = await measureJourneyGeometry();
     assertJourneyGeometry(320, completedZoomJourneyGeometry, 'completed 200% zoom');
 
