@@ -1954,7 +1954,7 @@
     _setMomentShareAvailability(true);
     const message = shareResult === 'cancelled' || shareResult === 'manual'
       ? _t('moment_share_cancelled', "Still yours to share when you're ready.")
-      : _t('moment_error', "That moment didn't come through. Give the radio a moment and try again.");
+      : _t('moment_error', "That moment didn't come through — give the radio a moment and try again.");
     _setMomentStatus(message);
   }
 
