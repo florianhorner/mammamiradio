@@ -145,9 +145,9 @@ annotated-types==0.8.0 \
     --hash=sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
     # via pydantic
-anthropic==0.122.0 \
-    --hash=sha256:45ec906452ffae6b5f7f0c53d01f50bfb7e4ce878d7ae8e4309d13171e557e67 \
-    --hash=sha256:ffec56ae96657c8d19fa575ec96f140f380c353a07ab7d61b92eb18ee6536601
+anthropic==1.0.0 \
+    --hash=sha256:32dd52e9e1d774393b27182f451398ba4262287a4d0eab30887f89f1481b3ae4 \
+    --hash=sha256:42be3c97604af7252c5898413aee076ace6c46e9bca0d0d90ceb77c7d3719027
     # via mammamiradio (pyproject.toml)
 anyio==4.14.2 \
     --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 \
@@ -1229,9 +1229,9 @@ typing-inspection==0.4.4 \
     #   fastapi
     #   pydantic
     #   pydantic-settings
-uvicorn==0.52.3 \
-    --hash=sha256:116af2710dbf47c80f463cd20ee4884b6662f4c9f227d797ddc7279d2fcc2c7c \
-    --hash=sha256:18857b9e6579300be55c91c0a1cfd37d9a2cf0cabea33b88275f199eb73b8b58
+uvicorn==0.52.4 \
+    --hash=sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86 \
+    --hash=sha256:f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1
     # via mammamiradio (pyproject.toml)
 uvloop==0.22.1 \
     --hash=sha256:017bd46f9e7b78e81606329d07141d3da446f8798c6baeec124260e22c262772 \
