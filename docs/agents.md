@@ -20,15 +20,27 @@ This file supplements the global instructions for the `mammamiradio` repository.
   or attach its household/cloud/MQTT devices without explicit authorization in
   the current message. Keep lab state and credentials under gitignored
   `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
-- Before opening any PR (ANY runtime — Claude, Codex, Cursor): run the pre-ship
-  review squad, then `scripts/emit-review-evidence.sh`, and commit
-  `proof/preship-review.json`. CI (`preship-evidence.yml`) verifies it against the
-  PR head, report-only. The Claude-side hook cannot fire in other runtimes; the
-  committed artifact is what makes the squad auditable everywhere.
+- Before opening any PR (ANY runtime — Claude, Codex, Cursor), complete the
+  temporary dual-evidence sequence: commit and review the implementation; run
+  `scripts/emit-review-evidence.sh` and commit legacy
+  `proof/preship-review.json`; review that resulting commit; then run
+  `scripts/emit-review-evidence.sh --v2` and commit the immutable receipt under
+  `proof/preship-reviews/v2/`. V1 is part of the v2 content digest, so changing
+  v1 after v2 invalidates v2. CI checks both formats independently from trusted
+  base code and remains report-only during migration. On the bootstrap PR, v2
+  is explicitly not evaluated because the base does not contain its verifier.
+  V2 is process evidence for trusted repository writers, not a signed
+  attestation: CI cannot retrieve the local ledger behind its source hash. The
+  report-only `pull_request` workflow is also PR-controlled; move orchestration
+  to a base-owned exact-head control plane before making the result required.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, present real alternatives and their trade-offs, then
   recommend one and explain why it is superior for this repository.
+- Keep human and feature PRs under 1,000 changed lines, counting additions and
+  deletions in the full diff. If a change approaches that limit, split it before
+  implementation. Do not meet the limit by removing regression tests, required
+  documentation, or review evidence.
 
 ## Parallel workspaces
 
@@ -62,21 +74,24 @@ Hard rules agents must not invent around:
 
 - Start with `gh pr list` state, current head SHAs/checks, and a clean tracked
   worktree. After every Dependabot merge, expect the rest of the batch to become
-  stale and rerun `bash scripts/nudge-dependabot-rebase.sh` instead of manually
-  rebasing bot branches.
+  stale. Do not fan out automated rebase comments across the batch; handle the
+  next PR only when it is actually ready to land.
 - Let pure patch/minor Python Dependabot PRs with auto-merge armed land through
-  Dependabot after fresh required checks pass. If quality fails on an unrelated
-  one-test timeout, verify the focused test locally before treating it as a
-  rerunnable flake; stop on any deterministic dependency break.
+  Dependabot when they remain current and fresh required checks pass. A stale
+  PR parks until an authenticated maintainer updates it; this is deliberate. If
+  quality fails on an unrelated one-test timeout, verify the focused test
+  locally before treating it as a rerunnable flake; stop on any deterministic
+  dependency break.
 - Treat semver-major GitHub Actions PRs as manual landings: inspect the fresh
   rebased diff, confirm required checks are green, include HA integration checks
   when workflow changes touch the Home Assistant surface, write review-log
   coverage for the exact head, then run `scripts/land-pr.sh <pr>`.
 - If Dependabot says it cannot rebase a PR because the branch was edited, or a
   dependency PR becomes conflict-dirty after another dependency merge, use
-  `@dependabot recreate` and re-review the recreated head. If a
-  `github-actions` nudge is rejected because the actor lacks push access, post
-  the `@dependabot rebase` comment from the authenticated user account.
+  `@dependabot recreate` from an authenticated maintainer account and re-review
+  the recreated head. GitHub Actions must not post Dependabot rebase or recreate
+  commands: its bot actor is rejected, and batch-wide nudges create repeated
+  comment and CI churn under strict up-to-date checks.
 
 ## Integration Trains
 

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import logging
 import subprocess
 import threading
-import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -567,7 +568,7 @@ async def test_cumulative_metadata_deadline_stops_serial_exact_lookup(tmp_path):
         tmp_path, lambda: 0, http_client=client, stream_worker=_successful_worker(calls=calls)
     )
     try:
-        with patch.object(jt, "_NETWORK_DEADLINE_SEC", 0.08):
+        with patch.object(jt, "_DISCOVERY_DEADLINE_SEC", 0.08):
             await provider.start(enabled=True, client_id=_CLIENT_ID, noncommercial_acknowledged=True)
             await _wait_for_state(provider, "degraded")
 
@@ -764,7 +765,10 @@ async def test_disable_during_worker_discards_late_result_before_replacement(tmp
         assert provider.retry() is False
         allow_worker.set()
         for _ in range(300):
-            if not provider.status()["in_flight"]:
+            # Worker completion and stale-operation cleanup use separate
+            # callbacks. Wait for the owned directory to disappear before
+            # treating the operation as complete.
+            if not provider.status()["in_flight"] and calls and not calls[0].exists():
                 break
             await asyncio.sleep(0.005)
         assert provider.status()["state"] == "disabled"
@@ -1111,26 +1115,54 @@ async def test_symlinked_temp_root_blocks_without_traversal(tmp_path, caplog):
 
 
 class _Sink:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
         self.data = bytearray()
         self.closed = False
+        self._events = events
 
-    def write(self, chunk: bytes) -> int:
+    def fileno(self) -> int:
+        return 101
+
+    def accept(self, chunk: bytes) -> int:
         self.data.extend(chunk)
         return len(chunk)
 
     def close(self) -> None:
+        if self._events is not None:
+            self._events.append("stdin.close")
         self.closed = True
 
 
 class _FakeProcess:
-    def __init__(self, command: list[str]) -> None:
+    def __init__(
+        self,
+        command: list[str],
+        *,
+        events: list[str] | None = None,
+        wait_error: BaseException | None = None,
+        kill_error: OSError | None = None,
+        returncode: int | None = None,
+    ) -> None:
         self.command = command
-        self.stdin = _Sink()
-        self._returncode: int | None = None
+        self.events = events
+        self.stdin = _Sink(events)
+        self._returncode = returncode
+        self._wait_error = wait_error
+        self._kill_error = kill_error
+        self.kill_calls = 0
+        self.wait_calls: list[float] = []
 
     def wait(self, timeout: float) -> int:
         assert timeout > 0
+        self.wait_calls.append(timeout)
+        if self.events is not None:
+            self.events.append("process.wait")
+        if self._wait_error is not None:
+            error = self._wait_error
+            self._wait_error = None
+            raise error
+        if self._returncode is not None:
+            return self._returncode
         Path(self.command[-1]).write_bytes(b"normalized-output")
         self._returncode = 0
         return 0
@@ -1139,6 +1171,11 @@ class _FakeProcess:
         return self._returncode
 
     def kill(self) -> None:
+        self.kill_calls += 1
+        if self.events is not None:
+            self.events.append("process.kill")
+        if self._kill_error is not None:
+            raise self._kill_error
         self._returncode = -9
 
 
@@ -1146,11 +1183,21 @@ class _StreamResponse:
     status_code = 200
     headers: ClassVar[dict[str, str]] = {"content-length": "12"}
 
+    def __init__(
+        self,
+        *,
+        events: list[str] | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
+        self.events = events
+        self.closed = False
+        self._close_error = close_error
+
     def __enter__(self):
-        return self
+        raise AssertionError("the worker must own response.close() explicitly")
 
     def __exit__(self, exc_type, exc, traceback):
-        return False
+        raise AssertionError("the worker must not use response context-manager exit")
 
     def iter_bytes(self, chunk_size: int):
         assert chunk_size == 64 * 1024
@@ -1158,23 +1205,409 @@ class _StreamResponse:
         yield b"bytes"
 
     def close(self) -> None:
-        pass
+        if self.events is not None:
+            self.events.append("response.close")
+        self.closed = True
+        if self._close_error is not None:
+            raise self._close_error
 
 
 class _SyncClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        response: _StreamResponse | None = None,
+        *,
+        events: list[str] | None = None,
+        send_error: BaseException | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
         self.requested_url = ""
+        self.response = response or _StreamResponse(events=events)
+        self.events = events
+        self.closed = False
+        self._send_error = send_error
+        self._close_error = close_error
 
     def __enter__(self):
-        return self
+        raise AssertionError("the worker must own client.close() explicitly")
 
     def __exit__(self, exc_type, exc, traceback):
-        return False
+        raise AssertionError("the worker must not use client context-manager exit")
 
-    def stream(self, method: str, url: str):
+    def build_request(self, method: str, url: str):
         assert method == "GET"
         self.requested_url = url
-        return _StreamResponse()
+        if self.events is not None:
+            self.events.append("client.build_request")
+        return SimpleNamespace(method=method, url=url)
+
+    def send(self, request, *, stream: bool):
+        assert stream is True
+        assert request.url == self.requested_url
+        if self.events is not None:
+            self.events.append("client.send")
+        if self._send_error is not None:
+            raise self._send_error
+        return self.response
+
+    def close(self) -> None:
+        if self.events is not None:
+            self.events.append("client.close")
+        self.closed = True
+        if self._close_error is not None:
+            raise self._close_error
+
+
+def _fake_os_write(processes: list[_FakeProcess]):
+    def write(file_descriptor: int, data: bytes | memoryview) -> int:
+        process = processes[-1]
+        assert file_descriptor == process.stdin.fileno()
+        return process.stdin.accept(bytes(data))
+
+    return write
+
+
+@pytest.mark.parametrize(
+    ("duration_sec", "expected"),
+    [(60.0, 120.0), (180.0, 240.0), (720.0, 780.0)],
+)
+def test_active_transfer_timeout_scales_with_validated_duration(duration_sec, expected):
+    assert jt._active_transfer_timeout_sec(duration_sec) == expected
+
+
+def test_nonblocking_writer_retries_and_completes_partial_writes(tmp_path):
+    process = _FakeProcess(["ffmpeg", str(tmp_path / "normalized.part")])
+    accepted = bytearray()
+    actions: list[BaseException | int | None] = [InterruptedError(), BlockingIOError(), 2, None]
+
+    def write(file_descriptor: int, data: bytes | memoryview) -> int:
+        assert file_descriptor == process.stdin.fileno()
+        action = actions.pop(0)
+        if isinstance(action, BaseException):
+            raise action
+        count = len(data) if action is None else action
+        accepted.extend(bytes(data[:count]))
+        return count
+
+    with (
+        patch.object(jt, "_monotonic", return_value=0.0),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+        patch.object(jt.os, "write", side_effect=write),
+    ):
+        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline=100.0)
+
+    assert accepted == b"audio"
+    assert actions == []
+
+
+@pytest.mark.parametrize(
+    "write_error",
+    [BrokenPipeError("closed"), OSError(errno.EPIPE, "closed")],
+)
+def test_nonblocking_writer_maps_broken_pipe_to_ffmpeg_failed(tmp_path, write_error):
+    process = _FakeProcess(["ffmpeg", str(tmp_path / "normalized.part")])
+
+    with (
+        patch.object(jt, "_monotonic", return_value=0.0),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+        patch.object(jt.os, "write", side_effect=write_error),
+        pytest.raises(jt._TransientError, match="ffmpeg_failed"),
+    ):
+        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline=100.0)
+
+
+def test_nonblocking_writer_detects_early_child_exit_before_write(tmp_path):
+    process = _FakeProcess(["ffmpeg", str(tmp_path / "normalized.part")], returncode=1)
+
+    with (
+        patch.object(jt, "_monotonic", return_value=0.0),
+        patch.object(jt.os, "write") as write,
+        pytest.raises(jt._TransientError, match="ffmpeg_failed"),
+    ):
+        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline=100.0)
+
+    write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("active_deadline", "expected_code"),
+    [(10.0, "network_timeout"), (100.0, "ffmpeg_timeout")],
+)
+def test_nonblocking_writer_uses_earliest_deadline_with_transfer_winning_ties(
+    tmp_path,
+    active_deadline,
+    expected_code,
+):
+    process = _FakeProcess(["ffmpeg", str(tmp_path / "normalized.part")])
+    now = [0.0]
+
+    def wait_for_writable(_file_descriptor: int, timeout_sec: float) -> bool:
+        now[0] += timeout_sec
+        return False
+
+    with (
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt, "_PIPE_POLL_INTERVAL_SEC", 20.0),
+        patch.object(jt, "_wait_for_pipe_writable", side_effect=wait_for_writable),
+        pytest.raises(jt._TransientError, match=expected_code),
+    ):
+        jt._write_all_nonblocking(process, process.stdin.fileno(), b"audio", active_deadline)
+
+
+def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    now = [0.0]
+    events: list[str] = []
+    processes: list[_FakeProcess] = []
+
+    class PacedResponse(_StreamResponse):
+        def iter_bytes(self, chunk_size: int):
+            assert chunk_size == 64 * 1024
+            now[0] = 131.0
+            yield b"audio-"
+            now[0] = 200.0
+            yield b"bytes"
+
+    response = PacedResponse(events=events)
+    client = _SyncClient(response, events=events)
+
+    @contextmanager
+    def delayed_slot(*, background: bool):
+        assert background is True
+        events.append("slot.enter")
+        now[0] = 201.0
+        try:
+            yield
+        finally:
+            events.append("slot.exit")
+
+    def popen(command, **_kwargs):
+        events.append("process.start")
+        process = _FakeProcess(command, events=events)
+        processes.append(process)
+        return process
+
+    def probe(*_args, **_kwargs):
+        events.append("probe")
+        return SimpleNamespace(returncode=0, stdout="180.0\n")
+
+    original_replace = jt.os.replace
+
+    def replace(source, destination):
+        events.append("publish")
+        original_replace(source, destination)
+
+    def hash_file(path):
+        events.append("hash")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    with (
+        patch.object(jt, "ffmpeg_slot", new=delayed_slot),
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt.httpx, "Client", return_value=client),
+        patch.object(jt.subprocess, "Popen", side_effect=popen),
+        patch.object(jt.subprocess, "run", side_effect=probe),
+        patch.object(jt.os, "set_blocking"),
+        patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+        patch.object(jt, "_hash_file", side_effect=hash_file),
+        patch.object(jt.os, "replace", side_effect=replace),
+    ):
+        artifact = jt._stream_and_normalize(candidate, operation_dir, lambda: events.append("normalizing"))
+
+    assert artifact.path == operation_dir / "normalized.mp3"
+    assert bytes(processes[0].stdin.data) == b"audio-bytes"
+    assert events.index("client.build_request") < events.index("slot.enter")
+    assert events.index("response.close") < events.index("slot.enter")
+    assert events.index("response.close") < events.index("stdin.close")
+    assert events.index("stdin.close") < events.index("process.wait")
+    assert events.index("process.wait") < events.index("probe")
+    assert events.index("probe") < events.index("slot.exit", events.index("probe"))
+    assert events.index("slot.exit") < events.index("hash") < events.index("publish")
+
+
+def test_worker_pipe_stall_is_bounded_and_cleans_every_resource(tmp_path):
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    events: list[str] = []
+    response = _StreamResponse(events=events)
+    client = _SyncClient(response, events=events)
+    process = _FakeProcess(["ffmpeg", str(operation_dir / "normalized.part")], events=events)
+    now = [0.0]
+
+    @contextmanager
+    def recording_slot(*, background: bool):
+        assert background is True
+        events.append("slot.enter")
+        try:
+            yield
+        finally:
+            events.append("slot.exit")
+
+    def wait_for_writable(_file_descriptor: int, timeout_sec: float) -> bool:
+        now[0] += timeout_sec
+        return False
+
+    with (
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt, "_PIPE_POLL_INTERVAL_SEC", 20.0),
+        patch.object(jt, "_wait_for_pipe_writable", side_effect=wait_for_writable),
+        patch.object(jt, "ffmpeg_slot", new=recording_slot),
+        patch.object(jt.httpx, "Client", return_value=client),
+        patch.object(jt.subprocess, "Popen", return_value=process),
+        patch.object(jt.os, "set_blocking"),
+        pytest.raises(jt._TransientError, match="ffmpeg_timeout"),
+    ):
+        jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert response.closed is True
+    assert client.closed is True
+    assert process.stdin.closed is True
+    assert process.kill_calls == 1
+    assert events.index("process.kill") < events.index("process.wait") < events.index("slot.exit")
+    assert not operation_dir.exists()
+
+
+def test_worker_post_eof_timeout_is_ffmpeg_timeout_and_reaps_child(tmp_path):
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    response = _StreamResponse()
+    client = _SyncClient(response)
+    process = _FakeProcess(
+        ["ffmpeg", str(operation_dir / "normalized.part")],
+        wait_error=subprocess.TimeoutExpired("ffmpeg", jt._FFMPEG_FINALIZE_TIMEOUT_SEC),
+    )
+    processes = [process]
+
+    with (
+        patch.object(jt.httpx, "Client", return_value=client),
+        patch.object(jt.subprocess, "Popen", return_value=process),
+        patch.object(jt.os, "set_blocking"),
+        patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+        pytest.raises(jt._TransientError, match="ffmpeg_timeout"),
+    ):
+        jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert process.wait_calls == [jt._FFMPEG_FINALIZE_TIMEOUT_SEC, jt._PROCESS_CLEANUP_TIMEOUT_SEC]
+    assert process.kill_calls == 1
+    assert not operation_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("transport_error", "expected_code"),
+    [
+        (httpx.ReadTimeout("late", request=httpx.Request("GET", "https://storage.jamendo.com/a")), "network_timeout"),
+        (
+            httpx.ConnectError("offline", request=httpx.Request("GET", "https://storage.jamendo.com/a")),
+            "audio_fetch_failed",
+        ),
+    ],
+)
+def test_worker_preserves_transport_failure_classification(tmp_path, transport_error, expected_code):
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    client = _SyncClient(send_error=transport_error)
+
+    with (
+        patch.object(jt.httpx, "Client", return_value=client),
+        pytest.raises(jt._TransientError, match=expected_code),
+    ):
+        jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert client.closed is True
+    assert not operation_dir.exists()
+
+
+def test_worker_non_200_and_success_path_close_failures_remain_audio_fetch_failed(tmp_path):
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+
+    for name, response, client_close_error in (
+        ("status", _StreamResponse(), None),
+        ("response_close", _StreamResponse(close_error=OSError("response close failed")), None),
+        ("client_close", _StreamResponse(), OSError("client close failed")),
+    ):
+        operation_dir = tmp_path / name / ("a" * 32) / ("b" * 32)
+        operation_dir.mkdir(parents=True)
+        if name == "status":
+            response.status_code = 503
+        client = _SyncClient(response, close_error=client_close_error)
+        process = _FakeProcess(["ffmpeg", str(operation_dir / "normalized.part")])
+        processes = [process]
+        with (
+            patch.object(jt.httpx, "Client", return_value=client),
+            patch.object(jt.subprocess, "Popen", return_value=process),
+            patch.object(jt.os, "set_blocking"),
+            patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
+            patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+            pytest.raises(jt._TransientError, match="audio_fetch_failed"),
+        ):
+            jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+        assert not operation_dir.exists()
+
+
+def test_worker_maps_slot_release_failure_after_success_to_ffmpeg_failed(tmp_path):
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    response = _StreamResponse()
+    client = _SyncClient(response)
+    process = _FakeProcess(["ffmpeg", str(operation_dir / "normalized.part")])
+    processes = [process]
+
+    @contextmanager
+    def broken_release_slot(*, background: bool):
+        assert background is True
+        yield
+        raise RuntimeError("release failed")
+
+    with (
+        patch.object(jt, "ffmpeg_slot", new=broken_release_slot),
+        patch.object(jt.httpx, "Client", return_value=client),
+        patch.object(jt.subprocess, "Popen", return_value=process),
+        patch.object(jt.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="180.0\n")),
+        patch.object(jt.os, "set_blocking"),
+        patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+        pytest.raises(jt._TransientError, match="ffmpeg_failed"),
+    ):
+        jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert response.closed is True
+    assert client.closed is True
+    assert process.stdin.closed is True
+    assert process.kill_calls == 0
+    assert not operation_dir.exists()
+
+
+def test_worker_network_cleanup_errors_do_not_mask_active_transfer_timeout(tmp_path):
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    now = [0.0]
+
+    class LateResponse(_StreamResponse):
+        def iter_bytes(self, chunk_size: int):
+            now[0] = 241.0
+            yield b"late"
+
+    response = LateResponse(close_error=OSError("response cleanup failed"))
+    client = _SyncClient(response, close_error=OSError("client cleanup failed"))
+    with (
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt.httpx, "Client", return_value=client),
+        pytest.raises(jt._TransientError, match="network_timeout"),
+    ):
+        jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert response.closed is True
+    assert client.closed is True
+    assert not operation_dir.exists()
 
 
 def test_default_worker_streams_to_single_partial_then_atomic_final(tmp_path):
@@ -1188,6 +1621,7 @@ def test_default_worker_streams_to_single_partial_then_atomic_final(tmp_path):
         assert kwargs["stdin"] == subprocess.PIPE
         assert kwargs["stdout"] == subprocess.DEVNULL
         assert kwargs["stderr"] == subprocess.DEVNULL
+        assert kwargs["bufsize"] == 0
         process = _FakeProcess(command)
         processes.append(process)
         return process
@@ -1196,6 +1630,9 @@ def test_default_worker_streams_to_single_partial_then_atomic_final(tmp_path):
     with (
         patch.object(jt.httpx, "Client", return_value=client),
         patch.object(jt.subprocess, "Popen", side_effect=popen),
+        patch.object(jt.os, "set_blocking"),
+        patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
         patch.object(
             jt.subprocess,
             "run",
@@ -1206,6 +1643,9 @@ def test_default_worker_streams_to_single_partial_then_atomic_final(tmp_path):
 
     assert client.requested_url == candidate["audio_url"]
     assert bytes(processes[0].stdin.data) == b"audio-bytes"
+    assert client.response.closed is True
+    assert client.closed is True
+    assert processes[0].stdin.closed is True
     assert normalized == [True]
     assert artifact.path == operation_dir / "normalized.mp3"
     assert artifact.duration_sec == 180.0
@@ -1221,8 +1661,7 @@ def test_default_worker_rejects_content_length_over_actual_byte_cap(tmp_path):
     class OversizeResponse(_StreamResponse):
         headers: ClassVar[dict[str, str]] = {"content-length": str(jt._MAX_AUDIO_BYTES + 1)}
 
-    client = _SyncClient()
-    client.stream = lambda method, url: OversizeResponse()  # type: ignore[method-assign]
+    client = _SyncClient(OversizeResponse())
     with (
         patch.object(jt.httpx, "Client", return_value=client),
         patch.object(jt.subprocess, "Popen") as popen,
@@ -1233,25 +1672,38 @@ def test_default_worker_rejects_content_length_over_actual_byte_cap(tmp_path):
     assert not operation_dir.exists()
 
 
-def test_default_worker_enforces_total_network_deadline(tmp_path):
+def test_default_worker_enforces_active_transfer_deadline(tmp_path):
     operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
     operation_dir.mkdir(parents=True)
     candidate = jt._candidate_from_exact_result(_item(), "12345")
 
+    now = [0.0]
+
     class SlowResponse(_StreamResponse):
         def iter_bytes(self, chunk_size: int):
-            time.sleep(0.03)
+            now[0] = 241.0
             yield b"late"
 
-    client = _SyncClient()
-    client.stream = lambda method, url: SlowResponse()  # type: ignore[method-assign]
+    response = SlowResponse()
+    client = _SyncClient(response)
+    processes: list[_FakeProcess] = []
+
+    def popen(command, **kwargs):
+        process = _FakeProcess(command)
+        processes.append(process)
+        return process
+
     with (
         patch.object(jt.httpx, "Client", return_value=client),
-        patch.object(jt, "_NETWORK_DEADLINE_SEC", 0.01),
-        patch.object(jt.subprocess, "Popen", side_effect=lambda command, **kwargs: _FakeProcess(command)),
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt.subprocess, "Popen", side_effect=popen),
+        patch.object(jt.os, "set_blocking"),
         pytest.raises(jt._TransientError, match="network_timeout"),
     ):
         jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+    assert response.closed is True
+    assert client.closed is True
+    assert processes == []
     assert not operation_dir.exists()
 
 
@@ -1288,8 +1740,7 @@ def test_default_worker_real_ffmpeg_stream_normalize_and_probe(tmp_path):
             for offset in range(0, len(source_bytes), chunk_size):
                 yield source_bytes[offset : offset + chunk_size]
 
-    client = _SyncClient()
-    client.stream = lambda method, url: AudioResponse()  # type: ignore[method-assign]
+    client = _SyncClient(AudioResponse())
     normalized = []
     with patch.object(jt.httpx, "Client", return_value=client):
         artifact = jt._stream_and_normalize(candidate, operation_dir, lambda: normalized.append(True))
@@ -2015,7 +2466,7 @@ async def test_successful_attempt_leaves_no_failure_reason_on_the_card(tmp_path,
         assert status["dominant_failure_code_this_attempt"] is None
         # The lifetime counter still records it, and the log still says so.
         assert status["rejected_count"] == 1
-        assert "Jamendo attempt succeeded after rejecting 1 candidate(s)" in caplog.text
+        assert "Jamendo discovery selected a candidate after rejecting 1 candidate(s)" in caplog.text
     finally:
         await provider.stop()
         await client.aclose()
@@ -2170,7 +2621,7 @@ async def test_timeout_that_ends_the_attempt_is_the_reason_shown(tmp_path, monke
     then reported an earlier candidate rejection while the retry schedule acted
     on the timeout.
     """
-    monkeypatch.setattr(jt, "_NETWORK_DEADLINE_SEC", 0.15)
+    monkeypatch.setattr(jt, "_DISCOVERY_DEADLINE_SEC", 0.15)
     release = asyncio.Event()
 
     async def handler(request: httpx.Request) -> httpx.Response:

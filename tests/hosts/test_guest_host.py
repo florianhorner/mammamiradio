@@ -188,13 +188,11 @@ def test_root_and_addon_guest_config_styles_stay_in_sync():
     assert "thimble-sized espressos" not in addon_style
 
 
-def test_regular_pairing_survives_guest_in_roster(config):
-    """Adding the guest must not disable the two-regular energy/chaos foil.
+def test_regular_hosts_keep_personality_modifiers_when_guest_is_rostered(config):
+    """A third roster entry must not drop regular-host personality modifiers.
 
-    The relative pairing (one host leads chaos, the other cuts with 'surgical'
-    contrast) only fires when both high-energy/high-chaos regulars are paired
-    against each other. With a third roster entry it used to silently break,
-    because pairing keyed off len(config.hosts) == 2.
+    Pairing still walks the two regulars so a guest cannot blank their tone
+    blocks. Conflict/who-leads language lives on the per-segment shape, not here.
     """
     config.hosts = [
         _host("Marco", energy=95, chaos=85),
@@ -202,8 +200,12 @@ def test_regular_pairing_survives_guest_in_roster(config):
         _host(_LOCAL_BALLOON_GUEST_HOST, energy=92, chaos=65),
     ]
     with_guest = _build_system_prompt(config)
-    assert "surgical" in with_guest  # the foil instruction survived the third host
+    assert "Marco" in with_guest
+    assert "Giulia" in with_guest
+    assert "per-segment exchange-shape directive" in with_guest
+    assert "surgical" not in with_guest
 
     config.hosts = config.hosts[:2]
     without_guest = _build_system_prompt(config)
-    assert "surgical" in without_guest  # same behavior as the pure two-host roster
+    assert "per-segment exchange-shape directive" in without_guest
+    assert "surgical" not in without_guest

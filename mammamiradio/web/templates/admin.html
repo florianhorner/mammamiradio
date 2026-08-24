@@ -5721,8 +5721,10 @@ async function startFirstListen(el){
         return;
       }
       const {response:forceResponse,payload:forcePayload}=await apiResponse('POST','/api/resume?force=true',undefined,FIRST_LISTEN_TIMEOUTS.play);
-      if(!(forceResponse.ok&&forcePayload?.ok===true&&forcePayload?.recovering===true)){
-        firstListenSetStatus('firstListenSpeakerStatus','The studio could not rebuild the station just now. Give it a few seconds, then tap Play the station again.','degraded');
+      // ok:true with recovering:false still means the station is on air (#1022).
+      if(!(forceResponse.ok&&forcePayload?.ok===true)){
+        const detail=transportFailureCopy(forcePayload,'The studio could not rebuild the station just now. Give it a few seconds, then tap Play the station again.');
+        firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');
         _firstListenUi.dispatch='idle';
         return;
       }

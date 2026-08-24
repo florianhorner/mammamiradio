@@ -7,7 +7,8 @@ If you want to fix or extend X, look in Y. The folder hierarchy IS the mental mo
 | What you want to change                            | Where to look                                |
 |----------------------------------------------------|-----------------------------------------------|
 | What hosts say (banter, jokes, callouts)           | `mammamiradio/hosts/scriptwriter.py`         |
-| Host voice: expression banks, fingerprints, Chaos/Festival fiction | `mammamiradio/hosts/prompt_world.py` |
+| Host voice: expression banks, fingerprints, shape/lore data, Chaos/Festival fiction | `mammamiradio/hosts/prompt_world.py` |
+| Roster-aware banter shape/lore selection and recency | `mammamiradio/hosts/relationship.py` |
 | Transition rewrite openers (anti-repeat copy + helpers) | `mammamiradio/hosts/transitions.py`     |
 | Stock fallback copy: chaos stock lines, ad-break bumpers | `mammamiradio/hosts/fallbacks.py`       |
 | Host personality, listener memory, motifs          | `mammamiradio/hosts/persona.py`              |
@@ -148,8 +149,8 @@ a token-burn event, or a positive degradation probe).
 
 `scriptwriter.py` → 5 cuts, leaf-first: `script_shared.py` → `prompts.py` → `llm_client.py`
 → `ads.py` → `banter.py` (facade last). Each cut updates the `hot_reload_modules` reload
-chain leaves-first in lockstep. Data leaves `prompt_world.py`, `transitions.py`,
-`fallbacks.py`, `station_name_guard.py` are already extracted.
+chain leaves-first in lockstep. Data leaves `prompt_world.py`, `relationship.py`,
+`transitions.py`, `fallbacks.py`, `station_name_guard.py` are already extracted.
 
 Every cut is behavior-preserving and byte-faithful: facade re-export + identity-guard
 test, whole-repo patch-string grep, per-module coverage floor, edge-soak on the Pi

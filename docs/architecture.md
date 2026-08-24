@@ -344,9 +344,11 @@ ceiling. The admission gate caps gated call sites at 2 ordinary/background jobs 
 1 rescue render in the steady state; that rescue cap is best-effort, not hard — a
 wedged rescue render lets every subsequent rescue call proceed ungated too, so
 concurrent rescue jobs aren't bounded at 1 for the duration of the wedge (see
-`mammamiradio/audio/admission.py`). The transient Jamendo provider holds a
-background admission slot while HTTP bytes stream directly into its single
-FFmpeg worker and normalized partial file. A standalone `yt-dlp` extract-audio
+`mammamiradio/audio/admission.py`). The transient Jamendo provider buffers the
+size-capped HTTP response before taking a background admission slot. It then
+sends that buffer through a nonblocking pipe to its FFmpeg worker and normalized
+partial file. Paced network waits stay outside shared admission. A standalone
+`yt-dlp` extract-audio
 FFmpeg remains outside that gate because wrapping its network fetch would hold a
 slot across download; it can add one transient process only when the operator has
 installed and enabled `external-media`. Neither add-on has that process surface.
@@ -1399,7 +1401,7 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/media-sources/jamendo` | PUT | Admin | Retain/replace/clear the client ID and persist explicit enabled + non-commercial acknowledgement intent; returns redacted status |
 | `/api/media-sources/jamendo/retry` | POST | Admin | Coalesce a transient-provider retry (`202` enabled; `409 jamendo_retry_disabled` when off) |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
-| `/api/hot-reload` | POST | Admin | Reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
+| `/api/hot-reload` | POST | Admin | Reload `language_policy.py`, `prompt_world.py`, `relationship.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
 
 Rotation-row mutations use optimistic identity checks rather than trusting a
 position by itself. The `id` fields above are opaque Admin row tokens, not song
@@ -1570,7 +1572,8 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/release_campaign.py` | Packaged release-beat manifest loading and bounded on-air campaign state (`cache/release_campaign_ledger.json`) |
 | `mammamiradio/restart_handoff.py` | Post-restart music continuity spool: producer writes safe recent segments, startup admits them into the queue (`cache/restart_handoff/`) |
 | `mammamiradio/hosts/scriptwriter.py` | Anthropic/OpenAI prompts for banter and ad copy (TODO: split — see cathedral plan PR 6) |
-| `mammamiradio/hosts/prompt_world.py` | Prompt-fiction data: expression banks, host fingerprints, style directives, Chaos/Festival mode blocks |
+| `mammamiradio/hosts/prompt_world.py` | Prompt-fiction data: expression banks, host fingerprints, exchange-shape/lore banks, style directives, Chaos/Festival mode blocks |
+| `mammamiradio/hosts/relationship.py` | Roster-aware exchange-shape/lore selection and in-memory recency rotation |
 | `mammamiradio/hosts/transitions.py` | Transition rewrite openers + anti-repeat stem/massage helpers |
 | `mammamiradio/hosts/fallbacks.py` | Stock fallback copy: chaos stock lines, ad-break intros/outros |
 | `mammamiradio/hosts/persona.py` | Listener persona: compounding memory, arc phases, motif tracking, session counting |

@@ -296,11 +296,21 @@ existing receipt. `--overwrite-selection-receipt` deliberately replaces that
 chosen receipt; use it only to correct the same review, never to start a new
 audit history.
 
-Two proof/ conventions coexist, on purpose: append-only dated receipts like the
-one above (audit history — never overwritten), and fixed-name current-state
-files that ARE overwritten each run (`proof/preship-review.json`,
-`proof/checks.txt`, `proof/review-findings.json`) where git history is the
-audit trail. New proof artifacts should say which convention they follow.
+Two proof/ conventions coexist, on purpose. Append-only receipts are never
+overwritten: that includes dated human-review receipts like the one above and
+content-addressed pre-ship receipts under `proof/preship-reviews/v2/`. Fixed-name
+current-state files (`proof/checks.txt`, `proof/review-findings.json`) use Git
+history as their audit trail. The legacy `proof/preship-review.json` remains a
+fixed-name file only during the v1/v2 compatibility phase. New proof artifacts
+should say which convention they follow.
+
+Content-addressing makes a v2 receipt deterministic and binds it to the reviewed
+tree; it does not authenticate who created it. `source_record_sha256` identifies
+the exact local review-ledger line used by the emitter, but CI has no copy of that
+ledger to authenticate. During the report-only phase this is an explicit process
+guard for trusted repository writers. Before it becomes required, the workflow
+orchestration must also move off the PR-editable `pull_request` definition and
+report from a base-owned control plane against the exact head.
 
 The redacted tracked proof stores the candidate ID and name, selected profile,
 text and audio hashes, provider result, duration, approval status, and human
@@ -325,6 +335,10 @@ ruff format .         # format
 ruff format --check . # format check (CI mode)
 mypy mammamiradio/ tests/  # type check
 ```
+
+`scripts/ruff.toml` extends the root Ruff policy and ignores only `N999`:
+`scripts` is importable for the landing CLI, while its existing hyphenated
+command filenames remain stable shell entry points rather than Python modules.
 
 To install pre-commit hooks locally:
 

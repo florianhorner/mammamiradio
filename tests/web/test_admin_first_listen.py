@@ -1122,12 +1122,20 @@ def test_first_listen_non_ok_resume_fails_closed_before_opening_the_stream() -> 
     assert "firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');" in start
 
 
-def test_first_listen_force_start_matches_producer_desk_success_check() -> None:
-    """Force Start must confirm success as strictly as the producer desk does,
-    not just an HTTP 200 with no payload check."""
+def test_first_listen_force_start_accepts_running_station_ok_without_recovering() -> None:
+    """Force Start succeeds on ok:true even when recovering is false.
+
+    While the confirm dialog is open, another tab (or Resume) may already have
+    put the station on air. The server then answers {"ok": true, "recovering":
+    false} — a start, not a rebuild. Requiring recovering===true shows a false
+    failure and drops First Listen back to idle while audio is playing (#1022).
+    """
     start = _function("startFirstListen", "saveFirstListenAttempt")
     assert "forcePayload?.ok===true" in start
-    assert "forcePayload?.recovering===true" in start
+    assert "forcePayload?.recovering===true" not in start
+    # Genuine force failures must keep the server's sentence, not a fixed string.
+    assert "transportFailureCopy(forcePayload," in start
+    assert start.index("transportFailureCopy(forcePayload,") < start.index("audio.src=`${_base}${FIRST_LISTEN_STREAM}`")
 
 
 def test_guide_narration_pauses_the_station_instead_of_tearing_it_down() -> None:
