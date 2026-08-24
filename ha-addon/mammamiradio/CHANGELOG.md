@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-- **Share the moment you meant.** The listener now offers a quiet Moment Picker for station voice, lets you listen before sharing, and publishes only the choice you pick. If no safe voice moment is available, sharing can fall back to one complete included track when one is eligible.
 - Operators now see **Mamma Mi Radio** in the First Listen recovery step when Home Assistant cannot find the Live source.
 - **You can now keep a moment before it disappears.** Everything the station recorded was on a timer. A shared clip was deleted after a day, and the written record of what was said after two weeks, so anything the hosts did that was worth hearing twice was gone before you could come back to it. The control room now has a **Keep this** button. Press it while the hosts are talking, or in the seconds after a break ends and the music comes back, and it is saved for good with a link you can share. A song cannot be kept, and neither can a break that opens over the end of one: those recordings belong to whoever made them. A kept link never expires, and Archivio lists everything you have kept so you can take one back off the shelf.
 

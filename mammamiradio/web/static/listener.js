@@ -88,30 +88,6 @@
 
   /* ── DOM refs (cached after DOMContentLoaded) ── */
   let audio, playBtn, playBtnSmall, heroPlay;
-  let momentDialog, momentAudio, momentListenBtn, momentShareBtn, momentChoiceEl,
-    momentProgressTimeEl, momentProgressFillEl, momentProvenanceEl,
-    momentContextToggle, momentChoicesEl, momentFollowupEl, momentHelpEl,
-    momentStatusEl, momentCloseBtn, momentCancelBtn;
-
-  // Deliberately separate from the header launcher's small data-state machine.
-  // A capture is server-frozen; this state only controls audition and consent.
-  const momentPicker = {
-    open: false,
-    generation: 0,
-    captureAbort: null,
-    capture: null,
-    choice: null,
-    playback: 'idle',
-    playbackToken: 0,
-    heard: false,
-    commitInFlight: false,
-    committedResult: null,
-    radioSuspended: false,
-    radioResumeIntent: false,
-    radioPauseOwned: false,
-    lastFocus: null,
-    backgroundInert: [],
-  };
 
   /* ── Helpers ── */
   function $(id) { return document.getElementById(id); }
@@ -563,14 +539,6 @@
 
   function startStream() {
     if (!audio || _stationIsStopped() || state.isPlaying || state.playPending) return;
-    // While an audition plays, Media Session play resumes it instead of mixing
-    // the live radio underneath it.
-    if (momentPicker.radioSuspended) {
-      state.wantsPlay = true;
-      momentPicker.radioResumeIntent = true;
-      _setPlaybackControls(false);
-      return;
-    }
     _clearPlaybackRetry();
     state.wantsPlay = true;
     state.playPending = true;
@@ -591,7 +559,6 @@
   function stopStream() {
     state.wantsPlay = false;
     state.playPending = false;
-    if (momentPicker.radioSuspended) momentPicker.radioResumeIntent = false;
     _clearPlaybackRetry();
     if (audio) audio.pause();
     setPlayingUi(false);
@@ -668,66 +635,11 @@
     } catch (e) { /* older browsers */ }
   }
 
-  function _setMediaSessionPlaybackState(playbackState) {
-    if (!('mediaSession' in navigator)) return;
-    try { navigator.mediaSession.playbackState = playbackState; } catch (_) { /* older browsers */ }
-  }
-
-  function _mediaSessionPlay() {
-    if (
-      momentPicker.open && momentPicker.capture && !momentPicker.committedResult &&
-      (momentPicker.playback === 'paused' || momentPicker.playback === 'ended')
-    ) {
-      _startMomentAudition();
-      return;
-    }
-    if (!state.isPlaying) startStream();
-  }
-
-  function _mediaSessionPause() {
-    if (
-      momentPicker.open && momentAudio &&
-      (momentPicker.playback === 'playing' || momentPicker.playback === 'seeking')
-    ) {
-      if (momentPicker.playback === 'seeking') {
-        momentPicker.playbackToken += 1;
-        momentPicker.playback = 'paused';
-        momentAudio.pause();
-        _resumeRadioAfterMoment();
-        if (momentDialog) momentDialog.dataset.state = 'ready';
-        if (momentListenBtn) momentListenBtn.disabled = false;
-        _setMomentListenLabel();
-      } else {
-        // Use the visible transport's pause path so radio focus and labels
-        // restore together.
-        momentAudio.pause();
-      }
-      _setMediaSessionPlaybackState('paused');
-      return;
-    }
-    stopStream();
-  }
-
-  function _mediaSessionStop() {
-    // Stop clears resume intent first, so pausing a Moment cannot wake the radio.
-    stopStream();
-    if (momentPicker.open && momentAudio && momentPicker.playback !== 'idle') {
-      momentPicker.playbackToken += 1;
-      momentAudio.pause();
-      momentPicker.playback = momentPicker.capture ? 'paused' : 'idle';
-      _resumeRadioAfterMoment();
-      if (momentDialog) momentDialog.dataset.state = 'ready';
-      if (momentListenBtn) momentListenBtn.disabled = false;
-      _setMomentListenLabel();
-    }
-    _setMediaSessionPlaybackState('paused');
-  }
-
   if ('mediaSession' in navigator) {
     try {
-      navigator.mediaSession.setActionHandler('play', _mediaSessionPlay);
-      navigator.mediaSession.setActionHandler('pause', _mediaSessionPause);
-      navigator.mediaSession.setActionHandler('stop', _mediaSessionStop);
+      navigator.mediaSession.setActionHandler('play', () => { if (!state.isPlaying) startStream(); });
+      navigator.mediaSession.setActionHandler('pause', stopStream);
+      navigator.mediaSession.setActionHandler('stop', stopStream);
     } catch (e) { /* ignore */ }
   }
 
@@ -1189,836 +1101,80 @@
     _toastTimer = setTimeout(() => { el.style.opacity = '0'; }, durationMs);
   }
 
-  /* ── Moment Picker: audition one frozen, server-owned choice before share ── */
-  function _momentChoiceDuration(choice) {
-    const declared = Number(choice && choice.duration_sec);
-    if (Number.isFinite(declared) && declared > 0) return declared;
-    const start = Number(choice && choice.in_sec);
-    const end = Number(choice && choice.out_sec);
-    return Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : 0;
-  }
-
-  function _momentChoiceLabel(choice) {
-    const label = choice && typeof choice.label === 'string' ? choice.label.trim() : '';
-    return label || _t('moment_title', 'Il momento');
-  }
-
-  function _isMomentChoice(choice) {
-    const start = Number(choice && choice.in_sec);
-    const end = Number(choice && choice.out_sec);
-    return !!(
-      choice && typeof choice.choice_id === 'string' && choice.choice_id &&
-      Number.isFinite(start) && Number.isFinite(end) && end > start
-    );
-  }
-
-  function _momentIsCurrent(token) {
-    return momentPicker.open && momentPicker.generation === token;
-  }
-
-  function _momentPlaybackIsCurrent(token) {
-    return momentPicker.open && momentPicker.playbackToken === token;
-  }
-
-  function _momentCommitIsCurrent(token, captureId) {
-    return !!(
-      _momentIsCurrent(token) && momentPicker.capture &&
-      momentPicker.capture.capture_id === captureId
-    );
-  }
-
-  function _momentShareIsCurrent(token, result) {
-    return _momentIsCurrent(token) && momentPicker.committedResult === result;
-  }
-
-  function _suspendRadioForMoment() {
-    if (!audio || momentPicker.radioSuspended) return;
-    const resumeIntent = state.wantsPlay || state.playPending || state.isPlaying || !audio.paused;
-    momentPicker.radioSuspended = true;
-    momentPicker.radioResumeIntent = resumeIntent;
-    state.wantsPlay = resumeIntent;
-    state.playPending = false;
-    _clearPlaybackRetry();
-    if (!audio.paused) {
-      // Set this before pause(): the event can arrive after a failed audition
-      // has already begun restoring the stream.
-      momentPicker.radioPauseOwned = true;
-      audio.pause();
-    }
-    setPlayingUi(false);
-  }
-
-  function _resumeRadioAfterMoment() {
-    if (!momentPicker.radioSuspended) return;
-    const shouldResume = momentPicker.radioResumeIntent && state.wantsPlay && !_stationIsStopped();
-    momentPicker.radioSuspended = false;
-    momentPicker.radioResumeIntent = false;
-    state.playPending = false;
-    if (shouldResume) startStream();
-    else _setPlaybackControls(_stationIsStopped());
-  }
-
-  function _clearMomentProvenance() {
-    if (momentProvenanceEl) momentProvenanceEl.replaceChildren();
-  }
-
-  function _releasableMomentCaptureId() {
-    const captureId = momentPicker.capture && momentPicker.capture.capture_id;
-    if (
-      typeof captureId !== 'string' || !captureId ||
-      momentPicker.committedResult || momentPicker.commitInFlight
-    ) return '';
-    return captureId;
-  }
-
-  function _releaseMomentCapture(captureId) {
-    if (!captureId) return;
-    // Cleanup must not hold the dialog open.
-    fetch(_base + '/api/clip/capture/' + encodeURIComponent(captureId), {
-      method: 'DELETE',
-    }).catch(() => {});
-  }
-
-  function _setMomentStatus(message) {
-    if (momentStatusEl) momentStatusEl.textContent = message || '';
-  }
-
-  function _setMomentProgress(elapsed = 0) {
-    const duration = _momentChoiceDuration(momentPicker.choice);
-    const safeElapsed = Math.max(0, Math.min(Number(elapsed) || 0, duration || 0));
-    if (momentProgressTimeEl) {
-      momentProgressTimeEl.textContent = fmtTime(safeElapsed) + ' / ' + fmtTime(duration);
-    }
-    if (momentProgressFillEl) {
-      momentProgressFillEl.style.width = duration > 0 ? ((safeElapsed / duration) * 100) + '%' : '0';
-    }
-  }
-
-  function _setMomentShareAvailability(available) {
-    if (!momentShareBtn || !momentHelpEl) return;
-    const enabled = !!available && !momentPicker.commitInFlight;
-    momentShareBtn.disabled = !enabled;
-    momentHelpEl.textContent = enabled
-      ? _t('moment_share_ready', 'You can share this moment now.')
-      : _t('moment_listen_first', 'Listen before sharing');
-  }
-
-  function _setMomentListenLabel() {
-    if (!momentListenBtn) return;
-    if (!momentPicker.capture) {
-      momentListenBtn.textContent = _t('moment_try_again', 'Try again');
-      return;
-    }
-    if (momentPicker.playback === 'playing') {
-      momentListenBtn.textContent = _t('moment_pause', 'Pause');
-    } else if (momentPicker.playback === 'paused') {
-      momentListenBtn.textContent = _t('moment_continue', 'Continue');
-    } else if (momentPicker.playback === 'ended') {
-      momentListenBtn.textContent = _t('moment_listen_again', 'Listen again');
-    } else {
-      momentListenBtn.textContent = _t('moment_listen', 'Listen to the moment');
-    }
-  }
-
-  function _setMomentBackgroundInert(open) {
-    if (open) {
-      momentPicker.backgroundInert = [];
-      if ('inert' in HTMLElement.prototype) {
-        Array.from(document.body.children).forEach((node) => {
-          if (node === momentDialog) return;
-          momentPicker.backgroundInert.push({ node, inert: node.inert });
-          node.inert = true;
-        });
-      }
-      document.body.classList.add('mmr-moment-picker-open');
-      return;
-    }
-    momentPicker.backgroundInert.forEach(({ node, inert }) => { node.inert = inert; });
-    momentPicker.backgroundInert = [];
-    document.body.classList.remove('mmr-moment-picker-open');
-  }
-
-  function _momentErrorMessage(data) {
-    if (data && data.retry_after) {
-      return _t('moment_rate_limited', 'The tape decks need {s}s before the next moment — try again then.')
-        .replace('{s}', data.retry_after);
-    }
-    if (data && data.error_code === 'music_share_unavailable') {
-      return _t('music_share_unavailable', 'A complete included track has to finish before it can be shared.');
-    }
-    switch (data && data.reason) {
-      case 'no_audio':
-      case 'format_unavailable':
-        return _t('moment_no_audio', 'Nothing to replay just yet — let the radio play for a moment, then try again.');
-      case 'capture_expired':
-      case 'capture_claimed':
-        return _t('moment_expired', 'That moment has passed — make a fresh one when the next moment lands.');
-      case 'capture_busy':
-      case 'write_failed':
-        return _t('moment_busy', 'The tape decks need a moment — try again shortly.');
-      default:
-        return _t('moment_error', "That moment didn't come through — give the radio a moment and try again.");
-    }
-  }
-
-  function _renderMomentProvenance() {
-    if (!momentProvenanceEl) return;
-    momentProvenanceEl.replaceChildren();
-    const capture = momentPicker.capture;
-    const choice = momentPicker.choice;
-    const chapterIds = Array.isArray(choice && choice.chapter_ids) ? new Set(choice.chapter_ids) : null;
-    const chapters = Array.isArray(capture && capture.chapters) ? capture.chapters : [];
-    const labels = chapters
-      .filter((chapter) => !chapterIds || chapterIds.has(chapter.chapter_id))
-      .map((chapter) => typeof chapter.label === 'string' ? chapter.label.trim() : '')
-      .filter(Boolean)
-      .slice(0, 3);
-    const lead = document.createElement('span');
-    lead.className = 'mmr-moment-picker__provenance-label';
-    lead.textContent = _t('moment_context', 'Context') + ': ';
-    momentProvenanceEl.appendChild(lead);
-    // A single boundary is not a chapter rail. Keep the quiet generic context
-    // line unless the server supplied at least two truthful closed labels.
-    if (labels.length < 2) {
-      momentProvenanceEl.appendChild(document.createTextNode('…'));
-      return;
-    }
-    labels.forEach((label) => {
-      const chapter = document.createElement('span');
-      chapter.className = 'mmr-moment-picker__chapter';
-      chapter.textContent = label;
-      momentProvenanceEl.appendChild(chapter);
-    });
-  }
-
-  function _renderMomentChoices() {
-    if (!momentChoicesEl || !momentContextToggle) return;
-    momentChoicesEl.replaceChildren();
-    const choices = (momentPicker.capture && momentPicker.capture.choices) || [];
-    const locked = momentPicker.commitInFlight || !!momentPicker.committedResult;
-    choices.forEach((choice) => {
-      const option = document.createElement('button');
-      option.type = 'button';
-      option.className = 'mmr-moment-picker__choice-option';
-      option.disabled = locked;
-      option.setAttribute('aria-pressed', String(choice.choice_id === momentPicker.choice.choice_id));
-      const label = document.createElement('span');
-      label.textContent = _momentChoiceLabel(choice);
-      const duration = document.createElement('small');
-      duration.textContent = fmtTime(_momentChoiceDuration(choice));
-      option.append(label, duration);
-      option.addEventListener('click', () => _selectMomentChoice(choice.choice_id));
-      momentChoicesEl.appendChild(option);
-    });
-    const hasAlternatives = choices.length > 1;
-    momentContextToggle.hidden = !hasAlternatives;
-    momentContextToggle.disabled = !hasAlternatives || locked;
-    if (!hasAlternatives) {
-      momentChoicesEl.hidden = true;
-      momentContextToggle.setAttribute('aria-expanded', 'false');
-    }
-  }
-
-  function _collapseMomentChoices() {
-    const restoreFocus = !!(
-      momentChoicesEl &&
-      momentChoicesEl.contains(document.activeElement)
-    );
-    if (momentChoicesEl) momentChoicesEl.hidden = true;
-    if (momentContextToggle) {
-      momentContextToggle.setAttribute('aria-expanded', 'false');
-      if (restoreFocus) momentContextToggle.focus();
-    }
-  }
-
-  function _renderMomentChoice({ resetGate = false } = {}) {
-    const choice = momentPicker.choice;
-    if (!choice) return;
-    if (resetGate) momentPicker.heard = false;
-    if (momentChoiceEl) {
-      momentChoiceEl.textContent = _momentChoiceLabel(choice) + ' · ' + fmtTime(_momentChoiceDuration(choice));
-    }
-    _setMomentProgress(0);
-    _renderMomentProvenance();
-    _renderMomentChoices();
-    _setMomentListenLabel();
-    _setMomentShareAvailability(momentPicker.heard);
-  }
-
-  function _renderMomentPreparing() {
-    if (!momentDialog) return;
-    momentDialog.dataset.state = 'preparing';
-    _clearMomentProvenance();
-    if (momentChoiceEl) momentChoiceEl.textContent = _t('moment_preparing', 'Preparing your moment…');
-    if (momentListenBtn) {
-      momentListenBtn.disabled = true;
-      momentListenBtn.textContent = _t('moment_listen', 'Listen to the moment');
-    }
-    if (momentShareBtn) momentShareBtn.disabled = true;
-    if (momentContextToggle) {
-      momentContextToggle.disabled = true;
-      momentContextToggle.hidden = true;
-      momentContextToggle.setAttribute('aria-expanded', 'false');
-    }
-    if (momentChoicesEl) {
-      momentChoicesEl.replaceChildren();
-      momentChoicesEl.hidden = true;
-    }
-    if (momentFollowupEl) momentFollowupEl.hidden = true;
-    if (momentHelpEl) momentHelpEl.textContent = _t('moment_preparing', 'Preparing your moment…');
-    _setMomentProgress(0);
-    _setMomentStatus(_t('moment_preparing', 'Preparing your moment…'));
-  }
-
-  function _renderMomentError(message) {
-    momentPicker.capture = null;
-    momentPicker.choice = null;
-    momentPicker.playback = 'idle';
-    momentPicker.heard = false;
-    momentPicker.commitInFlight = false;
-    momentPicker.committedResult = null;
-    momentPicker.playbackToken += 1;
-    if (momentAudio) {
-      momentAudio.pause();
-      momentAudio.removeAttribute('src');
-      momentAudio.load();
-    }
-    _resumeRadioAfterMoment();
-    _clearMomentProvenance();
-    if (momentDialog) momentDialog.dataset.state = 'error';
-    if (momentChoiceEl) momentChoiceEl.textContent = message;
-    if (momentListenBtn) {
-      momentListenBtn.disabled = false;
-      momentListenBtn.textContent = _t('moment_try_again', 'Try again');
-    }
-    if (momentContextToggle) {
-      momentContextToggle.disabled = true;
-      momentContextToggle.hidden = true;
-    }
-    if (momentChoicesEl) {
-      momentChoicesEl.replaceChildren();
-      momentChoicesEl.hidden = true;
-    }
-    if (momentFollowupEl) momentFollowupEl.hidden = true;
-    _setMomentShareAvailability(false);
-    _setMomentStatus(message);
-  }
-
-  function _renderMomentReady(capture) {
-    const choices = Array.isArray(capture.choices) ? capture.choices.filter(_isMomentChoice) : [];
-    if (!choices.length || typeof capture.audio_path !== 'string' || !capture.audio_path) {
-      const captureId = typeof capture.capture_id === 'string' ? capture.capture_id : '';
-      _releaseMomentCapture(captureId);
-      _renderMomentError(_momentErrorMessage(null));
-      return;
-    }
-    momentPicker.capture = { ...capture, choices };
-    momentPicker.choice = choices[0];
-    momentPicker.playback = 'idle';
-    momentPicker.heard = false;
-    momentPicker.commitInFlight = false;
-    momentPicker.committedResult = null;
-    if (momentDialog) momentDialog.dataset.state = 'ready';
-    if (momentAudio) {
-      momentAudio.pause();
-      momentAudio.removeAttribute('src');
-      // audio_path is deliberately application-relative: never root-resolve it
-      // or HA Ingress loses the temporary replay file.
-      momentAudio.src = _base + capture.audio_path;
-      momentAudio.load();
-    }
-    if (momentListenBtn) momentListenBtn.disabled = false;
-    if (momentFollowupEl) {
-      const hasFollowupHint = Number(capture.recapture_after) > 0;
-      momentFollowupEl.hidden = !hasFollowupHint;
-      if (hasFollowupHint) {
-        momentFollowupEl.textContent = _t('moment_followup', 'Try again shortly for the reaction.');
-      }
-    }
-    _renderMomentChoice({ resetGate: true });
-    _setMomentStatus(_t('moment_ready', 'Your moment is ready to hear.'));
-  }
-
-  function _selectMomentChoice(choiceId) {
-    if (!momentPicker.capture || momentPicker.commitInFlight || momentPicker.committedResult) return;
-    const choice = momentPicker.capture.choices.find((item) => item.choice_id === choiceId);
-    if (!choice || choice === momentPicker.choice) {
-      _collapseMomentChoices();
-      return;
-    }
-    momentPicker.playbackToken += 1;
-    if (momentAudio) momentAudio.pause();
-    _resumeRadioAfterMoment();
-    momentPicker.choice = choice;
-    momentPicker.playback = 'idle';
-    momentPicker.heard = false;
-    _collapseMomentChoices();
-    _renderMomentChoice({ resetGate: true });
-    _setMomentStatus(_t('moment_listen_first', 'Listen before sharing'));
-  }
-
-  function _waitForMomentEvent(name, token, timeoutMs = 10000) {
-    return new Promise((resolve, reject) => {
-      if (!momentAudio) { reject(new Error('missing audio')); return; }
-      let timeoutId;
-      const cleanup = () => {
-        clearTimeout(timeoutId);
-        momentAudio.removeEventListener(name, onEvent);
-        momentAudio.removeEventListener('error', onError);
-      };
-      const onEvent = () => {
-        cleanup();
-        if (!_momentPlaybackIsCurrent(token)) { reject(new Error('stale player')); return; }
-        resolve();
-      };
-      const onError = () => { cleanup(); reject(new Error('audio event failed')); };
-      timeoutId = setTimeout(() => { cleanup(); reject(new Error('audio event expired')); }, timeoutMs);
-      momentAudio.addEventListener(name, onEvent, { once: true });
-      momentAudio.addEventListener('error', onError, { once: true });
-    });
-  }
-
-  async function _waitForMomentMetadata(token) {
-    if (momentAudio && momentAudio.readyState >= 1) return;
-    await _waitForMomentEvent('loadedmetadata', token);
-  }
-
-  function _seekMomentAudio(target, token, timeoutMs = 5000) {
-    return new Promise((resolve, reject) => {
-      if (!momentAudio) { reject(new Error('missing audio')); return; }
-      let settled = false;
-      let fallbackId;
-      let timeoutId;
-      const cleanup = () => {
-        momentAudio.removeEventListener('seeked', onSeeked);
-        momentAudio.removeEventListener('error', onError);
-        momentAudio.removeEventListener('abort', onAbort);
-        clearTimeout(fallbackId);
-        clearTimeout(timeoutId);
-      };
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        if (!_momentPlaybackIsCurrent(token)) { reject(new Error('stale seek')); return; }
-        resolve();
-      };
-      const fail = (reason) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new Error(reason));
-      };
-      const onSeeked = () => finish();
-      const onError = () => fail('audio seek failed');
-      const onAbort = () => fail('audio seek aborted');
-      momentAudio.addEventListener('seeked', onSeeked, { once: true });
-      momentAudio.addEventListener('error', onError, { once: true });
-      momentAudio.addEventListener('abort', onAbort, { once: true });
-      timeoutId = setTimeout(() => fail('audio seek expired'), timeoutMs);
-      try {
-        momentAudio.currentTime = target;
-      } catch (_) {
-        fail('audio seek rejected');
-        return;
-      }
-      // A seek to an already-current zero can legally emit no seeked event.
-      // Keep the same verification path without waiting forever in that case.
-      fallbackId = setTimeout(() => {
-        if (!momentAudio.seeking && Math.abs(momentAudio.currentTime - target) <= 0.05) finish();
-      }, 0);
-    });
-  }
-
-  async function _startMomentAudition() {
-    if (momentPicker.committedResult) return;
-    if (!momentPicker.capture || !momentPicker.choice || !momentAudio) {
-      _requestMomentCapture();
-      return;
-    }
-    if (momentPicker.playback === 'playing') {
-      momentAudio.pause();
-      return;
-    }
-    const start = Number(momentPicker.choice.in_sec);
-    const end = Number(momentPicker.choice.out_sec);
-    const canResume = momentPicker.playback === 'paused' &&
-      momentAudio.currentTime >= start - 0.05 && momentAudio.currentTime < end - 0.05;
-    const token = ++momentPicker.playbackToken;
-    momentPicker.playback = 'seeking';
-    if (momentListenBtn) momentListenBtn.disabled = true;
-    try {
-      if (!canResume) {
-        // The only permission path: metadata -> frozen seek -> seeked -> play.
-        await _waitForMomentMetadata(token);
-        if (!_momentPlaybackIsCurrent(token)) return;
-        await _seekMomentAudio(start, token);
-        if (!_momentPlaybackIsCurrent(token) ||
-            momentAudio.currentTime < start - 0.08 || momentAudio.currentTime > start + 0.35) {
-          throw new Error('seek outside frozen range');
-        }
-      }
-      _suspendRadioForMoment();
-      await momentAudio.play();
-      if (!_momentPlaybackIsCurrent(token)) return;
-      momentPicker.playback = 'playing';
-      _setMediaSessionPlaybackState('playing');
-      if (momentDialog) momentDialog.dataset.state = 'auditioning';
-      if (momentListenBtn) momentListenBtn.disabled = false;
-      _setMomentListenLabel();
-      _setMomentStatus(_t('moment_auditioning', 'Playing your selected moment.'));
-    } catch (err) {
-      _resumeRadioAfterMoment();
-      if (!_momentPlaybackIsCurrent(token)) return;
-      momentPicker.playback = 'idle';
-      if (momentDialog) momentDialog.dataset.state = 'ready';
-      if (momentListenBtn) momentListenBtn.disabled = false;
-      _setMomentListenLabel();
-      _setMomentStatus(_t('moment_audio_error', 'That moment could not start — give the radio a moment and listen again.'));
-    }
-  }
-
-  function _onMomentTimeUpdate() {
-    if (!momentPicker.open || !momentPicker.choice || !momentAudio) return;
-    const start = Number(momentPicker.choice.in_sec);
-    const end = Number(momentPicker.choice.out_sec);
-    const current = momentAudio.currentTime;
-    if (!Number.isFinite(current) || current < start - 0.08) return;
-    const elapsed = Math.max(0, current - start);
-    _setMomentProgress(elapsed);
-    // A selected-range timeupdate at 0.5s is the consent gate. `play()` alone
-    // is insufficient because it can be rejected or never produce sound.
-    if (!momentPicker.heard && current >= start + 0.5 && current <= end + 0.08) {
-      momentPicker.heard = true;
-      _setMomentShareAvailability(true);
-      _setMomentStatus(_t('moment_share_ready', 'You can share this moment now.'));
-    }
-    if (current >= end - 0.02) {
-      momentPicker.playback = 'ended';
-      momentAudio.pause();
-      _setMediaSessionPlaybackState('paused');
-      _resumeRadioAfterMoment();
-      _setMomentProgress(_momentChoiceDuration(momentPicker.choice));
-      _setMomentListenLabel();
-    }
-  }
-
-  function _onMomentPaused() {
-    if (!momentPicker.open || momentPicker.playback !== 'playing' || !momentAudio) return;
-    const end = Number(momentPicker.choice && momentPicker.choice.out_sec);
-    momentPicker.playback = momentAudio.currentTime >= end - 0.02 ? 'ended' : 'paused';
-    _setMediaSessionPlaybackState('paused');
-    _resumeRadioAfterMoment();
-    if (momentDialog) momentDialog.dataset.state = 'ready';
-    _setMomentListenLabel();
-  }
-
-  function _onMomentEnded() {
-    if (!momentPicker.open) return;
-    momentPicker.playback = 'ended';
-    _setMediaSessionPlaybackState('paused');
-    _resumeRadioAfterMoment();
-    if (momentDialog) momentDialog.dataset.state = 'ready';
-    _setMomentListenLabel();
-  }
-
-  function _openMomentPicker() {
-    if (!momentDialog || momentPicker.open) return false;
-    momentPicker.open = true;
-    momentPicker.lastFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement : document.getElementById('share-clip-btn');
-    _setMomentBackgroundInert(true);
-    try {
-      if (typeof momentDialog.showModal === 'function') momentDialog.showModal();
-      else momentDialog.setAttribute('open', '');
-    } catch (_) {
-      momentDialog.setAttribute('open', '');
-    }
-    requestAnimationFrame(() => { momentCloseBtn && momentCloseBtn.focus(); });
-    return true;
-  }
-
-  function _finishMomentPickerClose() {
-    if (!momentPicker.open) return;
-    const releaseCaptureId = _releasableMomentCaptureId();
-    momentPicker.open = false;
-    momentPicker.generation += 1;
-    momentPicker.playbackToken += 1;
-    momentPicker.captureAbort && momentPicker.captureAbort.abort();
-    momentPicker.captureAbort = null;
-    if (momentAudio) {
-      momentAudio.pause();
-      momentAudio.removeAttribute('src');
-      momentAudio.load();
-    }
-    _releaseMomentCapture(releaseCaptureId);
-    _resumeRadioAfterMoment();
-    momentPicker.capture = null;
-    momentPicker.choice = null;
-    momentPicker.playback = 'idle';
-    momentPicker.heard = false;
-    momentPicker.commitInFlight = false;
-    momentPicker.committedResult = null;
-    _clearMomentProvenance();
-    _setMomentBackgroundInert(false);
-    const focusTarget = momentPicker.lastFocus;
-    momentPicker.lastFocus = null;
-    requestAnimationFrame(() => { if (focusTarget && focusTarget.isConnected) focusTarget.focus(); });
-  }
-
-  function _closeMomentPicker() {
-    if (!momentDialog || !momentPicker.open) return;
-    momentPicker.generation += 1;
-    momentPicker.playbackToken += 1;
-    momentPicker.captureAbort && momentPicker.captureAbort.abort();
-    momentPicker.captureAbort = null;
-    if (typeof momentDialog.close === 'function' && momentDialog.open) {
-      momentDialog.close();
-    } else {
-      momentDialog.removeAttribute('open');
-      _finishMomentPickerClose();
-    }
-  }
-
-  async function _requestMomentCapture() {
-    if (!momentPicker.open) return;
-    const releaseCaptureId = _releasableMomentCaptureId();
-    const token = ++momentPicker.generation;
-    momentPicker.playbackToken += 1;
-    momentPicker.captureAbort && momentPicker.captureAbort.abort();
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    momentPicker.captureAbort = controller;
-    if (momentAudio) {
-      momentAudio.pause();
-      momentAudio.removeAttribute('src');
-      momentAudio.load();
-    }
-    _releaseMomentCapture(releaseCaptureId);
-    _resumeRadioAfterMoment();
-    momentPicker.capture = null;
-    momentPicker.choice = null;
-    momentPicker.playback = 'idle';
-    momentPicker.heard = false;
-    momentPicker.commitInFlight = false;
-    momentPicker.committedResult = null;
-    _renderMomentPreparing();
-    try {
-      // Keep the create request running. The server may issue a capability
-      // before the picker closes or changes; reading the response is how the
-      // client learns and releases that stale ID. The controller still bounds
-      // the legacy follow-up, while generation guards protect a newer picker.
-      const res = await fetch(_base + '/api/clip/capture', {
-        method: 'POST',
-      });
-      const data = await res.json().catch(() => null);
-      if (!_momentIsCurrent(token)) {
-        if (data && data.ok === true && typeof data.capture_id === 'string') {
-          _releaseMomentCapture(data.capture_id);
-        }
-        return;
-      }
-      if (!res.ok || !data || data.ok !== true || typeof data.capture_id !== 'string') {
-        // The Moment Picker ledger contains no music. Only a no-audio result
-        // may use the legacy endpoint, whose manifest gate admits complete
-        // bundled starter tracks.
-        if (data && data.reason === 'no_audio') {
-          await _requestLegacyMusicShare(token, controller);
-          return;
-        }
-        _renderMomentError(_momentErrorMessage(data));
-        return;
-      }
-      _renderMomentReady(data);
-    } catch (err) {
-      if (!_momentIsCurrent(token) || (err && err.name === 'AbortError')) return;
-      _renderMomentError(_momentErrorMessage(null));
-    } finally {
-      if (_momentIsCurrent(token)) momentPicker.captureAbort = null;
-    }
-  }
-
-  async function _requestLegacyMusicShare(token, controller) {
-    const res = await fetch(_base + '/api/clip', {
-      method: 'POST',
-      signal: controller ? controller.signal : undefined,
-    });
-    const data = await res.json().catch(() => null);
-    if (!_momentIsCurrent(token)) return;
-    if (!res.ok || !data || data.ok !== true) {
-      _renderMomentError(_momentErrorMessage(data));
-      return;
-    }
-    momentPicker.capture = null;
-    momentPicker.choice = null;
-    momentPicker.playback = 'idle';
-    momentPicker.heard = true;
-    momentPicker.committedResult = data;
-    if (momentChoiceEl) {
-      const title = typeof data.track_title === 'string' ? data.track_title.trim() : '';
-      momentChoiceEl.textContent = title || _t('moment_title', 'Il momento');
-    }
-    if (momentListenBtn) momentListenBtn.disabled = true;
-    if (momentContextToggle) {
-      momentContextToggle.disabled = true;
-      momentContextToggle.hidden = true;
-      momentContextToggle.setAttribute('aria-expanded', 'false');
-    }
-    if (momentChoicesEl) {
-      momentChoicesEl.replaceChildren();
-      momentChoicesEl.hidden = true;
-    }
-    if (momentFollowupEl) momentFollowupEl.hidden = true;
-    _clearMomentProvenance();
-    _setMomentProgress(0);
-    _stageCommittedMomentForShare();
-  }
-
-  function _momentShareUrl(data) {
-    const path = data && (data.share_url || data.url);
-    if (typeof path !== 'string' || !path) return '';
-    return /^https?:\/\//i.test(path) ? path : window.location.origin + _base + path;
-  }
-
-  async function _shareCommittedMoment(data) {
-    const shareUrl = _momentShareUrl(data);
-    if (!shareUrl) return 'failed';
-    const stationName = currentStationName();
-    const frozenTitle = data && typeof data.track_title === 'string' ? data.track_title.trim() : '';
-    const title = frozenTitle || stationName;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: title + ' — ' + stationName, url: shareUrl });
-        return 'shared';
-      } catch (err) {
-        // Cancel is neither a successful share nor an implicit clipboard copy.
-        if (err && err.name === 'AbortError') return 'cancelled';
-      }
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      try {
-        await navigator.clipboard.writeText(shareUrl);
-        return 'shared';
-      } catch (_) { /* Last-resort prompt below. */ }
-    }
-    const promptResult = window.prompt(_t('moment_copy_prompt', 'Copy this moment:'), shareUrl);
-    return promptResult === null ? 'cancelled' : 'manual';
-  }
-
-  function _lockCommittedMomentControls() {
-    if (momentListenBtn) momentListenBtn.disabled = true;
-    if (momentContextToggle) {
-      momentContextToggle.disabled = true;
-      momentContextToggle.setAttribute('aria-expanded', 'false');
-    }
-    if (momentChoicesEl) {
-      momentChoicesEl.querySelectorAll('button').forEach((option) => { option.disabled = true; });
-      momentChoicesEl.hidden = true;
-    }
-  }
-
-  function _stageCommittedMomentForShare() {
-    if (!momentPicker.committedResult) return;
-    momentPicker.commitInFlight = false;
-    if (momentDialog) momentDialog.dataset.state = 'committed';
-    _lockCommittedMomentControls();
-    _setMomentShareAvailability(true);
-    _setMomentStatus(_t('moment_share_ready', 'You can share this moment now.'));
-  }
-
-  async function _shareFrozenMomentResult(result, token) {
-    if (!_momentShareIsCurrent(token, result) || momentPicker.commitInFlight) return;
-    momentPicker.commitInFlight = true;
-    if (momentDialog) momentDialog.dataset.state = 'sharing';
-    if (momentShareBtn) momentShareBtn.disabled = true;
-    _lockCommittedMomentControls();
-    if (momentHelpEl) momentHelpEl.textContent = _t('moment_saving', 'Saving your moment…');
-    let shareResult = 'failed';
-    try {
-      shareResult = await _shareCommittedMoment(result);
-    } catch (_) {
-      shareResult = 'failed';
-    }
-    if (!_momentShareIsCurrent(token, result)) return;
-    momentPicker.commitInFlight = false;
-    if (shareResult === 'shared') {
-      _setMomentStatus(_t('moment_shared', 'Your moment is ready to send.'));
-      _showToast(_t('moment_shared', 'Your moment is ready to send.'));
-      _closeMomentPicker();
-      return;
-    }
-    // The server has consumed this capability. Keep its immutable URL for
-    // another share attempt, but lock replay and alternate choices because
-    // either would require committing the capability again.
-    if (momentDialog) momentDialog.dataset.state = 'committed';
-    _lockCommittedMomentControls();
-    _setMomentShareAvailability(true);
-    const message = shareResult === 'cancelled' || shareResult === 'manual'
-      ? _t('moment_share_cancelled', "Still yours to share when you're ready.")
-      : _t('moment_error', "That moment didn't come through — give the radio a moment and try again.");
-    _setMomentStatus(message);
-  }
-
-  function _restoreMomentAfterCommitFailure(data) {
-    momentPicker.commitInFlight = false;
-    const expired = data && (data.reason === 'capture_expired' || data.reason === 'capture_claimed');
-    if (expired) {
-      _renderMomentError(_momentErrorMessage(data));
-      return;
-    }
-    if (momentDialog) momentDialog.dataset.state = 'ready';
-    if (momentListenBtn) momentListenBtn.disabled = false;
-    if (momentContextToggle) momentContextToggle.disabled = ((momentPicker.capture && momentPicker.capture.choices) || []).length < 2;
-    _renderMomentChoices();
-    _setMomentListenLabel();
-    _setMomentShareAvailability(momentPicker.heard);
-    _setMomentStatus(_momentErrorMessage(data));
-  }
-
-  async function _commitMomentChoice() {
-    const token = momentPicker.generation;
-    if (momentPicker.committedResult) {
-      await _shareFrozenMomentResult(momentPicker.committedResult, token);
-      return;
-    }
-    const capture = momentPicker.capture;
-    const choice = momentPicker.choice;
-    if (!capture || !choice || !momentPicker.heard || momentPicker.commitInFlight) return;
-    const captureId = capture.capture_id;
-    momentPicker.commitInFlight = true;
-    momentPicker.playbackToken += 1;
-    if (momentAudio) momentAudio.pause();
-    momentPicker.playback = 'ended';
-    _resumeRadioAfterMoment();
-    if (momentDialog) momentDialog.dataset.state = 'saving';
-    if (momentShareBtn) momentShareBtn.disabled = true;
-    if (momentListenBtn) momentListenBtn.disabled = true;
-    if (momentContextToggle) momentContextToggle.disabled = true;
-    _renderMomentChoices();
-    if (momentHelpEl) momentHelpEl.textContent = _t('moment_saving', 'Saving your moment…');
-    _setMomentStatus(_t('moment_saving', 'Saving your moment…'));
-    try {
-      const res = await fetch(_base + '/api/clip/commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capture_id: capture.capture_id, choice_id: choice.choice_id }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!_momentCommitIsCurrent(token, captureId)) return;
-      if (!res.ok || !data || data.ok !== true) {
-        _restoreMomentAfterCommitFailure(data);
-        return;
-      }
-      momentPicker.committedResult = data;
-      _stageCommittedMomentForShare();
-    } catch (err) {
-      if (!_momentCommitIsCurrent(token, captureId)) return;
-      _restoreMomentAfterCommitFailure(null);
-    }
-  }
-
+  /* ── Clip sharing: POST /api/clip, share via native sheet or clipboard ── */
   async function doShare() {
-    if (!_openMomentPicker()) return;
-    await _requestMomentCapture();
+    const btn = document.getElementById('share-clip-btn');
+    if (!btn || btn.disabled) return;
+    const labelEl = btn.querySelector('.mmr-share-btn-label');
+    const origLabel = labelEl ? labelEl.textContent : '';
+    // Centralized state restoration: every early-exit and the success path set
+    // nextState, and the finally block writes it once. Avoids leaving the
+    // button stuck at "loading" on API errors or user-cancelled share sheets.
+    let nextState = 'enabled';
+    btn.disabled = true;
+    btn.setAttribute('data-state', 'loading');
+    if (labelEl) labelEl.textContent = _t('clip_saving', 'Salvando…');
+    try {
+      const res = await fetch(_base + '/api/clip', { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || !data.ok) {
+        // Warm, actionable copy mapped from backend codes — never raw tech lingo.
+        let msg;
+        if (data && data.retry_after) {
+          msg = _t('clip_rate_limited', 'The tape decks need a moment — give them {s}s and tap again.')
+            .replace('{s}', data.retry_after);
+        } else if (data && data.error_code === 'music_share_unavailable') {
+          msg = _t('music_share_unavailable', 'A complete included track has to finish before it can be shared.');
+        } else if (data && data.reason === 'no_audio') {
+          msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
+        } else {
+          msg = _t('clip_error', "That clip didn't take — give it a moment and tap Share again.");
+        }
+        _showToast(msg);
+        return;
+      }
+      const shareUrl = window.location.origin + _base + (data.share_url || data.url);
+      // Always drop the URL on the clipboard (best-effort) so it's there no matter
+      // which share path runs — even if the native sheet is dismissed.
+      let copied = false;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try { await navigator.clipboard.writeText(shareUrl); copied = true; } catch (e) { /* best-effort */ }
+      }
+      const npEl = document.getElementById('np-track');
+      const stationName = currentStationName();
+      const title = (data.track_title && String(data.track_title).trim()) ||
+        ((npEl && npEl.textContent && npEl.textContent.trim()) || stationName);
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: title + ' — ' + stationName, url: shareUrl });
+        } catch (err) {
+          if (err && err.name === 'AbortError') {
+            // user cancelled the sheet. If the link made it to the clipboard,
+            // confirm it; otherwise give them a way out (principle #5) via the
+            // last-resort prompt rather than failing silently.
+            if (copied) { _showToast(_t('clip_copied', 'Link copied!')); }
+            else { window.prompt(_t('clip_copy_prompt', 'Copia il link:'), shareUrl); }
+            nextState = 'shared';
+            return;
+          }
+          throw err;
+        }
+        if (copied) _showToast(_t('clip_copied', 'Link copied!'));
+      } else if (copied) {
+        _showToast(_t('clip_copied', 'Link copied!'));
+      } else {
+        // Last-resort fallback: prompt
+        window.prompt(_t('clip_copy_prompt', 'Copia il link:'), shareUrl);
+      }
+      nextState = 'shared';
+    } catch (err) {
+      console.warn('doShare failed', err);
+      _showToast(_t('clip_error', "That clip didn't take — give it a moment and tap Share again."));
+    } finally {
+      btn.disabled = false;
+      if (labelEl) labelEl.textContent = origLabel;
+      btn.setAttribute('data-state', nextState);
+    }
   }
 
   /* ── Polling ──
@@ -2648,11 +1804,6 @@
     if (audio) {
       audio.addEventListener('play', () => setPlayingUi(true));
       audio.addEventListener('pause', () => {
-        if (momentPicker.radioPauseOwned) {
-          momentPicker.radioPauseOwned = false;
-          setPlayingUi(false);
-          return;
-        }
         if (!audio.ended && !audio.error) {
           state.wantsPlay = false;
           state.playPending = false;
@@ -2711,67 +1862,6 @@
 
     // Playback intent is scoped to the three explicit play affordances above.
     // Form, navigation, share, and install interactions must never start audio.
-
-    // Moment Picker: native dialog + native audio transport. These controls
-    // intentionally expose no range input, waveform, or browser-supplied cuts.
-    momentDialog = $('moment-picker');
-    momentAudio = $('moment-picker-audio');
-    momentListenBtn = $('moment-picker-listen');
-    momentShareBtn = $('moment-picker-share');
-    momentChoiceEl = $('moment-picker-choice');
-    momentProgressTimeEl = $('moment-picker-progress-time');
-    momentProgressFillEl = $('moment-picker-progress-fill');
-    momentProvenanceEl = $('moment-picker-provenance');
-    momentContextToggle = $('moment-picker-context-toggle');
-    momentChoicesEl = $('moment-picker-choices');
-    momentFollowupEl = $('moment-picker-followup');
-    momentHelpEl = $('moment-picker-help');
-    momentStatusEl = $('moment-picker-status');
-    momentCloseBtn = $('moment-picker-close');
-    momentCancelBtn = $('moment-picker-cancel');
-    if (momentDialog) {
-      momentDialog.addEventListener('cancel', (event) => {
-        event.preventDefault();
-        _closeMomentPicker();
-      });
-      momentDialog.addEventListener('close', _finishMomentPickerClose);
-    }
-    if (momentCloseBtn) momentCloseBtn.addEventListener('click', _closeMomentPicker);
-    if (momentCancelBtn) momentCancelBtn.addEventListener('click', _closeMomentPicker);
-    if (momentListenBtn) momentListenBtn.addEventListener('click', _startMomentAudition);
-    if (momentShareBtn) momentShareBtn.addEventListener('click', _commitMomentChoice);
-    if (momentContextToggle && momentChoicesEl) {
-      momentContextToggle.addEventListener('click', () => {
-        if (momentContextToggle.disabled) return;
-        const opening = momentChoicesEl.hidden;
-        momentChoicesEl.hidden = !opening;
-        momentContextToggle.setAttribute('aria-expanded', String(opening));
-      });
-    }
-    if (momentAudio) {
-      momentAudio.addEventListener('timeupdate', _onMomentTimeUpdate);
-      momentAudio.addEventListener('pause', _onMomentPaused);
-      momentAudio.addEventListener('ended', _onMomentEnded);
-      momentAudio.addEventListener('error', () => {
-        if (!momentPicker.open || momentPicker.playback === 'idle') return;
-        if (momentPicker.committedResult || momentPicker.commitInFlight) {
-          momentPicker.playback = 'ended';
-          _resumeRadioAfterMoment();
-          _lockCommittedMomentControls();
-          if (momentPicker.committedResult && !momentPicker.commitInFlight) {
-            if (momentDialog) momentDialog.dataset.state = 'committed';
-            _setMomentShareAvailability(true);
-          }
-          return;
-        }
-        momentPicker.playback = 'idle';
-        _resumeRadioAfterMoment();
-        if (momentDialog) momentDialog.dataset.state = 'ready';
-        if (momentListenBtn) momentListenBtn.disabled = false;
-        _setMomentListenLabel();
-        _setMomentStatus(_t('moment_audio_error', 'That moment could not start — give the radio a moment and listen again.'));
-      });
-    }
 
     // Service-worker registration (PWA install). Uses _base so HA ingress works.
     if ('serviceWorker' in navigator) {

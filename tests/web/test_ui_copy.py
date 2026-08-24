@@ -221,6 +221,10 @@ def test_listener_js_fallback_strings_match_the_english_copy():
     # removed here, so the list can only shrink. A listener reads whichever
     # version wins the race between the page and its /public-status payload.
     known_drift = {
+        "clip_copied",
+        "clip_copy_prompt",
+        "clip_rate_limited",
+        "clip_saving",
         "credits_catalog_unavailable",
         "credits_licensed_under",
         "credits_no_current_music",
@@ -430,14 +434,7 @@ def test_no_tech_lingo_reaches_the_listener():
         for key, value in COPY[lang].items():
             low = value.lower()
             for term in banned:
-                # ``Annulla`` is the ordinary Italian cancel label required by
-                # the listener dialog; it happens to contain the letters
-                # "null" without exposing the programming value. Keep the
-                # guard for the standalone machine word instead.
-                if term == "null":
-                    assert not re.search(r"\bnull\b", low), f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
-                else:
-                    assert term not in low, f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
+                assert term not in low, f"tech lingo '{term}' in COPY[{lang}][{key}]: {value!r}"
 
 
 def test_admin_toasts_have_no_raw_error_dead_ends():

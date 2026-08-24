@@ -9130,8 +9130,11 @@ async def test_sw_js_never_caches_listener_request_receipts():
 
     assert resp.status_code == 200
     receipt_bypass = resp.text.index("path.includes('/public-listener-requests')")
+    capture_bypass = resp.text.index("path.includes('/captures/')")
     assert receipt_bypass < resp.text.index("const isFreshAsset")
     assert receipt_bypass < resp.text.index("Catch-all for any other same-origin GET")
+    assert capture_bypass < resp.text.index("const isFreshAsset")
+    assert capture_bypass < resp.text.index("Catch-all for any other same-origin GET")
 
 
 @pytest.mark.asyncio

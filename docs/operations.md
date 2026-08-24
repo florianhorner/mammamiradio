@@ -348,7 +348,7 @@ Public:
 - `GET /sw.js`, `GET /static/{filename:path}` (PWA assets)
 - `POST /api/clip` (rate-limited; music sharing is available only for a
   complete single bundled-track window)
-- `POST /api/clip/capture` (rate-limited Moment Picker capture; creates a
+- `POST /api/clip/capture` (rate-limited temporary capture; creates a
   short-lived capability for a server-proven speech/station-bed voice run)
 - `GET /captures/{id}.mp3` (capability-scoped, no-store audition source),
   `DELETE /api/clip/capture/{id}` (release that temporary capability), and
@@ -361,19 +361,17 @@ Public:
 
 The read-only sidecar monitor in `scripts/stream_watch_server.py` is intentionally limited to `/public-status`, `/healthz`, and `/readyz` so it still works when admin auth is enabled.
 
-### Moment Picker capture lifecycle
+### Clip capture lifecycle
 
-Moment Picker capture is public but capability-scoped. The server proves that
+Clip capture is public but capability-scoped. The server proves that
 the retained source is a voice run classified as `speech` or `station_bed` and
 freezes the available choices. Commercial, unknown, and otherwise unproven
-audio is rejected. The listener falls back to legacy `POST /api/clip`, which
-shares music only when the current window is one complete validated bundled
-starter track. The browser supplies neither byte ranges nor final metadata.
+audio is rejected. Clients supply neither byte ranges nor final metadata.
 
 Temporary preview audio is ingress-relative, carries `Cache-Control: no-store`,
 and is excluded from the service worker cache. Capture creation is bounded by a
 per-IP concurrent quota, global capacity, and a creation rate limit.
-The listener releases an unused preview with
+Clients release an unused preview with
 `DELETE /api/clip/capture/{capture_id}`; expiry and station lifecycle boundaries
 also invalidate it. Capture records, quota accounting, and retained-timeline
 generation state reset for every application lifespan, even when a test or
@@ -381,7 +379,7 @@ embedding starts another lifespan in the same process.
 
 Committing accepts one server-frozen `choice_id`; the final sidecar comes from
 that choice alone. Finalization supplies bounded decoder context, trims decoded
-samples to the selected window, and re-encodes the result. Moment Picker commits
+samples to the selected window, and re-encodes the result. Capture commits
 and legacy `POST /api/clip` publications use the same serialized `clips/`
 retention boundary. Clips expire after 24 hours, and publishing at the 50-file
 cap evicts the oldest expiring audio-and-sidecar pair.

@@ -527,12 +527,6 @@ needs both a normalize pass and a loudness-reconcile re-encode is the usual
 culprit. A normalization cache hit on an already-reconciled file skips both and
 should log near-instant stages.
 
-## A Moment Picker replay expires or will not share
-
-Temporary Moment Picker audio is deliberately short-lived and private to the listener page. Ask the listener to create a fresh moment if the picker says it has passed; do not reuse or bookmark `/captures/...` URLs. A temporary replay is also deliberately unavailable after a commit, while an in-flight audio response finishes safely under its reader lease.
-
-For maintainers, the browser maps structured reasons to warm copy while logs keep the machine reason: `no_audio` means wait for a little more aired audio; `format_unavailable` means the retained run could not be proven as compatible MPEG-1 Layer III frames; `capture_expired` needs a fresh capture; `capture_busy` / `write_failed` can be retried; `rate_limited` carries `Retry-After`; and `invalid_choice` / `capture_claimed` means reopen the frozen picker instead of attempting a different cut. Confirm `/captures/` responses carry `Cache-Control: no-store` and the service worker bypasses that ingress-prefixed path before investigating browser cache behavior.
-
 ## Tests fail during collection
 
 If you see import errors like `ModuleNotFoundError: No module named 'dotenv'`, you are running tests outside the project env.

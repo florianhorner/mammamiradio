@@ -6159,8 +6159,8 @@ async def test_listener_page_includes_casa_card_and_public_status_binding():
 
 
 @pytest.mark.asyncio
-async def test_listener_share_reads_moment_capture_error_body():
-    """The audition-first listener flow must surface JSON capture errors."""
+async def test_listener_share_reads_clip_error_body():
+    """Listener clip sharing must surface JSON errors from non-2xx responses."""
     app = _make_test_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -6168,12 +6168,9 @@ async def test_listener_share_reads_moment_capture_error_body():
 
     assert js_resp.status_code == 200
     assert "const data = await res.json().catch(() => null);" in js_resp.text
-    assert "if (!res.ok || !data || data.ok !== true || typeof data.capture_id !== 'string')" in js_resp.text
-    assert "switch (data && data.reason)" in js_resp.text
-    assert "case 'no_audio':" in js_resp.text
-    assert "case 'format_unavailable':" in js_resp.text
-    assert "fetch(_base + '/api/clip/capture'" in js_resp.text
-    assert "if (!res.ok || !data || data.ok !== true)" in js_resp.text
+    assert "if (!res.ok || !data || !data.ok)" in js_resp.text
+    assert "data.error_code === 'music_share_unavailable'" in js_resp.text
+    assert "A complete included track has to finish before it can be shared." in js_resp.text
 
 
 # ---------------------------------------------------------------------------
