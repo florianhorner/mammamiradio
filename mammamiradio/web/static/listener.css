@@ -820,7 +820,8 @@ body.mmr-moment-picker-open { overflow-y: hidden; }
 .mmr-moment-picker__listen:hover:not(:disabled) { background: rgba(236, 204, 48, 0.15); }
 .mmr-moment-picker__listen:disabled,
 .mmr-moment-picker__share:disabled,
-.mmr-moment-picker__context-toggle:disabled { cursor: not-allowed; opacity: 0.52; }
+.mmr-moment-picker__context-toggle:disabled,
+.mmr-moment-picker__choice-option:disabled { cursor: not-allowed; opacity: 0.52; }
 .mmr-moment-picker__progress {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

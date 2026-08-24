@@ -7,6 +7,11 @@ async (page) => {
   const streamRequests = [];
   const statusPolls = [];
   const streamFixture = 'mammamiradio/assets/demo/recovery/continuity_1.mp3';
+  const momentFixture = 'mammamiradio/assets/demo/first_listen/first_listen_show.mp3';
+  const momentCaptures = [];
+  const momentCommits = [];
+  const momentReleases = [];
+  const legacyClipPosts = [];
   const songReceiptStorageKey = 'mmr.listener.songReceipt.v1';
   const receiptTokens = {
     reloadMatched: 'smoke-reload-matched',
@@ -28,6 +33,9 @@ async (page) => {
   let casaScenario = 'recent';
   let adExperimentScenario = 'empty';
   let nowStreamingScenario = 'music';
+  let momentCaptureScenario = 'ready';
+  let momentCaptureSequence = 0;
+  let heldMomentCaptureResolve = null;
   let tracksPlayed = 5;
   let rotationTrackCount = 84;
   // Deliberately stale: the hero must render the live rotation count instead.
@@ -288,6 +296,123 @@ async (page) => {
     const [status, body] = responses[requestScenario] || responses.declined;
     await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   });
+  await page.route('**/captures/*.mp3', async (route) => {
+    await route.fulfill({
+      status: 206,
+      contentType: 'audio/mpeg',
+      headers: {
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store, private, max-age=0',
+        'Content-Length': '649197',
+        'Content-Range': 'bytes 0-649196/649197',
+      },
+      path: momentFixture,
+    });
+  });
+  await page.route('**/api/clip/capture/*', async (route) => {
+    if (route.request().method() !== 'DELETE') {
+      await route.fallback();
+      return;
+    }
+    const captureId = decodeURIComponent(route.request().url().split('/').at(-1));
+    momentReleases.push(captureId);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, released: true }),
+    });
+  });
+  function momentCapturePayload(captureId, firstChapter = 'Prima voce', secondChapter = 'Seconda voce') {
+    return {
+      ok: true,
+      capture_id: captureId,
+      audio_path: `/captures/${captureId}.mp3`,
+      expires_in: 600,
+      choices: [
+        {
+          choice_id: 'moment',
+          label: 'Il momento',
+          in_sec: 0.25,
+          out_sec: 2.75,
+          duration_sec: 2.5,
+          chapter_ids: ['chapter-1', 'chapter-2'],
+        },
+        {
+          choice_id: 'context',
+          label: 'Con contesto',
+          in_sec: 0.25,
+          out_sec: 4.25,
+          duration_sec: 4,
+          chapter_ids: ['chapter-1', 'chapter-2'],
+        },
+      ],
+      chapters: [
+        { chapter_id: 'chapter-1', label: firstChapter },
+        { chapter_id: 'chapter-2', label: secondChapter },
+      ],
+    };
+  }
+  await page.route('**/api/clip/capture', async (route) => {
+    const scenario = momentCaptureScenario;
+    momentCaptures.push(scenario);
+    if (scenario === 'no_audio') {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: false, reason: 'no_audio' }),
+      });
+      return;
+    }
+    let captureId;
+    let firstChapter = 'Prima voce';
+    let secondChapter = 'Seconda voce';
+    if (scenario === 'stale_success') {
+      captureId = 'smoke-stale-capture-a';
+      firstChapter = 'Stale A prima';
+      secondChapter = 'Stale A seconda';
+      await new Promise((resolve) => { heldMomentCaptureResolve = resolve; });
+    } else if (scenario === 'fresh_after_stale') {
+      captureId = 'smoke-fresh-capture-b';
+      firstChapter = 'Fresh B prima';
+      secondChapter = 'Fresh B seconda';
+    } else {
+      momentCaptureSequence += 1;
+      captureId = `smoke-capture-${momentCaptureSequence}`;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(momentCapturePayload(captureId, firstChapter, secondChapter)),
+    });
+  });
+  await page.route('**/api/clip/commit', async (route) => {
+    momentCommits.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        clip_id: 'smoke-final',
+        share_url: '/clips/smoke-final',
+        track_title: 'Frozen Host Moment',
+        track_artist: 'Giulia',
+      }),
+    });
+  });
+  await page.route('**/api/clip', async (route) => {
+    legacyClipPosts.push(route.request().method());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        clip_id: 'starter-final',
+        share_url: '/clips/starter-final',
+        track_title: 'Starter Track',
+        track_artist: 'Starter Artist',
+      }),
+    });
+  });
   await page.route('**/stream', async (route) => {
     streamRequests.push({ at: Date.now(), url: route.request().url() });
     if (streamScenario === 'abort') {
@@ -336,6 +461,30 @@ async (page) => {
       heldRequestFrames = heldRequestFrames.filter((frame) => frame.id !== id);
     };
     try { localStorage.setItem('stationName', '__stale_station_identity__'); } catch (_) {}
+
+    window.__playerSmokeMomentShares = [];
+    window.__playerSmokeMomentShareMode = 'cancel';
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (payload) => {
+        window.__playerSmokeMomentShares.push(payload);
+        if (window.__playerSmokeMomentShareMode === 'cancel') {
+          throw new DOMException('cancelled by player smoke', 'AbortError');
+        }
+      },
+    });
+
+    window.__playerSmokeMediaActions = {};
+    if (!('mediaSession' in navigator)) {
+      Object.defineProperty(navigator, 'mediaSession', {
+        configurable: true,
+        value: { metadata: null, playbackState: 'none' },
+      });
+    }
+    Object.defineProperty(navigator.mediaSession, 'setActionHandler', {
+      configurable: true,
+      value: (action, handler) => { window.__playerSmokeMediaActions[action] = handler; },
+    });
 
     const nativeSetInterval = window.setInterval;
     window.setInterval = (callback, delay, ...args) => {
@@ -397,6 +546,340 @@ async (page) => {
       expected,
       { timeout: 5000, polling: 250 },
     ).catch(() => assert(false, message));
+  }
+
+  async function exerciseMomentPicker() {
+    let stage = 'start live radio';
+    try {
+      streamScenario = 'audio';
+      if (await page.locator('#radio-audio').evaluate((audio) => audio.paused)) {
+        await page.locator('#nav-cta').click();
+      }
+      await page.waitForFunction(
+        () => document.getElementById('radio-audio')?.paused === false,
+        null,
+        { timeout: 7000 },
+      );
+
+      stage = 'open ready capture';
+      momentCaptureScenario = 'ready';
+      await page.locator('#share-clip-btn').click();
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker')?.dataset.state === 'ready',
+        null,
+        { timeout: 7000 },
+      );
+      assert(momentCaptures.length === 1, 'opening the picker did not create exactly one capture');
+      const provenance = await page.locator('#moment-picker-provenance').textContent();
+      assert(
+        provenance.includes('Prima voce') && provenance.includes('Seconda voce'),
+        'frozen Moment provenance did not render',
+      );
+
+      stage = 'choose context and restore collapsed focus';
+      await page.locator('#moment-picker-context-toggle').click();
+      const contextOption = page.locator('#moment-picker-choices button').nth(1);
+      await contextOption.focus();
+      await contextOption.press('Enter');
+      const collapsedChoice = await page.evaluate(() => ({
+        hidden: document.getElementById('moment-picker-choices')?.hidden,
+        expanded: document.getElementById('moment-picker-context-toggle')?.getAttribute('aria-expanded'),
+        focused: document.activeElement?.id,
+        choice: document.getElementById('moment-picker-choice')?.textContent,
+        shareDisabled: document.getElementById('moment-picker-share')?.disabled,
+      }));
+      assert(
+        collapsedChoice.hidden && collapsedChoice.expanded === 'false' &&
+          collapsedChoice.focused === 'moment-picker-context-toggle',
+        `collapsed Moment choices stranded keyboard focus: ${JSON.stringify(collapsedChoice)}`,
+      );
+      assert(collapsedChoice.choice.includes('Con contesto'), 'keyboard choice selection did not update the Moment');
+      assert(collapsedChoice.shareDisabled, 'changing Moment context did not reset the listen-before-share gate');
+
+      stage = 'start audition';
+      await page.locator('#moment-picker-listen').click();
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker-audio')?.paused === false,
+        null,
+        { timeout: 7000 },
+      );
+      assert(
+        await page.locator('#radio-audio').evaluate((audio) => audio.paused),
+        'live radio mixed with the Moment audition',
+      );
+      await page.waitForFunction(
+        () => !document.getElementById('moment-picker-share')?.disabled,
+        null,
+        { timeout: 7000 },
+      );
+      const progress = await page.locator('#moment-picker-progress-fill').evaluate((fill) => ({
+        className: fill.className,
+        width: fill.style.width,
+        pixels: fill.getBoundingClientRect().width,
+      }));
+      assert(
+        progress.className.includes('mmr-moment-picker__progress-fill'),
+        'Moment progress fill lost its styled class',
+      );
+      assert(
+        parseFloat(progress.width) > 0 && progress.pixels > 0,
+        `Moment progress fill stayed invisible: ${JSON.stringify(progress)}`,
+      );
+
+      stage = 'pause audition through Media Session';
+      await page.evaluate(() => window.__playerSmokeMediaActions.pause());
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker-audio')?.paused === true &&
+          document.getElementById('radio-audio')?.paused === false,
+        null,
+        { timeout: 7000 },
+      );
+
+      stage = 'resume audition through Media Session and reclaim focus';
+      await page.evaluate(() => window.__playerSmokeMediaActions.play());
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker-audio')?.paused === false,
+        null,
+        { timeout: 7000 },
+      );
+      assert(
+        await page.locator('#radio-audio').evaluate((audio) => audio.paused),
+        'resumed Moment audition did not reclaim audio focus',
+      );
+
+      stage = 'stop both transports through Media Session';
+      await page.evaluate(() => window.__playerSmokeMediaActions.stop());
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker-audio')?.paused === true &&
+          document.getElementById('radio-audio')?.paused === true,
+        null,
+        { timeout: 7000 },
+      );
+      await page.evaluate(() => window.__playerSmokeMediaActions.play());
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker-audio')?.paused === false,
+        null,
+        { timeout: 7000 },
+      );
+      assert(
+        await page.locator('#radio-audio').evaluate((audio) => audio.paused),
+        'Media Session play mixed radio under the Moment audition',
+      );
+
+      stage = 'commit without consuming native share activation';
+      await page.locator('#moment-picker-share').click();
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker')?.dataset.state === 'committed',
+        null,
+        { timeout: 7000 },
+      );
+      assert(momentCommits.length === 1, 'first Moment share did not commit exactly once');
+      assert(
+        (await page.evaluate(() => window.__playerSmokeMomentShares.length)) === 0,
+        'Moment commit attempted native share after its click activation expired',
+      );
+
+      stage = 'cancel native share from a fresh click';
+      await page.locator('#moment-picker-share').click();
+      await page.waitForFunction(
+        () => window.__playerSmokeMomentShares.length === 1 &&
+          document.getElementById('moment-picker')?.dataset.state === 'committed' &&
+          !document.getElementById('moment-picker-share')?.disabled,
+        null,
+        { timeout: 7000 },
+      );
+      const cancelledState = await page.evaluate(() => ({
+        listenDisabled: document.getElementById('moment-picker-listen')?.disabled,
+        shareDisabled: document.getElementById('moment-picker-share')?.disabled,
+        contextDisabled: document.getElementById('moment-picker-context-toggle')?.disabled,
+        choicesDisabled: Array.from(document.querySelectorAll('#moment-picker-choices button'))
+          .every((button) => button.disabled),
+        shares: window.__playerSmokeMomentShares,
+      }));
+      assert(cancelledState.listenDisabled, 'native-share cancellation re-enabled consumed replay');
+      assert(!cancelledState.shareDisabled, 'native-share cancellation did not allow URL retry');
+      assert(
+        cancelledState.contextDisabled && cancelledState.choicesDisabled,
+        'native-share cancellation re-enabled consumed choices',
+      );
+      assert(
+        cancelledState.shares[0]?.title === `Frozen Host Moment — ${authoritativeName}`,
+        'native Moment share used mutable now-playing title',
+      );
+
+      stage = 'retain committed lock after late media error';
+      const postErrorState = await page.evaluate(() => {
+        document.getElementById('moment-picker-audio')?.dispatchEvent(new Event('error'));
+        return {
+          dialogState: document.getElementById('moment-picker')?.dataset.state,
+          listenDisabled: document.getElementById('moment-picker-listen')?.disabled,
+          shareDisabled: document.getElementById('moment-picker-share')?.disabled,
+          contextDisabled: document.getElementById('moment-picker-context-toggle')?.disabled,
+          choicesDisabled: Array.from(document.querySelectorAll('#moment-picker-choices button'))
+            .every((button) => button.disabled),
+        };
+      });
+      assert(postErrorState.dialogState === 'committed', 'late media error changed consumed Moment state');
+      assert(postErrorState.listenDisabled, 'late media error re-enabled consumed replay');
+      assert(!postErrorState.shareDisabled, 'late media error disabled frozen URL retry');
+      assert(
+        postErrorState.contextDisabled && postErrorState.choicesDisabled,
+        'late media error re-enabled consumed choices',
+      );
+
+      stage = 'retry frozen native share';
+      await page.evaluate(() => { window.__playerSmokeMomentShareMode = 'shared'; });
+      await page.locator('#moment-picker-share').click();
+      await page.waitForFunction(
+        () => !document.getElementById('moment-picker')?.open,
+        null,
+        { timeout: 7000 },
+      );
+      assert(momentCommits.length === 1, 'native Moment share retry recommitted the consumed capture');
+      assert(
+        (await page.evaluate(() => window.__playerSmokeMomentShares.length)) === 2,
+        'native Moment share retry did not reuse the frozen URL',
+      );
+      assert(!momentReleases.includes('smoke-capture-1'), 'committed capture was incorrectly released');
+
+      stage = 'release ready capture on close';
+      await page.locator('#share-clip-btn').click();
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker')?.dataset.state === 'ready',
+        null,
+        { timeout: 7000 },
+      );
+      await page.locator('#moment-picker-close').click();
+      await waitForRouteCount(
+        () => momentReleases.length,
+        1,
+        5000,
+        'closing a ready Moment did not release its capability',
+      );
+      assert(
+        momentReleases[0] === 'smoke-capture-2',
+        `wrong Moment capture released: ${JSON.stringify(momentReleases)}`,
+      );
+
+      stage = 'legacy complete-track fallback';
+      momentCaptureScenario = 'no_audio';
+      await page.locator('#share-clip-btn').click();
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker')?.dataset.state === 'committed',
+        null,
+        { timeout: 7000 },
+      );
+      assert(legacyClipPosts.length === 1, 'no_audio did not reach the legacy complete-track endpoint');
+      assert(
+        (await page.evaluate(() => window.__playerSmokeMomentShares.length)) === 2,
+        'legacy commit attempted native share after its click activation expired',
+      );
+      await page.locator('#moment-picker-share').click();
+      await page.waitForFunction(
+        () => !document.getElementById('moment-picker')?.open,
+        null,
+        { timeout: 7000 },
+      );
+      const shares = await page.evaluate(() => window.__playerSmokeMomentShares);
+      assert(
+        shares.at(-1)?.title === `Starter Track — ${authoritativeName}`,
+        'legacy fallback did not share frozen starter metadata',
+      );
+
+      stage = 'hold capture A across close';
+      const captureCountBeforeRace = momentCaptures.length;
+      momentCaptureScenario = 'stale_success';
+      await page.locator('#share-clip-btn').click();
+      await waitForRouteCount(
+        () => momentCaptures.length,
+        captureCountBeforeRace + 1,
+        5000,
+        'stale capture A request never reached the server',
+      );
+      assert(typeof heldMomentCaptureResolve === 'function', 'stale capture A was not held');
+      assert(
+        await page.locator('#moment-picker').getAttribute('data-state') === 'preparing',
+        'held capture A left the picker in the wrong state',
+      );
+
+      stage = 'close A and reopen fresh B';
+      await page.locator('#moment-picker-close').click();
+      await page.waitForFunction(
+        () => !document.getElementById('moment-picker')?.open &&
+          !document.body.classList.contains('mmr-moment-picker-open'),
+        null,
+        { timeout: 5000 },
+      );
+      momentCaptureScenario = 'fresh_after_stale';
+      await page.locator('#share-clip-btn').click();
+      await page.waitForFunction(
+        () => document.getElementById('moment-picker')?.dataset.state === 'ready' &&
+          document.getElementById('moment-picker-audio')?.src.endsWith('/captures/smoke-fresh-capture-b.mp3'),
+        null,
+        { timeout: 7000 },
+      );
+      assert(
+        (await page.locator('#moment-picker-provenance').textContent()).includes('Fresh B prima'),
+        'fresh capture B did not render before stale A completed',
+      );
+
+      stage = 'resolve stale capture A behind B';
+      heldMomentCaptureResolve();
+      heldMomentCaptureResolve = null;
+      await waitForRouteCount(
+        () => momentReleases.filter((captureId) => captureId === 'smoke-stale-capture-a').length,
+        1,
+        5000,
+        'stale successful capture was not released',
+      );
+      const freshAfterStale = await page.evaluate(() => ({
+        open: document.getElementById('moment-picker')?.open,
+        dialogState: document.getElementById('moment-picker')?.dataset.state,
+        audioSrc: document.getElementById('moment-picker-audio')?.src,
+        provenance: document.getElementById('moment-picker-provenance')?.textContent,
+        listenDisabled: document.getElementById('moment-picker-listen')?.disabled,
+        shareDisabled: document.getElementById('moment-picker-share')?.disabled,
+      }));
+      assert(
+        freshAfterStale.open && freshAfterStale.dialogState === 'ready' &&
+          freshAfterStale.audioSrc?.endsWith('/captures/smoke-fresh-capture-b.mp3') &&
+          freshAfterStale.provenance?.includes('Fresh B prima') &&
+          !freshAfterStale.listenDisabled && freshAfterStale.shareDisabled,
+        `stale capture completion disturbed reopened picker B: ${JSON.stringify(freshAfterStale)}`,
+      );
+      assert(
+        !momentReleases.includes('smoke-fresh-capture-b'),
+        'fresh capture B was released before its picker closed',
+      );
+
+      stage = 'close fresh capture B';
+      await page.locator('#moment-picker-close').click();
+      await waitForRouteCount(
+        () => momentReleases.filter((captureId) => captureId === 'smoke-fresh-capture-b').length,
+        1,
+        5000,
+        'fresh capture B was not released on close',
+      );
+
+      if (await page.locator('#nav-cta').getAttribute('aria-pressed') === 'true') {
+        await page.locator('#nav-cta').click();
+      }
+      await page.waitForFunction(
+        () => document.getElementById('radio-audio')?.paused === true,
+        null,
+        { timeout: 2000 },
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const state = await page.evaluate(() => ({
+        dialogState: document.getElementById('moment-picker')?.dataset.state,
+        status: document.getElementById('moment-picker-status')?.textContent,
+        radioPaused: document.getElementById('radio-audio')?.paused,
+        momentPaused: document.getElementById('moment-picker-audio')?.paused,
+        momentCurrentTime: document.getElementById('moment-picker-audio')?.currentTime,
+      })).catch(() => ({}));
+      throw new Error(`Moment Picker ${stage}: ${detail}; state=${JSON.stringify(state)}`);
+    }
   }
 
   await loadFreshPage();
@@ -1277,6 +1760,8 @@ async (page) => {
     'pause cancel left the audio element playing',
   );
 
+  await exerciseMomentPicker();
+
   // Error retries collapse to one timer, and an explicit pause cancels the
   // scheduled retry so sound cannot restart behind the listener's back.
   streamScenario = 'abort';
@@ -1325,6 +1810,10 @@ async (page) => {
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),
     receipt_polls: receiptPolls.length,
+    moment_captures: momentCaptures.length,
+    moment_commits: momentCommits.length,
+    moment_releases: momentReleases,
+    legacy_clip_posts: legacyClipPosts.length,
     blocked_off_origin_requests: [...new Set(blockedOffOriginRequests)],
   };
 }

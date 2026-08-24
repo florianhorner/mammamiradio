@@ -27,6 +27,10 @@ class ConcatDurationError(RuntimeError):
     """Raised when strict concat detects a proven output duration shortfall."""
 
 
+class DecoderSafeMp3RenderError(OSError):
+    """FFmpeg could not publish a complete standalone MP3 window."""
+
+
 def _norm_sidecar_path(norm_path: Path) -> Path:
     """Companion JSON path for a normalized cache file."""
     return norm_path.parent / f"{norm_path.name}.json"
@@ -304,6 +308,89 @@ def _run_ffmpeg(
         result.check_returncode()  # raises CalledProcessError
     logger.debug("ffmpeg stage %s: %.2fs", description, time.perf_counter() - _t0)
     return result
+
+
+def render_decoder_safe_mp3_window(
+    input_path: Path,
+    output_path: Path,
+    *,
+    preroll_samples: int,
+    sample_count: int,
+    sample_rate: int,
+) -> Path:
+    """Decode, trim, and atomically publish a standalone MP3 window.
+
+    ``input_path`` starts at a decoder-safe frame boundary. The leading
+    ``preroll_samples`` exist only to restore MPEG Layer III decoder state and
+    are removed before encoding exactly ``sample_count`` audible samples.
+
+    FFmpeg failures and empty renders raise :class:`DecoderSafeMp3RenderError`.
+    Filesystem failures raise :class:`OSError`. A failed render never replaces
+    an existing ``output_path`` and always removes its private staging file.
+    """
+
+    sample_values = (preroll_samples, sample_count, sample_rate)
+    if any(not isinstance(value, int) or isinstance(value, bool) for value in sample_values):
+        raise ValueError("decoder-safe MP3 sample bounds must be integers")
+    if preroll_samples < 0:
+        raise ValueError("decoder-safe MP3 preroll_samples must be non-negative")
+    if sample_count <= 0:
+        raise ValueError("decoder-safe MP3 sample_count must be positive")
+    if sample_rate <= 0:
+        raise ValueError("decoder-safe MP3 sample_rate must be positive")
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, staging_name = tempfile.mkstemp(
+        prefix=f".{output_path.name}.decoder-window-",
+        suffix=".part",
+        dir=output_path.parent,
+    )
+    staging_path = Path(staging_name)
+    try:
+        os.close(fd)
+        audible_end_sample = preroll_samples + sample_count
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-threads",
+            "1",
+            "-i",
+            str(input_path),
+            "-vn",
+            "-filter:a",
+            f"atrim=start_sample={preroll_samples}:end_sample={audible_end_sample},asetpts=PTS-STARTPTS",
+            "-ar",
+            str(sample_rate),
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            "-map_metadata",
+            "-1",
+            "-id3v2_version",
+            "3",
+            "-write_xing",
+            "1",
+            "-f",
+            "mp3",
+            str(staging_path),
+        ]
+        try:
+            _run_ffmpeg(cmd, f"decoder-safe MP3 window {input_path.name}", background=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise DecoderSafeMp3RenderError(f"unable to render decoder-safe MP3 window: {input_path}") from exc
+        if not staging_path.exists() or staging_path.stat().st_size <= 0:
+            raise DecoderSafeMp3RenderError(f"FFmpeg produced an empty decoder-safe MP3 window: {input_path}")
+        os.replace(staging_path, output_path)
+    finally:
+        try:
+            staging_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove decoder-safe MP3 staging file %s", staging_path)
+
+    return output_path
 
 
 def _fmt_num(value: float) -> str:

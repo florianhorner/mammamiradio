@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from mammamiradio.core.models import Segment, SegmentType
+from mammamiradio.web.mp3_frames import build_mpeg1_layer3_frame_index
 from mammamiradio.web.streamer import (
     CAPTURE_MAX_RECORDS,
     SegmentMark,
@@ -60,6 +61,24 @@ def _transport(app) -> httpx.ASGITransport:
     return httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
 
 
+@pytest.fixture(autouse=True)
+def _stub_decoder_safe_renderer(monkeypatch):
+    """Keep parser-only tests fast; real FFmpeg/onset proof has its own lane."""
+
+    def render(input_path, output_path, *, preroll_samples, sample_count, sample_rate):
+        del sample_rate
+        data = input_path.read_bytes()
+        index = build_mpeg1_layer3_frame_index(data)
+        first = preroll_samples // 1152
+        end = first + (sample_count // 1152)
+        byte_start, byte_end = index.byte_range(first, end)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(data[byte_start:byte_end])
+        return output_path
+
+    monkeypatch.setattr("mammamiradio.web.streamer.render_decoder_safe_mp3_window", render)
+
+
 @pytest.mark.asyncio
 async def test_capture_creates_frame_aligned_preview_and_idempotent_frozen_commit(tmp_path) -> None:
     app = _make_test_app()
@@ -96,6 +115,8 @@ async def test_capture_creates_frame_aligned_preview_and_idempotent_frozen_commi
         commit = commit_response.json()
         assert commit["ok"] is True
         assert commit["idempotent"] is False
+        assert commit["track_title"] == "Una frase riuscita"
+        assert commit["track_artist"] == "Studio"
 
         retry = await client.post(
             "/api/clip/commit",
@@ -146,18 +167,17 @@ async def test_capture_rejects_raw_ranges_and_unknown_choices(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_or_commercial_audio_is_generic_and_capped(tmp_path) -> None:
+@pytest.mark.parametrize("audio_class", ["commercial_music", "unknown"])
+async def test_unknown_or_commercial_audio_fails_closed(tmp_path, audio_class: str) -> None:
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
-    _seed_capture_timeline(app, audio_class="commercial_music", segment_type=SegmentType.MUSIC)
+    _seed_capture_timeline(app, audio_class=audio_class, segment_type=SegmentType.MUSIC)
 
     async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
         response = await client.post("/api/clip/capture")
-    assert response.status_code == 201
-    body = response.json()
-    assert [choice["choice_id"] for choice in body["choices"]] == ["moment"]
-    assert body["duration_sec"] <= 60
-    assert body["chapters"] == []
+    assert response.status_code == 409
+    assert response.json() == {"ok": False, "reason": "no_audio"}
+    assert not list((app.state.config.cache_dir / "captures").glob("*"))
 
 
 @pytest.mark.asyncio

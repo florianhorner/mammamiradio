@@ -248,6 +248,55 @@ def test_player_smoke_executes_ad_receipt_contract() -> None:
         assert needle in code, f"player smoke missing ad-receipt browser guard: {needle}"
 
 
+def test_player_smoke_executes_moment_picker_lifecycle_contract() -> None:
+    """Exercise browser media focus, consumed capability, and fallback behavior."""
+    code = RUN_CODE.read_text(encoding="utf-8")
+    for needle in (
+        "async function exerciseMomentPicker()",
+        "await exerciseMomentPicker();",
+        "page.route('**/api/clip/capture'",
+        "page.route('**/api/clip/commit'",
+        "page.route('**/api/clip'",
+        "page.route('**/captures/*.mp3'",
+        "'Content-Range': 'bytes 0-649196/649197'",
+        "live radio mixed with the Moment audition",
+        "collapsed Moment choices stranded keyboard focus",
+        "changing Moment context did not reset the listen-before-share gate",
+        "resumed Moment audition did not reclaim audio focus",
+        "Media Session play mixed radio under the Moment audition",
+        "Moment progress fill stayed invisible",
+        "Moment commit attempted native share after its click activation expired",
+        "native Moment share used mutable now-playing title",
+        "late media error re-enabled consumed replay",
+        "late media error re-enabled consumed choices",
+        "native Moment share retry recommitted the consumed capture",
+        "committed capture was incorrectly released",
+        "closing a ready Moment did not release its capability",
+        "no_audio did not reach the legacy complete-track endpoint",
+        "legacy commit attempted native share after its click activation expired",
+        "legacy fallback did not share frozen starter metadata",
+        "stale capture A request never reached the server",
+        "stale successful capture was not released",
+        "stale capture completion disturbed reopened picker B",
+        "fresh capture B was released before its picker closed",
+    ):
+        assert needle in code, f"player smoke missing Moment Picker guard: {needle}"
+
+    helper_start = code.index("async function exerciseMomentPicker()")
+    helper = code[helper_start : code.index("await loadFreshPage();", helper_start)]
+    assert helper.index("await page.locator('#moment-picker-listen').click()") < helper.index(
+        "live radio mixed with the Moment audition"
+    )
+    assert helper.index("momentCommits.length === 1") < helper.index(
+        "native Moment share retry recommitted the consumed capture"
+    )
+    assert helper.index("momentCaptureScenario = 'stale_success'") < helper.index(
+        "momentCaptureScenario = 'fresh_after_stale'"
+    )
+    assert helper.index("momentCaptureScenario = 'fresh_after_stale'") < helper.index("heldMomentCaptureResolve();")
+    assert helper.index("heldMomentCaptureResolve();") < helper.index("stale successful capture was not released")
+
+
 def test_default_listener_identity_fixture_is_canonical() -> None:
     config = tomllib.loads(RADIO_CONFIG.read_text(encoding="utf-8"))
     assert DEFAULT_STATION_NAME == "Mamma Mi Radio"

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
+import os
 import time
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from unittest.mock import patch
 
 import httpx
@@ -19,10 +19,12 @@ from mammamiradio.core.models import Segment, SegmentType
 from mammamiradio.web.mp3_frames import Mp3FrameIndexError, build_mpeg1_layer3_frame_index
 from mammamiradio.web.streamer import (
     CAPTURE_COMMIT_GRACE_SECONDS,
+    CAPTURE_MAX_RECORDS_PER_IP,
     CAPTURE_RATE_PRUNE_SECONDS,
     SegmentMark,
     _append_clip_chunk,
     _build_capture_source,
+    _capture_choice_is_share_safe,
     _CaptureNoAudioError,
     _CaptureRecord,
     _CaptureState,
@@ -39,11 +41,14 @@ from mammamiradio.web.streamer import (
     _mark_clip_segment_start,
     _range_contained_in,
     _release_capture_reader,
+    _render_capture_choice,
     _reset_clip_timeline,
     _safe_voice_run,
+    _settle_capture_claim,
     _snapshot_retained_audio,
     _source_choice,
     initialize_clip_capture_runtime,
+    shutdown_clip_capture_runtime,
 )
 from tests.web.test_streamer_routes import _make_test_app
 
@@ -57,6 +62,24 @@ def _mpeg1_l3_frames(count: int = 1_500) -> bytes:
 
 def _transport(app) -> httpx.ASGITransport:
     return httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+
+
+@pytest.fixture(autouse=True)
+def _stub_decoder_safe_renderer(monkeypatch):
+    """Use frame copies here; real decoder/onset behavior is FFmpeg-marked."""
+
+    def render(input_path, output_path, *, preroll_samples, sample_count, sample_rate):
+        del sample_rate
+        data = input_path.read_bytes()
+        index = build_mpeg1_layer3_frame_index(data)
+        first = preroll_samples // 1152
+        end = first + (sample_count // 1152)
+        byte_start, byte_end = index.byte_range(first, end)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(data[byte_start:byte_end])
+        return output_path
+
+    monkeypatch.setattr("mammamiradio.web.streamer.render_decoder_safe_mp3_window", render)
 
 
 def _seed_timeline(
@@ -93,6 +116,7 @@ def _record(
     *,
     source_path: Path | None = None,
     active_readers: int = 0,
+    active_writers: int = 0,
     expires_in: float = 60.0,
     build_deadline_in: float = 60.0,
     consumed_at: float | None = None,
@@ -108,6 +132,7 @@ def _record(
         build_deadline_monotonic=now + build_deadline_in,
         source_path=source_path,
         active_readers=active_readers,
+        active_writers=active_writers,
         consumed_monotonic=consumed_at,
     )
 
@@ -117,7 +142,7 @@ def _snapshot_with_marks(data: bytes, marks: tuple[SegmentMark, ...]) -> _ClipSn
 
 
 @pytest.mark.asyncio
-async def test_capture_runtime_cleans_orphans_and_tracks_one_maintenance_task(tmp_path: Path) -> None:
+async def test_capture_runtime_cleans_orphans_and_owns_one_maintenance_task(tmp_path: Path) -> None:
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
     captures = app.state.config.cache_dir / "captures"
@@ -125,19 +150,62 @@ async def test_capture_runtime_cleans_orphans_and_tracks_one_maintenance_task(tm
     orphan = captures / "old.mp3.part"
     orphan.write_bytes(b"left behind")
     (captures / "nested").mkdir()
+    clips = app.state.config.cache_dir / "clips"
+    clips.mkdir(parents=True)
+    stale_publication_scratch = clips / ".old-deadbeef.mp3.part"
+    fresh_publication_scratch = clips / ".fresh-deadbeef.json.part"
+    stale_publication_scratch.write_bytes(b"old scratch")
+    fresh_publication_scratch.write_bytes(b"active scratch")
+    old_time = time.time() - 7 * 3600
+    stale_publication_scratch.touch()
+    os.utime(stale_publication_scratch, (old_time, old_time))
 
     await initialize_clip_capture_runtime(app)
     task = app.state.capture_maintenance_task
     assert not orphan.exists()
-    assert task in app.state.background_tasks
+    assert not stale_publication_scratch.exists()
+    assert fresh_publication_scratch.exists()
+    assert task is not None
+    # This loop is lifecycle-owned and intentionally infinite.  The generic
+    # background-task set contains finite fire-and-forget jobs that callers may
+    # await, so putting the maintenance loop there would make those joins hang.
+    assert task not in getattr(app.state, "background_tasks", set())
 
     # Startup is idempotent: it must not create competing maintenance loops.
     await initialize_clip_capture_runtime(app)
     assert app.state.capture_maintenance_task is task
 
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    await shutdown_clip_capture_runtime(app)
+    assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_capture_runtime_shutdown_resets_same_app_lifespan(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    await initialize_clip_capture_runtime(app)
+    first_task = app.state.capture_maintenance_task
+    assert first_task is not None
+    source = app.state.config.cache_dir / "captures" / "live.mp3"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"private")
+    app.state.capture_records = {"live": _record("live", _CaptureState.READY, source_path=source)}
+    app.state.capture_rate = {"127.0.0.1": time.monotonic()}
+
+    await shutdown_clip_capture_runtime(app)
+
+    assert app.state.capture_maintenance_task is None
+    assert first_task.done()
+    assert app.state.capture_records == {}
+    assert app.state.capture_rate == {}
+    assert not source.exists()
+
+    await initialize_clip_capture_runtime(app)
+    second_task = app.state.capture_maintenance_task
+    assert second_task is not None
+    assert second_task is not first_task
+    assert not second_task.done()
+    await shutdown_clip_capture_runtime(app)
 
 
 def test_capture_timeline_ledger_and_snapshot_fail_closed(tmp_path: Path) -> None:
@@ -269,17 +337,16 @@ def test_capture_source_and_finalizer_are_atomic_and_fail_closed(tmp_path: Path,
     assert list(build.choices) == ["moment", "with_leadin", "with_followup"]
     assert build.chapters[0]["label"] == "Una frase"
 
-    generic = _build_capture_source(
-        _snapshot_with_marks(
-            data,
-            (SegmentMark(0, 0, len(data), "song", "music", "Song", "Band", "commercial_music"),),
-        ),
-        capture_id="b" * 43,
-        captures_dir=tmp_path / "captures",
-        station_name="Mamma Mi Radio",
-    )
-    assert list(generic.choices) == ["moment"]
-    assert generic.chapters == []
+    with pytest.raises(_CaptureNoAudioError):
+        _build_capture_source(
+            _snapshot_with_marks(
+                data,
+                (SegmentMark(0, 0, len(data), "song", "music", "Song", "Band", "commercial_music"),),
+            ),
+            capture_id="b" * 43,
+            captures_dir=tmp_path / "captures",
+            station_name="Mamma Mi Radio",
+        )
 
     short = _snapshot_with_marks(
         _mpeg1_l3_frames(100),
@@ -298,7 +365,7 @@ def test_capture_source_and_finalizer_are_atomic_and_fail_closed(tmp_path: Path,
     original_write_bytes = Path.write_bytes
 
     def fail_part_write(path: Path, value: bytes) -> int:
-        if path.name == f"{'e' * 43}.mp3.part":
+        if path.name == f".{'e' * 43}.decoder.mp3.part":
             raise OSError("disk full")
         return original_write_bytes(path, value)
 
@@ -323,8 +390,8 @@ def test_capture_source_and_finalizer_are_atomic_and_fail_closed(tmp_path: Path,
     sidecar = json.loads((tmp_path / "clips" / f"{result['clip_id']}.json").read_text())
     assert sidecar["clip_label"] == "Il momento"
 
-    invalid_choice = replace(build.choices["moment"], byte_end=build.source_path.stat().st_size + 1)
-    with pytest.raises(OSError):
+    invalid_choice = replace(build.choices["moment"], sample_count=build.choices["moment"].source_sample_count + 1)
+    with pytest.raises(ValueError):
         _finalize_capture_choice(build.source_path, invalid_choice, build.frozen_metadata, tmp_path / "clips")
 
     original_replace = __import__("os").replace
@@ -351,6 +418,34 @@ def test_capture_source_and_finalizer_are_atomic_and_fail_closed(tmp_path: Path,
     assert index.duration_sec > 0
 
 
+def test_frozen_choice_metadata_contains_only_intersecting_chapters(tmp_path: Path) -> None:
+    data = _mpeg1_l3_frames(2_000)
+    index = build_mpeg1_layer3_frame_index(data)
+    boundaries = [0, *(index.frames[offset].byte_start for offset in (500, 1_000, 1_500)), len(data)]
+    marks = tuple(
+        SegmentMark(0, boundaries[i], boundaries[i + 1], f"chapter-{i}", "banter", label, "Studio", "speech")
+        for i, label in enumerate(("Uno", "Due", "Tre", "Quattro"))
+    )
+    build = _build_capture_source(
+        _snapshot_with_marks(data, marks),
+        capture_id="m" * 43,
+        captures_dir=tmp_path / "captures",
+        station_name="Mamma Mi Radio",
+    )
+
+    moment = build.choices["moment"]
+    assert _capture_choice_is_share_safe(moment)
+    assert moment.chapter_summary == ("Tre", "Quattro")
+    assert moment.track_title == "Quattro"
+    assert build.chapters[-3:][0]["label"] == "Due"
+
+    result = _finalize_capture_choice(build.source_path, moment, build.frozen_metadata, tmp_path / "clips")
+    sidecar = json.loads((tmp_path / "clips" / f"{result['clip_id']}.json").read_text())
+    assert sidecar["chapter_summary"] == ["Tre", "Quattro"]
+    assert sidecar["track_title"] == "Quattro"
+    assert result["track_title"] == "Quattro"
+
+
 @pytest.mark.asyncio
 async def test_capture_expiry_respects_reader_leases_and_stop_invalidation(tmp_path: Path) -> None:
     app = _make_test_app()
@@ -370,7 +465,7 @@ async def test_capture_expiry_respects_reader_leases_and_stop_invalidation(tmp_p
             source_path=consumed_path,
             consumed_at=now - CAPTURE_COMMIT_GRACE_SECONDS - 1,
         ),
-        "claimed": _record("claimed", _CaptureState.CLAIMED, expires_in=-1),
+        "claimed": _record("claimed", _CaptureState.CLAIMED, expires_in=-1, active_writers=1),
     }
     app.state.capture_rate = {"stale": now - CAPTURE_RATE_PRUNE_SECONDS - 1, "fresh": now}
 
@@ -389,15 +484,18 @@ async def test_capture_expiry_respects_reader_leases_and_stop_invalidation(tmp_p
     assert "reader" not in app.state.capture_records
     assert not reader_path.exists()
 
-    # A station stop expires ready/creating capabilities but cannot steal a
-    # claimed finalizer or a prior, already-consumed share result.
+    # A station stop revokes every unfinished capability. A writer lease keeps
+    # a claimed source alive only until its in-flight renderer settles.
     ready = _record("ready", _CaptureState.READY, active_readers=1)
     creating = _record("new", _CaptureState.CREATING, active_readers=1)
     app.state.capture_records = {"ready": ready, "new": creating, "claimed": app.state.capture_records["claimed"]}
     await _invalidate_pending_captures(app)
     assert ready.state == _CaptureState.EXPIRED
     assert creating.state == _CaptureState.EXPIRED
-    assert app.state.capture_records["claimed"].state == _CaptureState.CLAIMED
+    assert app.state.capture_records["claimed"].state == _CaptureState.EXPIRED
+
+    await _settle_capture_claim(app, "claimed", "nonce-claimed", restore_ready=True)
+    assert "claimed" not in app.state.capture_records
 
 
 @pytest.mark.asyncio
@@ -457,6 +555,346 @@ async def test_capture_routes_refuse_unsafe_states_and_rollback_worker_failures(
 
 
 @pytest.mark.asyncio
+async def test_capture_range_errors_and_successes_always_release_reader_lease(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        capture = (await client.post("/api/clip/capture")).json()
+        record = app.state.capture_records[capture["capture_id"]]
+
+        malformed = await client.get(capture["audio_path"], headers={"Range": "bytes=not-a-range"})
+        assert malformed.status_code == 400
+        assert record.active_readers == 0
+
+        unsatisfiable = await client.get(capture["audio_path"], headers={"Range": "bytes=999999999-"})
+        assert unsatisfiable.status_code == 416
+        assert record.active_readers == 0
+
+        partial = await client.get(capture["audio_path"], headers={"Range": "bytes=0-9"})
+        assert partial.status_code == 206
+        assert len(partial.content) == 10
+        assert record.active_readers == 0
+
+        complete = await client.get(capture["audio_path"])
+        assert complete.status_code == 200
+        assert record.active_readers == 0
+
+
+@pytest.mark.asyncio
+async def test_capture_owner_quota_and_idempotent_release_preserve_global_capacity(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    _ensure_clip_capture_state(app)
+    owned_ids = [f"{index:043d}" for index in range(CAPTURE_MAX_RECORDS_PER_IP)]
+    for capture_id in owned_ids:
+        record = _record(capture_id, _CaptureState.READY)
+        record.owner_key = "127.0.0.1"
+        app.state.capture_records[capture_id] = record
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        limited = await client.post("/api/clip/capture")
+        assert limited.status_code == 429
+        assert limited.json()["reason"] == "owner_capacity"
+
+        released = await client.delete(f"/api/clip/capture/{owned_ids[0]}")
+        assert released.json() == {"ok": True, "released": True}
+        repeated = await client.delete(f"/api/clip/capture/{owned_ids[0]}")
+        assert repeated.json() == {"ok": True, "released": False}
+
+        admitted = await client.post("/api/clip/capture")
+        assert admitted.status_code == 201
+
+    other_transport = httpx.ASGITransport(app=app, client=("203.0.113.8", 12345))
+    async with httpx.AsyncClient(transport=other_transport, base_url="http://testserver") as other:
+        other_ip = await other.post("/api/clip/capture")
+    assert other_ip.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_capture_identity_ignores_forwarded_spoof_from_untrusted_peer(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    direct_ip = "203.0.113.50"
+    first_spoof = "198.51.100.10"
+    second_spoof = "198.51.100.11"
+    transport = httpx.ASGITransport(app=app, client=(direct_ip, 12345))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/clip/capture", headers={"X-Forwarded-For": first_spoof})
+        second = await client.post("/api/clip/capture", headers={"X-Forwarded-For": second_spoof})
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json()["reason"] == "rate_limited"
+    record = app.state.capture_records[first.json()["capture_id"]]
+    assert record.owner_key == direct_ip
+    public_text = first.text + second.text
+    assert all(identity not in public_text for identity in (direct_ip, first_spoof, second_spoof))
+
+
+@pytest.mark.asyncio
+async def test_capture_owner_quota_separates_forwarded_listeners_from_trusted_ha_proxy(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    _ensure_clip_capture_state(app)
+    owner_at_capacity = "198.51.100.21"
+    other_owner = "198.51.100.22"
+    for index in range(CAPTURE_MAX_RECORDS_PER_IP):
+        capture_id = f"{index:043d}"
+        record = _record(capture_id, _CaptureState.READY)
+        record.owner_key = owner_at_capacity
+        app.state.capture_records[capture_id] = record
+
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        limited = await client.post("/api/clip/capture", headers={"X-Forwarded-For": owner_at_capacity})
+        admitted = await client.post("/api/clip/capture", headers={"X-Forwarded-For": other_owner})
+
+    assert limited.status_code == 429
+    assert limited.json()["reason"] == "owner_capacity"
+    assert admitted.status_code == 201
+    admitted_record = app.state.capture_records[admitted.json()["capture_id"]]
+    assert admitted_record.owner_key == other_owner
+    public_text = limited.text + admitted.text
+    assert all(identity not in public_text for identity in (owner_at_capacity, other_owner))
+
+
+@pytest.mark.asyncio
+async def test_capture_identity_malformed_forwarded_header_falls_back_to_real_ip(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    real_ip = "198.51.100.77"
+    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
+    headers = {
+        "X-Forwarded-For": " , not-an-ip, 999.999.999.999",
+        "X-Real-IP": real_ip,
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = await client.post("/api/clip/capture", headers=headers)
+        second = await client.post("/api/clip/capture", headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json()["reason"] == "rate_limited"
+    record = app.state.capture_records[first.json()["capture_id"]]
+    assert record.owner_key == real_ip
+    assert app.state.capture_rate.keys() == {real_ip}
+    assert real_ip not in first.text + second.text
+
+
+@pytest.mark.asyncio
+async def test_capture_release_defers_unlink_for_reader_and_never_deletes_final_clip(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _ensure_clip_capture_state(app)
+    capture_id = "r" * 43
+    source = tmp_path / "capture.mp3"
+    source.write_bytes(b"private")
+    record = _record(capture_id, _CaptureState.READY, source_path=source, active_readers=1)
+    app.state.capture_records[capture_id] = record
+    final_clip = app.state.config.cache_dir / "clips" / "public.mp3"
+    final_clip.parent.mkdir(parents=True)
+    final_clip.write_bytes(b"public")
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        released = await client.delete(f"/api/clip/capture/{capture_id}")
+    assert released.json() == {"ok": True, "released": True}
+    assert record.state == _CaptureState.EXPIRED
+    assert source.exists()
+    assert final_clip.exists()
+
+    await _release_capture_reader(app, capture_id, record.nonce)
+    assert capture_id not in app.state.capture_records
+    assert not source.exists()
+    assert final_clip.exists()
+
+
+@pytest.mark.asyncio
+async def test_capture_commit_rechecks_choice_local_rights_before_claiming(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        capture = (await client.post("/api/clip/capture")).json()
+        record = app.state.capture_records[capture["capture_id"]]
+        record.choices["moment"] = replace(record.choices["moment"], audio_classes=("unknown",))
+        with patch("mammamiradio.web.streamer._finalize_capture_choice") as finalizer:
+            refused = await client.post(
+                "/api/clip/commit",
+                json={"capture_id": capture["capture_id"], "choice_id": "moment"},
+            )
+
+    assert refused.status_code == 403
+    assert refused.json() == {"ok": False, "reason": "share_not_allowed"}
+    assert record.state == _CaptureState.READY
+    finalizer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_release_during_capture_build_discards_late_source_without_refunding_rate_limit(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    original_builder = _build_capture_source
+    started = Event()
+    release_worker = Event()
+
+    def paused_builder(*args, **kwargs):
+        started.set()
+        assert release_worker.wait(timeout=2)
+        return original_builder(*args, **kwargs)
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        with patch("mammamiradio.web.streamer._build_capture_source", side_effect=paused_builder):
+            creating = asyncio.create_task(client.post("/api/clip/capture"))
+            await asyncio.wait_for(asyncio.to_thread(started.wait), timeout=2)
+            capture_id = next(iter(app.state.capture_records))
+            released = await client.delete(f"/api/clip/capture/{capture_id}")
+            assert released.json() == {"ok": True, "released": True}
+            release_worker.set()
+            response = await creating
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "capture_busy"
+    assert app.state.capture_records == {}
+    assert "127.0.0.1" in app.state.capture_rate
+    assert not list((app.state.config.cache_dir / "captures").glob("*"))
+
+
+@pytest.mark.asyncio
+async def test_capture_timeout_returns_before_worker_and_deletes_late_source(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    original_builder = _build_capture_source
+    started = Event()
+    release_worker = Event()
+    finished = Event()
+
+    def paused_builder(*args, **kwargs):
+        started.set()
+        assert release_worker.wait(timeout=2)
+        build = original_builder(*args, **kwargs)
+        finished.set()
+        return build
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        with (
+            patch("mammamiradio.web.streamer.CAPTURE_CREATE_TIMEOUT_SECONDS", 0.05),
+            patch("mammamiradio.web.streamer._build_capture_source", side_effect=paused_builder),
+        ):
+            response = await asyncio.wait_for(client.post("/api/clip/capture"), timeout=1)
+            assert started.is_set()
+            assert response.status_code == 503
+            assert response.json() == {"ok": False, "reason": "capture_busy", "retry_after": 3}
+            record = next(iter(app.state.capture_records.values()))
+            assert record.state == _CaptureState.DRAINING
+            assert app.state.capture_rate == {"127.0.0.1": record.created_monotonic}
+
+            release_worker.set()
+            assert await asyncio.wait_for(asyncio.to_thread(finished.wait, 1), timeout=2)
+            for _ in range(100):
+                if not app.state.capture_records:
+                    break
+                await asyncio.sleep(0.01)
+
+    assert app.state.capture_records == {}
+    assert app.state.capture_rate == {}
+    assert not list((app.state.config.cache_dir / "captures").glob("*"))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_commit_drains_renderer_and_restores_ready(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    started = Event()
+    release_renderer = Event()
+
+    def paused_renderer(*args, **kwargs):
+        started.set()
+        assert release_renderer.wait(timeout=2)
+        return _render_capture_choice(*args, **kwargs)
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        capture = (await client.post("/api/clip/capture")).json()
+        with patch("mammamiradio.web.streamer._render_capture_choice", side_effect=paused_renderer):
+            committing = asyncio.create_task(
+                client.post(
+                    "/api/clip/commit",
+                    json={"capture_id": capture["capture_id"], "choice_id": "moment"},
+                )
+            )
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=2)
+            committing.cancel()
+            await asyncio.sleep(0)
+            record = app.state.capture_records[capture["capture_id"]]
+            assert record.state == _CaptureState.CLAIMED
+            assert record.active_writers == 1
+            release_renderer.set()
+            with pytest.raises(asyncio.CancelledError):
+                await committing
+
+        record = app.state.capture_records[capture["capture_id"]]
+        assert record.state == _CaptureState.READY
+        assert record.active_writers == 0
+        assert record.claimed_choice_id is None
+        assert not list((app.state.config.cache_dir / "clips").glob("*.mp3"))
+
+        retried = await client.post(
+            "/api/clip/commit",
+            json={"capture_id": capture["capture_id"], "choice_id": "moment"},
+        )
+    assert retried.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_station_stop_revokes_claimed_capture_before_publication(tmp_path: Path) -> None:
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    started = Event()
+    release_renderer = Event()
+
+    def paused_renderer(*args, **kwargs):
+        started.set()
+        assert release_renderer.wait(timeout=2)
+        return _render_capture_choice(*args, **kwargs)
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        capture = (await client.post("/api/clip/capture")).json()
+        source_path = app.state.capture_records[capture["capture_id"]].source_path
+        with patch("mammamiradio.web.streamer._render_capture_choice", side_effect=paused_renderer):
+            committing = asyncio.create_task(
+                client.post(
+                    "/api/clip/commit",
+                    json={"capture_id": capture["capture_id"], "choice_id": "moment"},
+                )
+            )
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=2)
+            stopped = await client.post("/api/stop")
+            assert stopped.status_code == 200
+            record = app.state.capture_records[capture["capture_id"]]
+            assert record.state == _CaptureState.EXPIRED
+            assert record.active_writers == 1
+            assert source_path is not None and source_path.exists()
+            release_renderer.set()
+            committed = await committing
+
+    assert committed.status_code == 404
+    assert committed.json() == {"ok": False, "reason": "capture_expired"}
+    assert capture["capture_id"] not in app.state.capture_records
+    assert source_path is not None and not source_path.exists()
+    assert not list((app.state.config.cache_dir / "clips").glob("*.mp3"))
+
+
+@pytest.mark.asyncio
 async def test_capture_commit_write_retry_and_preview_share_race(tmp_path: Path) -> None:
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
@@ -512,3 +950,98 @@ async def test_capture_commit_write_retry_and_preview_share_race(tmp_path: Path)
         )
         assert retry.status_code == 200
         assert retry.json()["idempotent"] is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_and_moment_publications_share_one_serialized_fifty_file_cap(tmp_path: Path) -> None:
+    from mammamiradio.web import streamer as streamer_mod
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    for index in range(49):
+        (clips_dir / f"old-{index:02d}.mp3").write_bytes(b"old")
+        (clips_dir / f"old-{index:02d}.json").write_text("{}")
+    app.state.last_shareworthy_starter = {
+        "type": "starter",
+        "ended_monotonic": time.monotonic(),
+        "title": "Carefree",
+        "artist": "Kevin MacLeod",
+    }
+    streamer_mod._clip_rate.clear()
+    publication_guard = Lock()
+    active_publishers = 0
+    max_active_publishers = 0
+    real_publish = streamer_mod.publish_clip
+
+    def tracked_publish(*args, **kwargs):
+        nonlocal active_publishers, max_active_publishers
+        with publication_guard:
+            active_publishers += 1
+            max_active_publishers = max(max_active_publishers, active_publishers)
+        try:
+            time.sleep(0.05)
+            return real_publish(*args, **kwargs)
+        finally:
+            with publication_guard:
+                active_publishers -= 1
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        capture = (await client.post("/api/clip/capture")).json()
+        with (
+            patch("mammamiradio.web.streamer._read_validated_starter_share", return_value=b"starter-audio"),
+            patch("mammamiradio.web.streamer.publish_clip", side_effect=tracked_publish),
+        ):
+            moment_response, legacy_response = await asyncio.gather(
+                client.post(
+                    "/api/clip/commit",
+                    json={"capture_id": capture["capture_id"], "choice_id": "moment"},
+                ),
+                client.post("/api/clip"),
+            )
+
+    assert moment_response.status_code == 201
+    assert legacy_response.status_code == 200
+    assert max_active_publishers == 1
+    assert len(list(clips_dir.glob("*.mp3"))) == 50
+    assert len(list(clips_dir.glob("*.json"))) == 50
+    streamer_mod._clip_rate.clear()
+
+
+@pytest.mark.asyncio
+async def test_legacy_clip_read_finishing_after_stop_cannot_publish(tmp_path: Path) -> None:
+    from mammamiradio.web import streamer as streamer_mod
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    _seed_timeline(app)
+    app.state.last_shareworthy_starter = {
+        "type": "starter",
+        "ended_monotonic": time.monotonic(),
+        "title": "Carefree",
+        "artist": "Kevin MacLeod",
+    }
+    streamer_mod._clip_rate.clear()
+    started = Event()
+    release_reader = Event()
+
+    def paused_reader(_snapshot):
+        started.set()
+        assert release_reader.wait(timeout=2)
+        return b"complete-starter-audio"
+
+    async with httpx.AsyncClient(transport=_transport(app), base_url="http://testserver") as client:
+        with patch("mammamiradio.web.streamer._read_validated_starter_share", side_effect=paused_reader):
+            sharing = asyncio.create_task(client.post("/api/clip"))
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=2)
+            stopped = await client.post("/api/stop")
+            assert stopped.status_code == 200
+            release_reader.set()
+            response = await sharing
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "music_share_unavailable"
+    assert not list((app.state.config.cache_dir / "clips").glob("*.mp3"))
+    streamer_mod._clip_rate.clear()

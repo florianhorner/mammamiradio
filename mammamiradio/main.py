@@ -94,6 +94,7 @@ from mammamiradio.web.streamer import (
     initialize_clip_capture_runtime,
     router,
     run_playback_loop,
+    shutdown_clip_capture_runtime,
 )
 
 logging.basicConfig(
@@ -1110,6 +1111,7 @@ async def shutdown():
             tasks_to_cancel.append(_rh)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+    await shutdown_clip_capture_runtime(app)
     if hasattr(app.state, "jamendo_start_task"):
         app.state.jamendo_start_task = None
     jamendo_provider = getattr(app.state, "jamendo_provider", None)
