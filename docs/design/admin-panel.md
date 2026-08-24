@@ -71,11 +71,14 @@ a network error never leaves the console permanently compact.
 Below the console, a **tab bar** swaps a single **work area** — one panel visible
 at a time, choice persisted in `sessionStorage['adminTab']`:
 
+0. **First Listen** (gated — visible only while required or showing its one-time success)
+   — full onboarding takeover. After the success exit, the tab leaves the chrome; repair
+   and replay live in **Motore → Setup** and the setup strip.
 1. **Diretta** — `Modalità live` (Chaos/Festival/Super Italian toggles),
    `Azioni rapide` (fewer banter / fewer ads / reload / flag, plus a Lancia-red
    `Purge queue`), `Cadenza` (pacing sliders). The `Azioni immediate` triggers
    moved up into the console.
-2. **Scaletta** (default tab) — forward-only rundown of up to ~8 upcoming items,
+2. **Scaletta** (default tab after onboarding) — forward-only rundown of up to ~8 upcoming items,
    each with a compact relative label (`next` / `after` / `later`) + rough duration.
    Pending listener requests sit in a strip at the top and collapse when empty. No
    played history.

@@ -146,7 +146,7 @@ Then, in **First Listen** (the automatic fresh-install landing):
    station after the opening** only as supporting detail. Local music should be
    ready; charts and Jamendo are intentionally unavailable; recovery/demo audio
    must be described as a limitation rather than a music source.
-2. Mute the machine before confirming, select **Play the station**, then **Not
+2. Mute the machine before confirming, select **Start sound check**, then **Not
    yet**, and check that the repair guidance names this device's volume and mute
    and offers to try again here.
 3. Unmute, select **Try this device again**, and listen for the music bed,

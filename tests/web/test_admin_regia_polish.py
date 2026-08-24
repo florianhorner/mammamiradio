@@ -12,6 +12,7 @@ invariant suites (no browser). Real-browser flows are covered by /qa.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ADMIN_HTML = Path(__file__).resolve().parents[2] / "mammamiradio" / "web" / "templates" / "admin.html"
@@ -191,14 +192,20 @@ def test_golden_path_setup_strip_sits_between_console_and_tabs() -> None:
     assert 'data-tab="setup">First Listen' in html
     assert 'id="first-listen-panel" data-panel="setup"' in html
     assert 'aria-controls="first-listen-panel"' in html
+    assert 'body[data-first-listen-entry="complete"] #tab-setup' in html
 
 
-def test_seven_admin_tabs_keep_a_bounded_mobile_grid() -> None:
+def test_producer_desk_tabbar_has_seven_sections_with_setup_gated_after_onboarding() -> None:
     html = _html()
+    assert len(re.findall(r'<button\b[^>]*\bclass="[^"]*\bmmr-tab\b[^"]*"[^>]*\bdata-tab=', html)) == 7
     assert "grid-template-columns:repeat(4,minmax(0,1fr))" in html
     assert ".mmr-tab:last-child:nth-child(4n+3){grid-column:span 2" in html
     assert "grid-template-columns:repeat(2,minmax(0,1fr))" in html
     assert ".mmr-tab:last-child:nth-child(2n+1){grid-column:span 2" in html
+    completed = 'body:is([data-first-listen-entry="pending"],[data-first-listen-entry="complete"])'
+    assert f"{completed} :is(#tab-archivio,#tab-motore){{grid-column:span 2" in html
+    assert f"{completed} :is(#tab-diretta,#tab-conduttori,#tab-motore){{border-right:0" in html
+    assert f"{completed} :is(#tab-archivio,#tab-motore){{border-bottom:0" in html
 
 
 def test_setup_strip_renders_api_primary_action_not_static_dual_buttons() -> None:
@@ -285,7 +292,8 @@ def test_setup_auto_collapse_wired_into_render() -> None:
     assert "motoreSetupAutoCollapse(!needsAction&&_activeTab!=='setup')" in block
     assert "onboarding_steps" not in block[block.index("const needsAction") :]
     assert "alertDot.style.display=needsAction?'inline-block':'none'" in block
-    assert "tabAlert.style.display=needsAction?'inline-block':'none'" in block
+    assert "const show=needsAction&&document.body.dataset.firstListenEntry==='required'" in block
+    assert "tabAlert.style.display=show?'inline-block':'none'" in block
     assert "getElementById('firstListenTabAlert')" in block
     js = _js()
     assert "details.dataset.userPinned" in js, "manual pin must override auto-collapse"
@@ -530,7 +538,7 @@ def test_structural_italian_flair_preserved() -> None:
 def test_motore_runtime_groups_precede_first_listen_source_markup() -> None:
     html = _html()
     header = html[html.index("<h2>Motore</h2>") : html.index('id="pipelineStatus"')]
-    assert "pipeline · runtime · costi" in header
+    assert "Station health, runtime, costs, and settings." in header
     assert 'id="engineAlertDot"' in header
     pipeline = html.index('id="pipelineStatus"')
     status = html.index('id="eg-status-h"')
@@ -639,6 +647,21 @@ def test_admin_has_h1_with_brand_accent() -> None:
     assert '<h1 class="wm">' in html, "the brand wordmark must be the page <h1>."
     h1 = html[html.index('<h1 class="wm">') : html.index("</h1>")]
     assert 'class="mi"' in h1, "the gold Mi accent must live inside the <h1>."
+    assert html.count("<h1") == 1 and html.count("<h2") == 7
+    for hid in ("dg-modes-h", "dg-quick-h", "dg-pacing-h", "eg-status-h", "eg-costs-h", "eg-config-h"):
+        assert f'<h3 class="ttl-eyebrow" id="{hid}">' in html
+    technical = html[html.index('id="setupAdvancedDetails"') : html.index('id="setupCachedContextDiagnostics"')]
+    assert technical.count("<h4>") == 6 and "<h3>" not in technical
+    for copy in (
+        "Hear the station, confirm the sound, then choose privacy.",
+        "What is prepared to air next.",
+        "Live modes, pacing, and quick actions.",
+        "History and saved moments.",
+        "Station health, runtime, costs, and settings.",
+    ):
+        assert copy in html
+    for utility in ("AI writing", "Music sources", ">Costs<", ">Configuration<"):
+        assert utility in html
 
 
 def test_admin_tabs_use_aria_tab_pattern() -> None:

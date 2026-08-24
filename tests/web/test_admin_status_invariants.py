@@ -82,6 +82,23 @@ def test_status_helper_call_sites_use_canonical_literal_states() -> None:
     assert not unknown, f"Unknown status helper states in admin.html: {unknown}"
 
 
+def test_media_and_setup_statuses_have_one_css_owned_glyph() -> None:
+    html = _read_admin_html()
+    media = _function_block(html, "mediaSourceStatusChip")
+    jamendo = _function_block(html, "jamendoStatusChip")
+    strip = _function_block(html, "renderGuidedSetupStrip")
+    mapping = _function_block(html, "setupStripVisualState")
+
+    assert "chip.textContent=word" in media and ".shape" not in media
+    assert "return mediaSourceStatusChip(presentation.state)" in jamendo
+    assert "item.shape" not in strip
+    assert "setup-strip-chip status-inline ${state}" in strip
+    for expected in ("ready')return'ready", "checking')return'working", "not_configured')return'idle"):
+        assert expected in mapping
+    assert "state==='blocked'||state==='rejected')return'blocked'" in mapping
+    assert "return'degraded'" in mapping
+
+
 def test_record_hunt_card_has_phase_copy_and_wrapping_guard() -> None:
     html = _read_admin_html()
     block = _function_block(html, "updateHeadingBanner")
@@ -629,8 +646,8 @@ def test_system_health_rows_use_canonical_status_helpers() -> None:
     assert "else if(st?.session_stopped===true)" in update_systems
     assert "else if(st?.upcoming_mode==='building')" in update_systems
     assert update_systems.index("st?.session_stopped===true") < update_systems.index("st?.upcoming_mode==='building'")
-    assert "statusRow('Scrittura AI',aiState,aiLabel,aiDetail)" in update_systems
-    assert "statusRow('Fonti musica',musicState,musicLabel,musicDetail)" in update_systems
+    assert "statusRow('AI writing',aiState,aiLabel,aiDetail)" in update_systems
+    assert "statusRow('Music sources',musicState,musicLabel,musicDetail)" in update_systems
 
 
 def test_listener_request_statuses_map_to_canonical_states() -> None:

@@ -1395,6 +1395,17 @@ body[data-fader-down="true"] .on-air-progress-track .progress-fill {
   }
   .pl-a { grid-column: 2 / 4; grid-row: 3; width: auto; padding-left: 0; opacity: 1; }
   .pl-ban { grid-column: 4 / -1; grid-row: 3; justify-self: end; margin-left: 0; }
+  .sr-row { display:grid;grid-template-areas:"title" "actions";gap:6px;align-items:start; }
+  .sr-row > span:first-child { grid-area:title;display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2; }
+  .sr-add { grid-area:actions;justify-self:start;margin-left:0; }
+  .pl-row { grid-template-columns:44px 32px minmax(0,1fr); }
+  .pl-grip { display:none; }
+  .pl-art,.pl-art-empty { grid-column:2; }
+  .pl-t { grid-column:3;display:-webkit-box;white-space:normal;-webkit-box-orient:vertical;-webkit-line-clamp:2; }
+  .pl-meta { grid-column:1/-1; }
+  .pl-a { grid-column:1/3;width:100%; }
+  .pl-ban { grid-column:3/-1;justify-self:stretch; }
+  #plBody { max-height:none;overflow:visible;padding-right:0; }
   .pl-btn, .sr-add { min-height: 44px; }
   .undo-stack {
     left: 12px;
@@ -1698,7 +1709,7 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
-.drawer-subgroup > .ttl-eyebrow { display: block; margin-bottom: 10px; }
+.drawer-subgroup > .ttl-eyebrow { display: block; margin: 0 0 10px; }
 /* #E8A29B, not --lancia2: as a label on the chip's own translucent backing the
    brand red measured 2.8:1, under AA for text and under 3:1 for the border.
    This is the lifted red the sibling danger controls already use — .btn-ban
@@ -1832,8 +1843,9 @@ body[data-sticky-onair="true"] .producer-sticky-strip {
 .mmr-tabpanel{display:none}
 .mmr-tabpanel.is-active{display:block}
 .mmr-tabpanel:focus-visible{outline:none;box-shadow:inset 0 0 0 2px rgba(244,208,72,0.38),inset 0 1px 0 rgba(245,237,216,0.06),0 8px 24px -12px rgba(0,0,0,0.55)}
-/* First Listen is a primary first-run surface, not a diagnostic buried in
-   Motore. The live console stays out of the way while this tab is active. */
+/* First Listen is a gated first-run phase, not a permanent producer tab.
+   While required it owns the work area; after completion repair lives in
+   Motore → Setup and the tab leaves the chrome. */
 body[data-active-admin-tab="setup"] .mmr-console,
 body[data-active-admin-tab="setup"] .setup-strip{display:none!important}
 body[data-first-listen-entry="required"]:not([data-active-admin-tab]) .mmr-console,
@@ -1843,6 +1855,10 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) .mmr-tabpa
 body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-scaletta::after{display:none}
 body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup{color:var(--cream)}
 body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--sun);border-radius:2px}
+body[data-first-listen-entry="pending"] #tab-setup,
+body[data-first-listen-entry="complete"] #tab-setup,
+body[data-first-listen-entry="pending"] #first-listen-panel,
+body[data-first-listen-entry="complete"] #first-listen-panel{display:none!important}
 /* One header per panel */
 .mmr-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
 .a-panel header.mmr-panel-head-stacked{display:grid;grid-template-columns:1fr;gap:10px}
@@ -1874,6 +1890,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
   .mmr-tab:nth-child(4n){border-right:0}
   .mmr-tab:nth-child(n+5){border-bottom:0}
   .mmr-tab:last-child:nth-child(4n+3){grid-column:span 2;border-right:0}
+  body:is([data-first-listen-entry="pending"],[data-first-listen-entry="complete"]) .mmr-tab:not([hidden]){grid-column:auto;border-right:1px solid var(--line-strong);border-bottom:1px solid var(--line-strong)}
+  body:is([data-first-listen-entry="pending"],[data-first-listen-entry="complete"]) :is(#tab-archivio,#tab-motore){grid-column:span 2;border-bottom:0}
+  body:is([data-first-listen-entry="pending"],[data-first-listen-entry="complete"]) :is(#tab-conduttori,#tab-motore){border-right:0}
   .mmr-tab.is-active::after{left:10px;right:10px}
 }
 @media (max-width:520px){
@@ -1882,6 +1901,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
   .mmr-tab:nth-child(2n){border-right:0}
   .mmr-tab:nth-child(n+7){border-bottom:0}
   .mmr-tab:last-child:nth-child(2n+1){grid-column:span 2;border-right:0}
+  body:is([data-first-listen-entry="pending"],[data-first-listen-entry="complete"]) .mmr-tab:not([hidden]){grid-column:auto;border-right:1px solid var(--line-strong);border-bottom:1px solid var(--line-strong)}
+  body:is([data-first-listen-entry="pending"],[data-first-listen-entry="complete"]) :is(#tab-diretta,#tab-conduttori,#tab-motore){border-right:0}
+  body:is([data-first-listen-entry="pending"],[data-first-listen-entry="complete"]) :is(#tab-archivio,#tab-motore){border-bottom:0}
 }
 </style>
 <link rel="stylesheet" href="/static/first-listen.css">
@@ -2055,14 +2077,14 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
     <div class="mmr-tabpanels">
 
-    <!-- First Listen is mounted here once, using the same Setup DOM that
-         remains available for replay and repair after onboarding. -->
+    <!-- First Listen mounts the shared Setup DOM here only while entry is
+         required. After onboarding, Setup stays under Motore for repair. -->
     <section class="a-panel producer-zone mmr-tabpanel first-listen-panel" id="first-listen-panel" data-panel="setup" role="tabpanel" aria-labelledby="tab-setup" tabindex="0">
       <header class="mmr-panel-head">
         <div>
           <div class="ttl-eyebrow">First Listen</div>
           <h2>Hear Mamma Mi Radio, right here.</h2>
-          <div class="sub">Start with a real opening show. Then decide how much more personal the station should become.</div>
+          <div class="sub">Hear the station, confirm the sound, then choose privacy.</div>
         </div>
       </header>
       <div id="firstListenPanelMount"></div>
@@ -2072,6 +2094,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
     <section class="a-panel producer-zone mmr-tabpanel is-active" id="live-queue" data-panel="scaletta" role="tabpanel" aria-labelledby="tab-scaletta" tabindex="0">
       <header class="mmr-panel-head mmr-panel-head-stacked">
         <h2>Scaletta</h2>
+        <div class="sub">What is prepared to air next.</div>
         <div class="programme-toolbar">
           <div class="programme-runway" id="programmeRunway" role="status" aria-live="polite" hidden>
             <span class="programme-runway-primary" id="programmeAhead"></span>
@@ -2103,7 +2126,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
       <div class="music-sources" aria-label="Music sources">
         <div class="music-source-row" id="jamendoSourceRow" data-state="idle">
           <div class="music-source-copy">
-            <div class="music-source-title"><span id="jamendoSourceChip"><span class="status-chip idle" aria-label="status: idle"><span class="shape" aria-hidden="true">○</span>idle</span></span><span id="jamendoSourceLabel">Jamendo off</span></div>
+            <div class="music-source-title"><span id="jamendoSourceChip"><span class="status-chip idle" aria-label="status: idle">idle</span></span><span id="jamendoSourceLabel">Jamendo off</span></div>
             <div class="music-source-detail" id="jamendoSourceDetail">Starter and local music continue.</div>
           </div>
           <div class="music-source-actions" id="jamendoSourceActions"></div>
@@ -2112,7 +2135,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
         <div id="jamendoStateAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
         <div class="music-source-row" id="starterSourceRow" data-state="blocked">
           <div class="music-source-copy">
-            <div class="music-source-title"><span id="starterSourceChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span><span id="starterSourceLabel">Starter collection unavailable</span></div>
+            <div class="music-source-title"><span id="starterSourceChip"><span class="status-chip blocked" aria-label="status: blocked">blocked</span></span><span id="starterSourceLabel">Starter collection unavailable</span></div>
             <div class="music-source-detail" id="starterSourceDetail">The verified twelve-track package is not available.</div>
           </div>
         </div>
@@ -2182,12 +2205,12 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
     <!-- Diretta zone -->
     <section class="a-panel producer-zone mmr-tabpanel" id="drawer-steer" data-panel="diretta" role="tabpanel" aria-labelledby="tab-diretta" tabindex="0">
-      <header class="mmr-panel-head"><h2>Diretta</h2><div class="sub">cadenza · modalità · azioni</div></header>
+      <header class="mmr-panel-head"><h2>Diretta</h2><div class="sub">Live modes, pacing, and quick actions.</div></header>
     <section class="drawer-section" id="triggers">
 
       <!-- Subgroup 1: Modalità live -->
       <div class="drawer-subgroup" role="group" aria-labelledby="dg-modes-h">
-        <div class="ttl-eyebrow" id="dg-modes-h">Modalità live</div>
+        <h3 class="ttl-eyebrow" id="dg-modes-h">Modalità live</h3>
         <div class="chaos-control" id="chaosControl">
           <div class="chaos-label">
             <span class="chaos-bolt" aria-hidden="true">&#9889;</span>
@@ -2229,7 +2252,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
       <!-- Subgroup 3: Azioni rapide -->
       <div class="drawer-subgroup" role="group" aria-labelledby="dg-quick-h">
-        <div class="ttl-eyebrow" id="dg-quick-h">Azioni rapide</div>
+        <h3 class="ttl-eyebrow" id="dg-quick-h">Azioni rapide</h3>
         <div class="quick-actions">
           <button type="button" class="btn btn-chip" onclick="doQuickAction('less_banter',this)"><svg class="ic" aria-hidden="true"><use href="#ic-mic-off"/></svg> Fewer banter</button>
           <button type="button" class="btn btn-chip" onclick="doQuickAction('too_many_ads',this)"><svg class="ic" aria-hidden="true"><use href="#ic-ban"/></svg> Fewer ads</button>
@@ -2247,7 +2270,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
       <!-- Subgroup 4: Cadenza -->
       <div class="drawer-subgroup" role="group" aria-labelledby="dg-pacing-h" id="pacing">
-        <div class="ttl-eyebrow" id="dg-pacing-h">Cadenza</div>
+        <h3 class="ttl-eyebrow" id="dg-pacing-h">Cadenza</h3>
         <div class="sub" id="pacingMeta">Banter every 2 tracks</div>
         <div class="a-sliders">
           <label>
@@ -2289,7 +2312,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
     <section class="drawer-section" id="log">
       <header class="mmr-panel-head">
         <h2>Archivio</h2>
-        <div class="sub">History</div>
+        <div class="sub">History and saved moments.</div>
       </header>
       <div class="archivio-controls">
         <input type="search" class="search-input" id="logSearch" placeholder="Search archive…" autocomplete="off" aria-label="Search archive" oninput="onArchivioFilterChange()">
@@ -2315,7 +2338,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
     <!-- Motore zone -->
     <section class="a-panel producer-zone mmr-tabpanel" id="drawer-diagnostics" data-panel="motore" role="tabpanel" aria-labelledby="tab-motore" tabindex="0">
-      <header class="mmr-panel-head"><h2>Motore</h2><div class="sub">pipeline · runtime · costi <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></div></header>
+      <header class="mmr-panel-head"><h2>Motore</h2><div class="sub">Station health, runtime, costs, and settings. <span class="tab-alert" aria-hidden="true" id="engineAlertDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--warning);vertical-align:middle"></span></div></header>
           <div class="card-label">Pipeline</div>
           <div id="pipelineStatus" style="margin-bottom:14px"></div>
 
@@ -2325,7 +2348,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
         <!-- Group 1: Status -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-status-h">
-          <div class="ttl-eyebrow" id="eg-status-h">Status</div>
+          <h3 class="ttl-eyebrow" id="eg-status-h">Status</h3>
 
           <div class="card-label">Systems</div>
           <div class="status-stack" id="systemsBody" style="margin-bottom:14px"><div class="empty">Checking AI and music systems...</div></div>
@@ -2349,7 +2372,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
         <!-- Group 2: Costi (token cost counter lives here — protected element) -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-costs-h">
-          <div class="ttl-eyebrow" id="eg-costs-h">Costi</div>
+          <h3 class="ttl-eyebrow" id="eg-costs-h">Costs</h3>
 
           <div class="card-label">Execution</div>
           <div id="engineRuntime" style="font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--cream-dk);margin-bottom:14px">Loading...</div>
@@ -2363,7 +2386,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
 
         <!-- Station configuration (below runtime diagnosis, above collapsible Setup) -->
         <div class="drawer-subgroup" role="group" aria-labelledby="eg-config-h">
-          <div class="ttl-eyebrow" id="eg-config-h">Configurazione</div>
+          <h3 class="ttl-eyebrow" id="eg-config-h">Configuration</h3>
 
           <div class="card-label">AI Quality</div>
           <div style="margin-bottom:14px">
@@ -2395,7 +2418,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
           </div>
         </div>
 
-        <!-- Group 3: Setup (collapsible — auto-collapses when all-ready) -->
+        <!-- Group 3: Setup (collapsible — auto-collapses when all-ready). The
+             stable styling boundary moves with Setup during onboarding. -->
+        <div class="first-listen-panel first-listen-context" id="firstListenSetupContext">
         <details class="drawer-subgroup setup-group" role="group" aria-labelledby="eg-setup-h" id="setupGroup">
           <summary class="setup-summary">
             <span class="ttl-eyebrow" id="eg-setup-h">Setup</span>
@@ -2411,9 +2436,9 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             <section class="first-listen-surface" id="journeySurface" aria-labelledby="firstListenShowTitle" data-current-step="1">
               <header class="first-listen-opening" id="firstListenShowCard">
                 <p class="opening-kicker" id="firstListenShowKicker">First Listen: Marco + Giulia</p>
-                <h2 class="first-listen-opening-title" id="firstListenShowTitle" tabindex="-1">Hear Mamma Mi Radio right here.</h2>
+                <h3 class="first-listen-opening-title" id="firstListenShowTitle" tabindex="-1">Hear Mamma Mi Radio right here.</h3>
                 <div class="program-strip">
-                  <span class="program-mark" aria-hidden="true">Mi</span>
+                  <span class="program-mark" aria-hidden="true"><img src="/static/favicon.svg" alt="" aria-hidden="true"></span>
                   <div>
                     <span class="program-label" id="firstListenShowNextLabel">What you get</span>
                     <p class="first-listen-opening-copy" id="firstListenShowCopy">Marco and Giulia welcome you, then live radio begins.</p>
@@ -2422,11 +2447,11 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   </div>
                 </div>
                 <div class="guide-audio" data-guide="welcome">
-                  <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Hear Marco and Giulia</button>
+                    <button type="button" class="guide-audio-play" data-guide-key="welcome" aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide('welcome',this)">Preview 16-second welcome</button>
                     <p class="guide-audio-copy" id="guideWelcomeNote"><strong>16 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
                   <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. <strong>Giulia:</strong> Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.</p></details>
                 </div>
-                <p class="progress-line" id="firstListenProgressLine">Step 1 of 5. Next: play it on this device.</p>
+                <p class="progress-line" id="firstListenProgressLine">Step 1 of 4. Next: play it on this device.</p>
               </header>
 
               <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
@@ -2436,7 +2461,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <h3 class="first-listen-heading" id="firstListenSourceHeading" tabindex="-1">Meet Marco and Giulia</h3>
                   <span class="status-chip working" id="firstListenSourceChip" aria-label="Source status: checking">Checking</span>
                   <div class="first-listen-summary" id="firstListenSourceSummary">The welcome is ready. We’re checking that music can continue afterward.</div>
-                  <button type="button" class="first-listen-review" data-review-step="source" aria-expanded="false" aria-controls="firstListenSourceBody" onclick="toggleFirstListenReview('source',this)" hidden>Review</button>
+                  <button type="button" class="first-listen-review" data-review-step="source" aria-expanded="false" aria-controls="firstListenSourceBody" onclick="toggleFirstListenReview('source',this)" hidden>Review opening</button>
                 </div>
                 <div class="first-listen-body" id="firstListenSourceBody" role="region" aria-labelledby="firstListenSourceHeading" aria-hidden="false">
                   <h4 class="benefit-heading">Hear the full Mamma Mi Radio opening.</h4>
@@ -2454,14 +2479,14 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <h3 class="first-listen-heading" id="firstListenSpeakerHeading" tabindex="-1">Play it on this device</h3>
                   <span class="status-chip idle" id="firstListenSpeakerChip" aria-label="Playback status: waiting" hidden>Waiting</span>
                   <div class="first-listen-summary" id="firstListenSpeakerSummary">The station plays right here, on whatever you are reading this on.</div>
-                  <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review</button>
+                  <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review playback</button>
                 </div>
                 <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 2 of 5</strong><span>Next: check the sound</span></div>
+                  <div class="first-listen-current-meta"><strong>Step 2 of 4</strong><span>Next: check the sound</span></div>
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
                   <p class="use-copy">The station plays on this device. You choose headphones, Bluetooth, or the speaker.</p>
                   <div class="first-listen-actions" style="margin-top:0">
-                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)">Play the station</button>
+                    <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)">Start sound check</button>
                   </div>
                   <div class="setup-note" id="firstListenSpeakerHelp">A new play starts a new sound check.</div>
                   <div class="first-listen-status" id="firstListenSpeakerStatus" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -2474,10 +2499,10 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <h3 class="first-listen-heading" id="firstListenVerifyHeading" tabindex="-1">Check the sound</h3>
                   <span class="status-chip idle" id="firstListenVerifyChip" aria-label="Listening check: waiting" hidden>Waiting</span>
                   <div class="first-listen-summary" id="firstListenVerifySummary">Tell us when you hear the station on this device.</div>
-                  <button type="button" class="first-listen-review" data-review-step="verify" aria-expanded="false" aria-controls="firstListenVerifyBody" onclick="toggleFirstListenReview('verify',this)" hidden>Review</button>
+                  <button type="button" class="first-listen-review" data-review-step="verify" aria-expanded="false" aria-controls="firstListenVerifyBody" onclick="toggleFirstListenReview('verify',this)" hidden>Review sound check</button>
                 </div>
                 <div class="first-listen-body" id="firstListenVerifyBody" role="region" aria-labelledby="firstListenVerifyHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 3 of 5</strong><span>Next: choose whether the hosts can use Home details</span></div>
+                  <div class="first-listen-current-meta"><strong>Step 3 of 4</strong><span>Next: choose whether the hosts can use Home details</span></div>
                   <h4 class="benefit-heading">Can you hear Marco and Giulia?</h4>
                   <div class="semantic-visual evidence-line" aria-label="Station playback and human sound check">
                     <div class="evidence-stage"><span class="evidence-icon" aria-hidden="true">✓</span><strong>Sent</strong><span id="firstListenEvidenceSpeaker">This device</span></div>
@@ -2532,10 +2557,10 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   <h3 class="first-listen-heading" id="firstListenPrivacyHeading" tabindex="-1">Choose whether the hosts can use Home details</h3>
                   <span class="status-chip idle" id="firstListenPrivacyChip" aria-label="Home context: waiting" hidden>Off</span>
                   <div class="first-listen-summary" id="firstListenPrivacySummary">We won’t request Home details unless you ask for a preview.</div>
-                  <button type="button" class="first-listen-review" data-review-step="privacy" aria-expanded="false" aria-controls="firstListenPrivacyBody" onclick="toggleFirstListenReview('privacy',this)" hidden>Review</button>
+                  <button type="button" class="first-listen-review" data-review-step="privacy" aria-expanded="false" aria-controls="firstListenPrivacyBody" onclick="toggleFirstListenReview('privacy',this)" hidden>Review privacy choice</button>
                 </div>
                 <div class="first-listen-body" id="firstListenPrivacyBody" role="region" aria-labelledby="firstListenPrivacyHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 4 of 5</strong><span>Next: optional new conversations</span></div>
+                  <div class="first-listen-current-meta"><strong>Step 4 of 4</strong><span>Last required step</span></div>
                     <div class="first-listen-lock" id="firstListenPrivacyLock"><span class="first-listen-lock-shape" aria-hidden="true">○</span>Confirm that you heard the station first.</div>
                   <div class="setup-home-preview-section" id="homeContextPreviewSection">
                     <h4 class="benefit-heading">The hosts can mention weather or an active timer.</h4>
@@ -2561,16 +2586,19 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                 </div>
               </section>
 
+              </div>
+
+              <section class="first-listen-optional" id="firstListenOptional" aria-labelledby="firstListenOptionalHeading">
+              <h3 class="first-listen-optional-heading" id="firstListenOptionalHeading">Optional enhancement</h3>
               <section class="first-listen-step" id="firstListenAiStep" data-state="optional" aria-labelledby="firstListenAiHeading">
                 <div class="first-listen-head">
-                  <span class="first-listen-number" aria-hidden="true">5</span>
-                  <h3 class="first-listen-heading" id="firstListenAiHeading" tabindex="-1">Add new conversations between songs</h3>
+                  <h4 class="first-listen-heading" id="firstListenAiHeading" tabindex="-1">Add new conversations between songs</h4>
                   <span class="status-chip idle" id="firstListenAiChip" aria-label="AI hosts: optional" hidden>Optional</span>
                   <div class="first-listen-summary" id="firstListenAiSummary">You can add new host conversations later.</div>
                   <button type="button" class="first-listen-review" data-review-step="ai" aria-expanded="false" aria-controls="firstListenAiBody" onclick="toggleFirstListenOptional('ai',this)">Set up new conversations</button>
                 </div>
                 <div class="first-listen-body" id="firstListenAiBody" role="region" aria-labelledby="firstListenAiHeading" hidden aria-hidden="true" inert>
-                  <h4 class="benefit-heading">Marco and Giulia can create new conversations between songs.</h4>
+                  <p class="benefit-heading">Marco and Giulia can create new conversations between songs.</p>
                   <div class="semantic-visual included-extra">
                     <div><span class="visual-label">Included now</span><strong>Welcome and live radio</strong><span>No AI key needed.</span></div>
                     <span aria-hidden="true">+</span>
@@ -2620,17 +2648,17 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                   </fieldset>
                 </div>
               </section>
-              </div>
+              </section>
 
               <details class="setup-advanced technical-details" id="setupAdvancedDetails">
                 <summary>Technical details and help</summary>
                 <div class="technical-body" aria-hidden="true" inert>
-                  <section class="technical-group technical-group-wide"><h3>Music after the welcome</h3><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
-                  <section class="technical-group"><h3>Exact Home Assistant source</h3><p><code>media-source://mammamiradio/live</code></p><p>Exactly one selected <code>media_player</code>. No automatic room choice or volume change.</p></section>
-                  <section class="technical-group"><h3>Identity</h3><div class="setup-list" id="setupIdentity"></div></section>
-                  <section class="technical-group"><h3>Original setup evidence</h3><ul class="setup-steps" id="setupSteps"></ul></section>
-                  <section class="technical-group"><h3>First Listen timing</h3><p id="firstListenTiming">Measured in this browser after this device starts the station. No telemetry leaves this browser.</p></section>
-                  <section class="technical-group technical-group-wide"><h3>Requirements</h3><div class="setup-list" id="setupEssentials"></div><div class="setup-list" id="setupChecks"></div></section>
+                  <section class="technical-group technical-group-wide"><h4>Music after the welcome</h4><div class="first-listen-source-list" id="firstListenSources"><div class="empty">Checking what can play…</div></div></section>
+                  <section class="technical-group"><h4>Exact Home Assistant source</h4><p><code>media-source://mammamiradio/live</code></p><p>Exactly one selected <code>media_player</code>. No automatic room choice or volume change.</p></section>
+                  <section class="technical-group"><h4>Identity</h4><div class="setup-list" id="setupIdentity"></div></section>
+                  <section class="technical-group"><h4>Original setup evidence</h4><ul class="setup-steps" id="setupSteps"></ul></section>
+                  <section class="technical-group"><h4>First Listen timing</h4><p id="firstListenTiming">Measured in this browser after this device starts the station. No telemetry leaves this browser.</p></section>
+                  <section class="technical-group technical-group-wide"><h4>Requirements</h4><div class="setup-list" id="setupEssentials"></div><div class="setup-list" id="setupChecks"></div></section>
                   <details class="setup-advanced" id="setupCachedContextDiagnostics">
                     <summary>Cached Home context diagnostics</summary>
                     <div class="setup-note">This view may be old and cannot unlock Home context.</div>
@@ -2659,10 +2687,10 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
               </div>
               <div class="success-content">
                 <p class="success-kicker">Bravo! Your first broadcast is complete.</p>
-                <h2 id="firstListenSuccessTitle" tabindex="-1">Your station is on air.</h2>
+                <h3 id="firstListenSuccessTitle" tabindex="-1">Your station is on air.</h3>
                 <p class="success-copy" id="firstListenSuccessCopy">You heard Marco and Giulia, and your privacy choice is saved.</p>
                 <div class="success-receipt" aria-label="Saved First Listen choices"><div><span>Heard on</span><strong id="firstListenSuccessSpeaker">This device</strong></div><div><span>Home choice</span><strong id="firstListenSuccessPrivacy">Home stays private</strong></div></div>
-                <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openListener()">Open full listener</button><button type="button" class="btn btn-util first-listen-action" onclick="openFirstListenStation()">Station controls</button><button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Repair music source</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
+                <div class="success-actions"><button type="button" class="btn btn-trigger first-listen-action" onclick="openFirstListenListener()">Open full listener</button><button type="button" class="btn btn-util first-listen-action" onclick="openFirstListenStation()">Station controls</button><button type="button" class="btn btn-util first-listen-action" id="firstListenSuccessRepair" onclick="openSetupPanel('source')" hidden>Repair music source</button><button type="button" class="btn btn-util first-listen-action" onclick="reviewFirstListenChoices()">Review choices</button></div>
                 <div class="guide-audio" data-guide="success">
                   <button type="button" class="guide-audio-play" data-guide-key="success" aria-describedby="guideSuccessNote" onclick="toggleFirstListenGuide('success',this)">Play the celebration</button>
                   <p class="guide-audio-copy" id="guideSuccessNote"><strong>11 seconds on this device</strong><span>This celebration plays only on this device.</span></p>
@@ -2680,7 +2708,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
                     <div class="music-source-title" id="starterSetupLabel">Starter collection unavailable</div>
                     <div class="music-source-detail" id="starterSetupDetail">The verified twelve-track package is not available.</div>
                   </div>
-                  <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked"><span class="shape" aria-hidden="true">✗</span>blocked</span></span>
+                  <span id="starterSetupChip"><span class="status-chip blocked" aria-label="status: blocked">blocked</span></span>
                 </div>
               </div>
               <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
@@ -2712,6 +2740,7 @@ body[data-first-listen-entry="required"]:not([data-active-admin-tab]) #tab-setup
             </section>
           </div>
         </details>
+        </div>
 
       </div>
     </section>
@@ -3283,8 +3312,26 @@ function toggleAccordion(head){
 function toggleSection(head){head.classList.toggle('open');head.nextElementSibling.classList.toggle('open')}
 
 let _activeTab='scaletta';
-let _adminTabs=[],_adminPanels=[],_adminTabUserInteracted=false,_firstListenLandingResolved=false;
+let _adminTabs=[],_adminPanels=[],_adminTabUserInteracted=false,_firstListenLandingResolved=false,_setupGroupHome=null;
+function adminTabsForNav(){
+  return _adminTabs.filter(t=>!t.hidden);
+}
+function finalizeFirstListenCompletion(){
+  if(document.body.dataset.firstListenEntry!=='completing')return false;
+  _firstListenUi.showSuccess=false;
+  stopFirstListenGuide();
+  stopFirstListenStationAudio();
+  updateFirstListenSuccess();
+  document.body.dataset.firstListenEntry='complete';
+  syncFirstListenSetupMount();
+  return true;
+}
 function showAdminTab(name,{render=true,persist=true}={}){
+  const setupContext=document.getElementById('firstListenSetupContext');
+  const setupTab=document.getElementById('tab-setup'),setupPanel=document.getElementById('first-listen-panel');
+  const restoreFocus=name!=='setup'&&_activeTab==='setup'&&(setupContext?.contains(document.activeElement)||document.activeElement===setupTab||document.activeElement===setupPanel);
+  if(name!=='setup')finalizeFirstListenCompletion();
+  if(name==='setup'&&!['required','completing'].includes(document.body.dataset.firstListenEntry))name='motore';
   if(!_adminPanels.some(p=>p.dataset.panel===name))name='scaletta';
   _activeTab=name;
   document.body.dataset.activeAdminTab=name;
@@ -3293,7 +3340,8 @@ function showAdminTab(name,{render=true,persist=true}={}){
   if(name==='setup'){
     const details=document.getElementById('setupGroup');
     if(details)details.open=true;
-  }else{
+  }
+  if(name!=='setup'){
     stopFirstListenGuide();
     // The hidden First Listen element holds its own hub subscription. Any
     // tab away from Setup must release it, or it plays on indefinitely as a
@@ -3310,14 +3358,28 @@ function showAdminTab(name,{render=true,persist=true}={}){
   // operator keeps or removes one, so they are fetched on arrival rather than
   // every three seconds.
   if(name==='archivio')refreshKeptMoments();
+  if(restoreFocus)document.getElementById(`tab-${name}`)?.focus({preventScroll:true});
 }
-function initFirstListenPanelMount(){
-  const mount=document.getElementById('firstListenPanelMount');
+function syncFirstListenSetupMount(){
   const details=document.getElementById('setupGroup');
-  if(mount&&details&&details.parentElement!==mount)mount.append(details);
+  const context=document.getElementById('firstListenSetupContext');
+  const mount=document.getElementById('firstListenPanelMount');
+  if(!details||!context)return;
+  if(!_setupGroupHome)_setupGroupHome=context.parentElement;
+  const entry=document.body.dataset.firstListenEntry;
+  const required=entry==='required';
+  const guided=required||entry==='completing';
+  const target=(guided&&mount)?mount:_setupGroupHome;
+  if(target&&context.parentElement!==target)target.appendChild(context);
+  const tab=document.getElementById('tab-setup');
+  if(tab){
+    const hide=!guided;
+    tab.hidden=hide;
+    tab.setAttribute('aria-hidden',hide?'true':'false');
+  }
 }
 function initTabs(){
-  initFirstListenPanelMount();
+  syncFirstListenSetupMount();
   _adminTabs=Array.from(document.querySelectorAll('.mmr-tab[data-tab]'));
   _adminPanels=Array.from(document.querySelectorAll('.mmr-tabpanel[data-panel]'));
   _adminTabs.forEach(t=>t.addEventListener('click',()=>{
@@ -3329,19 +3391,23 @@ function initTabs(){
     const keys=['ArrowRight','ArrowLeft','Home','End'];
     if(!keys.includes(e.key))return;
     e.preventDefault();
-    let j=_adminTabs.findIndex(t=>t.classList.contains('is-active'));
+    const tabs=adminTabsForNav();
+    let j=tabs.findIndex(t=>t.classList.contains('is-active'));
     if(j<0)j=0;
-    if(e.key==='ArrowRight')j=(j+1)%_adminTabs.length;
-    else if(e.key==='ArrowLeft')j=(j-1+_adminTabs.length)%_adminTabs.length;
+    if(e.key==='ArrowRight')j=(j+1)%tabs.length;
+    else if(e.key==='ArrowLeft')j=(j-1+tabs.length)%tabs.length;
     else if(e.key==='Home')j=0;
-    else j=_adminTabs.length-1;
-    const next=_adminTabs[j];
+    else j=tabs.length-1;
+    const next=tabs[j];
     if(next){_adminTabUserInteracted=true;showAdminTab(next.dataset.tab,{render:true,persist:true});next.focus();}
   });}
   const entry=document.body.dataset.firstListenEntry||'pending';
   let initTab='scaletta';
   if(entry==='required')initTab='setup';
-  else try{initTab=sessionStorage.getItem('adminTab')||'scaletta';}catch(_){}
+  else try{
+    initTab=sessionStorage.getItem('adminTab')||'scaletta';
+    if(initTab==='setup')initTab='scaletta';
+  }catch(_){}
   _firstListenLandingResolved=entry!=='pending';
   showAdminTab(initTab,{render:false,persist:false});
   // Once the operator manually toggles the Setup group, stop auto-collapsing it.
@@ -3648,7 +3714,7 @@ async function doPurge(el){
 const STOP_FAILURE_COPY="We couldn't pause the station. Give the studio a few seconds, then press Stop again.";
 const RESUME_FAILURE_COPY="We couldn't resume the station. Give the studio a few seconds, then press Start again.";
 const FORCE_RESUME_CONFIRM_COPY="No audio is ready to play. Force-start with a host break anyway? The station may be quiet briefly while the studio rebuilds.";
-const FIRST_LISTEN_RESUME_FAILURE_COPY="The station could not start just now. Give it a few seconds, then tap Play the station again.";
+const FIRST_LISTEN_RESUME_FAILURE_COPY="The station could not start just now. Give it a few seconds, then tap Start sound check again.";
 // Stop and Resume answer with the precise reason they refused. Prefer it over
 // the generic line because it names the way out. An assetless Resume may also
 // offer the separately confirmed force-start below; it is never sent implicitly.
@@ -4692,23 +4758,18 @@ const MEDIA_SOURCE_STATE_WORDS={
 function mediaSourceStateWord(state){
   return MEDIA_SOURCE_STATE_WORDS[state]||state;
 }
-function mediaSourceStatusChip(state,shape){
+function mediaSourceStatusChip(state){
   const chip=document.createElement('span');
   const word=mediaSourceStateWord(state);
   chip.className='status-chip '+state;
   chip.setAttribute('aria-label','status: '+word);
-  const mark=document.createElement('span');
-  mark.className='shape';
-  mark.setAttribute('aria-hidden','true');
-  mark.textContent=shape;
-  chip.append(mark,document.createTextNode(word));
+  chip.textContent=word;
   return chip;
 }
 function renderStarterCatalogStatus(status){
   const catalog=Array.isArray(status&&status.starter_catalog)?status.starter_catalog:[];
   const ready=catalog.length===12;
   const state=ready?'ready':'blocked';
-  const shape=ready?'✓':'✗';
   const label=ready?'Starter collection on air':'Starter collection unavailable';
   const detail=ready
     ?'Twelve attributed bundled tracks are the offline rotation floor.'
@@ -4719,7 +4780,7 @@ function renderStarterCatalogStatus(status){
   }
   for(const id of ['starterSourceChip','starterSetupChip']){
     const holder=document.getElementById(id);
-    if(holder)holder.replaceChildren(mediaSourceStatusChip(state,shape));
+    if(holder)holder.replaceChildren(mediaSourceStatusChip(state));
   }
   for(const id of ['starterSourceLabel','starterSetupLabel']){
     const node=document.getElementById(id);
@@ -4731,19 +4792,7 @@ function renderStarterCatalogStatus(status){
   }
 }
 function jamendoStatusChip(presentation){
-  const chip=document.createElement('span');
-  // Class keeps the machine state for styling; text and aria-label do not.
-  // This is the chip the Jamendo row actually renders — mediaSourceStatusChip
-  // serves the starter row only, so a fix applied there alone never lands here.
-  const word=mediaSourceStateWord(presentation.state);
-  chip.className='status-chip '+presentation.state;
-  chip.setAttribute('aria-label','status: '+word);
-  const shape=document.createElement('span');
-  shape.className='shape';
-  shape.setAttribute('aria-hidden','true');
-  shape.textContent=presentation.shape;
-  chip.append(shape,document.createTextNode(word));
-  return chip;
+  return mediaSourceStatusChip(presentation.state);
 }
 function jamendoAction(label,handler){
   const button=document.createElement('button');
@@ -4890,19 +4939,21 @@ async function turnOffJamendo(){
 }
 function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
+  finalizeFirstListenCompletion();
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
     updateFirstListenSuccess();
     document.body.dataset.firstListenFocus='source';
   }
-  showAdminTab('setup',{render:true,persist:true});
+  const firstListenRequired=document.body.dataset.firstListenEntry==='required';
+  showAdminTab(firstListenRequired?'setup':'motore',{render:true,persist:true});
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
   const summary=details?.querySelector('summary');
-  const firstListenRequired=document.body.dataset.firstListenEntry==='required';
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
     if(focus==='source')focusFirstListenStep('source');
+    else if(focus==='choices')document.querySelector('#firstListenPrivacyStep[data-state="complete"] .first-listen-review')?.focus({preventScroll:true});
     else if(firstListenRequired)focusCurrentFirstListenStep();
     else summary?.focus({preventScroll:true});
   },50);
@@ -4931,7 +4982,21 @@ function resolveFirstListenLanding(setup){
   const first=setup?.guided_setup?.first_listen||{};
   if(first.bootstrap_ready!==true)return;
   const required=firstListenEntryRequired(setup);
-  document.body.dataset.firstListenEntry=required?'required':'complete';
+  const previous=document.body.dataset.firstListenEntry;
+  const preserveSuccess=!required&&(
+    previous==='completing'||(previous==='required'&&_activeTab==='setup'&&_firstListenUi.showSuccess)
+  );
+  if(required&&previous==='completing'){
+    _firstListenUi.showSuccess=false;
+    stopFirstListenGuide();
+    updateFirstListenSuccess();
+    setTimeout(()=>focusCurrentFirstListenStep(),0);
+  }
+  document.body.dataset.firstListenEntry=preserveSuccess?'completing':required?'required':'complete';
+  syncFirstListenSetupMount();
+  if(previous==='required'&&!required&&_activeTab==='setup'&&!preserveSuccess){
+    showAdminTab('scaletta',{render:true,persist:true});
+  }
   if(_firstListenLandingResolved)return;
   _firstListenLandingResolved=true;
   if(required&&!_adminTabUserInteracted){
@@ -4949,8 +5014,8 @@ function renderGuidedSetupStrip(setup){
   strip.classList.toggle('show',show);
   if(!entries.length){chips.innerHTML='';actions.innerHTML='';return;}
   chips.innerHTML=entries.map(item=>{
-    const shapeSym=item.shape&&SHAPE[item.shape]?SHAPE[item.shape]:SHAPE.info;
-    return `<span class="setup-strip-chip" data-s="${esc(item.status||'checking')}"><span aria-hidden="true">${shapeSym}</span>${esc(item.label||'Setup')}: ${esc(item.display_status||item.status||'checking')}</span>`;
+    const state=setupStripVisualState(item.status);
+    return `<span class="setup-strip-chip status-inline ${state}" data-s="${state}" aria-label="${esc(item.label||'Setup')}: status ${state}">${esc(item.label||'Setup')}: ${esc(item.display_status||item.status||'checking')}</span>`;
   }).join('');
   const primary=stripData.primary_action||{};
   const primaryKind=primary.kind||'review_setup';
@@ -4961,6 +5026,14 @@ function renderGuidedSetupStrip(setup){
     ?'openListener()'
     :primaryFocus==='source'?"openSetupPanel('source')":'openSetupPanel()';
   actions.innerHTML=`<button type="button" class="btn btn-util setup-strip-action" data-stopped-exempt onclick="${primaryHandler}">${esc(primaryLabel)}</button>`;
+}
+function setupStripVisualState(status){
+  const state=String(status||'unknown').trim().toLowerCase();
+  if(state==='ready')return'ready';
+  if(state==='checking')return'working';
+  if(state==='blocked'||state==='rejected')return'blocked';
+  if(state==='not_configured')return'idle';
+  return'degraded';
 }
 function firstListenSetChip(id,state,label){
   const el=document.getElementById(id);
@@ -5009,6 +5082,17 @@ const FIRST_LISTEN_STEP_KEYS={
   firstListenPrivacyStep:'privacy',
   firstListenAiStep:'ai',
 };
+const FIRST_LISTEN_REVIEW_LABELS={
+  source:'Review opening',
+  speaker:'Review playback',
+  verify:'Review sound check',
+  privacy:'Review privacy choice',
+  ai:'Review AI setup',
+};
+function firstListenRequiredCount(){
+  const path=document.getElementById('firstListenPath');
+  return path?[...path.children].filter(el=>el.classList.contains('first-listen-step')).length:4;
+}
 function firstListenSetStep(id,state){
   const step=document.getElementById(id);
   if(!step)return;
@@ -5017,7 +5101,7 @@ function firstListenSetStep(id,state){
   const reviewing=_firstListenUi.reviewStep===key;
   const optionalOpen=_firstListenUi.optionalStep===key;
   step.dataset.state=state;
-  if(current)step.setAttribute('aria-current','step');else step.removeAttribute('aria-current');
+  if(current&&key!=='ai')step.setAttribute('aria-current','step');else step.removeAttribute('aria-current');
   const body=step.querySelector(':scope > .first-listen-body');
   if(body){
     const anotherExpansion=Boolean(_firstListenUi.reviewStep||_firstListenUi.optionalStep);
@@ -5029,12 +5113,12 @@ function firstListenSetStep(id,state){
   const review=step.querySelector(':scope > .first-listen-head > .first-listen-review');
   if(review&&key!=='ai'){
     review.hidden=state!=='complete';
-    review.textContent=reviewing?'Close review':'Review';
+    review.textContent=reviewing?'Close review':(FIRST_LISTEN_REVIEW_LABELS[key]||'Review');
     review.setAttribute('aria-expanded',reviewing?'true':'false');
   }
 }
 function focusCurrentFirstListenStep(){
-  const heading=document.querySelector('.first-listen-step[data-state="current"] .first-listen-heading');
+  const heading=document.querySelector('#firstListenPath > .first-listen-step[data-state="current"] .first-listen-heading');
   if(heading){heading.focus();return true}
   return false;
 }
@@ -5132,18 +5216,13 @@ function updateFirstListenSuccess(){
     :'First Listen complete. Your station is on air.';
 }
 function reviewFirstListenChoices(){
-  _firstListenUi.showSuccess=false;
-  stopFirstListenGuide();
-  updateFirstListenSuccess();
-  document.querySelector('.first-listen-step[data-state="complete"] .first-listen-review')?.focus();
+  openSetupPanel('choices');
+}
+function openFirstListenListener(){
+  showAdminTab('scaletta',{render:true,persist:true});
+  openListener();
 }
 function openFirstListenStation(){
-  _firstListenUi.showSuccess=false;
-  stopFirstListenGuide();
-  // Leaving the setup tab must release the stream too, or the producer desk
-  // plays over a hidden element the operator has no visible control for.
-  stopFirstListenStationAudio();
-  updateFirstListenSuccess();
   showAdminTab('scaletta',{render:true,persist:true});
 }
 function startFirstListenClock(){
@@ -5334,11 +5413,12 @@ function renderFirstListenProgress(){
 
   const surface=document.getElementById('journeySurface');
   const progressLine=document.getElementById('firstListenProgressLine');
-  const currentStep=document.querySelector('.first-listen-step[data-state="current"]');
+  const requiredCount=firstListenRequiredCount();
+  const currentStep=document.querySelector('#firstListenPath > .first-listen-step[data-state="current"]');
   const currentNumber=currentStep?Number(currentStep.querySelector('.first-listen-number')?.textContent||0):0;
-  const nextLabels={1:sourceKnown&&!continuityAvailable?'repair the music source':'play it on this device',2:'check the sound',3:'choose whether the hosts can use Home details',4:'optional new conversations'};
+  const nextLabels={1:sourceKnown&&!continuityAvailable?'repair the music source':'play it on this device',2:'check the sound',3:'choose whether the hosts can use Home details'};
   if(surface)surface.dataset.currentStep=currentNumber?String(currentNumber):'complete';
-  if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of 5. Next: ${nextLabels[currentNumber]||'finish'}.`:'First Listen complete. Review any choice below.';
+  if(progressLine)progressLine.textContent=currentNumber?`Step ${currentNumber} of ${requiredCount}. Next: ${nextLabels[currentNumber]||'finish'}.`:'First Listen complete. Review any choice below.';
 
   const sourceSummary=document.getElementById('firstListenSourceSummary');
   const sourceRepair=document.getElementById('firstListenSourceRepair');
@@ -5375,7 +5455,7 @@ function renderFirstListenProgress(){
   const deliberateRetry=_firstListenUi.verification==='not_yet'&&!listenComplete;
   if(playBtn){
     playBtn.disabled=!sourceKnown||speakerBusy||browserGuidePlaying||(listenAccepted&&!deliberateRetry);
-    playBtn.textContent=_firstListenUi.dispatch==='starting'?'Starting the station…':deliberateRetry?'Play the station again':'Play the station';
+    playBtn.textContent=_firstListenUi.dispatch==='starting'?'Starting the station…':deliberateRetry?'Start sound check again':'Start sound check';
     firstListenSetActionTone(playBtn,!listenAccepted);
   }
   if(retryBtn)retryBtn.disabled=!deliberateRetry||speakerBusy||browserGuidePlaying;
@@ -5397,8 +5477,8 @@ function renderFirstListenProgress(){
     firstListenSetChip('firstListenSpeakerChip','ready','Sent');
     if(speakerSummary)speakerSummary.textContent='The station is playing on this device. Listen now.';
   }else if(sourceKnown){
-    firstListenSetChip('firstListenSpeakerChip','working','Ready');
-    if(speakerSummary)speakerSummary.textContent='Tap Play the station to hear it on this device.';
+    firstListenSetChip('firstListenSpeakerChip','working','Start here');
+    if(speakerSummary)speakerSummary.textContent='Tap Start sound check to hear it on this device.';
   }else{
     firstListenSetChip('firstListenSpeakerChip','idle','Waiting');
   }
@@ -5682,7 +5762,7 @@ function initFirstListenStationAudio(){
   audio.addEventListener('error',()=>{
     if(_firstListenUi.dispatch!=='starting')return;
     _firstListenUi.dispatch='rejected';
-    firstListenSetStatus('firstListenSpeakerStatus','This device could not start the station. Check volume, then try Play the station again.','blocked');
+    firstListenSetStatus('firstListenSpeakerStatus','This device could not start the station. Check volume, then try Start sound check again.','blocked');
     renderFirstListenProgress();
   });
 }
@@ -5716,14 +5796,14 @@ async function startFirstListen(el){
       // Force Start rebuilds the station with no playable runway. The producer
       // desk confirms before doing this; onboarding must not do it silently.
       if(!window.confirm(FORCE_RESUME_CONFIRM_COPY)){
-        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Play the station again.','degraded');
+        firstListenSetStatus('firstListenSpeakerStatus','No audio is ready yet. Give the tape decks a few seconds, then tap Start sound check again.','degraded');
         _firstListenUi.dispatch='idle';
         return;
       }
       const {response:forceResponse,payload:forcePayload}=await apiResponse('POST','/api/resume?force=true',undefined,FIRST_LISTEN_TIMEOUTS.play);
       // ok:true with recovering:false still means the station is on air (#1022).
       if(!(forceResponse.ok&&forcePayload?.ok===true)){
-        const detail=transportFailureCopy(forcePayload,'The studio could not rebuild the station just now. Give it a few seconds, then tap Play the station again.');
+        const detail=transportFailureCopy(forcePayload,'The studio could not rebuild the station just now. Give it a few seconds, then tap Start sound check again.');
         firstListenSetStatus('firstListenSpeakerStatus',detail,'degraded');
         _firstListenUi.dispatch='idle';
         return;
@@ -6058,7 +6138,7 @@ function renderFirstListen(setup,modeLabel,stationLabel){
     if(next)next.textContent=firstListenListeningCue(state);
   }else{
     if(headline)headline.textContent='Your first show is ready.';
-    if(next)next.textContent=state.sourceKnown?'Play the station on this device, then confirm what you hear.':'Preparing the opening while we check what plays after it.';
+    if(next)next.textContent=state.sourceKnown?'Start the sound check on this device, then confirm what you hear.':'Preparing the opening while we check what plays after it.';
   }
   return state;
 }
@@ -6168,10 +6248,12 @@ function renderSetup(setup){
   const needsAction=setup.onboarding_required===true;
   const alertDot=document.getElementById('engineAlertDot');
   if(alertDot)alertDot.style.display=needsAction?'inline-block':'none';
-  // First Listen owns setup attention as a primary surface, not as a warning
-  // hidden inside the Motore diagnostics tab.
+  // First Listen tab alert only applies while the gated onboarding tab exists.
   const tabAlert=document.getElementById('firstListenTabAlert');
-  if(tabAlert)tabAlert.style.display=needsAction?'inline-block':'none';
+  if(tabAlert){
+    const show=needsAction&&document.body.dataset.firstListenEntry==='required';
+    tabAlert.style.display=show?'inline-block':'none';
+  }
 
   // Keep the active First Listen path open through the optional AI step. It may
   // collapse only when viewed later from another operator surface.
@@ -6291,8 +6373,8 @@ function updateSystems(caps,st){
   }
 
   el.innerHTML=[
-    statusRow('Scrittura AI',aiState,aiLabel,aiDetail),
-    statusRow('Fonti musica',musicState,musicLabel,musicDetail),
+    statusRow('AI writing',aiState,aiLabel,aiDetail),
+    statusRow('Music sources',musicState,musicLabel,musicDetail),
   ].join('');
 }
 

@@ -48,7 +48,7 @@ primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
 
 Required First Listen proof is hearing the station on this device in the add-on
-Web UI. Select **Play the station**, then **Yes, I hear it** only after you hear
+Web UI. Select **Start sound check**, then **Yes, I hear it** only after you hear
 the opening, or use the [this-device repair
 steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
 
