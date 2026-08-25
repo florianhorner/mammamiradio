@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
+
 from mammamiradio.core.models import (
     LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
@@ -839,7 +841,8 @@ def _scrub_public_status_for_etag(payload: dict) -> dict:
 
 def public_status_etag(payload: dict) -> str:
     """Weak ETag for ``/public-status`` based on stable listener facts."""
-    body = json.dumps(_scrub_public_status_for_etag(payload), separators=(",", ":"), sort_keys=True).encode("utf-8")
+    normalized = jsonable_encoder(_scrub_public_status_for_etag(payload))
+    body = json.dumps(normalized, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return f'W/"{hashlib.blake2b(body, digest_size=8).hexdigest()}"'
 
 

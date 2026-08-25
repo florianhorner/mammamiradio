@@ -117,13 +117,13 @@
     return Math.round(diff / 60) + ' ' + _t('hours_ago', 'hr ago');
   }
   function casaMomentAgeMinutes(agoMin) {
-    const minutes = Number(agoMin);
-    return Number.isFinite(minutes) && minutes >= 0 ? Math.floor(minutes) : null;
+    return Number.isFinite(agoMin) && agoMin >= 0 ? Math.floor(agoMin) : null;
   }
   function formatCasaMomentAge(agoMin) {
     // Public receipts carry only a coarse minute count. Keep the raw field in
     // the API, but give listeners a natural, localized description.
-    const minutes = Math.max(1, casaMomentAgeMinutes(agoMin) || 0);
+    const minutes = casaMomentAgeMinutes(agoMin);
+    if (minutes === null) return _t('casa_moment_age_unknown', 'time unavailable');
     if (minutes < 60) {
       return _t('casa_moment_minutes_ago', '{m} min ago').replace('{m}', String(minutes));
     }
@@ -1195,7 +1195,8 @@
    *  - Live, visible tab: 3s (segment changes within a few seconds)
    *  - Live, hidden tab: 30s (immediate catch-up poll when the tab returns)
    *  - Stopped, visible: 3.5s (external resumes remain visible within a few seconds)
-   *  - Stopped, hidden: 60s
+   *  - Idle, visible: 3.5s (slower than live while retaining prompt wake-up)
+   *  - Idle/stopped, hidden: 60s
    *  - ETag/304 on unchanged segments: same cadence, ~0 response body bytes
    *    (~1,200 header-only polls/h vs ~29 MB/h at 25 KB every 3s on a static segment)
    */
@@ -1212,10 +1213,12 @@
 
   function _statusPollDelayMs() {
     const stopped = Boolean(state.status && state.status.session_stopped === true);
+    const nowStreaming = state.status && state.status.now_streaming;
+    const idle = !stopped && (!nowStreaming || !nowStreaming.type || nowStreaming.type === 'idle');
     if (document.hidden) {
-      return stopped ? STATUS_POLL_STOPPED_HIDDEN_MS : STATUS_POLL_HIDDEN_MS;
+      return stopped || idle ? STATUS_POLL_STOPPED_HIDDEN_MS : STATUS_POLL_HIDDEN_MS;
     }
-    return stopped ? STATUS_POLL_STOPPED_MS : STATUS_POLL_LIVE_MS;
+    return stopped || idle ? STATUS_POLL_STOPPED_MS : STATUS_POLL_LIVE_MS;
   }
 
   function _clearStatusPollTimer() {

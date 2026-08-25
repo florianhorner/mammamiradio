@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,6 +15,12 @@ from tests.web.test_route_smoke import _make_app
 async def test_public_status_response_has_etag_and_cache_control():
     app = _make_app()
     app.state.config.identity.station_name = "Radio Città"
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "label": "Città",
+        "started": time.time() - 1,
+        "metadata": {"public_asset": Path("music/citta.mp3")},
+    }
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/public-status")
@@ -27,6 +34,7 @@ async def test_public_status_response_has_etag_and_cache_control():
     assert "max-age=1" in directives
     assert "Radio Città" in resp.text
     assert b"Radio Citt\\u00e0" not in resp.content
+    assert resp.json()["now_streaming"]["metadata"]["public_asset"] == "music/citta.mp3"
 
 
 @pytest.mark.asyncio

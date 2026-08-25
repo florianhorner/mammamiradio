@@ -365,6 +365,7 @@ def test_listener_moment_receipt_copy_is_localized():
         "casa_moments_title",
         "casa_moments_helper",
         "casa_moment_airing",
+        "casa_moment_age_unknown",
         "casa_moment_minutes_ago",
         "casa_moment_hours_ago",
         "casa_moment_yesterday",

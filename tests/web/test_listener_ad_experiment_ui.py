@@ -92,6 +92,7 @@ def test_listener_status_poll_is_bounded_and_rejects_stale_responses() -> None:
         "const receivedAtMonoMs = performance.now();",
         "state.statusClockAnchorMs = receivedAtMonoMs;",
         "_localStatusMinutes(m.ago_min)",
+        "casa_moment_age_unknown",
         "if (Array.isArray(status.starter_catalog)) {",
     ):
         assert needle in fetch or needle in js, f"listener status poll lost guard: {needle}"

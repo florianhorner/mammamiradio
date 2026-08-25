@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -11667,7 +11668,7 @@ async def public_status(request: Request) -> Response:
     Honors ``If-None-Match`` with a weak ETag derived from stable payload
     fields (progress and uptime are scrubbed — the listener interpolates them).
     """
-    payload = _public_status_payload(request)
+    payload = jsonable_encoder(_public_status_payload(request))
     etag = public_status_etag(payload)
     headers = {
         "ETag": etag,
