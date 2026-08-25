@@ -98,6 +98,53 @@ class Mp3FrameIndex:
 
 
 @dataclass(frozen=True)
+class Mp3DecoderWindow:
+    """Byte and sample bounds for decoding one audible MPEG-1 Layer III run.
+
+    ``decoder_byte_start`` may precede the first audible frame by a bounded
+    amount so the decoder can reconstruct Layer III bit-reservoir and synthesis
+    state. Consumers must discard exactly ``preroll_samples`` and retain exactly
+    ``audible_sample_count`` decoded samples before publishing the result.
+    """
+
+    decoder_byte_start: int
+    decoder_byte_end: int
+    preroll_samples: int
+    audible_sample_count: int
+    sample_rate: int
+
+
+def mpeg1_l3_decoder_window(
+    index: Mp3FrameIndex,
+    audible_first: int,
+    audible_end: int,
+    *,
+    lower_bound: int,
+) -> Mp3DecoderWindow:
+    """Return a bounded decoder window for ``[audible_first, audible_end)``.
+
+    All ordinals address ``index.frames``. At most ten preceding frames are
+    included for decoder context, and the returned byte range never begins
+    before ``lower_bound``. Invalid or empty ranges fail closed.
+    """
+
+    ordinals = (audible_first, audible_end, lower_bound)
+    if any(not isinstance(value, int) or isinstance(value, bool) for value in ordinals):
+        raise Mp3FrameIndexError("invalid decoder window frame range")
+    if not 0 <= lower_bound <= audible_first < audible_end <= len(index.frames):
+        raise Mp3FrameIndexError("invalid decoder window frame range")
+
+    decoder_first = max(lower_bound, audible_first - _MAX_DECODER_PREROLL_FRAMES)
+    return Mp3DecoderWindow(
+        decoder_byte_start=index.frames[decoder_first].byte_start,
+        decoder_byte_end=index.frames[audible_end - 1].byte_end,
+        preroll_samples=(audible_first - decoder_first) * _MPEG1_L3_SAMPLES_PER_FRAME,
+        audible_sample_count=(audible_end - audible_first) * _MPEG1_L3_SAMPLES_PER_FRAME,
+        sample_rate=index.sample_rate,
+    )
+
+
+@dataclass(frozen=True)
 class Mp3HandoffSplit:
     """A frame-aligned partition plus a decoder-safe tail input.
 
@@ -491,11 +538,16 @@ def split_mpeg1_l3_handoff(
     playable_start_byte = index.data_start
     head_end_byte = index.frames[tail_first].byte_start
     playable_end_byte = index.data_end
-    tail_decode_first = max(0, tail_first - _MAX_DECODER_PREROLL_FRAMES)
-    tail_decode_start_byte = index.frames[tail_decode_first].byte_start
-    tail_preroll_frame_count = tail_first - tail_decode_first
+    decoder_window = mpeg1_l3_decoder_window(
+        index,
+        tail_first,
+        len(index.frames),
+        lower_bound=0,
+    )
+    tail_decode_start_byte = decoder_window.decoder_byte_start
+    tail_preroll_frame_count = decoder_window.preroll_samples // _MPEG1_L3_SAMPLES_PER_FRAME
     head_payload = source_data[playable_start_byte:head_end_byte]
-    tail_payload = source_data[tail_decode_start_byte:playable_end_byte]
+    tail_payload = source_data[tail_decode_start_byte : decoder_window.decoder_byte_end]
     if not head_payload or not tail_payload:
         raise Mp3FrameIndexError("handoff must retain complete head and tail frames")
 
@@ -530,6 +582,6 @@ def split_mpeg1_l3_handoff(
         tail_decode_path=tail_path,
         tail_decode_start_byte=tail_decode_start_byte,
         tail_preroll_frame_count=tail_preroll_frame_count,
-        tail_preroll_samples=tail_preroll_frame_count * _MPEG1_L3_SAMPLES_PER_FRAME,
-        tail_sample_count=(len(index.frames) - tail_first) * _MPEG1_L3_SAMPLES_PER_FRAME,
+        tail_preroll_samples=decoder_window.preroll_samples,
+        tail_sample_count=decoder_window.audible_sample_count,
     )
