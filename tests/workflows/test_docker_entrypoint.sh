@@ -4,7 +4,7 @@
 # Verifies the standalone Docker entrypoint's ADMIN_TOKEN handling without
 # building the image: cold start generates + persists a token, restart loads
 # the persisted value, externally-set ADMIN_TOKEN is honored, and a
-# read-only /data degrades to logging the token once.
+# read-only /data still generates a token without printing it.
 
 set -e
 
@@ -70,9 +70,18 @@ else
     TMP2="$(mktemp -d)"
     chmod 555 "$TMP2"
     unset ADMIN_TOKEN
-    TOKEN4="$(MAMMAMIRADIO_ADMIN_TOKEN_FILE="$TMP2/admin_token" "$ENTRYPOINT" sh -c 'echo "$ADMIN_TOKEN"' 2>/dev/null)"
+    LOG4="$(mktemp)"
+    TOKEN4="$(MAMMAMIRADIO_ADMIN_TOKEN_FILE="$TMP2/admin_token" "$ENTRYPOINT" sh -c 'echo "$ADMIN_TOKEN"' 2>"$LOG4")"
     assert_nonempty "read-only /data still generates ADMIN_TOKEN" "$TOKEN4"
     [ ! -f "$TMP2/admin_token" ] && echo "  PASS  read-only /data does not create token file" && PASS=$((PASS + 1)) || { echo "  FAIL  unexpected file created"; FAIL=$((FAIL + 1)); }
+    if grep -E 'ADMIN_TOKEN=[0-9a-fA-F]+' "$LOG4" >/dev/null; then
+        echo "  FAIL  read-only /data logged ADMIN_TOKEN value"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS  read-only /data does not log ADMIN_TOKEN value"
+        PASS=$((PASS + 1))
+    fi
+    rm -f "$LOG4"
     chmod 755 "$TMP2"
     rm -rf "$TMP2"
 fi

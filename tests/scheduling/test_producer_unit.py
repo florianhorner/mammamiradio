@@ -3202,7 +3202,7 @@ async def test_banter_with_listener_request_commit_applies_on_queue():
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    req = {"type": "song_request", "name": "Florian", "song_found": True}
+    req = {"type": "song_request", "name": "Alex", "song_found": True}
     state.pending_requests.append(req)
     commit = ListenerRequestCommit(request=req, consume=True)
 
@@ -5805,9 +5805,9 @@ async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return(
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
         "ha:person.florian_horner",
-        "Florian è appena tornato a casa. Un caloroso bentornato.",
+        "Residente uno è appena tornato a casa. Un caloroso bentornato.",
     )
-    lines = [(config.hosts[0], "Bentornato Florian.")]
+    lines = [(config.hosts[0], "Bentornato Residente uno.")]
 
     with patch(
         f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
@@ -5836,7 +5836,7 @@ async def test_listener_truth_guard_rejects_return_line_that_names_another_resid
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
         "ha:person.florian_horner",
-        "Florian è appena tornato a casa. Un caloroso bentornato.",
+        "Residente uno è appena tornato a casa. Un caloroso bentornato.",
     )
     safe_lines = [(config.hosts[0], "The studio keeps moving, amici.")]
 
@@ -5847,7 +5847,7 @@ async def test_listener_truth_guard_rejects_return_line_that_names_another_resid
         guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
             state,
             config,
-            [(config.hosts[0], "Florian is back with Sabrina.")],
+            [(config.hosts[0], "Residente uno is back with Residente due.")],
         )
 
     assert [(line.host, line.text) for line in guarded] == safe_lines
@@ -5870,7 +5870,7 @@ async def test_listener_truth_guard_rejects_unbound_named_return():
         guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
             state,
             config,
-            [(config.hosts[0], "Bentornato Florian.")],
+            [(config.hosts[0], "Bentornato Residente uno.")],
         )
 
     assert [(line.host, line.text) for line in guarded] == safe_lines

@@ -28,10 +28,11 @@ if [ -z "${ADMIN_TOKEN:-}" ]; then
             echo "[mammamiradio] Generated ADMIN_TOKEN and persisted to $TOKEN_FILE" >&2
             echo "[mammamiradio] Read it with: docker compose exec <service> cat $TOKEN_FILE" >&2
         else
-            # /data is not writable — log the token once so the operator can
-            # capture it. Without persistence it will regenerate on next start.
+            # /data is not writable — the token cannot be persisted and will
+            # regenerate on the next start. Never print the value: it would
+            # land in Docker logs.
             echo "[mammamiradio] WARNING: $TOKEN_FILE not writable; ADMIN_TOKEN will regenerate on restart" >&2
-            echo "[mammamiradio] ADMIN_TOKEN=$ADMIN_TOKEN  (capture this — it will not be shown again)" >&2
+            echo "[mammamiradio] Set ADMIN_TOKEN in the environment; the generated value is not shown" >&2
         fi
     fi
     export ADMIN_TOKEN
