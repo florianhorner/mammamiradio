@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -621,3 +622,75 @@ def test_music_stream_start_maps_each_runtime_source_to_on_air(
         assert payload["advanced"]["status"] == "on_air"
     else:
         assert payload["sources"][projected_kind]["status"] == "on_air"
+
+
+def test_public_status_etag_ignores_every_listener_advanced_clock():
+    payload = {
+        "now_streaming": {"type": "music", "label": "A — B"},
+        "current_progress_sec": 12.3,
+        "uptime_sec": 100,
+        "runtime_health": {"queue_empty_elapsed_s": 3.2, "queue_empty": True},
+        "ha_moments": {
+            "last_event_label": "Morning launch",
+            "last_event_ago_min": 1,
+            "recent": [{"label": "Morning launch", "ago_min": 1, "status": "aired"}],
+        },
+        "session_stopped": False,
+    }
+    original = copy.deepcopy(payload)
+    other = copy.deepcopy(payload)
+    other["current_progress_sec"] = 45.6
+    other["uptime_sec"] = 500
+    other["runtime_health"]["queue_empty_elapsed_s"] = 90.1
+    other["ha_moments"]["last_event_ago_min"] = 2
+    other["ha_moments"]["recent"][0]["ago_min"] = 2
+
+    assert status_payload.public_status_etag(payload) == status_payload.public_status_etag(other)
+    assert payload == original, "ETag normalization mutated the response payload"
+
+    semantic_change = copy.deepcopy(payload)
+    semantic_change["ha_moments"]["recent"][0]["status"] = "airing"
+    assert status_payload.public_status_etag(payload) != status_payload.public_status_etag(semantic_change)
+
+
+@pytest.mark.parametrize("recent", [None, "invalid", [None, "invalid", {"ago_min": 3}]])
+def test_public_status_etag_tolerates_nonstandard_recent_shapes(recent):
+    payload = {"ha_moments": {"recent": recent}}
+    original = copy.deepcopy(payload)
+
+    assert status_payload.public_status_etag(payload).startswith('W/"')
+    assert payload == original
+
+
+@pytest.mark.parametrize(
+    ("header", "etag", "expected"),
+    [
+        ('W/"abc123"', 'W/"abc123"', True),
+        ('"abc123"', 'W/"abc123"', True),
+        ('W/"stale", "abc123"', 'W/"abc123"', True),
+        ('W/"a,b"', 'W/"a,b"', True),
+        ('W/"\x80"', 'W/"\x80"', True),
+        ("*", 'W/"abc123"', True),
+        ('W/"other"', 'W/"abc123"', False),
+        ('W/"ABC123"', 'W/"abc123"', False),
+        ('W/"unterminated', 'W/"abc123"', False),
+        ('W/"€"', 'W/"€"', False),
+        ('*, W/"abc123"', 'W/"abc123"', False),
+        ("", 'W/"abc123"', False),
+    ],
+)
+def test_public_status_not_modified_honors_if_none_match(header, etag, expected):
+    assert status_payload.public_status_not_modified({"If-None-Match": header}, etag) is expected
+
+
+def test_public_status_not_modified_combines_repeated_header_lines():
+    class RepeatedHeaders:
+        @staticmethod
+        def get(_name):
+            return None
+
+        @staticmethod
+        def getlist(_name):
+            return ['W/"stale"', '"abc123"']
+
+    assert status_payload.public_status_not_modified(RepeatedHeaders(), 'W/"abc123"')

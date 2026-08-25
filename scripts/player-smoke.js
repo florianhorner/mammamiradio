@@ -6,6 +6,7 @@ async (page) => {
   const receiptPolls = [];
   const streamRequests = [];
   const statusPolls = [];
+  const statusResponses = [];
   const streamFixture = 'mammamiradio/assets/demo/recovery/continuity_1.mp3';
   const songReceiptStorageKey = 'mmr.listener.songReceipt.v1';
   const receiptTokens = {
@@ -30,6 +31,8 @@ async (page) => {
   let nowStreamingScenario = 'music';
   let tracksPlayed = 5;
   let rotationTrackCount = 84;
+  let conditionalStatusResponses = false;
+  const serverStartedAtSec = Date.now() / 1000;
   // Deliberately stale: the hero must render the live rotation count instead.
   const currentSource = {
     kind: 'charts',
@@ -84,6 +87,30 @@ async (page) => {
 
   function assert(condition, message) {
     if (!condition) throw new Error(`player-smoke: ${message}`);
+  }
+
+  function weakStatusEtag(body) {
+    let hash = 2166136261;
+    for (let index = 0; index < body.length; index += 1) {
+      hash ^= body.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `W/"smoke-${(hash >>> 0).toString(16)}"`;
+  }
+
+  function semanticStatusEtag(payload) {
+    const semantic = JSON.parse(JSON.stringify(payload));
+    delete semantic.current_progress_sec;
+    delete semantic.uptime_sec;
+    if (semantic.ha_moments) {
+      delete semantic.ha_moments.last_event_ago_min;
+      if (Array.isArray(semantic.ha_moments.recent)) {
+        semantic.ha_moments.recent.forEach((moment) => {
+          if (moment && typeof moment === 'object') delete moment.ago_min;
+        });
+      }
+    }
+    return weakStatusEtag(JSON.stringify(semantic));
   }
 
   function setReceiptPlan(token, plan) {
@@ -157,37 +184,60 @@ async (page) => {
 
   await page.route('**/public-status', async (route) => {
     statusPolls.push(Date.now());
+    const nowStreaming = sessionStopped
+      ? { type: 'stopped', label: 'Session stopped', metadata: {}, started: serverStartedAtSec }
+      : nowStreamingScenario === 'ad-roster'
+        ? {
+            type: 'ad',
+            label: 'Ad break',
+            metadata: { brands: ['Prezzoforte', 'TeleCuore'] },
+            started: serverStartedAtSec,
+          }
+        : nowStreamingScenario === 'ad-generic'
+          ? { type: 'ad', label: 'Ad break', metadata: {}, started: serverStartedAtSec }
+          : { type: 'music', label: 'Mina — Città vuota', metadata: {}, started: serverStartedAtSec };
+    const payload = {
+      identity: { station_name: authoritativeName, source: 'player-smoke' },
+      brand: { station_name: authoritativeName },
+      capabilities: { ha: true },
+      session_stopped: sessionStopped,
+      uptime_sec: 3540,
+      tracks_played: tracksPlayed,
+      rotation_track_count: rotationTrackCount,
+      current_source: currentSource,
+      now_streaming: nowStreaming,
+      upcoming: [],
+      upcoming_mode: 'building',
+      current_progress_sec: sessionStopped ? null : 10,
+      current_duration_sec: sessionStopped ? null : 180,
+      ha_moments: {
+        mood: '',
+        weather: '',
+        last_event_label: 'Morning launch',
+        last_event_ago_min: 59,
+        recent: casaReceipts[casaScenario],
+      },
+      ad_experiment: adExperiments[adExperimentScenario],
+    };
+    const body = JSON.stringify(payload);
+    const responseEtag = semanticStatusEtag(payload);
+    const requestEtag = route.request().headers()['if-none-match'] || '';
+    const notModified = conditionalStatusResponses && requestEtag === responseEtag;
+    const responseStatus = notModified ? 304 : 200;
+    statusResponses.push({ requestEtag, responseEtag, status: responseStatus });
+    if (notModified) {
+      await route.fulfill({
+        status: 304,
+        headers: { ETag: responseEtag, 'Cache-Control': 'public, max-age=1' },
+        body: '',
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        identity: { station_name: authoritativeName, source: 'player-smoke' },
-        brand: { station_name: authoritativeName },
-        capabilities: { ha: true },
-        session_stopped: sessionStopped,
-        uptime_sec: 90,
-        tracks_played: tracksPlayed,
-        rotation_track_count: rotationTrackCount,
-        current_source: currentSource,
-        now_streaming: sessionStopped
-          ? { type: 'stopped', label: 'Session stopped', metadata: {} }
-          : nowStreamingScenario === 'ad-roster'
-            ? { type: 'ad', label: 'Ad break', metadata: { brands: ['Prezzoforte', 'TeleCuore'] } }
-            : nowStreamingScenario === 'ad-generic'
-              ? { type: 'ad', label: 'Ad break', metadata: {} }
-              : { type: 'music', label: 'Mina — Città vuota', metadata: {} },
-        upcoming: [],
-        upcoming_mode: 'building',
-        current_progress_sec: 3,
-        current_duration_sec: 180,
-        ha_moments: {
-          mood: '',
-          weather: '',
-          last_event_label: '',
-          recent: casaReceipts[casaScenario],
-        },
-        ad_experiment: adExperiments[adExperimentScenario],
-      }),
+      headers: { ETag: responseEtag, 'Cache-Control': 'public, max-age=1' },
+      body,
     });
   });
   await page.route('**/public-listener-requests', async (route) => {
@@ -305,11 +355,49 @@ async (page) => {
 
   await page.addInitScript(() => {
     const nativeSetTimeout = window.setTimeout.bind(window);
-    window.setTimeout = (callback, delay, ...args) => nativeSetTimeout(
-      callback,
-      delay === 3000 ? 40 : delay,
-      ...args,
-    );
+    const statusPollDelays = new Set([3000, 3500, 30000, 60000]);
+    window.__playerSmokeAccelerateStatusPolls = true;
+    window.__playerSmokeStatusPollDelays = [];
+    window.__playerSmokeStatusTimeout = null;
+    window.setTimeout = (callback, delay, ...args) => {
+      const callbackSource = typeof callback === 'function'
+        ? Function.prototype.toString.call(callback)
+        : '';
+      const isStatusPoll = callbackSource.includes('await fetchStatus()')
+        && callbackSource.includes('_armStatusPoll');
+      let effectiveDelay = delay;
+      if (isStatusPoll && window.__playerSmokeAccelerateStatusPolls && statusPollDelays.has(delay)) {
+        effectiveDelay = 40;
+      } else if (!isStatusPoll && delay === 3000) {
+        // Preserve the pre-existing receipt-smoke acceleration. Status timing
+        // is controlled separately so the real stopped-resume cadence can run.
+        effectiveDelay = 40;
+      }
+      const id = nativeSetTimeout(callback, effectiveDelay, ...args);
+      if (isStatusPoll) {
+        window.__playerSmokeStatusPollDelays.push(delay);
+        window.__playerSmokeLastStatusPollDelay = delay;
+        window.__playerSmokeStatusTimeout = id;
+      }
+      return id;
+    };
+
+    const nativeDateNow = Date.now.bind(Date);
+    window.__playerSmokeWallClockOffsetMs = 0;
+    Date.now = () => nativeDateNow() + window.__playerSmokeWallClockOffsetMs;
+
+    const nativePerformanceNow = performance.now.bind(performance);
+    window.__playerSmokeMonotonicOffsetMs = 0;
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      value: () => nativePerformanceNow() + window.__playerSmokeMonotonicOffsetMs,
+    });
+
+    window.__playerSmokeDocumentHidden = document.hidden;
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      get: () => window.__playerSmokeDocumentHidden,
+    });
 
     const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
     const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
@@ -336,16 +424,6 @@ async (page) => {
       heldRequestFrames = heldRequestFrames.filter((frame) => frame.id !== id);
     };
     try { localStorage.setItem('stationName', '__stale_station_identity__'); } catch (_) {}
-
-    const nativeSetInterval = window.setInterval;
-    window.setInterval = (callback, delay, ...args) => {
-      const id = Reflect.apply(nativeSetInterval, window, [callback, delay, ...args]);
-      if (delay === 3000 && callback?.name === 'fetchStatus') {
-        window.__playerSmokeFetchStatus = callback;
-        window.__playerSmokeStatusInterval = id;
-      }
-      return id;
-    };
 
     const nativeJson = Response.prototype.json;
     Response.prototype.json = async function (...args) {
@@ -376,6 +454,18 @@ async (page) => {
   async function reloadPage() {
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 });
     await waitForLivePage();
+  }
+
+  async function setDocumentVisibility(hidden) {
+    await page.evaluate((nextHidden) => {
+      window.__playerSmokeDocumentHidden = nextHidden;
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+  }
+
+  function parseTimecode(value) {
+    const match = /^(\d+):(\d{2})$/.exec(value);
+    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
   }
 
   // A value that is expected to CHANGE proves itself: the wait can only succeed
@@ -459,6 +549,120 @@ async (page) => {
     const el = document.getElementById('mmr-copy-bootstrap');
     return el ? JSON.parse(el.textContent) : {};
   });
+
+  // Take control of the recursive scheduler and accept one fresh 200 while the
+  // browser wall clock is deliberately five minutes ahead of the server.
+  // Progress must be anchored to the payload plus monotonic client elapsed time.
+  const clockAnchorPoll = statusResponses.length;
+  await page.evaluate(() => {
+    window.__playerSmokeAccelerateStatusPolls = false;
+    window.__playerSmokeWallClockOffsetMs = 5 * 60 * 1000;
+    window.__playerSmokeMonotonicOffsetMs = 0;
+    window.__playerSmokeDocumentHidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await waitForRouteCount(
+    () => statusResponses.length,
+    clockAnchorPoll + 1,
+    5000,
+    'clock-skew anchor poll did not reach /public-status',
+  );
+  await page.waitForFunction(
+    () => document.getElementById('np-time-cur')?.textContent !== '—' &&
+      document.getElementById('stat-airtime')?.textContent === '0h 59m' &&
+      document.getElementById('casa-event')?.textContent.includes('59 min fa'),
+    null,
+    { timeout: 5000, polling: 20 },
+  ).catch(() => assert(false, 'server/browser wall-clock skew corrupted the initial status clocks'));
+  const initialClockState = await page.evaluate(() => ({
+    progress: document.getElementById('np-time-cur')?.textContent || '',
+    airtime: document.getElementById('stat-airtime')?.textContent || '',
+    event: document.getElementById('casa-event')?.textContent || '',
+  }));
+  const initialProgressSec = parseTimecode(initialClockState.progress);
+  assert(
+    initialProgressSec !== null && initialProgressSec >= 10 && initialProgressSec <= 13,
+    `server/browser wall-clock skew corrupted progress: ${JSON.stringify(initialClockState)}`,
+  );
+
+  // A bodyless 304 must still advance every visible clock from the accepted
+  // 200 anchor. Flip the wall clock behind the server to prove it is irrelevant.
+  conditionalStatusResponses = true;
+  const firstNotModifiedPoll = statusResponses.length;
+  await page.evaluate(() => {
+    window.__playerSmokeWallClockOffsetMs = -5 * 60 * 1000;
+    window.__playerSmokeMonotonicOffsetMs = 61 * 1000;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await waitForRouteCount(
+    () => statusResponses.length,
+    firstNotModifiedPoll + 1,
+    5000,
+    'conditional clock poll did not reach /public-status',
+  );
+  const firstNotModified = statusResponses[firstNotModifiedPoll];
+  assert(firstNotModified.status === 304, `unchanged status did not return 304: ${JSON.stringify(firstNotModified)}`);
+  assert(firstNotModified.requestEtag, 'conditional status poll omitted If-None-Match');
+  await page.waitForFunction(
+    (hoursAgo) => {
+      const rows = Array.from(document.querySelectorAll('#casa-moments-rows .row'));
+      return document.getElementById('stat-airtime')?.textContent === '1h 0m' &&
+        document.getElementById('casa-event')?.textContent.includes('60 min fa') &&
+        rows.some((row) => row.textContent.includes(`Fifty-nine minute ritual · ${hoursAgo}`));
+    },
+    copy.casa_moment_hours_ago.replace('{h}', '1'),
+    { timeout: 5000, polling: 20 },
+  ).catch(() => assert(false, 'bodyless 304 did not advance uptime and Home-moment ages'));
+  const advancedProgress = parseTimecode(await page.locator('#np-time-cur').textContent());
+  assert(
+    advancedProgress !== null && advancedProgress >= 71 && advancedProgress <= 74,
+    `bodyless 304 did not advance progress monotonically: ${advancedProgress}`,
+  );
+
+  // Same-minute 304s must not rebuild the Casa aria-live subtree.
+  await page.evaluate(() => {
+    window.__playerSmokeCasaMutationCount = 0;
+    window.__playerSmokeCasaObserver = new MutationObserver((records) => {
+      window.__playerSmokeCasaMutationCount += records.length;
+    });
+    window.__playerSmokeCasaObserver.observe(document.getElementById('casa-card'), {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+  });
+  const sameMinutePoll = statusResponses.length;
+  await setDocumentVisibility(false);
+  await waitForRouteCount(
+    () => statusResponses.length,
+    sameMinutePoll + 1,
+    5000,
+    'same-minute conditional poll did not reach /public-status',
+  );
+  assert(statusResponses[sameMinutePoll].status === 304, 'same-minute status poll did not return 304');
+  await page.waitForTimeout(100);
+  assert(
+    await page.evaluate(() => window.__playerSmokeCasaMutationCount) === 0,
+    'same-minute 304 rewrote the Casa live region',
+  );
+
+  // Restore normal accelerated polling for the broader interaction suite.
+  conditionalStatusResponses = false;
+  const clockResetPoll = statusResponses.length;
+  await page.evaluate(() => {
+    window.__playerSmokeCasaObserver.disconnect();
+    window.__playerSmokeWallClockOffsetMs = 0;
+    window.__playerSmokeMonotonicOffsetMs = 0;
+    window.__playerSmokeAccelerateStatusPolls = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await waitForRouteCount(
+    () => statusResponses.length,
+    clockResetPoll + 1,
+    5000,
+    'status polling did not resume after the clock-skew scenario',
+  );
 
   async function waitForReceiptText(expected, timeout = 3000) {
     await page.waitForFunction(
@@ -972,19 +1176,28 @@ async (page) => {
   assert(genericAdSurfaces.mediaTitle === genericAdSurfaces.title, 'generic Media Session title did not match the visible title');
   assert(genericAdSurfaces.mediaArtist === genericAdSurfaces.secondary, 'generic Media Session label did not match the visible label');
 
-  // Hold poll N after JSON parsing, render poll N+1, then release N. This puts
-  // the stale response beyond AbortController cancellation and tests the generation guard.
+  // Quiesce the accelerated loop, then hold poll N after JSON parsing. A
+  // visibility-triggered poll N+1 must still send the last *applied* ETag and
+  // receive the changed body. Committing N's ETag before its body wins would
+  // make N+1 return 304 and wedge the UI on the previous segment forever.
   await page.evaluate(() => {
-    if (typeof window.__playerSmokeFetchStatus !== 'function') {
-      throw new Error('player-smoke: status poll callback was not captured');
-    }
-    clearInterval(window.__playerSmokeStatusInterval);
+    window.__playerSmokeAccelerateStatusPolls = false;
+    window.__playerSmokeDocumentHidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(100);
+  conditionalStatusResponses = true;
+  adExperimentScenario = 'empty';
+  rotationTrackCount = 28;
+  const staleRaceStart = statusResponses.length;
+  await page.evaluate(() => {
     let release;
     const gate = { claimed: false, seen: false };
     gate.promise = new Promise((resolve) => { release = resolve; });
     gate.release = release;
     window.__playerSmokeStatusJsonGate = gate;
-    window.__playerSmokeOldStatusPoll = window.__playerSmokeFetchStatus();
+    window.__playerSmokeDocumentHidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
   });
   await page.waitForFunction(
     () => window.__playerSmokeStatusJsonGate?.seen,
@@ -992,9 +1205,7 @@ async (page) => {
     { timeout: 5000, polling: 20 },
   ).catch(() => assert(false, 'stale status race never held poll N after JSON parsing'));
 
-  adExperimentScenario = 'empty';
-  rotationTrackCount = 28;
-  await page.evaluate(() => window.__playerSmokeFetchStatus());
+  await setDocumentVisibility(false);
   await page.waitForFunction(
     () => {
       const details = document.getElementById('ad-session-receipt');
@@ -1007,11 +1218,25 @@ async (page) => {
     null,
     { timeout: 5000, polling: 50 },
   ).catch(() => assert(false, 'runtime reset did not hide, collapse, and clear the stale ad receipt'));
+  await waitForRouteCount(
+    () => statusResponses.length,
+    staleRaceStart + 2,
+    5000,
+    'superseding status poll did not reach /public-status',
+  );
+  const [heldResponse, winningResponse] = statusResponses.slice(staleRaceStart, staleRaceStart + 2);
+  assert(heldResponse.status === 200, `held changed status was not a 200: ${JSON.stringify(heldResponse)}`);
+  assert(winningResponse.status === 200, `winning changed status was not a 200: ${JSON.stringify(winningResponse)}`);
+  assert(
+    winningResponse.requestEtag === heldResponse.requestEtag &&
+      winningResponse.requestEtag !== heldResponse.responseEtag,
+    `held response poisoned the conditional validator: ${JSON.stringify({ heldResponse, winningResponse })}`,
+  );
 
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     window.__playerSmokeStatusJsonGate.release();
-    await window.__playerSmokeOldStatusPoll;
   });
+  await page.waitForTimeout(100);
   const postRaceReceipt = await page.evaluate(() => {
     const details = document.getElementById('ad-session-receipt');
     return {
@@ -1032,6 +1257,24 @@ async (page) => {
     await page.locator('#ad-session-announcement').textContent() === '',
     'runtime reset did not clear the ad receipt announcement',
   );
+  const postRaceConditionalPoll = statusResponses.length;
+  await setDocumentVisibility(false);
+  await waitForRouteCount(
+    () => statusResponses.length,
+    postRaceConditionalPoll + 1,
+    5000,
+    'post-race conditional poll did not reach /public-status',
+  );
+  assert(
+    statusResponses[postRaceConditionalPoll].status === 304,
+    `winning payload ETag was not committed after render: ${JSON.stringify(statusResponses[postRaceConditionalPoll])}`,
+  );
+  conditionalStatusResponses = false;
+  await page.evaluate(() => {
+    window.__playerSmokeStatusJsonGate = null;
+    window.__playerSmokeAccelerateStatusPolls = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
   nowStreamingScenario = 'music';
 
   async function casaState() {
@@ -1298,6 +1541,21 @@ async (page) => {
   await page.waitForTimeout(3000);
   assert(playCount() === countAtPause, 'scheduled retry restarted audio after explicit pause');
 
+  // Visibility drives the documented live cadence without relying on a named
+  // interval callback: hidden tabs back off, then catch up immediately.
+  await setDocumentVisibility(true);
+  await page.waitForFunction(
+    () => window.__playerSmokeLastStatusPollDelay === 30000,
+    null,
+    { timeout: 2000, polling: 20 },
+  ).catch(() => assert(false, 'hidden live status polling did not back off to 30 seconds'));
+  await setDocumentVisibility(false);
+  await page.waitForFunction(
+    () => window.__playerSmokeLastStatusPollDelay === 3000,
+    null,
+    { timeout: 2000, polling: 20 },
+  ).catch(() => assert(false, 'visible live status polling did not restore the 3-second cadence'));
+
   sessionStopped = true;
   await page.waitForFunction(
     () => ['nav-cta', 'np-play', 'hero-play'].every((id) => document.getElementById(id).disabled),
@@ -1317,11 +1575,67 @@ async (page) => {
   await page.locator('#nav-cta').evaluate((el) => el.click());
   await page.waitForTimeout(100);
   assert(playCount() === stoppedRequestCount, 'disabled stopped control requested audio');
+  await page.waitForFunction(
+    () => window.__playerSmokeLastStatusPollDelay === 3500,
+    null,
+    { timeout: 2000, polling: 20 },
+  ).catch(() => assert(false, 'visible stopped status polling did not use the 3.5-second probe'));
+
+  await setDocumentVisibility(true);
+  await page.waitForFunction(
+    () => window.__playerSmokeLastStatusPollDelay === 60000,
+    null,
+    { timeout: 2000, polling: 20 },
+  ).catch(() => assert(false, 'hidden stopped status polling did not back off to 60 seconds'));
+  await setDocumentVisibility(false);
+  await page.waitForFunction(
+    () => window.__playerSmokeLastStatusPollDelay === 3500,
+    null,
+    { timeout: 2000, polling: 20 },
+  ).catch(() => assert(false, 'visible stopped status polling did not restore the 3.5-second probe'));
+
+  // Stop accelerating the recursive timer, accept one final stopped payload,
+  // then resume only at the server. A still-visible listener must discover the
+  // external resume within the 3.5s cadence plus the 2.4s request deadline.
+  const stoppedAnchorPoll = statusResponses.length;
+  await page.evaluate(() => {
+    window.__playerSmokeAccelerateStatusPolls = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await waitForRouteCount(
+    () => statusResponses.length,
+    stoppedAnchorPoll + 1,
+    5000,
+    'real-cadence stopped anchor poll did not reach /public-status',
+  );
+  await page.waitForFunction(
+    () => window.__playerSmokeLastStatusPollDelay === 3500,
+    null,
+    { timeout: 2000, polling: 20 },
+  );
+  const resumeStartedAtMs = Date.now();
+  sessionStopped = false;
+  await page.waitForFunction(
+    () => ['nav-cta', 'np-play', 'hero-play'].every((id) => !document.getElementById(id).disabled),
+    null,
+    { timeout: 6000, polling: 20 },
+  ).catch(() => assert(false, 'visible stopped listener did not discover an external resume within 6 seconds'));
+  const stoppedResumeMs = Date.now() - resumeStartedAtMs;
+  assert(stoppedResumeMs <= 6000, `external stopped resume took ${stoppedResumeMs}ms`);
+  assert(playCount() === stoppedRequestCount, 'status-only external resume requested audio');
+  const observedStatusCadences = await page.evaluate(() => window.__playerSmokeStatusPollDelays);
+  for (const expectedDelay of [3000, 3500, 30000, 60000]) {
+    assert(
+      observedStatusCadences.includes(expectedDelay),
+      `recursive status scheduler never requested ${expectedDelay}ms: ${JSON.stringify(observedStatusCadences)}`,
+    );
+  }
   assert(pageErrors.length === 0, `uncaught page errors: ${pageErrors.join(' | ')}`);
 
   return {
     ok: true,
     stream_intent_ms: streamIntentMs,
+    stopped_resume_ms: stoppedResumeMs,
     identity: authoritativeName,
     request_scenarios: requestPosts.map((entry) => entry.scenario),
     receipt_polls: receiptPolls.length,

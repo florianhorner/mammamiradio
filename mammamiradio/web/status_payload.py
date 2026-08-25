@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import math
 import time
 from pathlib import Path
@@ -805,6 +807,110 @@ def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
         "current_progress_sec": round(progress_sec, 1) if progress_sec is not None else None,
         "current_duration_sec": round(duration_sec, 1) if duration_sec is not None else None,
     }
+
+
+PUBLIC_STATUS_CACHE_CONTROL = "public, max-age=1"
+
+
+def _scrub_public_status_for_etag(payload: dict) -> dict:
+    """Drop fields that change every poll without a segment or state transition.
+
+    ``current_progress_sec`` and ``uptime_sec`` advance on every request; HA
+    moment age and queue-empty elapsed time are wall-clock derived the same way.
+    The listener page advances every visible clock from the last accepted 200
+    response while semantic facts remain protected by the validator.
+    """
+    scrubbed = copy.deepcopy(payload)
+    scrubbed.pop("current_progress_sec", None)
+    scrubbed.pop("uptime_sec", None)
+    ha_moments = scrubbed.get("ha_moments")
+    if isinstance(ha_moments, dict):
+        ha_moments.pop("last_event_ago_min", None)
+        recent = ha_moments.get("recent")
+        if isinstance(recent, list):
+            for moment in recent:
+                if isinstance(moment, dict):
+                    moment.pop("ago_min", None)
+    runtime_health = scrubbed.get("runtime_health")
+    if isinstance(runtime_health, dict):
+        runtime_health.pop("queue_empty_elapsed_s", None)
+    return scrubbed
+
+
+def public_status_etag(payload: dict) -> str:
+    """Weak ETag for ``/public-status`` based on stable listener facts."""
+    body = json.dumps(_scrub_public_status_for_etag(payload), separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return f'W/"{hashlib.blake2b(body, digest_size=8).hexdigest()}"'
+
+
+def _etag_opaque_values(field_value: str) -> list[str] | None:
+    """Parse an entity-tag list and return opaque values without weakness.
+
+    A comma is legal inside an opaque tag, so splitting the field on commas is
+    not sufficient. Malformed input returns ``None`` and therefore falls back
+    to a normal 200 response.
+    """
+    values: list[str] = []
+    index = 0
+    length = len(field_value)
+    while index < length:
+        while index < length and field_value[index] in " \t":
+            index += 1
+        if field_value.startswith("W/", index):
+            index += 2
+        if index >= length or field_value[index] != '"':
+            return None
+        index += 1
+        start = index
+        while index < length and field_value[index] != '"':
+            codepoint = ord(field_value[index])
+            if not (codepoint == 0x21 or 0x23 <= codepoint <= 0x7E or 0x80 <= codepoint <= 0xFF):
+                return None
+            index += 1
+        if index >= length:
+            return None
+        values.append(field_value[start:index])
+        index += 1
+        while index < length and field_value[index] in " \t":
+            index += 1
+        if index == length:
+            return values
+        if field_value[index] != ",":
+            return None
+        index += 1
+        while index < length and field_value[index] in " \t":
+            index += 1
+        if index == length:
+            return None
+    return None
+
+
+def public_status_not_modified(request_headers: object, etag: str) -> bool:
+    """Return True when ``If-None-Match`` weakly matches the current ETag."""
+    getter = getattr(request_headers, "get", None)
+    if not callable(getter):
+        return False
+
+    raw_header_values: list[object] = []
+    getlist = getattr(request_headers, "getlist", None)
+    if callable(getlist):
+        listed = getlist("if-none-match")
+        if isinstance(listed, str):
+            raw_header_values.append(listed)
+        elif listed:
+            raw_header_values.extend(listed)
+    if not raw_header_values:
+        raw_header_values.append(getter("If-None-Match") or getter("if-none-match"))
+    header_values = [value for value in raw_header_values if isinstance(value, str)]
+    if not header_values or len(header_values) != len(raw_header_values):
+        return False
+    if_none_match = ",".join(header_values)
+    if if_none_match.strip() == "*":
+        return True
+
+    current = _etag_opaque_values(etag)
+    candidates = _etag_opaque_values(if_none_match)
+    return bool(current and len(current) == 1 and candidates and current[0] in candidates)
 
 
 def _serialize_stream_log_entry(entry) -> dict:

@@ -78,6 +78,8 @@
     currentLabel: null,
     currentProgressMs: 0,
     segmentDurationMs: 0,
+    statusClockAnchorMs: null,
+    statusClockRenderedMinuteOffset: null,
     progressTimer: null,
     lastNpKey: null,
     currentNowPlaying: null,
@@ -822,9 +824,10 @@
     if (tTot) tTot.textContent = trustworthy ? fmtTime(durationSec) : '—';
   }
 
-  function renderHeroStats(status, caps) {
-    const uptimeSec = (status && typeof status.uptime_sec === 'number')
-      ? status.uptime_sec
+  function renderAirtime(status) {
+    const localUptimeSec = status ? _localStatusSeconds(status.uptime_sec) : null;
+    const uptimeSec = Number.isFinite(localUptimeSec)
+      ? localUptimeSec
       : (Date.now() - state.sessionStart) / 1000;
     const h = Math.floor(uptimeSec / 3600);
     const m = Math.floor((uptimeSec % 3600) / 60);
@@ -832,6 +835,10 @@
     if (stat1) {
       stat1.textContent = (h === 0 && m === 0) ? _t('np_live', 'Live') : (h + 'h ' + m + 'm');
     }
+  }
+
+  function renderHeroStats(status, caps) {
+    renderAirtime(status);
     const stat2 = $('stat-tracks');
     if (stat2) {
       const rotationCount = status ? status.rotation_track_count : null;
@@ -981,7 +988,8 @@
     if (weather) weather.textContent = ha.weather || '';
     if (event) {
       if (ha.last_event_label) {
-        const ago = ha.last_event_ago_min ? ' · rilevato ' + ha.last_event_ago_min + ' min fa' : '';
+        const lastEventAgeMin = _localStatusMinutes(ha.last_event_ago_min);
+        const ago = lastEventAgeMin ? ' · rilevato ' + lastEventAgeMin + ' min fa' : '';
         event.textContent = ha.last_event_label + ago;
       } else {
         event.textContent = '';
@@ -1003,7 +1011,7 @@
         momentsRows.textContent = '';
         const hasAiring = recent.some((m) => m.status === 'airing');
         const latestReceiptAge = recent.reduce((newest, m) => {
-          const age = casaMomentAgeMinutes(m.ago_min);
+          const age = casaMomentAgeMinutes(_localStatusMinutes(m.ago_min));
           return age !== null && (newest === null || age < newest) ? age : newest;
         }, null);
         if (staleNote) {
@@ -1019,7 +1027,7 @@
           const text = document.createElement('span');
           text.textContent = m.status === 'airing'
             ? (m.label || '') + ' · ' + _t('casa_moment_airing', 'on air now')
-            : (m.label || '') + ' · ' + formatCasaMomentAge(m.ago_min);
+            : (m.label || '') + ' · ' + formatCasaMomentAge(_localStatusMinutes(m.ago_min));
           row.appendChild(ico);
           row.appendChild(text);
           momentsRows.appendChild(row);
@@ -1181,28 +1189,141 @@
    * Brand-engine PR-F: listener uses /public-status exclusively (no admin endpoints).
    * /public-status returns brand + capabilities + facts in one shape — single fetch
    * replaces the old /status + /api/capabilities pair. Works on any deploy (loopback,
-   * LAN, public) without the 401 risk of admin-only routes. */
-  const STATUS_POLL_INTERVAL_MS = 3000;
+   * LAN, public) without the 401 risk of admin-only routes.
+   *
+   * Poll budget (#931):
+   *  - Live, visible tab: 3s (segment changes within a few seconds)
+   *  - Live, hidden tab: 30s (immediate catch-up poll when the tab returns)
+   *  - Stopped, visible: 3.5s (external resumes remain visible within a few seconds)
+   *  - Stopped, hidden: 60s
+   *  - ETag/304 on unchanged segments: same cadence, ~0 response body bytes
+   *    (~1,200 header-only polls/h vs ~29 MB/h at 25 KB every 3s on a static segment)
+   */
+  const STATUS_POLL_LIVE_MS = 3000;
+  const STATUS_POLL_HIDDEN_MS = 30000;
+  const STATUS_POLL_STOPPED_MS = 3500;
+  const STATUS_POLL_STOPPED_HIDDEN_MS = 60000;
   const STATUS_POLL_DEADLINE_MS = 2400;
   let _statusPollGeneration = 0;
+  let _statusScheduleRevision = 0;
+  let _statusPollTimer = null;
+  let _statusEtag = null;
+  let _activeStatusController = null;
+
+  function _statusPollDelayMs() {
+    const stopped = Boolean(state.status && state.status.session_stopped === true);
+    if (document.hidden) {
+      return stopped ? STATUS_POLL_STOPPED_HIDDEN_MS : STATUS_POLL_HIDDEN_MS;
+    }
+    return stopped ? STATUS_POLL_STOPPED_MS : STATUS_POLL_LIVE_MS;
+  }
+
+  function _clearStatusPollTimer() {
+    if (_statusPollTimer !== null) {
+      clearTimeout(_statusPollTimer);
+      _statusPollTimer = null;
+    }
+  }
+
+  function _armStatusPoll(revision, delayMs) {
+    _statusPollTimer = setTimeout(async () => {
+      _statusPollTimer = null;
+      await fetchStatus();
+      // A visibility event may have installed a newer timer while this fetch
+      // was in flight. Only the owner of the current schedule may re-arm it.
+      if (revision !== _statusScheduleRevision) return;
+      _armStatusPoll(revision, _statusPollDelayMs());
+    }, delayMs);
+  }
+
+  function _scheduleStatusPoll({ immediate = false } = {}) {
+    const revision = ++_statusScheduleRevision;
+    _clearStatusPollTimer();
+    _armStatusPoll(revision, immediate ? 0 : _statusPollDelayMs());
+  }
+
+  function _statusClockElapsedSec() {
+    if (!Number.isFinite(state.statusClockAnchorMs)) return 0;
+    return Math.max(0, (performance.now() - state.statusClockAnchorMs) / 1000);
+  }
+
+  function _localStatusSeconds(value) {
+    return Number.isFinite(value) ? value + _statusClockElapsedSec() : null;
+  }
+
+  function _localStatusMinutes(value) {
+    return Number.isFinite(value) ? Math.floor(value) + Math.floor(_statusClockElapsedSec() / 60) : null;
+  }
+
+  function _localProgressSec() {
+    const progressSec = state.currentProgressMs / 1000;
+    const durationSec = state.segmentDurationMs / 1000;
+    if (!Number.isFinite(progressSec) || progressSec < 0 || !Number.isFinite(durationSec) || durationSec <= 0) {
+      return null;
+    }
+    return progressSec + _statusClockElapsedSec();
+  }
+
+  function _renderLocalProgress() {
+    const progressSec = _localProgressSec();
+    if (progressSec === null) return;
+    renderProgress(progressSec, state.segmentDurationMs / 1000);
+  }
+
+  function _renderLocalStatusClocks() {
+    _renderLocalProgress();
+    if (!state.status) return;
+    renderAirtime(state.status);
+    const minuteOffset = Math.floor(_statusClockElapsedSec() / 60);
+    if (minuteOffset === state.statusClockRenderedMinuteOffset) return;
+    state.statusClockRenderedMinuteOffset = minuteOffset;
+    updateCasa(state.status.ha_moments);
+  }
+
+  function _ensureProgressTicker() {
+    if (state.progressTimer !== null || _localProgressSec() === null) return;
+    state.progressTimer = setInterval(_renderLocalProgress, 1000);
+  }
+
+  function _stopProgressTicker() {
+    if (state.progressTimer === null) return;
+    clearInterval(state.progressTimer);
+    state.progressTimer = null;
+  }
+
   async function fetchStatus() {
     const generation = ++_statusPollGeneration;
+    if (_activeStatusController) _activeStatusController.abort();
     const controller = new AbortController();
+    _activeStatusController = controller;
     const deadline = setTimeout(() => controller.abort(), STATUS_POLL_DEADLINE_MS);
+    const headers = {};
+    if (_statusEtag) headers['If-None-Match'] = _statusEtag;
     try {
-      const r = await fetch(_base + '/public-status', { signal: controller.signal });
+      const r = await fetch(_base + '/public-status', { signal: controller.signal, headers });
+      const receivedAtMonoMs = performance.now();
+      if (generation !== _statusPollGeneration) return;
+      if (r.status === 304) {
+        _renderLocalStatusClocks();
+        return;
+      }
       if (!r.ok) return;
+      const responseEtag = r.headers.get('ETag');
       const status = await r.json();
       if (generation !== _statusPollGeneration) return;
+      state.statusClockAnchorMs = receivedAtMonoMs;
+      state.statusClockRenderedMinuteOffset = 0;
+      state.status = status;
       syncStationName(status);
       // Capabilities live inside the public payload (PR-B). Wrap to match the
       // legacy { capabilities: {...} } shape the rest of listener.js expects.
       const caps = { capabilities: status.capabilities || {} };
-      state.status = status;
       state.caps = caps;
       state.firstDataReceived = true;
-      state.starterCatalog = Array.isArray(status.starter_catalog) ? status.starter_catalog : [];
-      renderStarterCatalog(state.starterCatalog);
+      if (Array.isArray(status.starter_catalog)) {
+        state.starterCatalog = status.starter_catalog;
+        renderStarterCatalog(state.starterCatalog);
+      }
       // Toggle [data-cap] elements based on capabilities (design D2: client-side
       // capability-conditional rendering).
       if (typeof window.mmrApplyCaps === 'function') {
@@ -1226,14 +1347,23 @@
       ) {
         state.currentProgressMs = status.current_progress_sec * 1000;
         state.segmentDurationMs = status.current_duration_sec * 1000;
-        renderProgress(status.current_progress_sec, status.current_duration_sec);
+        _renderLocalProgress();
+        _ensureProgressTicker();
+      } else {
+        state.currentProgressMs = 0;
+        state.segmentDurationMs = 0;
+        _stopProgressTicker();
       }
+      // Publish the validator only after the parsed, current payload has been
+      // applied successfully. There is no await inside this commit boundary.
+      _statusEtag = responseEtag || null;
     } catch (e) {
       if (generation === _statusPollGeneration && e?.name !== 'AbortError') {
         console.warn('fetchStatus failed', e);
       }
     } finally {
       clearTimeout(deadline);
+      if (_activeStatusController === controller) _activeStatusController = null;
     }
   }
 
@@ -1870,10 +2000,11 @@
 
     // Kick off
     renderPalinsestoDate();
-    fetchStatus();
     fetchRequests();
-    /* fetchPublicStatus removed in PR-F */
-    setInterval(fetchStatus, STATUS_POLL_INTERVAL_MS);
+    _scheduleStatusPoll({ immediate: true });
+    document.addEventListener('visibilitychange', () => {
+      _scheduleStatusPoll({ immediate: !document.hidden });
+    });
     setInterval(fetchRequests, 60000);
   });
 })();

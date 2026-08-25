@@ -10,6 +10,7 @@ import functools
 import hashlib
 import importlib
 import ipaddress
+import json
 import logging
 import math
 import os
@@ -263,6 +264,7 @@ from mammamiradio.web.provider_verdict import (
     _run_provider_verdict,
 )
 from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
+    PUBLIC_STATUS_CACHE_CONTROL,
     _admin_track_id,
     _cached_cache_size_mb,
     _duration_sec_from_payload,
@@ -282,6 +284,8 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
     _serialize_stream_log_entry,
     _serialize_track,
     _status_now_playback,
+    public_status_etag,
+    public_status_not_modified,
 )
 from mammamiradio.web.ui_copy import copy_strings
 
@@ -11657,9 +11661,22 @@ async def readyz(request: Request):
 
 
 @router.get("/public-status")
-async def public_status(request: Request):
-    """Return listener-safe station metadata and render-ready upcoming segments."""
-    return _public_status_payload(request)
+async def public_status(request: Request) -> Response:
+    """Return listener-safe station metadata and render-ready upcoming segments.
+
+    Honors ``If-None-Match`` with a weak ETag derived from stable payload
+    fields (progress and uptime are scrubbed — the listener interpolates them).
+    """
+    payload = _public_status_payload(request)
+    etag = public_status_etag(payload)
+    headers = {
+        "ETag": etag,
+        "Cache-Control": PUBLIC_STATUS_CACHE_CONTROL,
+    }
+    if public_status_not_modified(request.headers, etag):
+        return Response(status_code=304, headers=headers)
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @router.get("/status")
