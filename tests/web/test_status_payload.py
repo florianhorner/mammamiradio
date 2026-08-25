@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -274,6 +275,16 @@ def test_serialize_stream_log_entry_uses_metadata_duration_fallback():
         "duration_sec": 12.5,
         "duration_ms": 12500,
     }
+
+
+@pytest.mark.parametrize("invalid_duration", [math.inf, -math.inf, math.nan, True])
+def test_duration_sec_from_payload_rejects_non_finite_or_boolean_values(invalid_duration):
+    payload = {
+        "duration_sec": invalid_duration,
+        "metadata": {"duration_ms": invalid_duration, "duration_s": invalid_duration},
+    }
+
+    assert status_payload._duration_sec_from_payload(payload) is None
 
 
 def test_public_segment_metadata_redacts_private_ritual_internals():

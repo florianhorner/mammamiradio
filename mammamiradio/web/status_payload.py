@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import math
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -692,18 +693,18 @@ def _paginated_tracks(
 def _duration_sec_from_payload(payload: dict | None) -> float | None:
     if not payload:
         return None
-    duration = payload.get("duration_sec")
-    if isinstance(duration, int | float) and duration > 0:
-        return float(duration)
+    duration = _positive_seconds(payload.get("duration_sec"))
+    if duration is not None:
+        return duration
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
-    duration_ms = metadata.get("duration_ms")
-    if isinstance(duration_ms, int | float) and duration_ms > 0:
-        return float(duration_ms) / 1000.0
-    duration_s = metadata.get("duration_s")
-    if isinstance(duration_s, int | float) and duration_s > 0:
-        return float(duration_s)
+    duration_ms = _positive_seconds(metadata.get("duration_ms"))
+    if duration_ms is not None:
+        return duration_ms / 1000.0
+    duration_s = _positive_seconds(metadata.get("duration_s"))
+    if duration_s is not None:
+        return duration_s
     return None
 
 
@@ -814,6 +815,11 @@ def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
 PUBLIC_STATUS_CACHE_CONTROL = "public, max-age=1"
 
 
+def normalize_public_status_json(payload: dict) -> dict:
+    """Coerce a public-status payload into strict, FastAPI-compatible JSON data."""
+    return json.loads(json.dumps(jsonable_encoder(payload)), parse_constant=lambda _value: None)
+
+
 def _scrub_public_status_for_etag(payload: dict) -> dict:
     """Remove listener-advanced clock leaves before hashing."""
     scrubbed = copy.deepcopy(payload)
@@ -835,46 +841,26 @@ def _scrub_public_status_for_etag(payload: dict) -> dict:
 
 def public_status_etag(payload: dict) -> str:
     """Weak ETag for ``/public-status`` based on stable listener facts."""
-    normalized = jsonable_encoder(_scrub_public_status_for_etag(payload))
-    body = json.dumps(normalized, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    normalized = normalize_public_status_json(_scrub_public_status_for_etag(payload))
+    body = json.dumps(normalized, allow_nan=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return f'W/"{hashlib.blake2b(body, digest_size=8).hexdigest()}"'
+
+
+_ETAG_VALUE_RE = re.compile(r'[ \t]*(?:W/)?"([\x21\x23-\x7e\x80-\xff]*)"[ \t]*(?:,|$)')
 
 
 def _etag_opaque_values(field_value: str) -> list[str] | None:
     """Parse an entity-tag list into opaque values."""
     values: list[str] = []
-    index = 0
-    length = len(field_value)
-    while index < length:
-        while index < length and field_value[index] in " \t":
-            index += 1
-        if field_value.startswith("W/", index):
-            index += 2
-        if index >= length or field_value[index] != '"':
+    position = 0
+    for match in _ETAG_VALUE_RE.finditer(field_value):
+        if match.start() != position:
             return None
-        index += 1
-        start = index
-        while index < length and field_value[index] != '"':
-            codepoint = ord(field_value[index])
-            if not (codepoint == 0x21 or 0x23 <= codepoint <= 0x7E or 0x80 <= codepoint <= 0xFF):
-                return None
-            index += 1
-        if index >= length:
-            return None
-        values.append(field_value[start:index])
-        index += 1
-        while index < length and field_value[index] in " \t":
-            index += 1
-        if index == length:
-            return values
-        if field_value[index] != ",":
-            return None
-        index += 1
-        while index < length and field_value[index] in " \t":
-            index += 1
-        if index == length:
-            return None
-    return None
+        values.append(match.group(1))
+        position = match.end()
+    if position != len(field_value) or field_value.rstrip(" \t").endswith(","):
+        return None
+    return values or None
 
 
 def public_status_not_modified(request_headers: object, etag: str) -> bool:
@@ -882,19 +868,13 @@ def public_status_not_modified(request_headers: object, etag: str) -> bool:
     getter = getattr(request_headers, "get", None)
     if not callable(getter):
         return False
-
-    raw_header_values: list[object] = []
     getlist = getattr(request_headers, "getlist", None)
-    if callable(getlist):
-        listed = getlist("if-none-match")
-        if isinstance(listed, str):
-            raw_header_values.append(listed)
-        elif listed:
-            raw_header_values.extend(listed)
-    if not raw_header_values:
-        raw_header_values.append(getter("If-None-Match") or getter("if-none-match"))
-    header_values = [value for value in raw_header_values if isinstance(value, str)]
-    if not header_values or len(header_values) != len(raw_header_values):
+    header_values = getlist("if-none-match") if callable(getlist) else []
+    if isinstance(header_values, str):
+        header_values = [header_values]
+    if not header_values:
+        header_values = [getter("If-None-Match") or getter("if-none-match")]
+    if not all(isinstance(value, str) for value in header_values):
         return False
     if_none_match = ",".join(header_values)
     if if_none_match.strip() == "*":
@@ -912,8 +892,8 @@ def _serialize_stream_log_entry(entry) -> dict:
         "timestamp": entry.timestamp,
         "metadata": _public_segment_metadata(entry.metadata),
     }
-    duration_sec = float(getattr(entry, "duration_sec", 0.0) or 0.0)
-    if duration_sec <= 0:
+    duration_sec = _positive_seconds(getattr(entry, "duration_sec", 0.0))
+    if duration_sec is None:
         duration_sec = _duration_sec_from_payload({"metadata": entry.metadata}) or 0.0
     if duration_sec > 0:
         payload["duration_sec"] = duration_sec

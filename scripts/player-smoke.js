@@ -562,9 +562,6 @@ async (page) => {
     return el ? JSON.parse(el.textContent) : {};
   });
 
-  // Take control of the recursive scheduler and accept one fresh 200 while the
-  // browser wall clock is deliberately five minutes ahead of the server.
-  // Progress must be anchored to the payload plus monotonic client elapsed time.
   rotationTrackCount = 55;
   const clockAnchorPoll = statusResponses.length;
   await page.evaluate(() => {
@@ -603,8 +600,6 @@ async (page) => {
     `server/browser wall-clock skew corrupted progress: ${JSON.stringify(initialClockState)}`,
   );
 
-  // A bodyless 304 must still advance every visible clock from the accepted
-  // 200 anchor. Flip the wall clock behind the server to prove it is irrelevant.
   conditionalStatusResponses = true;
   const firstNotModifiedPoll = statusResponses.length;
   await page.evaluate(() => {
@@ -637,7 +632,6 @@ async (page) => {
     `bodyless 304 did not advance progress monotonically: ${advancedProgress}`,
   );
 
-  // Same-minute 304s must not rebuild the Casa aria-live subtree.
   await page.evaluate(() => {
     window.__playerSmokeCasaMutationCount = 0;
     window.__playerSmokeCasaObserver = new MutationObserver((records) => {
@@ -665,7 +659,6 @@ async (page) => {
     'same-minute 304 rewrote the Casa live region',
   );
 
-  // Restore normal accelerated polling for the broader interaction suite.
   conditionalStatusResponses = false;
   const clockResetPoll = statusResponses.length;
   await page.evaluate(() => {
@@ -1194,10 +1187,6 @@ async (page) => {
   assert(genericAdSurfaces.mediaTitle === genericAdSurfaces.title, 'generic Media Session title did not match the visible title');
   assert(genericAdSurfaces.mediaArtist === genericAdSurfaces.secondary, 'generic Media Session label did not match the visible label');
 
-  // Quiesce the accelerated loop, then hold poll N after JSON parsing. A
-  // visibility-triggered poll N+1 must still send the last *applied* ETag and
-  // receive the changed body. Committing N's ETag before its body wins would
-  // make N+1 return 304 and wedge the UI on the previous segment forever.
   await page.evaluate(() => {
     window.__playerSmokeAccelerateStatusPolls = false;
     window.__playerSmokeDocumentHidden = true;

@@ -29,7 +29,6 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -285,6 +284,7 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export â€
     _serialize_stream_log_entry,
     _serialize_track,
     _status_now_playback,
+    normalize_public_status_json,
     public_status_etag,
     public_status_not_modified,
 )
@@ -11664,7 +11664,7 @@ async def readyz(request: Request):
 @router.get("/public-status")
 async def public_status(request: Request) -> Response:
     """Return listener-safe status with semantic ETag/304 revalidation."""
-    payload = jsonable_encoder(_public_status_payload(request))
+    payload = normalize_public_status_json(_public_status_payload(request))
     etag = public_status_etag(payload)
     headers = {
         "ETag": etag,
@@ -11672,7 +11672,7 @@ async def public_status(request: Request) -> Response:
     }
     if public_status_not_modified(request.headers, etag):
         return Response(status_code=304, media_type="application/json", headers=headers)
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    body = json.dumps(payload, allow_nan=False, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return Response(content=body, media_type="application/json", headers=headers)
 
 
