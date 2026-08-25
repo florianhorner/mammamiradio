@@ -72,7 +72,8 @@ async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_ro
     state.home_authorization = HomeAuthorization.legacy()
     state.moment_store = MomentStore()
     state.ha_last_event_label = "Porta ingresso"
-    state.ha_last_event_ts = time.time() - 20 * 60
+    minute = (time.time() // 60 - 1) * 60
+    state.ha_last_event_ts = minute + 30
     for _ in range(3):
         state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="aired")
     first = await _get_public_status(app)
@@ -82,7 +83,7 @@ async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_ro
     state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="aired")
     rolled = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
     assert rolled.status_code == 200 and rolled.json()["ha_moments"]["recent"] == first.json()["ha_moments"]["recent"]
-    state.ha_last_event_ts = time.time() - 60
+    state.ha_last_event_ts = minute + 31
     second = await _get_public_status(app, {"If-None-Match": rolled.headers["ETag"]})
     assert second.status_code == 200 and second.headers["ETag"] != rolled.headers["ETag"]
     assert second.json()["ha_moments"]["last_event_ago_min"] == 1
