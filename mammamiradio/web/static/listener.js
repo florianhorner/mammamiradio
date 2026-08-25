@@ -1191,14 +1191,8 @@
    * replaces the old /status + /api/capabilities pair. Works on any deploy (loopback,
    * LAN, public) without the 401 risk of admin-only routes.
    *
-   * Poll budget (#931):
-   *  - Live, visible tab: 3s (segment changes within a few seconds)
-   *  - Live, hidden tab: 30s (immediate catch-up poll when the tab returns)
-   *  - Stopped, visible: 3.5s (external resumes remain visible within a few seconds)
-   *  - Idle, visible: 3.5s (slower than live while retaining prompt wake-up)
-   *  - Idle/stopped, hidden: 60s
-   *  - ETag/304 on unchanged segments: same cadence, ~0 response body bytes
-   *    (~1,200 header-only polls/h vs ~29 MB/h at 25 KB every 3s on a static segment)
+   * Poll budget (#931): live visible 3s; idle/stopped visible 3.5s; live hidden
+   * 30s; idle/stopped hidden 60s. ETag/304 keeps unchanged response bodies empty.
    */
   const STATUS_POLL_LIVE_MS = 3000;
   const STATUS_POLL_HIDDEN_MS = 30000;

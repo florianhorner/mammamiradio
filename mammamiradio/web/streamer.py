@@ -11663,11 +11663,7 @@ async def readyz(request: Request):
 
 @router.get("/public-status")
 async def public_status(request: Request) -> Response:
-    """Return listener-safe station metadata and render-ready upcoming segments.
-
-    Honors ``If-None-Match`` with a weak ETag derived from stable payload
-    fields (progress and uptime are scrubbed — the listener interpolates them).
-    """
+    """Return listener-safe status with semantic ETag/304 revalidation."""
     payload = jsonable_encoder(_public_status_payload(request))
     etag = public_status_etag(payload)
     headers = {

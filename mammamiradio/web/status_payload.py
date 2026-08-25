@@ -815,13 +815,7 @@ PUBLIC_STATUS_CACHE_CONTROL = "public, max-age=1"
 
 
 def _scrub_public_status_for_etag(payload: dict) -> dict:
-    """Drop fields that change every poll without a segment or state transition.
-
-    ``current_progress_sec`` and ``uptime_sec`` advance on every request; HA
-    moment age and queue-empty elapsed time are wall-clock derived the same way.
-    The listener page advances every visible clock from the last accepted 200
-    response while semantic facts remain protected by the validator.
-    """
+    """Remove listener-advanced clock leaves before hashing."""
     scrubbed = copy.deepcopy(payload)
     scrubbed.pop("current_progress_sec", None)
     scrubbed.pop("uptime_sec", None)
@@ -847,12 +841,7 @@ def public_status_etag(payload: dict) -> str:
 
 
 def _etag_opaque_values(field_value: str) -> list[str] | None:
-    """Parse an entity-tag list and return opaque values without weakness.
-
-    A comma is legal inside an opaque tag, so splitting the field on commas is
-    not sufficient. Malformed input returns ``None`` and therefore falls back
-    to a normal 200 response.
-    """
+    """Parse an entity-tag list into opaque values."""
     values: list[str] = []
     index = 0
     length = len(field_value)
