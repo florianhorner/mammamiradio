@@ -1257,6 +1257,7 @@ async def test_recovery_sweeper_segment_renders_tts_with_sting(tmp_path):
         "title": "Recovery sweeper",
         "error_recovery": True,
         "rescue": True,
+        "clip_audio_class": "unknown",
     }
     mock_synthesize.assert_awaited_once()
     assert mock_synthesize.call_args.args[:2] == ("Mamma Mi Radio resta in onda.", "marin")
@@ -9821,6 +9822,7 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
     seg = queue.get_nowait()
     assert seg.metadata.get("resume_bridge") is True
     assert seg.path == norm_file
+    assert seg.metadata["clip_audio_class"] == "unknown"
 
 
 class TestBanterHosts:

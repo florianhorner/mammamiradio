@@ -67,7 +67,7 @@ from mammamiradio.scheduling.producer import (
     prewarm_first_segment,
     run_producer,
 )
-from mammamiradio.web.status_payload import _source_readiness_status
+from mammamiradio.web.status_payload import _public_segment_metadata, _source_readiness_status
 from mammamiradio.web.streamer import _apply_ban
 
 PRODUCER_MODULE = "mammamiradio.scheduling.producer"
@@ -685,6 +685,10 @@ async def test_direct_enqueue_publishes_matching_shadow_row(tmp_path):
     assert state.queued_segments[0]["id"] == seg.metadata["queue_id"]
     assert state.queued_segments[0]["label"] == "Resume bridge"
     assert SEGMENT_PLAYLIST_SOURCE_KIND_KEY not in seg.metadata
+    # Recovery/legacy construction paths carry no provenance proof. The common
+    # enqueue funnel must fail closed instead of treating their type as speech.
+    assert seg.metadata["clip_audio_class"] == "unknown"
+    assert "clip_audio_class" not in _public_segment_metadata(seg.metadata)
     m_chain.assert_not_called()  # rescue skipped the egress colour pass
 
 
