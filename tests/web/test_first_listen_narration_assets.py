@@ -411,7 +411,7 @@ def test_admin_guide_metadata_requires_exactly_one_play_button_per_container(tmp
     welcome_button = (
         '<button type="button" class="guide-audio-play" data-guide-key="welcome" '
         'aria-describedby="guideWelcomeNote" onclick="toggleFirstListenGuide(\'welcome\',this)">'
-        "Hear Marco and Giulia</button>"
+        "Preview 16-second welcome</button>"
     )
     assert source.count(welcome_button) == 1
     source = source.replace(welcome_button, f"{welcome_button}{welcome_button}", 1)

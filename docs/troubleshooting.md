@@ -382,9 +382,9 @@ Voice validation now runs at config load, not at synthesis time:
 ## First Listen does not play on this device
 
 Required First Listen proof is hearing the station in the add-on Web UI on this
-device. If **Play the station** is quiet, check mute and volume on this tab,
+device. If **Start sound check** is quiet, check mute and volume on this tab,
 confirm the sound is coming from this browser and not another app, then try
-**Play the station** again. Technical details under the journey name the stream
+**Start sound check** again. Technical details under the journey name the stream
 URL. Home Assistant speakers are an optional later route, not this step.
 
 ## First Listen: the optional Home Assistant speaker route is quiet

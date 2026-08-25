@@ -17,8 +17,7 @@ Install and start the Home Assistant OS app below, then open the producer desk
 at `/admin`. First Listen plays `/stream` here — laptop speaker, headphones,
 Bluetooth, or AirPlay. No HACS integration is required. A fresh unfinished
 install opens **First Listen** automatically; completed installs return to the
-control room, while the same tab remains available to review progress or repair
-an unfinished step:
+control room, with review and repair under **Motore → Setup**:
 
 1. The opening card explains the authored 27-second mini-show: an original
    music bed, Marco and Giulia's privacy-aware welcome, then a handoff to the
@@ -27,7 +26,7 @@ an unfinished step:
    sits underneath as supporting detail. It says whether primary music,
    recovery cover, or a music repair is what follows; bundled demo music is not
    presented as a song library.
-2. Select **Play the station**. Confirm with **Yes, I hear it** only after you
+2. Select **Start sound check**. Confirm with **Yes, I hear it** only after you
    hear Mamma Mi Radio, or **Not yet** for
    [warm repair steps](docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
 3. Select **Keep Home private** without reading Home state, or
@@ -71,12 +70,12 @@ See [Music sources and rights boundaries](docs/music-sources.md).
 
 First audio is separate from home context. On every fresh install, the
 **Host home context** choice is omitted and remains off until you hear the
-station, request a fresh filtered preview, and explicitly choose **Let future
-hosts use this**.
+station, request a fresh filtered preview, and explicitly choose **Let Marco
+and Giulia use these details**.
 Previewing does not publish the snapshot into host scripts or send it to an AI
 provider. If that preview contains only generic daylight, it is shown for
 transparency but classified as ambient-only—not meaningful personalization—and
-**Keep private and continue** is recommended. That private choice preserves
+**Keep Home private** is recommended. That private choice preserves
 Home Assistant entity publishing while suspending Home-state polling, timer
 reads/interrupts, and Home-derived host work.
 

@@ -64,26 +64,40 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert positions == sorted(positions)
     assert html.count('class="first-listen-step"') == 5
     assert 'id="firstListenPath"' in html
+    path = html[html.index('id="firstListenPath"') : html.index('id="firstListenOptional"')]
+    assert path.count('class="first-listen-step"') == 4
+    assert 'id="firstListenAiStep"' not in path
+    assert "Optional enhancement" in html
+    assert (
+        html.index('id="firstListenPath"')
+        < html.index('id="firstListenOptional"')
+        < html.index('id="firstListenAiStep"')
+    )
     assert "Hear Mamma Mi Radio right here." in html
+    assert '<header class="mmr-panel-head sr-only">' in html
     assert "Meet Marco and Giulia" in html
     assert "Play it on this device" in html
-    assert "Play the station" in html
+    assert "Start sound check" in html
     assert "Check the sound" in html
     assert "Choose whether the hosts can use Home details" in html
     assert "Add new conversations between songs" in html
-    assert "Step 1 of 5. Next: play it on this device." in html
+    assert "Step 1 of 4. Next: play it on this device." in html
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
     assert "const current=state==='current'" in step
     assert "const reviewing=_firstListenUi.reviewStep===key" in step
     assert "const optionalOpen=_firstListenUi.optionalStep===key" in step
-    assert "if(current)step.setAttribute('aria-current','step');else step.removeAttribute('aria-current')" in step
+    assert (
+        "if(current&&key!=='ai')step.setAttribute('aria-current','step');else step.removeAttribute('aria-current')"
+        in step
+    )
     assert "const anotherExpansion=Boolean(_firstListenUi.reviewStep||_firstListenUi.optionalStep)" in step
     assert "const visible=reviewing||optionalOpen||(current&&!anotherExpansion)" in step
     assert "body.hidden=!visible" in step
     assert "body.setAttribute('aria-hidden',visible?'false':'true')" in step
     assert "body.toggleAttribute('inert',!visible)" in step
     assert "review.hidden=state!=='complete'" in step
+    assert "FIRST_LISTEN_REVIEW_LABELS[key]" in step
     assert "review.setAttribute('aria-expanded',reviewing?'true':'false')" in step
     collapsed_bodies = re.findall(r'<div class="first-listen-body"[^>]*\bhidden\b[^>]*\binert\b', html)
     assert len(collapsed_bodies) == 4
@@ -102,6 +116,28 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "firstListenAiStep',configuredKeys.length?'current'" not in progress
 
 
+def test_completed_first_listen_hides_setup_tab_and_routes_repair_to_motore() -> None:
+    html = _html()
+    for state in ("pending", "complete"):
+        assert f'body[data-first-listen-entry="{state}"] #tab-setup' in html
+        assert f'body[data-first-listen-entry="{state}"] #first-listen-panel' in html
+    sections = (
+        ("showAdminTab", "syncFirstListenSetupMount",
+         ("!['required','completing'].includes", "if(name!=='setup')finalizeFirstListenCompletion()")),
+        ("initTabs", "initProgrammeActions", ("adminTabsForNav()", "if(initTab==='setup')initTab='scaletta'")),
+        ("renderSetup", "setupRecheck", ("firstListenEntry==='required'", "firstListenTabAlert")),
+        ("finalizeFirstListenCompletion", "showAdminTab",
+         ("firstListenEntry!=='completing'", "stopFirstListenGuide()", "stopFirstListenStationAudio()",
+          "firstListenEntry='complete'", "syncFirstListenSetupMount()")),
+        ("resolveFirstListenLanding", "renderGuidedSetupStrip",
+         ("_activeTab==='setup'&&_firstListenUi.showSuccess", "previous==='completing'",
+          "preserveSuccess?'completing':required?'required':'complete'")),
+    )  # fmt: skip
+    for start, end, needles in sections:
+        body = _function(start, end)
+        assert all(needle in body for needle in needles)
+
+
 def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
     html = _html()
     assert 'data-tab="setup"' in html
@@ -116,8 +152,15 @@ def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
     assert 'id="firstListenQuickCopy"' not in html
     assert html.index('data-tab="setup"') < html.index('data-tab="scaletta"')
 
-    mount = _function("initFirstListenPanelMount", "initTabs")
-    assert "mount.append(details)" in mount
+    mount = _function("syncFirstListenSetupMount", "initTabs")
+    for needle in ("entry==='required'", "firstListenSetupContext", "target.appendChild(context)",
+                   "entry==='completing'", "const hide=!guided"):  # fmt: skip
+        assert needle in mount
+    assert 'id="firstListenSetupContext"' in html
+    assert 'class="first-listen-panel first-listen-context"' in html
+    css = _css()
+    assert "#first-listen-panel .setup-group > summary" in css
+    assert ".first-listen-panel .setup-group > summary" not in css
 
     origin_gate = _function("firstListenInstallNeedsOnboarding", "firstListenEntryRequired")
     assert "first?.install_origin||'unknown'" in origin_gate
@@ -133,14 +176,15 @@ def test_unfinished_fresh_install_owns_a_top_level_first_surface() -> None:
 
     resolve = _function("resolveFirstListenLanding", "renderGuidedSetupStrip")
     assert "if(_firstListenLandingResolved)return" in resolve
+    assert "syncFirstListenSetupMount()" in resolve
+    assert "previous==='required'&&!required&&_activeTab==='setup'" in resolve
     assert "required&&!_adminTabUserInteracted" in resolve
     assert "showAdminTab('setup',{render:true,persist:false})" in resolve
     assert "focus(" not in resolve
 
-    manual = _function("openSetupPanel", "firstListenEntryRequired")
-    assert "showAdminTab('setup',{render:true,persist:true})" in manual
+    manual = _function("openSetupPanel", "openMusicSourceTools")
+    assert "firstListenRequired?'setup':'motore'" in manual
     assert "details.dataset.userPinned='true'" in manual
-    assert "tab-motore" not in manual
 
 
 def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None:
@@ -191,7 +235,7 @@ def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> Non
         "{heard:requestedHeard},FIRST_LISTEN_TIMEOUTS.verify)" in html
     )
     assert "media-source://mammamiradio/live" in html
-    assert "Play the station" in html
+    assert "Start sound check" in html
     assert "Yes, I hear it" in html
     assert "Not yet" in html
     audio_tag = re.search(r'<audio id="firstListenStationAudio"[^>]*>', html)
@@ -366,7 +410,7 @@ def test_first_listen_actions_fail_closed_on_http_or_payload_errors() -> None:
     privacy = _function("chooseFirstListenPrivacy", "renderHomeContextPreviewGate")
     assert "api('PATCH','/api/setup/home-context-choice'" not in privacy
     assert "if(!choiceSaved){" in privacy
-    assert privacy.index("if(!choiceSaved){") < privacy.index("_firstListenUi.showSuccess=celebrate")
+    assert privacy.index("if(!choiceSaved){") < privacy.index("_firstListenUi.showSuccess=showCelebration")
 
 
 def test_first_listen_side_effect_responses_are_bound_to_the_exact_request() -> None:
@@ -625,23 +669,46 @@ def test_first_listen_controls_have_accessible_busy_and_mobile_contracts() -> No
     assert '<link rel="stylesheet" href="/static/first-listen.css">' in html
     assert ".first-listen-panel .first-listen-review {" in css
     assert "@media (max-width: 430px)" in css
+    assert "@media (max-width: 720px)" in css
     assert "width: min(42.5rem, 100%)" in css
     assert 'aria-live="polite" aria-atomic="true"' in html
     assert "setAttribute('aria-busy','true')" in html
     assert "prefers-reduced-motion: reduce" in css
 
 
+def test_first_listen_uses_truthful_action_copy() -> None:
+    html = _html()
+    progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
+    for copy in ("Preview 16-second welcome", "Start sound check", "Review opening", "Review playback",
+                 "Review sound check", "Review privacy choice", "Review AI setup"):  # fmt: skip
+        assert copy in html
+    for copy in ("Start sound check again", "firstListenSetChip('firstListenSpeakerChip','working','Start here')",
+                 "Tap Start sound check to hear it on this device."):  # fmt: skip
+        assert copy in progress
+    assert "Play the station" not in html
+
+
+def test_first_listen_program_mark_reuses_canonical_favicon() -> None:
+    html = _html()
+    mark = html[html.index('class="program-mark"') : html.index("program-label")]
+    assert all(needle in mark for needle in ('src="/static/favicon.svg"', 'alt=""', "aria-hidden"))
+    assert ">Mi<" not in mark
+    wordmark = html[html.index('<h1 class="wm">') : html.index("</h1>")]
+    assert 'class="mi">Mi</span>' in wordmark
+
+
 def test_completed_rows_review_inline_without_stealing_current_step() -> None:
     html = _html()
     assert html.count('onclick="toggleFirstListenReview(') == 4
-    for key, body in (
-        ("source", "firstListenSourceBody"),
-        ("speaker", "firstListenSpeakerBody"),
-        ("verify", "firstListenVerifyBody"),
-        ("privacy", "firstListenPrivacyBody"),
+    for key, body, label in (
+        ("source", "firstListenSourceBody", "Review opening"),
+        ("speaker", "firstListenSpeakerBody", "Review playback"),
+        ("verify", "firstListenVerifyBody", "Review sound check"),
+        ("privacy", "firstListenPrivacyBody", "Review privacy choice"),
     ):
         assert f'data-review-step="{key}"' in html
         assert f'aria-controls="{body}"' in html
+        assert label in html
     assert 'aria-expanded="false"' in html
 
     toggle = _function("toggleFirstListenReview", "toggleFirstListenOptional")
@@ -795,7 +862,7 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
     assert "Bravo! Your first broadcast is complete." in html
     assert "Your station is on air." in html
     assert "Open full listener" in html
-    assert 'onclick="openListener()"' in html
+    assert 'onclick="openFirstListenListener()"' in html
     success_actions = html[html.index('class="success-actions"') : html.index('id="firstListenSuccessRepair"')]
     assert success_actions.index("Open full listener") < success_actions.index("Station controls")
     assert "Review choices" in html
@@ -817,7 +884,7 @@ def test_fresh_completion_uses_a_separate_success_surface() -> None:
     assert "const priorInstall=projection.legacy||projection.first.install_origin==='existing'" in choice
     assert "const reviewingPrivacy=_firstListenUi.reviewStep==='privacy'" in choice
     assert "const celebrate=!projection.privacyReviewed&&projection.heard&&!priorInstall&&!reviewingPrivacy" in choice
-    assert "_firstListenUi.showSuccess=celebrate" in choice
+    assert "_firstListenUi.showSuccess=showCelebration" in choice
 
 
 def test_setup_alert_uses_canonical_onboarding_requirement_not_optional_ai_todos() -> None:
@@ -1023,9 +1090,15 @@ def test_leaving_first_listen_releases_the_station_audio_element() -> None:
     assert "stopFirstListenStationAudio()" in open_listener
     assert open_listener.index("stopFirstListenStationAudio()") < open_listener.index("window.open(")
 
+    finalize = _function("finalizeFirstListenCompletion", "showAdminTab")
+    assert "stopFirstListenStationAudio()" in finalize
+    assert finalize.index("stopFirstListenStationAudio()") < finalize.index("syncFirstListenSetupMount()")
+
+    open_listener_exit = _function("openFirstListenListener", "openFirstListenStation")
+    assert open_listener_exit.index("showAdminTab('scaletta'") < open_listener_exit.index("openListener()")
+
     open_station = _function("openFirstListenStation", "startFirstListenClock")
-    assert "stopFirstListenStationAudio()" in open_station
-    assert open_station.index("stopFirstListenStationAudio()") < open_station.index("showAdminTab(")
+    assert "showAdminTab('scaletta'" in open_station
 
     # Every other tab switch (direct clicks, "Repair music source", any future
     # caller of showAdminTab) is covered separately -- see
@@ -1202,7 +1275,7 @@ def test_leaving_the_setup_tab_by_any_route_stops_the_station_audio() -> None:
     clicks and the "Repair music source" shortcut both route through
     showAdminTab and left it playing as a phantom listener.
     """
-    show_tab = _function("showAdminTab", "initFirstListenPanelMount")
+    show_tab = _function("showAdminTab", "syncFirstListenSetupMount")
     assert "stopFirstListenStationAudio()" in show_tab
     assert show_tab.index("stopFirstListenGuide()") < show_tab.index("stopFirstListenStationAudio()")
 
