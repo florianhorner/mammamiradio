@@ -5921,9 +5921,9 @@ async def _run_producer_inner(
             _was_idle = False
         _producer_idle_logged = False
 
-        # Mid-playback drain guard: if the queue hits zero after production has
-        # started, or an urgent interrupt just created that empty boundary, seed
-        # recovery audio before beginning the potentially slow urgent render.
+        # Mid-playback drain guard: if the queue hits zero after this producer
+        # admitted audio, startup prewarm admitted audio, or an urgent interrupt
+        # actually purged buffered audio, seed recovery before a slow render.
         # _drain_guard_queued prevents re-firing until a real segment lands.
         # A listener handoff is the one exception: once its dedication has been
         # queued, the promised song owns this producer boundary even if playback
@@ -5931,7 +5931,14 @@ async def _run_producer_inner(
         # recovery ladder still cover a render that cannot finish in time.
         if (
             queue.empty()
-            and (_segments_produced > 0 or state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT)
+            and (
+                _segments_produced > 0
+                or state.segments_produced > 0
+                or (
+                    state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+                    and state.discard_by_reason.get(GenerationWasteReason.INTERRUPT, 0) > 0
+                )
+            )
             and not _drain_guard_queued
             and state.listener_request_handoff is None
             and await _queue_drain_recovery_bridge(_queue_segment, state, config)
