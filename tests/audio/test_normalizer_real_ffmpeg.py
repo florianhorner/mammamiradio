@@ -219,6 +219,7 @@ def test_decoder_safe_mp3_window_renders_decodable_bounded_audio(tmp_path):
         preroll_samples=window.preroll_samples,
         sample_count=window.audible_sample_count,
         sample_rate=window.sample_rate,
+        bitrate_kbps=160,
     )
 
     subprocess.run(

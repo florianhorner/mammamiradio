@@ -40,6 +40,7 @@ def test_render_decoder_safe_mp3_window_trims_samples_and_publishes_atomically(
         preroll_samples=11_520,
         sample_count=57_600,
         sample_rate=48_000,
+        bitrate_kbps=160,
     )
 
     assert result == output
@@ -50,6 +51,7 @@ def test_render_decoder_safe_mp3_window_trims_samples_and_publishes_atomically(
     assert cmd[cmd.index("-filter:a") + 1] == ("atrim=start_sample=11520:end_sample=69120,asetpts=PTS-STARTPTS")
     assert cmd[cmd.index("-ar") + 1] == "48000"
     assert cmd[cmd.index("-c:a") + 1] == "libmp3lame"
+    assert cmd[cmd.index("-b:a") + 1] == "160k"
     assert cmd[cmd.index("-write_xing") + 1] == "1"
     assert cmd[cmd.index("-f") + 1] == "mp3"
     assert invocation["kwargs"] == {"background": True}
@@ -85,6 +87,7 @@ def test_render_decoder_safe_mp3_window_preserves_output_and_cleans_partial_on_t
             preroll_samples=1152,
             sample_count=2304,
             sample_rate=48_000,
+            bitrate_kbps=192,
         )
 
     assert caught.value.__cause__ is tool_error
@@ -108,6 +111,7 @@ def test_render_decoder_safe_mp3_window_rejects_empty_ffmpeg_output(
             preroll_samples=0,
             sample_count=1152,
             sample_rate=48_000,
+            bitrate_kbps=192,
         )
 
     assert not output.exists()
@@ -139,6 +143,7 @@ def test_render_decoder_safe_mp3_window_cleans_staging_when_atomic_replace_fails
             preroll_samples=0,
             sample_count=1152,
             sample_rate=48_000,
+            bitrate_kbps=192,
         )
 
     assert output.read_bytes() == b"old"
@@ -146,14 +151,16 @@ def test_render_decoder_safe_mp3_window_cleans_staging_when_atomic_replace_fails
 
 
 @pytest.mark.parametrize(
-    ("preroll_samples", "sample_count", "sample_rate"),
+    ("preroll_samples", "sample_count", "sample_rate", "bitrate_kbps"),
     [
-        (-1, 1152, 48_000),
-        (0, 0, 48_000),
-        (0, 1152, 0),
-        (False, 1152, 48_000),
-        (0, True, 48_000),
-        (0, 1152, 48_000.0),
+        (-1, 1152, 48_000, 192),
+        (0, 0, 48_000, 192),
+        (0, 1152, 0, 192),
+        (0, 1152, 48_000, 0),
+        (False, 1152, 48_000, 192),
+        (0, True, 48_000, 192),
+        (0, 1152, 48_000.0, 192),
+        (0, 1152, 48_000, 192.0),
     ],
 )
 def test_render_decoder_safe_mp3_window_rejects_invalid_sample_bounds_before_writing(
@@ -162,6 +169,7 @@ def test_render_decoder_safe_mp3_window_rejects_invalid_sample_bounds_before_wri
     preroll_samples: Any,
     sample_count: Any,
     sample_rate: Any,
+    bitrate_kbps: Any,
 ) -> None:
     run_ffmpeg = pytest.fail
     monkeypatch.setattr(normalizer, "_run_ffmpeg", run_ffmpeg)
@@ -174,6 +182,7 @@ def test_render_decoder_safe_mp3_window_rejects_invalid_sample_bounds_before_wri
             preroll_samples=preroll_samples,
             sample_count=sample_count,
             sample_rate=sample_rate,
+            bitrate_kbps=bitrate_kbps,
         )
 
     assert not output.parent.exists()

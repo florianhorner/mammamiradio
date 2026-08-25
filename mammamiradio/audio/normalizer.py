@@ -317,27 +317,32 @@ def render_decoder_safe_mp3_window(
     preroll_samples: int,
     sample_count: int,
     sample_rate: int,
+    bitrate_kbps: int,
 ) -> Path:
     """Decode, trim, and atomically publish a standalone MP3 window.
 
     ``input_path`` starts at a decoder-safe frame boundary. The leading
     ``preroll_samples`` exist only to restore MPEG Layer III decoder state and
     are removed before encoding exactly ``sample_count`` audible samples.
+    Callers pass the station's configured ``audio.bitrate`` as
+    ``bitrate_kbps`` so this publication path cannot drift from stream output.
 
     FFmpeg failures and empty renders raise :class:`DecoderSafeMp3RenderError`.
     Filesystem failures raise :class:`OSError`. A failed render never replaces
     an existing ``output_path`` and always removes its private staging file.
     """
 
-    sample_values = (preroll_samples, sample_count, sample_rate)
+    sample_values = (preroll_samples, sample_count, sample_rate, bitrate_kbps)
     if any(not isinstance(value, int) or isinstance(value, bool) for value in sample_values):
-        raise ValueError("decoder-safe MP3 sample bounds must be integers")
+        raise ValueError("decoder-safe MP3 render parameters must be integers")
     if preroll_samples < 0:
         raise ValueError("decoder-safe MP3 preroll_samples must be non-negative")
     if sample_count <= 0:
         raise ValueError("decoder-safe MP3 sample_count must be positive")
     if sample_rate <= 0:
         raise ValueError("decoder-safe MP3 sample_rate must be positive")
+    if bitrate_kbps <= 0:
+        raise ValueError("decoder-safe MP3 bitrate_kbps must be positive")
 
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -366,7 +371,7 @@ def render_decoder_safe_mp3_window(
             "-c:a",
             "libmp3lame",
             "-b:a",
-            "192k",
+            f"{bitrate_kbps}k",
             "-map_metadata",
             "-1",
             "-id3v2_version",
