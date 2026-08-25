@@ -97,8 +97,8 @@ the following after you have installed the integration and restarted Home
 Assistant. The media-player ownership choice above does not change this route.
 
 1. Open the Mamma Mi Radio add-on Web UI. A fresh unfinished install opens
-   **First Listen** automatically; completed or existing installs can select
-   the same tab explicitly.
+   **First Listen** automatically; completed installs review or repair it under
+   **Motore → Setup**.
 2. The opening card puts a reviewed 27-second Mamma Mi Radio mini-show on deck:
    an original music bed plus a privacy-aware Marco/Giulia welcome, then a
    handoff to the live stream. It uses neither an AI key nor Home context.
@@ -145,8 +145,8 @@ If First Listen says the listening check was not saved, select **Restore sound
 check**. That action only retries the local receipt write; it does not replay
 the station or send another playback request. A refresh in the same app process
 restores that recovery choice. If the app restarted and the unsaved proof is
-gone, First Listen says so and asks you to refresh, then play the station on
-this device once more.
+gone, First Listen says so and asks you to refresh, then select **Start sound
+check** on this device once more.
 
 If the privacy choice takes effect but its setup review is not saved, the live
 choice remains in force. For the private choice, select **Save private choice

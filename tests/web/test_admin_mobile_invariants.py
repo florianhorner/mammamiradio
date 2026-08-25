@@ -547,9 +547,9 @@ def test_record_hunt_card_and_library_tools_are_mobile_safe() -> None:
     assert css.rfind(".library-tools-body { grid-template-columns: 1fr; }") > css.index(".library-tools-body {")
     assert chips.get("min-width") == "0"
     assert phone_row.get("display") == "grid"
-    assert phone_row.get("grid-template-columns") == "44px 44px 32px minmax(0, 1fr)"
+    assert phone_row.get("grid-template-columns") == "44px 32px minmax(0,1fr)"
     assert phone_row.get("column-gap") == "4px"
-    assert phone_meta.get("grid-column") == "4 / -1"
+    assert phone_meta.get("grid-column") == "1/-1"
     assert phone_meta.get("grid-row") == "2"
     assert phone_meta.get("display") == "flex"
     assert phone_meta.get("flex-wrap") == "wrap"
@@ -559,7 +559,7 @@ def test_record_hunt_card_and_library_tools_are_mobile_safe() -> None:
     assert phone_chips.get("flex-wrap") == "wrap"
     assert phone_actions.get("grid-row") == "3"
     assert phone_ban.get("grid-row") == "3"
-    assert "grid-template-columns: 44px 44px 32px minmax(0, 1fr) auto" not in phone_css
+    assert _declarations_for_selector(phone_css, ".pl-grip").get("display") == "none"
     assert "white-space: nowrap" in css[css.index(".hunt-pick") : css.index(".pl-a {")]
 
     _assert_touch_target(".record-hunt-button")
