@@ -279,11 +279,8 @@ def test_serialize_stream_log_entry_uses_metadata_duration_fallback():
 
 @pytest.mark.parametrize("invalid_duration", [math.inf, -math.inf, math.nan, True, 10**1000])
 def test_duration_sec_from_payload_rejects_non_finite_or_boolean_values(invalid_duration):
-    payload = {
-        "duration_sec": invalid_duration,
-        "metadata": {"duration_ms": invalid_duration, "duration_s": invalid_duration},
-    }
-
+    metadata = dict.fromkeys(("duration_ms", "duration_s"), invalid_duration)
+    payload = {"duration_sec": invalid_duration, "metadata": metadata}
     assert status_payload._duration_sec_from_payload(payload) is None
 
 
@@ -655,10 +652,8 @@ def test_public_status_etag_is_deterministic_and_ignores_every_listener_advanced
     other["runtime_health"]["queue_empty_elapsed_s"] = 90.1
     other["ha_moments"]["last_event_ago_min"] = 2
     other["ha_moments"]["recent"][0]["ago_min"] = 2
-
     assert status_payload.public_status_etag(payload) == status_payload.public_status_etag(other)
     assert payload == original, "ETag normalization mutated the response payload"
-
     semantic_change = copy.deepcopy(payload)
     semantic_change["ha_moments"]["recent"][0]["status"] = "airing"
     assert status_payload.public_status_etag(payload) != status_payload.public_status_etag(semantic_change)
@@ -670,7 +665,6 @@ def test_public_status_etag_is_deterministic_and_ignores_every_listener_advanced
 def test_public_status_etag_tolerates_nonstandard_recent_shapes(recent):
     payload = {"ha_moments": {"recent": recent}}
     original = copy.deepcopy(payload)
-
     assert status_payload.public_status_etag(payload).startswith('W/"')
     assert payload == original
 
@@ -697,13 +691,5 @@ def test_public_status_not_modified_honors_if_none_match(header, etag, expected)
 
 
 def test_public_status_not_modified_combines_repeated_header_lines():
-    class RepeatedHeaders:
-        @staticmethod
-        def get(_name):
-            return None
-
-        @staticmethod
-        def getlist(_name):
-            return ['W/"stale"', '"abc123"']
-
-    assert status_payload.public_status_not_modified(RepeatedHeaders(), 'W/"abc123"')
+    headers = SimpleNamespace(get=lambda _name: None, getlist=lambda _name: ['W/"stale"', '"abc123"'])
+    assert status_payload.public_status_not_modified(headers, 'W/"abc123"')

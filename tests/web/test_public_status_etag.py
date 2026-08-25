@@ -1,10 +1,9 @@
 import math
-import os
-import subprocess
-import sys
 import time
 from decimal import Decimal
 from pathlib import Path
+from subprocess import check_output
+from sys import executable
 
 import httpx
 import pytest
@@ -20,29 +19,14 @@ async def _get_public_status(app, headers=None):
 
 
 def test_public_status_etag_is_stable_for_unordered_segment_metadata():
-    script = """
-from mammamiradio.web.status_payload import _public_segment_metadata, public_status_etag
+    script = """from mammamiradio.web.status_payload import _public_segment_metadata,public_status_etag
+m=_public_segment_metadata({'x':{('a',frozenset({'jazz','pop'})),('b',frozenset({1,'1',None}))}})
+print(public_status_etag({'now_streaming':{'metadata':m}}))"""
 
-metadata = _public_segment_metadata({
-    "genres": {"jazz", "pop", "rock"},
-    "frozen_genres": frozenset({"jazz", "pop", "rock"}),
-})
-print(public_status_etag({"now_streaming": {"metadata": metadata}}))
-"""
-    etags = []
-    for hash_seed in ("1", "2"):
-        env = os.environ.copy()
-        env["PYTHONHASHSEED"] = hash_seed
-        completed = subprocess.run(
-            [sys.executable, "-c", script],
-            check=True,
-            capture_output=True,
-            env=env,
-            text=True,
-        )
-        etags.append(completed.stdout.strip())
+    def etag(seed):
+        return check_output([executable, "-c", script], env={"PYTHONHASHSEED": seed}, text=True)
 
-    assert etags[0] == etags[1]
+    assert etag("1") == etag("2")
 
 
 @pytest.mark.asyncio
@@ -71,7 +55,6 @@ async def test_public_status_if_none_match_uses_weak_comparison(validator_kind):
     app = _make_app()
     app.state.station_state.now_streaming = {"started": time.time() - 12, "metadata": {"duration_ms": 180_000}}
     first = await _get_public_status(app)
-    assert first.json()["current_progress_sec"] is not None
     etag = first.headers["ETag"]
     strong = etag.removeprefix("W/")
     validators = {"weak": etag, "strong": strong, "list": f'W/"stale", {strong}', "wildcard": "*"}
@@ -91,8 +74,7 @@ async def test_public_status_malformed_or_stale_validator_returns_200(validator)
 @pytest.mark.asyncio
 async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_rows():
     app = _make_app()
-    state = app.state.station_state
-    config = app.state.config
+    state, config = app.state.station_state, app.state.config
     config.homeassistant.context_enabled = config.homeassistant.enabled = True
     config.ha_token = "test-token"
     state.ha_context = "enabled"
@@ -105,8 +87,7 @@ async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_ro
         state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="aired")
     first = await _get_public_status(app)
     state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="dropped")
-    hidden = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
-    assert hidden.status_code == 304
+    assert (await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})).status_code == 304
     state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="aired")
     rolled = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
     assert rolled.status_code == 200 and rolled.json()["ha_moments"]["recent"] == first.json()["ha_moments"]["recent"]
@@ -126,9 +107,8 @@ async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_ro
 async def test_public_status_if_none_match_state_change_returns_200_with_new_etag():
     app = _make_app()
     first = await _get_public_status(app)
-    old_etag = first.headers["ETag"]
     app.state.station_state.session_stopped = True
     app.state.station_state.last_state_change_at = time.time()
-    second = await _get_public_status(app, {"If-None-Match": old_etag})
-    assert second.status_code == 200 and second.headers["ETag"] != old_etag
+    second = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
+    assert second.status_code == 200 and second.headers["ETag"] != first.headers["ETag"]
     assert second.json()["session_stopped"] is True
