@@ -117,7 +117,7 @@ EVIDENCE_CHECKER="${MMR_QUEUE_EVIDENCE_CHECKER:-$SCRIPT_DIR/check-preship-eviden
 
 evidence_summary() {
   local head="$1" base="$2"
-  if [ -n "${MMR_QUEUE_SKIP_EVIDENCE:-}" ]; then
+  if [ "${MMR_QUEUE_SKIP_EVIDENCE:-0}" = "1" ]; then
     printf 'skipped\n'
     return 0
   fi
@@ -130,7 +130,7 @@ evidence_summary() {
 
 thread_debt_count() {
   local pr="$1" slug owner repo query response
-  if [ -n "${MMR_QUEUE_SKIP_THREADS:-}" ]; then
+  if [ "${MMR_QUEUE_SKIP_THREADS:-0}" = "1" ]; then
     printf 'skipped\n'
     return 0
   fi

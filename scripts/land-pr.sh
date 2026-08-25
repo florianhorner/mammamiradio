@@ -123,7 +123,7 @@ squad_check() {
 
 evidence_check() {
   local target="$1" base="$2" out rc
-  if [ -n "${MMR_LAND_SKIP_EVIDENCE_CHECK:-}" ]; then
+  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
     return 0
   fi
   out="$(bash "$EVIDENCE_CHECKER" --v2 --target "$target" --base "$base" --mode pr 2>&1)" || rc=$?
@@ -140,7 +140,7 @@ evidence_check() {
 
 thread_check() {
   local pr="$1" slug owner repo query response blocked
-  if [ -n "${MMR_LAND_SKIP_THREAD_CHECK:-}" ]; then
+  if [ "${MMR_LAND_SKIP_THREAD_CHECK:-0}" = "1" ]; then
     return 0
   fi
 
