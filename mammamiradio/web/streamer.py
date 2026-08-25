@@ -10935,9 +10935,10 @@ def _public_status_payload(request: Request, *, include_etag_revision: bool = Fa
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
-            event_revision = hashlib.blake2b(
-                str(state.ha_last_event_ts).encode(), key=event_key, digest_size=8
-            ).hexdigest()
+            if config.ha_token:
+                event_revision = hashlib.blake2b(
+                    str(state.ha_last_event_ts).encode(), key=event_key, digest_size=8
+                ).hexdigest()
         if state.ha_ritual_public_families:
             ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
         if recent_moments:

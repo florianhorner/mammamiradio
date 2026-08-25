@@ -47,10 +47,8 @@ async def test_public_status_if_none_match_uses_weak_comparison(validator_kind):
     strong = etag.removeprefix("W/")
     validators = {"weak": etag, "strong": strong, "list": f'W/"stale", {strong}', "wildcard": "*"}
     second = await _get_public_status(app, {"If-None-Match": validators[validator_kind]})
-    assert second.status_code == 304
-    assert second.headers["ETag"] == etag
-    assert second.headers["Cache-Control"] == "public, max-age=1"
-    assert second.content == b""
+    assert second.status_code == 304 and second.content == b""
+    assert second.headers["ETag"] == etag and second.headers["Cache-Control"] == "public, max-age=1"
 
 
 @pytest.mark.asyncio
@@ -89,6 +87,10 @@ async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_ro
     assert second.json()["ha_moments"]["last_event_ago_min"] == 1
     config.ha_token = "other-token"
     assert (await _get_public_status(app, {"If-None-Match": second.headers["ETag"]})).status_code == 200
+    config.ha_token = ""
+    without_secret = await _get_public_status(app)
+    state.ha_last_event_ts += 1
+    assert (await _get_public_status(app, {"If-None-Match": without_secret.headers["ETag"]})).status_code == 304
 
 
 @pytest.mark.asyncio
@@ -99,6 +101,5 @@ async def test_public_status_if_none_match_state_change_returns_200_with_new_eta
     app.state.station_state.session_stopped = True
     app.state.station_state.last_state_change_at = time.time()
     second = await _get_public_status(app, {"If-None-Match": old_etag})
-    assert second.status_code == 200
-    assert second.headers["ETag"] != old_etag
+    assert second.status_code == 200 and second.headers["ETag"] != old_etag
     assert second.json()["session_stopped"] is True
