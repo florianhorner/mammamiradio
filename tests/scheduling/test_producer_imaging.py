@@ -181,6 +181,7 @@ async def test_banter_talk_bed_cold_start_no_last_music_file(tmp_path):
     assert args[2] is None
     assert mock_mix.call_args.args[3] == config.imaging.bed_volume_db
     imaging.pick_stinger.assert_not_called()
+    assert seg.metadata["clip_audio_class"] == "station_bed"
 
 
 @pytest.mark.asyncio
@@ -453,6 +454,7 @@ async def test_error_recovery_tone_after_banter_does_not_get_transition_stinger(
     assert seg.type == SegmentType.MUSIC
     assert seg.metadata.get("error_recovery") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.metadata["clip_audio_class"] == "unknown"
     assert seg.path.name == "emergency_tone.mp3"
     assert seg.ephemeral is False
     mock_imaging_cls.return_value.pick_stinger.assert_not_called()
@@ -568,6 +570,7 @@ async def test_banter_handoff_uses_reserved_tail_and_generic_talk_bed(tmp_path):
         "primary_prefix": "banter",
         "fallback_prefix": "banter_dry",
     }
+    assert seg.metadata["clip_audio_class"] == "commercial_music"
 
 
 @pytest.mark.asyncio
@@ -752,6 +755,7 @@ async def test_banter_talk_bed_failure_queues_dry_banter(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.path.name.startswith("banter_full_")
+    assert seg.metadata["clip_audio_class"] == "speech"
     imaging.pick_talk_bed.assert_called_once()
 
 
@@ -885,6 +889,7 @@ async def test_news_flash_handoff_uses_reserved_tail(tmp_path):
         "primary_prefix": "news",
         "fallback_prefix": "news_dry",
     }
+    assert seg.metadata["clip_audio_class"] == "commercial_music"
 
 
 @pytest.mark.asyncio
