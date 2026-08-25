@@ -1,7 +1,3 @@
-"""ETag + If-None-Match tests for /public-status listener polling."""
-
-from __future__ import annotations
-
 import math
 import time
 from decimal import Decimal
@@ -10,6 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from mammamiradio.home.authorization import HomeAuthorization
+from mammamiradio.home.moment_receipts import MomentStore
 from tests.web.test_route_smoke import _make_app
 
 
@@ -23,40 +21,32 @@ async def test_public_status_response_has_etag_and_cache_control():
     app = _make_app()
     app.state.config.identity.station_name = "Radio Città"
     app.state.station_state.now_streaming = {
-        "type": "music",
         "label": "Città",
         "started": time.time() - 1,
         "duration_sec": math.inf,
-        "metadata": {
-            "public_asset": Path("music/citta.mp3"),
-            "duration_ms": math.inf,
-            "analysis": {"peak": math.nan, "rms": Decimal("NaN")},
-        },
+        "metadata": {"public_asset": Path("music/citta.mp3"), "analysis": [math.nan, Decimal("NaN")]},
     }
     resp = await _get_public_status(app)
-    assert resp.status_code == 200
-    assert resp.headers["ETag"].startswith('W/"')
+    assert resp.status_code == 200 and resp.headers["ETag"].startswith('W/"')
     assert {"public", "max-age=1"} <= {part.strip() for part in resp.headers["Cache-Control"].split(",")}
     assert "Radio Città" in resp.text and b"Radio Citt\\u00e0" not in resp.content
     assert b"Infinity" not in resp.content and b"NaN" not in resp.content
-    payload = resp.json()
-    assert payload["now_streaming"]["metadata"]["public_asset"] == "music/citta.mp3"
-    assert payload["now_streaming"]["duration_sec"] is None
-    assert payload["now_streaming"]["metadata"]["duration_ms"] is None
-    assert payload["now_streaming"]["metadata"]["analysis"] == {"peak": None, "rms": None}
-    assert payload["current_duration_sec"] is None
+    streaming = resp.json()["now_streaming"]
+    assert streaming["metadata"] == {"public_asset": "music/citta.mp3", "analysis": [None, None]}
+    assert streaming["duration_sec"] is None and resp.json()["current_duration_sec"] is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("validator_kind", ["weak", "strong", "list", "wildcard"])
 async def test_public_status_if_none_match_uses_weak_comparison(validator_kind):
     app = _make_app()
+    app.state.station_state.now_streaming = {"started": time.time() - 12, "metadata": {"duration_ms": 180_000}}
     first = await _get_public_status(app)
+    assert first.json()["current_progress_sec"] is not None
     etag = first.headers["ETag"]
     strong = etag.removeprefix("W/")
     validators = {"weak": etag, "strong": strong, "list": f'W/"stale", {strong}', "wildcard": "*"}
     second = await _get_public_status(app, {"If-None-Match": validators[validator_kind]})
-
     assert second.status_code == 304
     assert second.headers["ETag"] == etag
     assert second.headers["Cache-Control"] == "public, max-age=1"
@@ -68,42 +58,33 @@ async def test_public_status_if_none_match_uses_weak_comparison(validator_kind):
 async def test_public_status_malformed_or_stale_validator_returns_200(validator):
     app = _make_app()
     response = await _get_public_status(app, {"If-None-Match": validator})
-
-    assert response.status_code == 200
-    assert response.json()["session_stopped"] is False
+    assert response.status_code == 200 and response.json()["session_stopped"] is False
 
 
 @pytest.mark.asyncio
-async def test_public_status_etag_stable_when_only_progress_advances():
+async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_rows():
     app = _make_app()
     state = app.state.station_state
-    now = time.time()
-    state.now_streaming = {
-        "type": "music",
-        "label": "Artist — Title",
-        "started": now - 12.0,
-        "metadata": {"duration_ms": 180_000},
-    }
-    first = await _get_public_status(app)
-    etag = first.headers["ETag"]
-    assert first.json()["current_progress_sec"] is not None
-    second = await _get_public_status(app, {"If-None-Match": etag})
-    assert second.status_code == 304
-    assert second.headers.get("ETag") == etag
-
-
-@pytest.mark.asyncio
-async def test_same_label_home_event_recurrence_changes_etag():
-    app = _make_app()
-    state = app.state.station_state
-    app.state.config.homeassistant.context_enabled = True
+    config = app.state.config
+    config.homeassistant.context_enabled = config.homeassistant.enabled = True
+    config.ha_token = "test-token"
     state.ha_context = "enabled"
+    state.home_authorization = HomeAuthorization.legacy()
+    state.moment_store = MomentStore()
     state.ha_last_event_label = "Porta ingresso"
     state.ha_last_event_ts = time.time() - 20 * 60
+    for _ in range(3):
+        state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="aired")
     first = await _get_public_status(app)
+    state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="dropped")
+    hidden = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
+    assert hidden.status_code == 304
+    state.moment_store.record(lane="interrupt", family="arrival", public_label="Rientro", status="aired")
+    rolled = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
+    assert rolled.status_code == 200 and rolled.json()["ha_moments"]["recent"] == first.json()["ha_moments"]["recent"]
     state.ha_last_event_ts = time.time() - 60
-    second = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
-    assert second.status_code == 200 and second.headers["ETag"] != first.headers["ETag"]
+    second = await _get_public_status(app, {"If-None-Match": rolled.headers["ETag"]})
+    assert second.status_code == 200 and second.headers["ETag"] != rolled.headers["ETag"]
     assert second.json()["ha_moments"]["last_event_ago_min"] == 1
 
 

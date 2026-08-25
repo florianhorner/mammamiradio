@@ -10871,7 +10871,7 @@ async def reset_host_personality(host_name: str, request: Request, _: None = Dep
     return {"ok": True, "host": host.name, "personality": host.personality.to_dict()}
 
 
-def _public_status_payload(request: Request) -> dict:
+def _public_status_payload(request: Request, *, include_etag_revision: bool = False) -> dict:
     """Build the read-only status payload shared by public and admin APIs.
 
     The listener page polls this endpoint every ~3s. The admin /status route
@@ -10905,6 +10905,8 @@ def _public_status_payload(request: Request) -> dict:
     # unauthenticated endpoint. An "airing" row shows only while it belongs to
     # the segment now_streaming is playing (send-start is provisional).
     recent_moments: list[dict] = []
+    recent_revision: tuple[str, ...] = ()
+    event_revision: int | None = None
     ha_capable = bool(config.ha_token and config.homeassistant.enabled and config.homeassistant.context_enabled)
     moment_store = getattr(state, "moment_store", None)
     authorization = state.home_authorization or HomeAuthorization.narrow()
@@ -10912,7 +10914,11 @@ def _public_status_payload(request: Request) -> dict:
         try:
             _ns_meta = (state.now_streaming or {}).get("metadata") or {}
             _active_ids = {str(_ns_meta.get(_key) or "") for _key in ("ritual_moment_id", "gag_moment_id")} - {""}
-            recent_moments = moment_store.to_public_rows(now=now_ts, active_ids=_active_ids, limit=3)
+            recent_moments = moment_store.to_public_rows(
+                now=now_ts, active_ids=_active_ids, limit=3, include_revision=include_etag_revision
+            )
+            if include_etag_revision:
+                recent_revision = tuple(moment.pop("_etag_revision") for moment in recent_moments)
         except Exception:  # pragma: no cover - receipts must never break status
             logger.debug("Moment receipt public rows failed", exc_info=True)
             recent_moments = []
@@ -10928,6 +10934,7 @@ def _public_status_payload(request: Request) -> dict:
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
+            event_revision = int(state.ha_last_event_ts // 60)
         if state.ha_ritual_public_families:
             ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
         if recent_moments:
@@ -10971,6 +10978,7 @@ def _public_status_payload(request: Request) -> dict:
             ),
         },
         "ha_moments": ha_moments,
+        **({"_etag_revision": (event_revision, recent_revision)} if include_etag_revision else {}),
         # Process-local receipt counts reused by the admin status payload.
         "ad_experiment": _ad_experiment_status(state),
         # Brand-fiction layer (PR-A schema). Listener renders against this.
@@ -11664,11 +11672,10 @@ async def readyz(request: Request):
 @router.get("/public-status")
 async def public_status(request: Request) -> Response:
     """Return listener-safe status with semantic ETag/304 revalidation."""
-    payload = normalize_public_status_json(_public_status_payload(request))
-    state = request.app.state.station_state
-    moment_rows = getattr(getattr(state, "moment_store", None), "rows", ())
-    revision = (state.ha_last_event_ts, [(row.id, row.status, row.airing_ts, row.final_ts) for row in moment_rows])
-    etag = public_status_etag(payload, revision=revision if payload.get("ha_moments") else None)
+    raw_payload = _public_status_payload(request, include_etag_revision=True)
+    revision = raw_payload.pop("_etag_revision", None)
+    payload = normalize_public_status_json(raw_payload)
+    etag = public_status_etag(payload, revision=revision)
     headers = {
         "ETag": etag,
         "Cache-Control": PUBLIC_STATUS_CACHE_CONTROL,
