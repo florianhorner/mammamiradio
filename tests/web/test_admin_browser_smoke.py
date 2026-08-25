@@ -106,6 +106,8 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         # console hidden; the smoke must open the producer desk like an
         # operator before asserting focus or geometry inside it.
         "showAdminTab('scaletta'",
+        "setup status chips lost semantic mapping",
+        "forced colors hid setup status glyphs",
     ):
         assert needle in code, f"admin browser smoke lost behavior guard: {needle}"
     assert "waitForTimeout(" not in code, "admin browser smoke must use state-based waits, not timing sleeps."

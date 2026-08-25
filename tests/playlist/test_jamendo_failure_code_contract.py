@@ -130,15 +130,11 @@ def test_every_visible_state_has_a_human_word() -> None:
 
 
 def test_jamendo_chip_renders_the_human_word() -> None:
-    """The Jamendo row uses its own chip function, not the shared one.
-
-    Wiring the human word into mediaSourceStatusChip alone left the Jamendo card
-    — the one this change exists for — still printing "working" and "degraded".
-    """
+    """Jamendo must reuse the shared chip without leaking raw machine state."""
     body = _ADMIN_TEMPLATE.read_text(encoding="utf-8")
     chip = re.search(r"function jamendoStatusChip\(presentation\)\{(.*?)\n\}", body, re.DOTALL)
     assert chip is not None
-    assert "mediaSourceStateWord(presentation.state)" in chip.group(1)
+    assert "return mediaSourceStatusChip(presentation.state)" in chip.group(1)
     assert "createTextNode(presentation.state)" not in chip.group(1)
     assert "'status: '+presentation.state" not in chip.group(1)
 

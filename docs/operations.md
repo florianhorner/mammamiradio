@@ -926,7 +926,7 @@ Supervisor value. The add-on binds `0.0.0.0` with no admin credential by default
 and trusts its own LAN for admin access (see **Admin access model**); set
 `admin_token` in the add-on options to require a credential.
 
-The dashboard is accessible via HA ingress (sidebar). The first-run flow shows source readiness, starts the exact Live media source on one selected Home Assistant speaker, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. AI-host keys are optional and come afterward.
+The dashboard is accessible via HA ingress (sidebar). First Listen shows source readiness, plays the station on the current browser device, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. Home Assistant speakers and AI-host keys are optional later enhancements.
 
 First Listen progress is owner-only setup metadata under `/data/cache/state` in
 add-on mode. Its receipt records factual milestones, not the live Home-context
