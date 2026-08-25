@@ -1193,6 +1193,7 @@
    *
    * Poll budget (#931): live visible 3s; idle/stopped visible 3.5s; live hidden
    * 30s; idle/stopped hidden 60s. ETag/304 keeps unchanged response bodies empty.
+   * (~1,200 header-only polls/h; ~29 MB/h baseline at 25 KB every 3s).
    */
   const STATUS_POLL_LIVE_MS = 3000;
   const STATUS_POLL_HIDDEN_MS = 30000;
