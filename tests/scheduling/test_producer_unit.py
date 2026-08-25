@@ -9117,6 +9117,123 @@ async def test_drain_bridge_queues_only_canned_clip_when_cache_is_cold(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_drain_bridge_queues_starter_music_when_norm_cache_is_cold(tmp_path):
+    """A safety drain sees direct starter music even though it bypasses the norm cache."""
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+    from mammamiradio.scheduling import producer
+
+    tracks = load_starter_tracks()
+    state = StationState(
+        playlist=tracks,
+        playlist_source=starter_source(len(tracks)),
+        listeners_active=1,
+        home_authorization=HomeAuthorization.legacy(),
+    )
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    for index in range(3):
+        buffered = tmp_path / f"buffered-{index}.mp3"
+        buffered.write_bytes(b"buffered audio")
+        queue.put_nowait(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=buffered,
+                duration_sec=180.0,
+                metadata={"title": f"Buffered {index}"},
+            )
+        )
+    skip_event = asyncio.Event()
+    empty_sfx = tmp_path / "empty-sfx"
+    empty_sfx.mkdir()
+
+    with patch(f"{PRODUCER_MODULE}._SFX_DIR", empty_sfx):
+        fired = await producer._fire_interrupt(
+            state,
+            InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
+            queue,
+            skip_event,
+            bridge_tmp_dir=tmp_path,
+        )
+
+    assert fired is True
+    assert queue.empty()
+    assert skip_event.is_set()
+    assert state.interrupt_slot is not None
+
+    async def _enqueue(segment: Segment, **kwargs) -> bool:
+        return await producer._enqueue_with_egress(queue, state, config, segment, **kwargs)
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_enqueue, state, config)
+
+    assert ok is True
+    assert queue.qsize() == 1
+    segment = queue.get_nowait()
+    assert segment.type is SegmentType.MUSIC
+    assert segment.path != canned_clip
+    assert segment.metadata.get("audio_source") == "starter"
+    assert segment.metadata.get("queue_drain_recovery") is True
+    assert segment.metadata.get("music_reservation_id") == segment.metadata.get("queue_id")
+    assert state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+    assert state.interrupt_slot is not None
+    assert state.played_tracks[-1].cache_key == tracks[0].cache_key
+    assert state.music_admission_reservations[segment.metadata["queue_id"]].cache_key == tracks[0].cache_key
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "starter_catalog")]
+
+
+@pytest.mark.asyncio
+async def test_drain_bridge_falls_back_to_canned_when_starter_admission_is_rejected(tmp_path):
+    """A starter admission refusal keeps the existing canned safety rung intact."""
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+    from mammamiradio.scheduling import producer
+
+    tracks = load_starter_tracks()
+    state = StationState(
+        playlist=tracks,
+        playlist_source=starter_source(len(tracks)),
+        listeners_active=1,
+        home_authorization=HomeAuthorization.legacy(),
+    )
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    rejected: list[Segment] = []
+    queued: list[Segment] = []
+
+    async def _reject_starter(segment: Segment, **_kwargs) -> bool:
+        if segment.metadata.get("audio_source") == "starter":
+            rejected.append(segment)
+            return False
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_reject_starter, state, config)
+
+    assert ok is True
+    assert len(rejected) == 1
+    assert rejected[0].type is SegmentType.MUSIC
+    assert [segment.path for segment in queued] == [canned_clip]
+    assert list(state.played_tracks) == []
+    assert state.music_admission_reservations == {}
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "canned")]
+
+
+@pytest.mark.asyncio
 async def test_resume_bridge_music_runway_queues_only_canned_clip_when_cache_cold(tmp_path):
     """music_runway=True with a cold norm cache still queues just the canned clip."""
     from mammamiradio.scheduling import producer

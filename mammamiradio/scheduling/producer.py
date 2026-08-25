@@ -1235,6 +1235,7 @@ async def _queue_continuity_bridge(
     canned_title: str,
     canned_metadata: dict | None = None,
     music_runway: bool = False,
+    starter_catalog_runway: bool = False,
 ) -> bool:
     """Queue the best available producer-side continuity bridge.
 
@@ -1289,6 +1290,18 @@ async def _queue_continuity_bridge(
         _record_bridge_fire(state, bridge_type, "norm_cache")
         return True
 
+    _arm_bridge_rung()
+    if starter_catalog_runway and await _queue_starter_catalog_bridge_segment(
+        queue_segment,
+        state,
+        config,
+        bridge_type=bridge_type,
+        bridge_flag=bridge_flag,
+        stale_check=_bridge_stale_reason,
+    ):
+        _record_bridge_fire(state, bridge_type, "starter_catalog")
+        return True
+
     fallback = _pick_recovery_clip(state)
     if fallback:
         _arm_bridge_rung()
@@ -1327,8 +1340,9 @@ async def _queue_continuity_bridge(
                 # stopped, blocklist gate). Naming one of them here would be a
                 # guess — the clip is queued either way and that is what matters.
                 logger.info(
-                    "%s bridge: no cache music queued behind the canned clip",
+                    "%s bridge: no %s queued behind the canned clip",
                     bridge_type.capitalize(),
+                    "music runway" if starter_catalog_runway else "cache music",
                 )
             return True
         if state.continuity_epoch == bridge_continuity_epoch:
@@ -1430,6 +1444,128 @@ async def _queue_norm_cache_bridge_segment(
         ),
         stale_check=stale_check,
     )
+
+
+async def _queue_starter_catalog_bridge_segment(
+    queue_segment: Callable[..., Awaitable[bool]],
+    state: StationState,
+    config: StationConfig,
+    *,
+    bridge_type: str,
+    bridge_flag: str,
+    stale_check: Callable[[], bool | str | None] | None = None,
+) -> bool:
+    """Queue one verified starter song when a drain cannot see cache music."""
+    source = state.playlist_source
+    if (
+        source is None
+        or source.kind != "starter"
+        or not state.playlist
+        or state.listener_request_handoff is not None
+        or any(track.source != "starter" for track in state.playlist)
+    ):
+        return False
+
+    captured_playlist_revision = state.playlist_revision
+    captured_source_revision = state.source_revision
+    source_readiness = state.source_readiness
+    try:
+        # The drain guard excludes listener handoffs before entering this helper,
+        # which is the only selector branch that mutates the supplied queue. The
+        # remaining acceptance rules live in StationState and its reservation
+        # ledger, so a private empty queue is enough to reuse the canonical
+        # selector without widening every continuity-bridge call signature.
+        track = _select_accepted_music_track(state, config, asyncio.Queue())
+    except StarterCycleReservationPendingError:
+        logger.info("%s bridge: starter cycle is waiting for queued reservations", bridge_type.capitalize())
+        return False
+    except RuntimeError:
+        logger.info("%s bridge: no starter-catalog track is currently eligible", bridge_type.capitalize())
+        return False
+    if track is None or track.source != "starter":
+        return False
+
+    try:
+        rendered = await _render_music_track(
+            track,
+            config,
+            temp_prefix="starter_bridge",
+            context=f"{bridge_type} bridge",
+            playlist=state.playlist,
+            source_readiness=source_readiness,
+        )
+    except Exception:
+        source_readiness.mark_failure(track.source, "A starter track could not be verified for recovery")
+        logger.warning(
+            "%s bridge: starter-catalog verification failed for %s",
+            bridge_type.capitalize(),
+            track.display,
+            exc_info=True,
+        )
+        return False
+    if rendered is None:
+        source_readiness.mark_failure(track.source, "A starter track could not be prepared for recovery")
+        return False
+
+    playlist_index = next((index for index, candidate in enumerate(state.playlist) if candidate is track), -1)
+    rationale = generate_track_rationale(track, source=source, listener=state.listener)
+    crate = classify_track_crate(track, source)
+    segment = Segment(
+        type=SegmentType.MUSIC,
+        path=rendered.path,
+        duration_sec=(track.duration_ms or 0) / 1000.0,
+        metadata={
+            "title": track.display,
+            "artist": track.artist,
+            "title_only": track.title,
+            "youtube_id": track.youtube_id,
+            "spotify_id": track.spotify_id,
+            "album_art": track.album_art,
+            "duration_ms": track.duration_ms,
+            "provider_track_id": track.provider_track_id,
+            "music_attribution": track.attribution.to_dict() if track.attribution else None,
+            "rationale": rationale,
+            "crate": crate,
+            "audio_source": "starter",
+            "clip_audio_class": _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC,
+            "playlist_index": playlist_index,
+            "source_kind": track.source,
+            "heading_id": track.heading_id,
+            bridge_flag: True,
+        },
+        ephemeral=False,
+    )
+
+    def _starter_stale_reason() -> bool | str | None:
+        if stale_check is not None:
+            verdict = stale_check()
+            if verdict:
+                return verdict
+        if captured_source_revision != state.source_revision:
+            return GenerationWasteReason.STALE_SOURCE
+        if captured_playlist_revision != state.playlist_revision and _music_segment_left_rotation(state, segment):
+            return GenerationWasteReason.STALE_PLAYLIST
+        return None
+
+    logger.warning(
+        "%s bridge: inserting verified starter-catalog runway: %s",
+        bridge_type.capitalize(),
+        track.display,
+    )
+    queued = await queue_segment(
+        segment,
+        shadow_entry=_queue_shadow_entry(segment),
+        stale_check=_starter_stale_reason,
+        admission_callback=partial(_reserve_music_segment, state, track),
+    )
+    if not queued:
+        return False
+
+    source_readiness.mark_playable(track.source)
+    _arm_accepted_heading_announcement(state, track)
+    state.after_music(track)
+    _remember_rendered_music(rendered, state)
+    return True
 
 
 async def _producer_error_recovery_segment(state: StationState, config: StationConfig) -> Segment | None:
@@ -1557,7 +1693,7 @@ async def _queue_drain_recovery_bridge(
     state: StationState,
     config: StationConfig,
 ) -> bool:
-    """Queue a drain bridge and, when available, cached music runway."""
+    """Queue a drain bridge with cache or verified starter music runway."""
     return await _queue_continuity_bridge(
         queue_segment,
         state,
@@ -1566,6 +1702,7 @@ async def _queue_drain_recovery_bridge(
         bridge_flag="queue_drain_recovery",
         canned_title="Station continuity",
         music_runway=True,
+        starter_catalog_runway=True,
     )
 
 
