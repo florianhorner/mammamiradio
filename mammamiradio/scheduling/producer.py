@@ -1457,25 +1457,32 @@ async def _queue_starter_catalog_bridge_segment(
 ) -> bool:
     """Queue one verified starter song when a drain cannot see cache music."""
     source = state.playlist_source
-    if (
-        source is None
-        or source.kind != "starter"
-        or not state.playlist
-        or state.listener_request_handoff is not None
-        or any(track.source != "starter" for track in state.playlist)
-    ):
+    if source is None or source.kind != "starter" or not state.playlist or state.listener_request_handoff is not None:
         return False
 
     captured_playlist_revision = state.playlist_revision
     captured_source_revision = state.source_revision
     source_readiness = state.source_readiness
+    # Recovery must not consume an operator/listener pin merely by asking the
+    # canonical selector for an automatic starter candidate. This call has no
+    # await, so temporarily hiding and restoring the pin is atomic to the event
+    # loop and preserves both the value and its ownership revision.
+    held_pin = state.pinned_track
+    held_pin_revision = state.pinned_track_revision
     try:
         # The drain guard excludes listener handoffs before entering this helper,
         # which is the only selector branch that mutates the supplied queue. The
         # remaining acceptance rules live in StationState and its reservation
         # ledger, so a private empty queue is enough to reuse the canonical
         # selector without widening every continuity-bridge call signature.
-        track = _select_accepted_music_track(state, config, asyncio.Queue())
+        if held_pin is not None:
+            state.pinned_track = None
+        try:
+            track = _select_accepted_music_track(state, config, asyncio.Queue())
+        finally:
+            if held_pin is not None:
+                state.pinned_track = held_pin
+                state.pinned_track_revision = held_pin_revision
     except StarterCycleReservationPendingError:
         logger.info("%s bridge: starter cycle is waiting for queued reservations", bridge_type.capitalize())
         return False
@@ -5914,9 +5921,9 @@ async def _run_producer_inner(
             _was_idle = False
         _producer_idle_logged = False
 
-        # Mid-playback drain guard: if the queue hits zero during active playback
-        # (after at least one real segment has been produced), insert a canned clip
-        # to bridge the gap while the producer or prefetch task catches up.
+        # Mid-playback drain guard: if the queue hits zero after production has
+        # started, or an urgent interrupt just created that empty boundary, seed
+        # recovery audio before beginning the potentially slow urgent render.
         # _drain_guard_queued prevents re-firing until a real segment lands.
         # A listener handoff is the one exception: once its dedication has been
         # queued, the promised song owns this producer boundary even if playback
@@ -5924,7 +5931,7 @@ async def _run_producer_inner(
         # recovery ladder still cover a render that cannot finish in time.
         if (
             queue.empty()
-            and _segments_produced > 0
+            and (_segments_produced > 0 or state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT)
             and not _drain_guard_queued
             and state.listener_request_handoff is None
             and await _queue_drain_recovery_bridge(_queue_segment, state, config)
