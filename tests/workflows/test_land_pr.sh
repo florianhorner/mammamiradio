@@ -123,6 +123,24 @@ make_reader() {
   echo "$f"
 }
 
+# make_multi_reader <skill> <commit> <timestamp> [<skill> <commit> <timestamp> ...]
+make_multi_reader() {
+  local f skill commit ts
+  f="$(mktemp "$TMPDIR_T/reader.XXXXXX")"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf 'cat <<'\''LINES'\''\n'
+    while [ "$#" -ge 3 ]; do
+      skill="$1"; commit="$2"; ts="$3"; shift 3
+      printf '{"skill":"%s","commit":"%s","timestamp":"%s"}\n' "$skill" "$commit" "$ts"
+    done
+    printf '%s\n' '---CONFIG---'
+    printf '%s\n' 'LINES'
+  } > "$f"
+  chmod +x "$f"
+  echo "$f"
+}
+
 empty_reader() {
   local f; f="$(mktemp "$TMPDIR_T/reader.XXXXXX")"
   printf '%s\n' '#!/usr/bin/env bash' 'echo ---CONFIG---' > "$f"
@@ -186,7 +204,7 @@ printf '%s' "$RUN_OUT" | grep -q "exact PR head" || fail "deny message should me
 pass "behind PR denies without post-update exact-head review"
 
 # Case 3b: BEHIND PR with review on the new head => update then arm
-run_land "$(make_reader review "$HEAD2_SHORT" "$NOW_ISO")" \
+run_land "$(make_multi_reader review "$HEAD_SHORT" "$NOW_ISO" review "$HEAD2_SHORT" "$NOW_ISO")" \
   GH_MOCK_MERGE_STATE=BEHIND GH_MOCK_HEAD_AFTER="$HEAD2_FULL"
 grep -q "pr update-branch 7" "$GH_MOCK_LOG" || fail "behind PR should call update-branch"
 [ "$RUN_RC" -eq 0 ] || fail "behind PR with post-update review should arm (exit code)"
