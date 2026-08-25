@@ -1189,7 +1189,7 @@
    * Brand-engine PR-F: listener uses /public-status exclusively (no admin endpoints).
    * /public-status returns brand + capabilities + facts in one shape — single fetch
    * replaces the old /status + /api/capabilities pair. Works on any deploy (loopback,
-   * LAN, public) without the 401 risk of admin-only routes.
+   * LAN, public) without the 401 risk of admin-only routes. */
    *
    * Poll budget (#931): live visible 3s; idle/stopped visible 3.5s; live hidden
    * 30s; idle/stopped hidden 60s. ETag/304 keeps unchanged response bodies empty.
@@ -1226,8 +1226,6 @@
     _statusPollTimer = setTimeout(async () => {
       _statusPollTimer = null;
       await fetchStatus();
-      // A visibility event may have installed a newer timer while this fetch
-      // was in flight. Only the owner of the current schedule may re-arm it.
       if (revision !== _statusScheduleRevision) return;
       _armStatusPoll(revision, _statusPollDelayMs());
     }, delayMs);
@@ -1351,8 +1349,6 @@
         state.segmentDurationMs = 0;
         _stopProgressTicker();
       }
-      // Publish the validator only after the parsed, current payload has been
-      // applied successfully. There is no await inside this commit boundary.
       _statusEtag = responseEtag || null;
     } catch (e) {
       if (generation === _statusPollGeneration && e?.name !== 'AbortError') {
