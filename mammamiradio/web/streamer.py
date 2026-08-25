@@ -11665,7 +11665,10 @@ async def readyz(request: Request):
 async def public_status(request: Request) -> Response:
     """Return listener-safe status with semantic ETag/304 revalidation."""
     payload = normalize_public_status_json(_public_status_payload(request))
-    etag = public_status_etag(payload)
+    state = request.app.state.station_state
+    moment_rows = getattr(getattr(state, "moment_store", None), "rows", ())
+    revision = (state.ha_last_event_ts, [(row.id, row.status, row.airing_ts, row.final_ts) for row in moment_rows])
+    etag = public_status_etag(payload, revision=revision if payload.get("ha_moments") else None)
     headers = {
         "ETag": etag,
         "Cache-Control": PUBLIC_STATUS_CACHE_CONTROL,

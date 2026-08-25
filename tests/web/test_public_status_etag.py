@@ -35,15 +35,9 @@ async def test_public_status_response_has_etag_and_cache_control():
     }
     resp = await _get_public_status(app)
     assert resp.status_code == 200
-    etag = resp.headers.get("ETag")
-    assert etag is not None
-    assert etag.startswith('W/"')
-    cache_control = resp.headers.get("Cache-Control", "")
-    directives = {part.strip() for part in cache_control.split(",")}
-    assert "public" in directives
-    assert "max-age=1" in directives
-    assert "Radio Città" in resp.text
-    assert b"Radio Citt\\u00e0" not in resp.content
+    assert resp.headers["ETag"].startswith('W/"')
+    assert {"public", "max-age=1"} <= {part.strip() for part in resp.headers["Cache-Control"].split(",")}
+    assert "Radio Città" in resp.text and b"Radio Citt\\u00e0" not in resp.content
     assert b"Infinity" not in resp.content and b"NaN" not in resp.content
     payload = resp.json()
     assert payload["now_streaming"]["metadata"]["public_asset"] == "music/citta.mp3"
@@ -54,24 +48,13 @@ async def test_public_status_response_has_etag_and_cache_control():
 
 
 @pytest.mark.asyncio
-async def test_public_status_if_none_match_unchanged_state_returns_304():
-    app = _make_app()
-    first = await _get_public_status(app)
-    etag = first.headers["ETag"]
-    second = await _get_public_status(app, {"If-None-Match": etag})
-    assert second.status_code == 304
-    assert second.headers.get("ETag") == etag
-    assert second.content == b""
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("validator_kind", ["strong", "list", "wildcard"])
+@pytest.mark.parametrize("validator_kind", ["weak", "strong", "list", "wildcard"])
 async def test_public_status_if_none_match_uses_weak_comparison(validator_kind):
     app = _make_app()
     first = await _get_public_status(app)
     etag = first.headers["ETag"]
     strong = etag.removeprefix("W/")
-    validators = {"strong": strong, "list": f'W/"stale", {strong}', "wildcard": "*"}
+    validators = {"weak": etag, "strong": strong, "list": f'W/"stale", {strong}', "wildcard": "*"}
     second = await _get_public_status(app, {"If-None-Match": validators[validator_kind]})
 
     assert second.status_code == 304
@@ -92,7 +75,6 @@ async def test_public_status_malformed_or_stale_validator_returns_200(validator)
 
 @pytest.mark.asyncio
 async def test_public_status_etag_stable_when_only_progress_advances():
-    """Progress and uptime advance every poll; the ETag must not."""
     app = _make_app()
     state = app.state.station_state
     now = time.time()
@@ -108,6 +90,21 @@ async def test_public_status_etag_stable_when_only_progress_advances():
     second = await _get_public_status(app, {"If-None-Match": etag})
     assert second.status_code == 304
     assert second.headers.get("ETag") == etag
+
+
+@pytest.mark.asyncio
+async def test_same_label_home_event_recurrence_changes_etag():
+    app = _make_app()
+    state = app.state.station_state
+    app.state.config.homeassistant.context_enabled = True
+    state.ha_context = "enabled"
+    state.ha_last_event_label = "Porta ingresso"
+    state.ha_last_event_ts = time.time() - 20 * 60
+    first = await _get_public_status(app)
+    state.ha_last_event_ts = time.time() - 60
+    second = await _get_public_status(app, {"If-None-Match": first.headers["ETag"]})
+    assert second.status_code == 200 and second.headers["ETag"] != first.headers["ETag"]
+    assert second.json()["ha_moments"]["last_event_ago_min"] == 1
 
 
 @pytest.mark.asyncio

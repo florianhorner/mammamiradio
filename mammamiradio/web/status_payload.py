@@ -839,9 +839,9 @@ def _scrub_public_status_for_etag(payload: dict) -> dict:
     return scrubbed
 
 
-def public_status_etag(payload: dict) -> str:
+def public_status_etag(payload: dict, *, revision: object | None = None) -> str:
     """Weak ETag for ``/public-status`` based on stable listener facts."""
-    normalized = normalize_public_status_json(_scrub_public_status_for_etag(payload))
+    normalized = normalize_public_status_json({"payload": _scrub_public_status_for_etag(payload), "revision": revision})
     body = json.dumps(normalized, allow_nan=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return f'W/"{hashlib.blake2b(body, digest_size=8).hexdigest()}"'
 
