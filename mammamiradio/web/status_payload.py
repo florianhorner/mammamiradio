@@ -354,9 +354,15 @@ def _nonnegative_milliseconds(value: object) -> int | None:
 
 
 def _positive_seconds(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return seconds
 
 
 def _ha_mailbox_state(state: StationState) -> tuple[bool, bool, str | None, int | None, bool | None]:

@@ -287,6 +287,10 @@ def test_duration_sec_from_payload_rejects_non_finite_or_boolean_values(invalid_
     assert status_payload._duration_sec_from_payload(payload) is None
 
 
+def test_duration_sec_from_payload_treats_oversized_integer_as_unavailable():
+    assert status_payload._duration_sec_from_payload({"duration_sec": 10**1000}) is None
+
+
 def test_public_segment_metadata_redacts_private_ritual_internals():
     metadata = {
         "source": "banter",
