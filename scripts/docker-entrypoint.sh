@@ -24,16 +24,14 @@ if [ -z "${ADMIN_TOKEN:-}" ]; then
         # — openssl is not in the slim base image and adding it would bloat the
         # image for one line of randomness.
         ADMIN_TOKEN="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-        if [ -w "$(dirname "$TOKEN_FILE")" ]; then
-            printf '%s' "$ADMIN_TOKEN" > "$TOKEN_FILE"
+        if [ -w "$(dirname "$TOKEN_FILE")" ] && printf '%s' "$ADMIN_TOKEN" > "$TOKEN_FILE" 2>/dev/null; then
             chmod 600 "$TOKEN_FILE" 2>/dev/null || true
             echo "[mammamiradio] Generated ADMIN_TOKEN and persisted to $TOKEN_FILE" >&2
             echo "[mammamiradio] Read it with: docker compose exec <service> cat $TOKEN_FILE" >&2
         else
-            # /data is not writable — the token cannot be persisted and will
-            # regenerate on the next start. Never print the value: it would
-            # land in Docker logs.
-            echo "[mammamiradio] WARNING: $TOKEN_FILE not writable; ADMIN_TOKEN will regenerate on restart" >&2
+            # The token cannot be persisted and will regenerate on the next
+            # start. Never print the value: it would land in Docker logs.
+            echo "[mammamiradio] WARNING: $TOKEN_FILE could not be persisted; ADMIN_TOKEN will regenerate on restart" >&2
             echo "[mammamiradio] Set ADMIN_TOKEN in the environment; the generated value is not shown" >&2
         fi
     fi

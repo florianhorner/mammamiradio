@@ -86,6 +86,23 @@ else
     rm -rf "$TMP2"
 fi
 
+# Case 5: writable parent but failed token-file write still degrades safely.
+TMP3="$(mktemp -d)"
+mkdir "$TMP3/admin_token"
+unset ADMIN_TOKEN
+LOG5="$(mktemp)"
+TOKEN5="$(MAMMAMIRADIO_ADMIN_TOKEN_FILE="$TMP3/admin_token" "$ENTRYPOINT" sh -c 'echo "$ADMIN_TOKEN"' 2>"$LOG5")"
+assert_nonempty "failed token-file write still generates ADMIN_TOKEN" "$TOKEN5"
+if [ -n "$TOKEN5" ] && grep -Fq -- "$TOKEN5" "$LOG5"; then
+    echo "  FAIL  failed token-file write logged ADMIN_TOKEN value"
+    FAIL=$((FAIL + 1))
+else
+    echo "  PASS  failed token-file write does not log ADMIN_TOKEN value"
+    PASS=$((PASS + 1))
+fi
+rm -f "$LOG5"
+rm -rf "$TMP3"
+
 # Cleanup
 rm -rf "$TMP1"
 
