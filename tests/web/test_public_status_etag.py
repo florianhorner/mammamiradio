@@ -87,6 +87,8 @@ async def test_same_label_home_recurrences_change_etag_without_leaking_hidden_ro
     second = await _get_public_status(app, {"If-None-Match": rolled.headers["ETag"]})
     assert second.status_code == 200 and second.headers["ETag"] != rolled.headers["ETag"]
     assert second.json()["ha_moments"]["last_event_ago_min"] == 1
+    config.ha_token = "other-token"
+    assert (await _get_public_status(app, {"If-None-Match": second.headers["ETag"]})).status_code == 200
 
 
 @pytest.mark.asyncio

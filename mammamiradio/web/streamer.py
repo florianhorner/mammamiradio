@@ -10906,7 +10906,8 @@ def _public_status_payload(request: Request, *, include_etag_revision: bool = Fa
     # the segment now_streaming is playing (send-start is provisional).
     recent_moments: list[dict] = []
     recent_revision: tuple[str, ...] = ()
-    event_revision: float | None = None
+    event_revision: str | None = None
+    event_key = bytes.fromhex(_home_access_fingerprint(config))
     ha_capable = bool(config.ha_token and config.homeassistant.enabled and config.homeassistant.context_enabled)
     moment_store = getattr(state, "moment_store", None)
     authorization = state.home_authorization or HomeAuthorization.narrow()
@@ -10934,7 +10935,9 @@ def _public_status_payload(request: Request, *, include_etag_revision: bool = Fa
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
-            event_revision = state.ha_last_event_ts
+            event_revision = hashlib.blake2b(
+                str(state.ha_last_event_ts).encode(), key=event_key, digest_size=8
+            ).hexdigest()
         if state.ha_ritual_public_families:
             ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
         if recent_moments:

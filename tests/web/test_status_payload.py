@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import copy
 import math
-import subprocess
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -637,7 +635,7 @@ def test_music_stream_start_maps_each_runtime_source_to_on_air(
         assert payload["sources"][projected_kind]["status"] == "on_air"
 
 
-def test_public_status_etag_ignores_every_listener_advanced_clock():
+def test_public_status_etag_is_deterministic_and_ignores_every_listener_advanced_clock():
     payload = {
         "now_streaming": {"type": "music", "label": "A — B"},
         "current_progress_sec": 12.3,
@@ -664,23 +662,8 @@ def test_public_status_etag_ignores_every_listener_advanced_clock():
     semantic_change = copy.deepcopy(payload)
     semantic_change["ha_moments"]["recent"][0]["status"] = "airing"
     assert status_payload.public_status_etag(payload) != status_payload.public_status_etag(semantic_change)
-
-
-def test_public_status_etag_is_process_independent_without_exposing_private_revision():
-    private_event_timestamp = 1_700_000_000.125
-    script = f"""
-from mammamiradio.web.status_payload import public_status_etag
-
-payload = {{"station": "Radio Città", "session_stopped": False}}
-revision = ({private_event_timestamp!r}, ("opaque-moment-id",))
-print(public_status_etag(payload, revision=revision))
-"""
-
-    worker_etags = [subprocess.check_output([sys.executable, "-c", script], text=True).strip() for _worker in range(2)]
-
-    assert worker_etags[0] == worker_etags[1]
-    assert worker_etags[0].startswith('W/"')
-    assert str(private_event_timestamp) not in worker_etags[0]
+    etag = status_payload.public_status_etag({"station": "Radio Città"}, revision=("event", ("moment",)))
+    assert etag == 'W/"d03ca683a9ddee8a"'
 
 
 @pytest.mark.parametrize("recent", [None, "invalid", [None, "invalid", {"ago_min": 3}]])

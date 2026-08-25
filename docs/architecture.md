@@ -56,10 +56,8 @@ standalone external-media-/  (optional; absent from both add-ons)
                 +-> /status (admin-only anonymous session diagnostics)
 ```
 
-The listener revalidates `/public-status` with a weak semantic ETag. Live versus
-idle/stopped tabs poll every 3/3.5 seconds when visible and 30/60 seconds when
-hidden. Matching validators return bodyless 304s while one monotonic anchor
-advances listener clocks; payload, anchor, and ETag share a generation guard.
+The listener revalidates `/public-status` with a weak semantic ETag; live/idle/stopped tabs poll every 3/3.5 seconds when visible and 30/60 seconds when hidden.
+Matching validators return bodyless 304s while one monotonic anchor advances listener clocks; payload, anchor, and ETag share a generation guard.
 
 ## Startup flow
 
