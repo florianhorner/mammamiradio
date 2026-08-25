@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import re
-import secrets
 import time
 from pathlib import Path
 from typing import Any
@@ -819,7 +818,6 @@ def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
 
 
 PUBLIC_STATUS_CACHE_CONTROL = "public, max-age=1"
-_PUBLIC_STATUS_ETAG_KEY = secrets.token_bytes(32)
 
 
 def normalize_public_status_json(payload: dict) -> dict:
@@ -850,7 +848,7 @@ def public_status_etag(payload: dict, *, revision: object | None = None) -> str:
     """Weak ETag for ``/public-status`` based on stable listener facts."""
     normalized = normalize_public_status_json({"payload": _scrub_public_status_for_etag(payload), "revision": revision})
     body = json.dumps(normalized, allow_nan=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return f'W/"{hashlib.blake2b(body, key=_PUBLIC_STATUS_ETAG_KEY, digest_size=8).hexdigest()}"'
+    return f'W/"{hashlib.blake2b(body, digest_size=8).hexdigest()}"'
 
 
 _ETAG_VALUE_RE = re.compile(r'[ \t]*(?:W/)?"([\x21\x23-\x7e\x80-\xff]*)"[ \t]*(?:,|$)')
