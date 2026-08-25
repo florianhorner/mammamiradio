@@ -27,6 +27,20 @@ async def test_public_status_response_has_etag_and_cache_control():
 
 
 @pytest.mark.asyncio
+async def test_public_status_preserves_unicode_in_utf8_response():
+    app = _make_app()
+    app.state.config.identity.station_name = "Radio Città"
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/public-status")
+
+    assert response.status_code == 200
+    assert "Radio Città" in response.text
+    assert b"Radio Citt\\u00e0" not in response.content
+    assert response.json()["identity"]["station_name"] == "Radio Città"
+
+
+@pytest.mark.asyncio
 async def test_public_status_if_none_match_unchanged_state_returns_304():
     app = _make_app()
     transport = httpx.ASGITransport(app=app)

@@ -11674,8 +11674,8 @@ async def public_status(request: Request) -> Response:
         "Cache-Control": PUBLIC_STATUS_CACHE_CONTROL,
     }
     if public_status_not_modified(request.headers, etag):
-        return Response(status_code=304, headers=headers)
-    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return Response(status_code=304, media_type="application/json", headers=headers)
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return Response(content=body, media_type="application/json", headers=headers)
 
 
