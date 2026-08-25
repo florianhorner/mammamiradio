@@ -3,8 +3,10 @@
 #
 # Mirrors the HA add-on pattern: if ADMIN_TOKEN is unset, auto-generate one
 # and persist it to /data/admin_token so it survives container restarts.
-# Operators can read the value with:
+# Operators can read a persisted value with:
 #   docker compose exec mammamiradio cat /data/admin_token
+# If /data is not writable the generated value is not printed; set ADMIN_TOKEN
+# in the environment so it survives restart.
 #
 # HA add-on mode uses ha-addon/mammamiradio/rootfs/run.sh instead — this
 # entrypoint is only for the standalone Dockerfile.

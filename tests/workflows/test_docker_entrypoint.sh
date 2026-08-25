@@ -74,7 +74,7 @@ else
     TOKEN4="$(MAMMAMIRADIO_ADMIN_TOKEN_FILE="$TMP2/admin_token" "$ENTRYPOINT" sh -c 'echo "$ADMIN_TOKEN"' 2>"$LOG4")"
     assert_nonempty "read-only /data still generates ADMIN_TOKEN" "$TOKEN4"
     [ ! -f "$TMP2/admin_token" ] && echo "  PASS  read-only /data does not create token file" && PASS=$((PASS + 1)) || { echo "  FAIL  unexpected file created"; FAIL=$((FAIL + 1)); }
-    if grep -E 'ADMIN_TOKEN=[0-9a-fA-F]+' "$LOG4" >/dev/null; then
+    if [ -n "$TOKEN4" ] && grep -Fq -- "$TOKEN4" "$LOG4"; then
         echo "  FAIL  read-only /data logged ADMIN_TOKEN value"
         FAIL=$((FAIL + 1))
     else
