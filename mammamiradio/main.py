@@ -6,6 +6,7 @@ import asyncio
 import importlib.metadata
 import json
 import logging
+import math
 import os
 import secrets
 import shutil
@@ -91,10 +92,8 @@ from mammamiradio.web.streamer import (
     _register_background_task,
     _session_stopped_flag,
     _stream_chunk_size,
-    initialize_clip_capture_runtime,
     router,
     run_playback_loop,
-    shutdown_clip_capture_runtime,
 )
 
 logging.basicConfig(
@@ -772,29 +771,20 @@ async def startup():
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=config.pacing.lookahead_segments + 2)
 
-    # Retained live-audio ledger for listener sharing. The playback coroutine is
-    # the sole writer: it owns both these raw chunks and the absolute byte/segment
-    # boundaries that make chapter-guided captures safe. Keep a byte cap rather
-    # than ``deque(maxlen=...)``: egress chunks can vary in size, so a count cap
-    # cannot tell a capture route where retained audio truly begins. Its capacity
-    # follows the bounded source-packet size used by the playback loop, retaining
-    # at least the longest legacy shareable segment even for malformed bitrates.
+    # Ring buffer for clip sharing ("share WTF moment"). Sized to hold the longest
+    # shareable ad/banter segment (CLIP_MAX_SEGMENT_SECONDS) so a full spot can be
+    # captured whole; music clips still only read the trailing 30s. Its capacity
+    # follows the bounded source-packet size used by the playback loop. The
+    # max(240, …) floor keeps a usable buffer when bitrate is missing or malformed.
     from collections import deque
 
-    _clip_chunk_bytes = 4096
     try:
         _bytes_per_sec = int(config.audio.bitrate) * 1000 // 8
         _clip_chunk_bytes = _stream_chunk_size(_bytes_per_sec)
-        _clip_max_bytes = max(240 * _clip_chunk_bytes, _bytes_per_sec * CLIP_MAX_SEGMENT_SECONDS)
+        _clip_maxlen = max(240, math.ceil(_bytes_per_sec * CLIP_MAX_SEGMENT_SECONDS / _clip_chunk_bytes))
     except (TypeError, ValueError, AttributeError):
-        _clip_max_bytes = 240 * _clip_chunk_bytes
-    app.state.clip_ring_buffer: deque[bytes] = deque()
-    app.state.clip_buffer_max_bytes = _clip_max_bytes
-    app.state.clip_buffer_bytes = 0
-    app.state.clip_buffer_start_byte = 0
-    app.state.clip_bytes_total = 0
-    app.state.clip_generation = 0
-    app.state.clip_marks = []
+        _clip_maxlen = 240
+    app.state.clip_ring_buffer: deque[bytes] = deque(maxlen=_clip_maxlen)
     app.state.last_shareworthy_clip = None
     # Written by the playback loop at each segment boundary: which segment is
     # airing and how many of its chunks are in the ring. "Keep this" cuts from
@@ -827,7 +817,6 @@ async def startup():
     app.state.home_context_choice_lock = asyncio.Lock()
     jamendo_provider = JamendoStreamProvider(config.tmp_dir, lambda: state.source_revision)
     app.state.jamendo_provider = jamendo_provider
-    await initialize_clip_capture_runtime(app)
 
     def _persist_heading_update(heading) -> None:
         async def _write_heading() -> None:
@@ -1111,7 +1100,6 @@ async def shutdown():
             tasks_to_cancel.append(_rh)
     if tasks_to_cancel:
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-    await shutdown_clip_capture_runtime(app)
     if hasattr(app.state, "jamendo_start_task"):
         app.state.jamendo_start_task = None
     jamendo_provider = getattr(app.state, "jamendo_provider", None)

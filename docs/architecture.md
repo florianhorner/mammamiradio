@@ -795,9 +795,7 @@ Two features create the illusion of a live radio studio:
 
 ### Clip sharing
 
-`POST /api/clip` publishes only one complete bundled starter track whose path, hash, identity, and attribution still match the canonical manifest. The playback loop records that snapshot after a clean full-track send, and the endpoint revalidates the package file before copying it into `{cache_dir}/clips/`. Jamendo, local, mixed, partial, unknown, ad, and banter windows return `403 music_share_unavailable`; their bytes cannot enter the public clip store through this route. Per-IP rate limiting allows one attempt every 10 seconds and rolls back when no eligible starter window exists. The listener maps the structured failure code to actionable copy.
-
-`POST /api/clip/capture` publishes ordinary clips only from a server-proven voice run classified as `speech` or `station_bed`. Commercial, unknown, mixed, and otherwise unproven capture audio is refused. Both clip routes use the same serialized `{cache_dir}/clips/` retention boundary: cleanup and the 24-hour TTL are rechecked before a final clip becomes visible, and publishing at the 50-file cap evicts the oldest expiring audio-and-sidecar pair. Eligible clips are served without auth at `GET /clips/{id}.mp3`. Operator keepsakes use a separate directory, reject music-tailed segments, and do not expire.
+`POST /api/clip` can publish only one complete bundled starter track whose path, hash, identity, and attribution still match the canonical manifest. The playback loop records that snapshot only after a clean full-track send; the endpoint revalidates the package file before copying it into `{cache_dir}/clips/`. Jamendo, local, mixed, partial, unknown, ad, and banter windows fail closed with `403 music_share_unavailable`; none of their bytes can enter the public clip store. Eligible clips are served without auth at `GET /clips/{id}.mp3` and auto-expire after 24 hours. Per-IP rate limiting (1 clip per 10 seconds, rolled back when no eligible starter window exists) and a 50-clip disk cap prevent abuse. The listener maps the structured failure code to actionable copy. The one path by which host or ad audio becomes publicly servable is an operator-initiated keepsake (below), which writes to a different directory, is voice-only and music-tail-refused, and carries no TTL.
 
 ### Keepsakes
 
@@ -812,21 +810,6 @@ Durability is structural rather than a flag: `cleanup_old_clips` and the `CLIP_M
 Bounds: `KEEPSAKE_MAX_SAVED` (200) and a `KEEPSAKE_MIN_FREE_MB` (256) free-space preflight, run together with the file publication under `_keepsake_write_lock` so two presses cannot both pass at the ceiling. At roughly 4 MB for a long segment a full shelf is about 800 MB on the same volume as the norm cache, and no evictor reclaims it. The write is `mkstemp` + `fsync` + `os.replace`, so a kill mid-write can never publish a truncated keepsake. The scratch such a kill leaves behind is swept at the next startup by `prune_stale_keepsake_tmp_files`, since nothing else in the cache recurses into this directory.
 
 Keepsakes reuse the `/clips/{id}.mp3` and `/clips/{id}` URLs and are checked after `clips/`, so an id can never resolve to a keepsake while a live clip of that id exists. `GET /api/clip/keep` and `DELETE /api/clip/keep/{id}` list and revoke them, surfaced as **Kept moments** in the admin Archivio tab; deleting the file is the whole revocation, since both public routes read from disk per request.
-
-### Clip capture protocol
-
-Clip capture exposes a **public, capability-scoped protocol** separate from the authenticated admin API. The egress loop owns a byte-capped raw-MP3 ledger and segment marks that close at segment boundaries; the capture route copies them into one immutable, no-await snapshot. Producers stamp `clip_audio_class` as `speech`, `station_bed`, `commercial_music`, or fail-closed `unknown`. Capture succeeds only for a continuous voice run whose server-owned classification is `speech` or `station_bed`. Commercial, unknown, mixed, and otherwise unproven material is unavailable as a choice. Clients supply no cut points, byte offsets, or final metadata.
-
-The capture worker indexes complete MPEG-1 Layer III frames, including VBR, to establish bounded source and selection edges. Finalization supplies bounded decoder context, trims decoded samples to the selected window, and re-encodes the result. This makes decoder safety an output property without requiring every choice to be a direct frame slice. Only the selected choice contributes metadata to the final clip; adjacent chapters and unselected choices cannot enter its sidecar.
-
-| Route | Purpose | Success | Failure boundary |
-| --- | --- | --- | --- |
-| `POST /api/clip/capture` | Create a temporary audition source from a server-proven voice run | `201` with `capture_id`, application-relative `audio_path`, chapters, and frozen choices | Unsafe or unproven audio, unavailable audio/format, and rate, quota, capacity, or write failures return a structured reason |
-| `GET /captures/{id}.mp3` | Native-audio audition source | `audio/mpeg`, `Cache-Control: no-store` | Expired/claimed captures are not replayable; active readers hold a lease |
-| `DELETE /api/clip/capture/{capture_id}` | Release an unused capture capability | The temporary source and quota slot are released | Invalid, expired, or claimed captures remain unavailable for release |
-| `POST /api/clip/commit` | Persist one already-frozen `choice_id` | `201` final clip inside the shared 24-hour/50-file retention boundary; same-choice retry is `200 idempotent:true` | Raw ranges, alternate choices after claim, expired captures, and publication failures are refused; at the cap, the oldest expiring audio-and-sidecar pair is evicted |
-
-Temporary captures live for ten minutes. Global capacity and a per-IP concurrent quota bound them; `.part` files and atomic rename protect publication, and the service worker excludes these files from its cache. Each application lifespan resets capture records, quota accounting, retained timeline state, and generation ownership, even when one app object serves repeated lifespans. Stop and reset boundaries invalidate outstanding capabilities.
 
 ### Optional standalone chart refresh
 
@@ -1377,15 +1360,11 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/resume` | POST | Admin | With readable runway, clear the durable stop marker and return `{"ok":true,"recovering":false}`; without assets, remain stopped with `503` + `force_available:true`. Only an explicitly confirmed `?force=true` clears the marker without runway, arms recovery, and returns `{"ok":true,"recovering":true,"runway_source":"none"}` |
 | `/api/credentials` | POST | Admin | Update credentials at runtime |
 | `/api/clip` | POST | Public | Capture eligible material; music requires a complete bundled-starter-only window, otherwise `403 music_share_unavailable` |
-| `/api/clip/capture` | POST | Public | Freeze a temporary, decoder-safe capture from a server-proven speech/station-bed voice run and return a short-lived capability |
-| `/api/clip/capture/{capture_id}` | DELETE | Public (capture capability) | Release an unused temporary capture and its per-IP concurrent-quota slot |
-| `/api/clip/commit` | POST | Public (capture capability) | Commit one server-frozen audition choice through the shared 24-hour/50-file clip retention boundary |
-| `/captures/{id}.mp3` | GET | Public (capture capability) | Serve a no-store temporary audition asset under a reader lease |
 | `/api/clip/keep` | POST | Admin | Keep the airing voice segment (or the one just ended) durably in `cache_dir/keepsakes/`. Refusal reasons: `music`, `music_tail`, `not_on_air`, `too_early`, `not_keepable`, `archive_full`, `no_room`, `write_failed` |
 | `/api/clip/keep` | GET | Admin | List kept moments, newest first (`keepsake_id`, title, segment type, created_at, size, share URL) |
 | `/api/clip/keep/{id}` | DELETE | Admin | Remove one kept moment, audio and sidecar together; the supported way to revoke audio that never expires |
 | `/clips/{id}.mp3` | GET | Public | Serve a saved clip (no auth, for sharing). Falls back to `keepsakes/` when the clip is missing or expired, and keepsakes carry no TTL |
-| `/clips/{id}` | GET | Public | Share landing page (OG card + player). Falls back to `keepsakes/` when the clip is missing or expired; an expired clip renders a "this moment has passed" state rather than a 404 |
+| `/clips/{id}` | GET | Public | Share landing page (OG card + player). Falls back to `keepsakes/` when the clip is missing or expired; an expired clip renders an "this moment has passed" state rather than a 404 |
 | `/api/track-rules` | POST | Admin | Flag a reaction rule for the current track |
 | `/api/listener-request` | POST | Public | Submit a song request or shoutout; successful responses add `public_token` and the current `song_resolution` for listener-side follow-up |
 | `/public-listener-requests` | GET | Public | Sanitized listener-request feed for the on-page sidebar (`public_token`, `status`, `song_resolution`, name, message, type) — admin `request_id`, `submitter_ip_hash`, and `evict_after` stay server-side |

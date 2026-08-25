@@ -22,8 +22,6 @@ import time
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from dataclasses import field as dataclass_field
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -66,7 +64,6 @@ from mammamiradio.audio.normalizer import (
     load_track_metadata,
     norm_cache_duration_sec,
     probe_duration_sec,
-    render_decoder_safe_mp3_window,
 )
 from mammamiradio.audio.stream_format import stream_audio_metadata
 from mammamiradio.core.capabilities import capabilities_to_dict, get_capabilities
@@ -194,12 +191,7 @@ from mammamiradio.playlist.playlist import (
     write_persisted_source,
 )
 from mammamiradio.playlist.preferences import clear_preference, preference_score, save_preferences, set_preference
-from mammamiradio.scheduling.clip import (
-    CLIP_TTL_SECONDS,
-    KEEPSAKE_SEGMENT_TYPES,
-    prune_stale_clip_tmp_files,
-    publish_clip,
-)
+from mammamiradio.scheduling.clip import KEEPSAKE_SEGMENT_TYPES
 from mammamiradio.scheduling.handoff import (
     cancel_active_music_handoff,
     finish_handoff_segment,
@@ -252,13 +244,7 @@ from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/t
 )
 from mammamiradio.web.json_body import read_json_object
 from mammamiradio.web.media_sources import _media_error, safe_jamendo_status
-from mammamiradio.web.mp3_frames import (
-    Mp3FrameIndex,
-    Mp3FrameIndexError,
-    _skip_id3_and_xing_header,
-    build_mpeg1_layer3_frame_index,
-    mpeg1_l3_decoder_window,
-)
+from mammamiradio.web.mp3_frames import _skip_id3_and_xing_header
 from mammamiradio.web.pages import _get_injected_html, _sanitize_ingress_prefix
 from mammamiradio.web.persistence import (
     _CREDENTIAL_ENV_TO_FIELD,
@@ -1013,1019 +999,6 @@ class StreamPacer:
             deficit_seconds=deficit,
             warn_underrun=warn_underrun,
         )
-
-
-# Quiet Moment Picker: a separate, listener-private capture flow. It is
-# deliberately independent from the legacy /api/clip rate map and on-disk clip
-# contract below. These short-lived source files are capabilities, not a public
-# clip archive, so they must never fall through a browser/PWA cache.
-CAPTURE_TTL_SECONDS = 10 * 60
-CAPTURE_CREATE_TIMEOUT_SECONDS = 20.0
-CAPTURE_COMMIT_GRACE_SECONDS = 30.0
-CAPTURE_MAINTENANCE_SECONDS = 60.0
-CAPTURE_MAX_RECORDS = 20
-CAPTURE_MAX_RECORDS_PER_IP = 4
-CAPTURE_RATE_LIMIT_SECONDS = 10.0
-CAPTURE_RATE_PRUNE_SECONDS = 300.0
-CAPTURE_VOICE_MAX_SECONDS = 120.0
-CAPTURE_DEFAULT_BEFORE_SECONDS = 8.0
-CAPTURE_DEFAULT_AFTER_SECONDS = 6.0
-CAPTURE_CONTEXT_SECONDS = 15.0
-CAPTURE_HEARD_LAG_SECONDS = 10.0
-_CAPTURE_ID_RE = _re.compile(r"^[A-Za-z0-9_-]{43}$")
-_CAPTURE_AUDIO_CLASSES = frozenset({"speech", "station_bed", "commercial_music", "unknown"})
-_CAPTURE_SAFE_AUDIO_CLASSES = frozenset({"speech", "station_bed"})
-_CAPTURE_VOICE_SEGMENT_TYPES = frozenset({"banter", "news_flash"})
-
-
-class _CaptureState(StrEnum):
-    CREATING = "creating"
-    DRAINING = "draining"
-    READY = "ready"
-    CLAIMED = "claimed"
-    CONSUMED = "consumed"
-    EXPIRED = "expired"
-
-
-@dataclass
-class SegmentMark:
-    """One immutable-at-start, bounded-at-end segment on the retained timeline.
-
-    The playback loop owns this object. The producer only contributes its
-    conservative ``clip_audio_class`` metadata when it still knows the render
-    path; neither the browser nor a capture route gets to infer it later.
-    """
-
-    generation: int
-    byte_start: int
-    byte_end: int | None
-    segment_id: str
-    segment_type: str
-    title: str
-    artist: str
-    clip_audio_class: str
-
-
-@dataclass(frozen=True)
-class _ClipSnapshot:
-    """A no-await copy of the current retained audio and timeline ledger."""
-
-    chunks: tuple[bytes, ...]
-    marks: tuple[SegmentMark, ...]
-    buffer_start_byte: int
-    buffer_end_byte: int
-    generation: int
-
-
-@dataclass(frozen=True)
-class _CaptureChoice:
-    choice_id: str
-    label: str
-    byte_start: int
-    byte_end: int
-    in_sec: float
-    out_sec: float
-    duration_sec: float
-    chapter_ids: tuple[str, ...]
-    start_sample: int
-    sample_count: int
-    source_sample_count: int
-    sample_rate: int
-    segment_types: tuple[str, ...]
-    audio_classes: tuple[str, ...]
-    track_title: str
-    track_artist: str
-    chapter_summary: tuple[str, ...]
-
-    def public(self) -> dict[str, Any]:
-        return {
-            "choice_id": self.choice_id,
-            "label": self.label,
-            "in_sec": round(self.in_sec, 3),
-            "out_sec": round(self.out_sec, 3),
-            "duration_sec": round(self.duration_sec, 3),
-            "chapter_ids": list(self.chapter_ids),
-        }
-
-
-@dataclass
-class _CaptureRecord:
-    capture_id: str
-    nonce: str
-    generation: int
-    state: _CaptureState
-    created_monotonic: float
-    expires_monotonic: float
-    build_deadline_monotonic: float
-    owner_key: str = "unknown"
-    source_path: Path | None = None
-    choices: dict[str, _CaptureChoice] = dataclass_field(default_factory=dict)
-    chapters: list[dict[str, Any]] = dataclass_field(default_factory=list)
-    duration_sec: float = 0.0
-    frozen_metadata: dict[str, Any] = dataclass_field(default_factory=dict)
-    active_readers: int = 0
-    active_writers: int = 0
-    claimed_choice_id: str | None = None
-    commit_result: dict[str, Any] | None = None
-    consumed_monotonic: float | None = None
-
-
-def _capture_error(reason: str, status_code: int, *, retry_after: int | None = None) -> JSONResponse:
-    """Return the exact listener-private error envelope, never UI prose."""
-
-    content: dict[str, Any] = {"ok": False, "reason": reason}
-    headers: dict[str, str] = {}
-    if retry_after is not None:
-        content["retry_after"] = retry_after
-        headers["Retry-After"] = str(retry_after)
-    return JSONResponse(content=content, status_code=status_code, headers=headers)
-
-
-def _clip_listener_identity(request: Request) -> str:
-    """Resolve one listener through the shared trusted-proxy boundary."""
-
-    # listener_requests imports streamer lifecycle helpers, so this must remain
-    # lazy to avoid a module-initialization cycle.
-    from mammamiradio.web.listener_requests import _client_ip_for_rate_limit
-
-    return _client_ip_for_rate_limit(request)
-
-
-def _capture_directory(config) -> Path:
-    return config.cache_dir / "captures"
-
-
-def _ensure_clip_capture_state(app) -> None:
-    """Lazily install capture state for minimal test apps as well as startup."""
-
-    state = app.state
-    if not hasattr(state, "capture_lock"):
-        state.capture_lock = asyncio.Lock()
-    if not hasattr(state, "capture_records"):
-        state.capture_records = {}
-    if not hasattr(state, "capture_rate"):
-        state.capture_rate = {}
-    if not hasattr(state, "clip_publish_lock"):
-        state.clip_publish_lock = asyncio.Lock()
-
-
-def _remove_capture_orphans(captures_dir: Path) -> int:
-    """Delete only transient capture artifacts left by a prior process."""
-
-    if not captures_dir.is_dir():
-        return 0
-    removed = 0
-    for path in captures_dir.iterdir():
-        if not path.is_file():
-            continue
-        try:
-            path.unlink(missing_ok=True)
-            removed += 1
-        except OSError:
-            logger.warning("Capture startup cleanup could not remove %s", path)
-    return removed
-
-
-async def initialize_clip_capture_runtime(app) -> None:
-    """Start bounded capture maintenance after app state/config are ready."""
-
-    _ensure_clip_capture_state(app)
-    existing_task = getattr(app.state, "capture_maintenance_task", None)
-    if existing_task is not None and not existing_task.done():
-        return
-    if existing_task is not None or app.state.capture_records or app.state.capture_rate:
-        # A completed/cancelled task handle and its reservations belong to the
-        # previous lifespan.  Reuse of the same FastAPI app must start clean.
-        await shutdown_clip_capture_runtime(app)
-    config = getattr(app.state, "config", None)
-    if config is not None:
-        try:
-            removed = await asyncio.to_thread(_remove_capture_orphans, _capture_directory(config))
-            if removed:
-                logger.info("Capture cleanup: removed %d orphaned temporary file(s)", removed)
-        except OSError:
-            logger.warning("Capture startup cleanup failed", exc_info=True)
-        scratch_removed = await asyncio.to_thread(prune_stale_clip_tmp_files, config.cache_dir / "clips")
-        if scratch_removed:
-            logger.info("Clip cleanup: removed %d stale publication scratch file(s)", scratch_removed)
-    task = asyncio.create_task(_capture_maintenance_loop(app))
-    app.state.capture_maintenance_task = task
-
-
-async def shutdown_clip_capture_runtime(app) -> None:
-    """End one capture lifespan and release every in-memory/disk reservation."""
-
-    _ensure_clip_capture_state(app)
-    task = getattr(app.state, "capture_maintenance_task", None)
-    # Clear the handle before awaiting cancellation so a same-process restart
-    # can never mistake an old cancelled task for a live maintenance owner.
-    app.state.capture_maintenance_task = None
-    if task is not None and not task.done():
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    paths: list[Path] = []
-    async with app.state.capture_lock:
-        for record in app.state.capture_records.values():
-            if record.source_path is not None:
-                paths.append(record.source_path)
-        app.state.capture_records.clear()
-        app.state.capture_rate.clear()
-    if paths:
-        await asyncio.to_thread(_delete_capture_sources, paths)
-
-    # Locks are lifecycle-owned too.  Replacing them avoids carrying a lock
-    # bound to an old event loop into lifespan reuse in tests or embedded hosts.
-    app.state.capture_lock = asyncio.Lock()
-    app.state.clip_publish_lock = asyncio.Lock()
-
-
-def _reset_clip_timeline(app) -> None:
-    """Forget raw timeline state on a deliberate station stop/session boundary."""
-
-    ring = getattr(app.state, "clip_ring_buffer", None)
-    if ring is not None:
-        ring.clear()
-    app.state.clip_buffer_bytes = 0
-    app.state.clip_buffer_start_byte = 0
-    app.state.clip_bytes_total = 0
-    app.state.clip_generation = int(getattr(app.state, "clip_generation", 0)) + 1
-    app.state.clip_marks = []
-
-
-async def _invalidate_pending_captures(app) -> None:
-    """Expire uncommitted capability captures at an explicit stop boundary."""
-
-    _ensure_clip_capture_state(app)
-    async with app.state.capture_lock:
-        for record in app.state.capture_records.values():
-            if record.state in {
-                _CaptureState.CREATING,
-                _CaptureState.READY,
-                _CaptureState.CLAIMED,
-            }:
-                record.state = _CaptureState.EXPIRED
-    await _collect_expired_captures(app)
-
-
-async def _apply_clip_stop_boundary(app) -> None:
-    """Apply the Stop boundary to public clip writers and pending captures."""
-
-    _ensure_clip_capture_state(app)
-    async with app.state.clip_publish_lock:
-        app.state.clip_stop_generation = int(getattr(app.state, "clip_stop_generation", 0)) + 1
-        _reset_clip_timeline(app)
-        await _invalidate_pending_captures(app)
-
-
-def _append_clip_chunk(app, chunk: bytes) -> None:
-    """Append one aired chunk and evict by exact retained byte count.
-
-    This is intentionally synchronous and bounded: the egress coroutine calls
-    it after broadcast, so it performs no disk I/O, parsing, or await.
-    """
-
-    ring = getattr(app.state, "clip_ring_buffer", None)
-    if ring is None:
-        return
-    # Minimal test apps may still provide the legacy count-capped deque without
-    # the new ledger. Preserve their old behavior rather than guessing an
-    # absolute byte boundary from a silent deque eviction.
-    if not hasattr(app.state, "clip_buffer_max_bytes"):
-        ring.append(chunk)
-        return
-    ring.append(chunk)
-    app.state.clip_bytes_total = int(getattr(app.state, "clip_bytes_total", 0)) + len(chunk)
-    app.state.clip_buffer_bytes = int(getattr(app.state, "clip_buffer_bytes", 0)) + len(chunk)
-    max_bytes = int(getattr(app.state, "clip_buffer_max_bytes", 0))
-    while max_bytes > 0 and app.state.clip_buffer_bytes > max_bytes and ring:
-        dropped = ring.popleft()
-        app.state.clip_buffer_bytes -= len(dropped)
-        app.state.clip_buffer_start_byte = int(getattr(app.state, "clip_buffer_start_byte", 0)) + len(dropped)
-    _prune_evicted_clip_marks(app)
-
-
-def _normal_clip_audio_class(metadata: dict[str, Any]) -> str:
-    value = str(metadata.get("clip_audio_class") or "unknown")
-    return value if value in _CAPTURE_AUDIO_CLASSES else "unknown"
-
-
-def _mark_clip_segment_start(app, segment: Segment) -> None:
-    """Close the previous mark and begin the newly aired segment at byte truth."""
-
-    if not hasattr(app.state, "clip_marks"):
-        return
-    marks: list[SegmentMark] = app.state.clip_marks
-    at_byte = int(getattr(app.state, "clip_bytes_total", 0))
-    if marks and marks[-1].byte_end is None:
-        marks[-1].byte_end = at_byte
-    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
-    title = str(metadata.get("title_only") or metadata.get("title") or "").strip()
-    artist = str(metadata.get("artist") or "").strip()
-    marks.append(
-        SegmentMark(
-            generation=int(getattr(app.state, "clip_generation", 0)),
-            byte_start=at_byte,
-            byte_end=None,
-            segment_id=str(metadata.get("queue_id") or uuid4().hex),
-            segment_type=segment.type.value,
-            title=title,
-            artist=artist,
-            clip_audio_class=_normal_clip_audio_class(metadata),
-        )
-    )
-    _prune_evicted_clip_marks(app)
-
-
-def _prune_evicted_clip_marks(app) -> None:
-    """Prune only fully evicted *closed* marks; retain the active boundary."""
-
-    marks = getattr(app.state, "clip_marks", None)
-    if not isinstance(marks, list):
-        return
-    start = int(getattr(app.state, "clip_buffer_start_byte", 0))
-    app.state.clip_marks = [mark for mark in marks if mark.byte_end is None or mark.byte_end > start]
-
-
-def _snapshot_retained_audio(app) -> _ClipSnapshot | None:
-    """Capture an immutable no-await snapshot owned by the playback ledger."""
-
-    ring = getattr(app.state, "clip_ring_buffer", None)
-    if not ring or not hasattr(app.state, "clip_buffer_max_bytes"):
-        return None
-    buffer_start = int(getattr(app.state, "clip_buffer_start_byte", 0))
-    buffer_end = int(getattr(app.state, "clip_bytes_total", 0))
-    generation = int(getattr(app.state, "clip_generation", 0))
-    # No await between these copies: the egress task cannot interleave within a
-    # synchronous Python block, so chunks, bounds, and marks describe one instant.
-    chunks = tuple(ring)
-    copied_marks = tuple(
-        SegmentMark(
-            generation=mark.generation,
-            byte_start=mark.byte_start,
-            byte_end=buffer_end if mark.byte_end is None else mark.byte_end,
-            segment_id=mark.segment_id,
-            segment_type=mark.segment_type,
-            title=mark.title,
-            artist=mark.artist,
-            clip_audio_class=mark.clip_audio_class,
-        )
-        for mark in getattr(app.state, "clip_marks", [])
-        if mark.generation == generation
-    )
-    if sum(map(len, chunks)) != buffer_end - buffer_start:
-        # Defensive guard for a manually-mutated test app or a future writer
-        # bypassing the sole-owner helper. Never derive a false byte mapping.
-        return None
-    return _ClipSnapshot(chunks, copied_marks, buffer_start, buffer_end, generation)
-
-
-def _delete_capture_sources(paths: list[Path]) -> None:
-    """Best-effort disk cleanup, always outside the capture lock."""
-
-    for path in paths:
-        try:
-            path.unlink(missing_ok=True)
-            path.with_name(path.name + ".part").unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Capture cleanup could not remove %s", path)
-
-
-async def _collect_expired_captures(app) -> None:
-    """Expire records under the lock and unlink only after reader leases drain."""
-
-    _ensure_clip_capture_state(app)
-    now = time.monotonic()
-    paths: list[Path] = []
-    async with app.state.capture_lock:
-        records: dict[str, _CaptureRecord] = app.state.capture_records
-        for capture_id, record in list(records.items()):
-            if (
-                (record.state == _CaptureState.CREATING and now >= record.build_deadline_monotonic)
-                or (record.state == _CaptureState.READY and now >= record.expires_monotonic)
-                or (
-                    record.state == _CaptureState.CONSUMED
-                    and record.consumed_monotonic is not None
-                    and now >= record.consumed_monotonic + CAPTURE_COMMIT_GRACE_SECONDS
-                )
-            ):
-                record.state = _CaptureState.EXPIRED
-
-            # Readers and writers own leases on the immutable source. Expiry may
-            # revoke their capability immediately, but disk reclamation waits
-            # until every in-flight user has drained.
-            if record.state == _CaptureState.EXPIRED and record.active_readers == 0 and record.active_writers == 0:
-                records.pop(capture_id, None)
-                if record.source_path is not None:
-                    paths.append(record.source_path)
-
-        stale_ips = [ip for ip, stamp in app.state.capture_rate.items() if now - stamp >= CAPTURE_RATE_PRUNE_SECONDS]
-        for ip in stale_ips:
-            app.state.capture_rate.pop(ip, None)
-    if paths:
-        await asyncio.to_thread(_delete_capture_sources, paths)
-
-
-async def _capture_maintenance_loop(app) -> None:
-    """Single cancellable periodic cleanup task for temporary replay assets."""
-
-    try:
-        while True:
-            await asyncio.sleep(CAPTURE_MAINTENANCE_SECONDS)
-            try:
-                await _collect_expired_captures(app)
-            except Exception:  # pragma: no cover - later ticks self-heal
-                logger.warning("Capture maintenance tick failed", exc_info=True)
-    except asyncio.CancelledError:
-        raise
-
-
-async def _release_capture_reader(app, capture_id: str, nonce: str) -> None:
-    """Release a GET reader lease after its response stops using the file."""
-
-    _ensure_clip_capture_state(app)
-    async with app.state.capture_lock:
-        record = app.state.capture_records.get(capture_id)
-        if record is not None and record.nonce == nonce:
-            record.active_readers = max(0, record.active_readers - 1)
-    await _collect_expired_captures(app)
-
-
-async def _settle_capture_claim(app, capture_id: str, nonce: str, *, restore_ready: bool) -> None:
-    """Release one writer lease and optionally restore a retryable claim."""
-
-    _ensure_clip_capture_state(app)
-    async with app.state.capture_lock:
-        record = app.state.capture_records.get(capture_id)
-        if record is not None and record.nonce == nonce:
-            record.active_writers = max(0, record.active_writers - 1)
-            if restore_ready and record.state == _CaptureState.CLAIMED:
-                record.state = _CaptureState.READY
-                record.claimed_choice_id = None
-    await _collect_expired_captures(app)
-
-
-class _CaptureFileResponse(FileResponse):
-    """A temporary-file response whose lease survives every response path.
-
-    Starlette returns early for malformed and unsatisfiable Range headers before
-    running ``FileResponse.background``.  Wrapping the entire ASGI call in a
-    ``finally`` also covers disconnects, stat failures, and future early exits.
-    """
-
-    def __init__(self, *args, app: Any, capture_id: str, nonce: str, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._capture_app = app
-        self._capture_id = capture_id
-        self._capture_nonce = nonce
-
-    async def __call__(self, scope, receive, send) -> None:
-        try:
-            await super().__call__(scope, receive, send)
-        finally:
-            try:
-                await _release_capture_reader(self._capture_app, self._capture_id, self._capture_nonce)
-            except Exception:
-                # Never replace an already-sent media response with a cleanup
-                # failure.  Lifespan shutdown remains the final reclamation net.
-                logger.warning("Capture reader release failed", exc_info=True)
-
-
-class _CaptureNoAudioError(ValueError):
-    """The snapshot is real but cannot make a truthful replay moment."""
-
-
-class _CaptureCommitInvalidatedError(RuntimeError):
-    """The station boundary revoked a claimed capture before publication."""
-
-
-@dataclass(frozen=True)
-class _CaptureBuild:
-    source_path: Path
-    choices: dict[str, _CaptureChoice]
-    chapters: list[dict[str, Any]]
-    duration_sec: float
-    frozen_metadata: dict[str, Any]
-
-
-def _frame_range_inside_bytes(index: Mp3FrameIndex, start_byte: int, end_byte: int) -> tuple[int, int] | None:
-    """Return frame ordinals wholly contained in a byte interval of snapshot data."""
-
-    first = next((frame.ordinal for frame in index.frames if frame.byte_start >= start_byte), None)
-    last = next((frame.ordinal for frame in reversed(index.frames) if frame.byte_end <= end_byte), None)
-    if first is None or last is None or first > last:
-        return None
-    return first, last + 1
-
-
-def _frame_range_for_mark(index: Mp3FrameIndex, snapshot: _ClipSnapshot, mark: SegmentMark) -> tuple[int, int] | None:
-    if mark.byte_end is None or mark.generation != snapshot.generation:
-        return None
-    if mark.byte_start < snapshot.buffer_start_byte or mark.byte_end > snapshot.buffer_end_byte:
-        return None
-    return _frame_range_inside_bytes(
-        index,
-        mark.byte_start - snapshot.buffer_start_byte,
-        mark.byte_end - snapshot.buffer_start_byte,
-    )
-
-
-def _range_contained_in(index: Mp3FrameIndex, first: int, end: int, max_seconds: float) -> tuple[int, int] | None:
-    """Keep the newest whole-frame portion of a range within one policy cap."""
-
-    if index.duration_for(first, end) <= max_seconds:
-        return first, end
-    end_sec = index.end_for(end)
-    return index.frame_range(max(index.start_for(first), end_sec - max_seconds), end_sec)
-
-
-def _default_choice_range(index: Mp3FrameIndex, first: int, end: int) -> tuple[int, int] | None:
-    """Freeze the understated [-8s,+6s] audition around the listener lag anchor."""
-
-    run_start = index.start_for(first)
-    run_end = index.end_for(end)
-    anchor = max(run_start, run_end - CAPTURE_HEARD_LAG_SECONDS)
-    desired_start = max(run_start, anchor - CAPTURE_DEFAULT_BEFORE_SECONDS)
-    desired_end = min(run_end, anchor + CAPTURE_DEFAULT_AFTER_SECONDS)
-    desired_duration = min(CAPTURE_DEFAULT_BEFORE_SECONDS + CAPTURE_DEFAULT_AFTER_SECONDS, run_end - run_start)
-    if desired_end - desired_start < desired_duration:
-        if desired_start <= run_start:
-            desired_end = min(run_end, desired_start + desired_duration)
-        elif desired_end >= run_end:
-            desired_start = max(run_start, desired_end - desired_duration)
-    selected = index.frame_range(desired_start, desired_end)
-    if selected is None or index.duration_for(*selected) < 6.0:
-        return None
-    return selected
-
-
-def _context_range(
-    index: Mp3FrameIndex,
-    first: int,
-    end: int,
-    default: tuple[int, int],
-    *,
-    before: bool,
-) -> tuple[int, int] | None:
-    """Offer only already-aired, whole-frame context around a frozen moment."""
-
-    default_start = index.start_for(default[0])
-    default_end = index.end_for(default[1])
-    if before:
-        target = index.frame_range(max(index.start_for(first), default_start - CAPTURE_CONTEXT_SECONDS), default_end)
-        if target is None or target[0] >= default[0]:
-            return None
-    else:
-        target = index.frame_range(default_start, min(index.end_for(end), default_end + CAPTURE_CONTEXT_SECONDS))
-        if target is None or target[1] <= default[1]:
-            return None
-    return target
-
-
-def _safe_voice_run(index: Mp3FrameIndex, snapshot: _ClipSnapshot) -> tuple[tuple[int, int], list[SegmentMark]] | None:
-    """Find the newest contiguous producer-proven spoken/station-bed run."""
-
-    marked: list[tuple[SegmentMark, tuple[int, int]]] = []
-    for mark in snapshot.marks:
-        frame_range = _frame_range_for_mark(index, snapshot, mark)
-        if frame_range is None:
-            continue
-        marked.append((mark, frame_range))
-    if not marked:
-        return None
-    # The heard anchor lives near the retained tail. If the latest complete
-    # mark is commercial/unknown, do not reach back across it for a named
-    # conversation. The listener may separately try the complete-starter path.
-    latest_mark = marked[-1][0]
-    if not (
-        latest_mark.segment_type in _CAPTURE_VOICE_SEGMENT_TYPES
-        and latest_mark.clip_audio_class in _CAPTURE_SAFE_AUDIO_CLASSES
-    ):
-        return None
-    run: list[tuple[SegmentMark, tuple[int, int]]] = []
-    for mark, frame_range in reversed(marked):
-        eligible = (
-            mark.segment_type in _CAPTURE_VOICE_SEGMENT_TYPES and mark.clip_audio_class in _CAPTURE_SAFE_AUDIO_CLASSES
-        )
-        if not eligible:
-            break
-        if run and mark.byte_end != run[-1][0].byte_start:
-            break
-        run.append((mark, frame_range))
-    if not run:
-        return None
-    run.reverse()
-    first = run[0][1][0]
-    end = run[-1][1][1]
-    bounded = _range_contained_in(index, first, end, CAPTURE_VOICE_MAX_SECONDS)
-    if bounded is None:
-        return None
-    return bounded, [mark for mark, _range in run]
-
-
-def _source_choice(
-    index: Mp3FrameIndex,
-    source_first: int,
-    source_end: int,
-    choice_id: str,
-    label: str,
-    selected: tuple[int, int],
-    chapter_ids: tuple[str, ...],
-    *,
-    selected_marks: tuple[SegmentMark, ...] = (),
-    chapter_summary: tuple[str, ...] = (),
-) -> _CaptureChoice:
-    source_byte_start, _source_byte_end = index.byte_range(source_first, source_end)
-    byte_start, byte_end = index.byte_range(*selected)
-    start_sample = round((index.start_for(selected[0]) - index.start_for(source_first)) * index.sample_rate)
-    sample_count = round(index.duration_for(*selected) * index.sample_rate)
-    latest = selected_marks[-1] if selected_marks else None
-    return _CaptureChoice(
-        choice_id=choice_id,
-        label=label,
-        byte_start=byte_start - source_byte_start,
-        byte_end=byte_end - source_byte_start,
-        in_sec=start_sample / index.sample_rate,
-        out_sec=(start_sample + sample_count) / index.sample_rate,
-        duration_sec=index.duration_for(*selected),
-        chapter_ids=chapter_ids,
-        start_sample=start_sample,
-        sample_count=sample_count,
-        source_sample_count=round(index.duration_for(source_first, source_end) * index.sample_rate),
-        sample_rate=index.sample_rate,
-        segment_types=tuple(mark.segment_type for mark in selected_marks),
-        audio_classes=tuple(mark.clip_audio_class for mark in selected_marks),
-        track_title=latest.title if latest is not None else "",
-        track_artist=latest.artist if latest is not None else "",
-        chapter_summary=chapter_summary,
-    )
-
-
-def _capture_choice_is_share_safe(choice: _CaptureChoice) -> bool:
-    """Require producer-frozen, choice-local proof before public publication."""
-
-    return (
-        bool(choice.segment_types)
-        and bool(choice.audio_classes)
-        and choice.start_sample >= 0
-        and choice.sample_count > 0
-        and choice.start_sample + choice.sample_count <= choice.source_sample_count
-        and all(segment_type in _CAPTURE_VOICE_SEGMENT_TYPES for segment_type in choice.segment_types)
-        and all(audio_class in _CAPTURE_SAFE_AUDIO_CLASSES for audio_class in choice.audio_classes)
-    )
-
-
-def _chapter_payload(
-    index: Mp3FrameIndex,
-    snapshot: _ClipSnapshot,
-    source_first: int,
-    source_end: int,
-    marks: list[SegmentMark],
-) -> list[dict[str, Any]]:
-    """Return at most three static provenance labels, never an editable rail."""
-
-    source_start = index.start_for(source_first)
-    source_end_sec = index.end_for(source_end)
-    chapters: list[dict[str, Any]] = []
-    for mark in marks:
-        mark_range = _frame_range_for_mark(index, snapshot, mark)
-        if mark_range is None:
-            continue
-        start = max(source_start, index.start_for(mark_range[0]))
-        end = min(source_end_sec, index.end_for(mark_range[1]))
-        if end <= start:
-            continue
-        label = mark.title or ("In studio" if mark.segment_type == "banter" else "In diretta")
-        chapters.append(
-            {
-                "chapter_id": mark.segment_id,
-                "label": label,
-                "start_sec": round(start - source_start, 3),
-                "end_sec": round(end - source_start, 3),
-                "audio_class": mark.clip_audio_class,
-            }
-        )
-    return chapters[-3:]
-
-
-def _build_capture_source(
-    snapshot: _ClipSnapshot,
-    *,
-    capture_id: str,
-    captures_dir: Path,
-    station_name: str,
-) -> _CaptureBuild:
-    """Build one cap-clean source file and server-frozen whole-frame choices.
-
-    This function only receives immutable values and runs in ``to_thread``. It
-    never consults app state, current now-playing metadata, or the live ring.
-    """
-
-    data = b"".join(snapshot.chunks)
-    index = build_mpeg1_layer3_frame_index(data)
-
-    safe = _safe_voice_run(index, snapshot)
-    if safe is None:
-        # Moment Picker is a voice/station-bed publication path.  Commercial,
-        # mixed, missing, and unknown provenance remain unavailable here; the
-        # listener may separately try the legacy complete-starter route.
-        raise _CaptureNoAudioError("no producer-proven voice run")
-    (run_first, run_end), source_marks = safe
-    default = _default_choice_range(index, run_first, run_end)
-    if default is None:
-        raise _CaptureNoAudioError("spoken run is too short")
-    variants: list[tuple[str, str, tuple[int, int]]] = [("moment", "Il momento", default)]
-    lead = _context_range(index, run_first, run_end, default, before=True)
-    if lead is not None:
-        variants.append(("with_leadin", "Con l’inizio", lead))
-    follow = _context_range(index, run_first, run_end, default, before=False)
-    if follow is not None:
-        variants.append(("with_followup", "Con il dopo", follow))
-
-    source_first = min(selection[0] for _id, _label, selection in variants)
-    source_end = max(selection[1] for _id, _label, selection in variants)
-    if index.duration_for(source_first, source_end) > CAPTURE_VOICE_MAX_SECONDS:
-        raise _CaptureNoAudioError("source exceeds policy cap")
-    chapters = _chapter_payload(index, snapshot, source_first, source_end, source_marks)
-    source_start_sec = index.start_for(source_first)
-    choices: dict[str, _CaptureChoice] = {}
-    for choice_id, label, selection in variants:
-        choice_start_sec = index.start_for(selection[0]) - source_start_sec
-        choice_end_sec = index.end_for(selection[1]) - source_start_sec
-        choice_chapter_ids = tuple(
-            chapter["chapter_id"]
-            for chapter in chapters
-            if chapter["end_sec"] > choice_start_sec and chapter["start_sec"] < choice_end_sec
-        )
-        selected_marks = tuple(
-            mark
-            for mark in source_marks
-            if (mark_range := _frame_range_for_mark(index, snapshot, mark)) is not None
-            and mark_range[1] > selection[0]
-            and mark_range[0] < selection[1]
-        )
-        selected_chapter_summary = tuple(
-            chapter["label"] for chapter in chapters if chapter["chapter_id"] in choice_chapter_ids
-        )
-        choice = _source_choice(
-            index,
-            source_first,
-            source_end,
-            choice_id,
-            label,
-            selection,
-            choice_chapter_ids,
-            selected_marks=selected_marks,
-            chapter_summary=selected_chapter_summary,
-        )
-        if not _capture_choice_is_share_safe(choice):
-            raise _CaptureNoAudioError("choice lacks safe provenance")
-        choices[choice_id] = choice
-    decoder_lower_bound = run_first
-    for mark in source_marks:
-        mark_range = _frame_range_for_mark(index, snapshot, mark)
-        if mark_range is not None and mark_range[0] <= source_first < mark_range[1]:
-            # A newly encoded segment owns its own decoder start.  Context from
-            # a prior segment is neither needed nor allowed to cross this seam.
-            decoder_lower_bound = mark_range[0]
-            break
-    decoder_window = mpeg1_l3_decoder_window(
-        index,
-        source_first,
-        source_end,
-        lower_bound=decoder_lower_bound,
-    )
-    decoder_source = data[decoder_window.decoder_byte_start : decoder_window.decoder_byte_end]
-    if not decoder_source:
-        raise _CaptureNoAudioError("empty decoder source")
-    captures_dir.mkdir(parents=True, exist_ok=True)
-    source_path = captures_dir / f"{capture_id}.mp3"
-    decoder_path = captures_dir / f".{capture_id}.decoder.mp3"
-    decoder_part = decoder_path.with_name(decoder_path.name + ".part")
-    try:
-        decoder_part.write_bytes(decoder_source)
-        os.replace(decoder_part, decoder_path)
-        render_decoder_safe_mp3_window(
-            decoder_path,
-            source_path,
-            preroll_samples=decoder_window.preroll_samples,
-            sample_count=decoder_window.audible_sample_count,
-            sample_rate=decoder_window.sample_rate,
-        )
-    except (OSError, ValueError):
-        source_path.unlink(missing_ok=True)
-        raise
-    finally:
-        decoder_part.unlink(missing_ok=True)
-        decoder_path.unlink(missing_ok=True)
-
-    frozen_metadata = {
-        "station_name": station_name,
-    }
-    return _CaptureBuild(
-        source_path=source_path,
-        choices=choices,
-        chapters=chapters,
-        duration_sec=decoder_window.audible_sample_count / decoder_window.sample_rate,
-        frozen_metadata=frozen_metadata,
-    )
-
-
-def _render_capture_choice(source_path: Path, choice: _CaptureChoice) -> bytes:
-    """Render a standalone, exact-sample MP3 before taking the archive lock."""
-
-    if not _capture_choice_is_share_safe(choice):
-        raise ValueError("frozen choice is not share-safe")
-    rendered_path = source_path.with_name(f".{source_path.stem}-{uuid4().hex}.commit.mp3")
-    try:
-        render_decoder_safe_mp3_window(
-            source_path,
-            rendered_path,
-            preroll_samples=choice.start_sample,
-            sample_count=choice.sample_count,
-            sample_rate=choice.sample_rate,
-        )
-        clip_data = rendered_path.read_bytes()
-    finally:
-        rendered_path.unlink(missing_ok=True)
-    if not clip_data:
-        raise OSError("frozen choice has no audio")
-    return clip_data
-
-
-def _finalize_capture_choice(
-    source_path: Path,
-    choice: _CaptureChoice,
-    frozen_metadata: dict[str, Any],
-    clips_dir: Path,
-    *,
-    clip_data: bytes | None = None,
-) -> dict[str, Any]:
-    """Publish one legacy-compatible clip from one frozen, proven choice."""
-
-    if not _capture_choice_is_share_safe(choice):
-        raise ValueError("frozen choice is not share-safe")
-    if clip_data is None:
-        clip_data = _render_capture_choice(source_path, choice)
-    if not isinstance(clip_data, bytes) or not clip_data:
-        raise OSError("frozen choice has no audio")
-    sidecar = {
-        "station_name": str(frozen_metadata.get("station_name") or ""),
-        "track_title": choice.track_title,
-        "track_artist": choice.track_artist,
-        "created_at": int(time.time()),
-        "clip_label": choice.label,
-        "duration_sec": round(choice.duration_sec, 3),
-        "chapter_summary": list(choice.chapter_summary),
-    }
-    clip_id = publish_clip(
-        clip_data,
-        clips_dir,
-        sidecar=sidecar,
-        max_saved=CLIP_MAX_SAVED,
-        max_age_hours=CLIP_TTL_SECONDS // 3600,
-    )
-    return {
-        "ok": True,
-        "clip_id": clip_id,
-        "url": f"/clips/{clip_id}.mp3",
-        "share_url": f"/clips/{clip_id}",
-        "track_title": choice.track_title,
-        "track_artist": choice.track_artist,
-    }
-
-
-async def _publish_claimed_capture(
-    app,
-    *,
-    capture_id: str,
-    nonce: str,
-    generation: int,
-    source_path: Path,
-    choice: _CaptureChoice,
-    frozen_metadata: dict[str, Any],
-    clip_data: bytes,
-) -> dict[str, Any]:
-    """Publish and consume one claim on the station's Stop boundary lock."""
-
-    async with app.state.clip_publish_lock:
-        async with app.state.capture_lock:
-            record = app.state.capture_records.get(capture_id)
-            if (
-                record is None
-                or record.nonce != nonce
-                or record.state != _CaptureState.CLAIMED
-                or record.generation != generation
-                or int(getattr(app.state, "clip_generation", -1)) != generation
-                or bool(getattr(getattr(app.state, "station_state", None), "session_stopped", False))
-            ):
-                raise _CaptureCommitInvalidatedError
-
-        result = await asyncio.to_thread(
-            _finalize_capture_choice,
-            source_path,
-            choice,
-            frozen_metadata,
-            app.state.config.cache_dir / "clips",
-            clip_data=clip_data,
-        )
-
-        # Stop takes this same outer lock, so the valid claim cannot be revoked
-        # between public file replacement and its idempotency receipt.
-        async with app.state.capture_lock:
-            record = app.state.capture_records.get(capture_id)
-            if record is None or record.nonce != nonce or record.state != _CaptureState.CLAIMED:
-                # No ordinary route can reach this while the publication lock is
-                # held; keep an error log if lifecycle ordering regresses.
-                logger.error("moment_capture_commit_lost_claim_after_publication capture_id=%s", capture_id)
-                return result
-            record.state = _CaptureState.CONSUMED
-            record.commit_result = result
-            record.consumed_monotonic = time.monotonic()
-            record.active_writers = max(0, record.active_writers - 1)
-        return result
-
-
-async def _discard_creating_capture(app, capture_id: str, nonce: str, client_ip: str, stamp: float) -> None:
-    """Remove a failed/late reservation without clobbering another rate stamp."""
-
-    _ensure_clip_capture_state(app)
-    source_path: Path | None = None
-    removed_reservation = False
-    async with app.state.capture_lock:
-        record = app.state.capture_records.get(capture_id)
-        if record is not None and record.nonce == nonce:
-            app.state.capture_records.pop(capture_id, None)
-            source_path = record.source_path
-            removed_reservation = True
-        if removed_reservation and app.state.capture_rate.get(client_ip) == stamp:
-            app.state.capture_rate.pop(client_ip, None)
-    if source_path is not None:
-        await asyncio.to_thread(_delete_capture_sources, [source_path])
-
-
-async def _drain_late_capture_build(
-    app,
-    task: asyncio.Task[_CaptureBuild],
-    *,
-    capture_id: str,
-    nonce: str,
-    client_ip: str,
-    stamp: float,
-) -> None:
-    """Finish a worker that cannot be cancelled, remove its output, and release its quota."""
-
-    build: _CaptureBuild | None = None
-    cancelled = False
-    try:
-        try:
-            build = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            # ``to_thread`` keeps running after task cancellation. Shutdown may
-            # cancel this drain, but cleanup still owns the worker to completion.
-            cancelled = True
-            try:
-                build = await task
-            except Exception:
-                pass
-        except Exception:
-            pass
-        if build is not None:
-            await asyncio.to_thread(_delete_capture_sources, [build.source_path])
-    finally:
-        await _discard_creating_capture(app, capture_id, nonce, client_ip, stamp)
-    if cancelled:
-        raise asyncio.CancelledError
-
-
-async def _schedule_capture_build_drain(
-    app,
-    task: asyncio.Task[_CaptureBuild],
-    *,
-    capture_id: str,
-    nonce: str,
-    client_ip: str,
-    stamp: float,
-) -> None:
-    """Transfer a timed-out build and its capacity reservation to a drain."""
-
-    async with app.state.capture_lock:
-        record = app.state.capture_records.get(capture_id)
-        if record is not None and record.nonce == nonce and record.state == _CaptureState.CREATING:
-            record.state = _CaptureState.DRAINING
-    drain_task = asyncio.create_task(
-        _drain_late_capture_build(
-            app,
-            task,
-            capture_id=capture_id,
-            nonce=nonce,
-            client_ip=client_ip,
-            stamp=stamp,
-        )
-    )
-    _register_background_task(app.state, drain_task)
 
 
 def _drain_segment_queue(q) -> list:
@@ -5967,13 +4940,6 @@ def _start_stream_segment(
     """Publish selected/readable state after the first non-empty file read."""
 
     playback_epoch = state.on_stream_segment_selected(segment)
-    # Never retain music in the chapter-capture ledger. Clearing the previous
-    # eligible run at this boundary also prevents a listener who opens the
-    # picker during a song from receiving stale spoken context instead.
-    if segment.type is SegmentType.MUSIC:
-        _reset_clip_timeline(app)
-    else:
-        _mark_clip_segment_start(app, segment)
     logger.info(
         "Selected readable %s segment for playback (epoch=%d): %s",
         segment.type.value,
@@ -6565,6 +5531,7 @@ async def run_playback_loop(app) -> None:
             state.queue_empty_since = None
             gap_clips_served = 0
             continue
+
         if not segment.mark_playback_started():
             # Settle like every other pre-air drop site. Without this the
             # segment vanishes with its listener-request reservation still held,
@@ -6816,14 +5783,13 @@ async def run_playback_loop(app) -> None:
                             _record_rescue_airplay(state, segment)
                             _record_continuity_air(state, segment)
 
-                        # Feed only non-music into the generic share/capture ring.
-                        # Starter music uses a separately validated package snapshot
-                        # below; local, Jamendo, mixed, and unknown music must never
-                        # enter retained clip memory even if an endpoint later
-                        # returns 403. The picker uses the same exact byte ledger.
+                        # Feed only non-music into the generic share ring. Starter
+                        # music uses a separately validated package snapshot below;
+                        # local, Jamendo, mixed, and unknown music must never enter
+                        # clip/share memory even if the endpoint later returns 403.
                         clip_buf = getattr(app.state, "clip_ring_buffer", None)
                         if clip_buf is not None and segment.type is not SegmentType.MUSIC:
-                            _append_clip_chunk(app, chunk)
+                            clip_buf.append(chunk)
                             clip_segment_chunks += 1
                             # Read-then-write rather than mutate-in-place: the
                             # stop path sets this attribute to None, and today
@@ -9159,15 +8125,9 @@ async def stop_session(request: Request, _: None = Depends(require_admin_access)
 
     state.last_state_change_at = time.time()
     state.now_streaming = {"type": "stopped", "label": "Session stopped", "started": time.time(), "metadata": {}}
-    # Drop every share/capture capability so no audio or frozen preview crosses
-    # an explicit station-stop boundary.
-    app_state.last_shareworthy_starter = None
-    boundary_task = asyncio.create_task(_apply_clip_stop_boundary(request.app))
-    try:
-        await asyncio.shield(boundary_task)
-    except asyncio.CancelledError:
-        await boundary_task
-        raise
+    # Drop the remembered starter share snapshot so a clip can't leak across a
+    # stop (the generic ad/banter clip snapshot is already cleared above).
+    request.app.state.last_shareworthy_starter = None
     logger.info(
         "Session stopped by admin epoch=%d purged_segments=%d cleanup_warnings=%s",
         visible_epoch,
@@ -12031,322 +10991,6 @@ def _public_status_payload(request: Request) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/clip/capture")
-async def create_clip_capture(request: Request):
-    """Freeze one private, cap-clean audition source for the Moment Picker."""
-
-    _ensure_clip_capture_state(request.app)
-    station_state = getattr(request.app.state, "station_state", None)
-    if station_state is not None and station_state.session_stopped:
-        return _capture_error("no_audio", 409)
-    # Snapshot before yielding to any lock/worker: this exact retained timeline,
-    # not future broadcast bytes or current mutable metadata, becomes the replay.
-    snapshot = _snapshot_retained_audio(request.app)
-    if snapshot is None:
-        return _capture_error("no_audio", 409)
-
-    await _collect_expired_captures(request.app)
-    client_ip = _clip_listener_identity(request)
-    now = time.monotonic()
-    async with request.app.state.capture_lock:
-        last = request.app.state.capture_rate.get(client_ip, 0.0)
-        if now - last < CAPTURE_RATE_LIMIT_SECONDS:
-            retry_after = max(1, math.ceil(CAPTURE_RATE_LIMIT_SECONDS - (now - last)))
-            return _capture_error("rate_limited", 429, retry_after=retry_after)
-        owned = [
-            record
-            for record in request.app.state.capture_records.values()
-            if record.owner_key == client_ip
-            and record.state
-            in {_CaptureState.CREATING, _CaptureState.DRAINING, _CaptureState.READY, _CaptureState.CLAIMED}
-        ]
-        if len(owned) >= CAPTURE_MAX_RECORDS_PER_IP:
-            retry_after = max(1, math.ceil(min(record.expires_monotonic for record in owned) - now))
-            return _capture_error("owner_capacity", 429, retry_after=retry_after)
-        if len(request.app.state.capture_records) >= CAPTURE_MAX_RECORDS:
-            return _capture_error("capture_busy", 503, retry_after=3)
-        capture_id = secrets.token_urlsafe(32)
-        # token_urlsafe(32) is 43 base64url chars, but retain a defensive loop
-        # so the public ID contract can never drift if Python changes internals.
-        while not _CAPTURE_ID_RE.fullmatch(capture_id) or capture_id in request.app.state.capture_records:
-            capture_id = secrets.token_urlsafe(32)
-        nonce = secrets.token_urlsafe(16)
-        request.app.state.capture_records[capture_id] = _CaptureRecord(
-            capture_id=capture_id,
-            nonce=nonce,
-            generation=snapshot.generation,
-            state=_CaptureState.CREATING,
-            created_monotonic=now,
-            expires_monotonic=now + CAPTURE_TTL_SECONDS,
-            build_deadline_monotonic=now + CAPTURE_CREATE_TIMEOUT_SECONDS,
-            owner_key=client_ip,
-        )
-        request.app.state.capture_rate[client_ip] = now
-
-    config = request.app.state.config
-    build_task = asyncio.create_task(
-        asyncio.to_thread(
-            _build_capture_source,
-            snapshot,
-            capture_id=capture_id,
-            captures_dir=_capture_directory(config),
-            station_name=config.display_station_name,
-        )
-    )
-    try:
-        build = await asyncio.wait_for(
-            asyncio.shield(build_task),
-            timeout=max(0.001, now + CAPTURE_CREATE_TIMEOUT_SECONDS - time.monotonic()),
-        )
-    except TimeoutError:
-        await _schedule_capture_build_drain(
-            request.app,
-            build_task,
-            capture_id=capture_id,
-            nonce=nonce,
-            client_ip=client_ip,
-            stamp=now,
-        )
-        logger.warning("moment_capture_rejected reason=create_timeout")
-        return _capture_error("capture_busy", 503, retry_after=3)
-    except asyncio.CancelledError:
-        await _schedule_capture_build_drain(
-            request.app,
-            build_task,
-            capture_id=capture_id,
-            nonce=nonce,
-            client_ip=client_ip,
-            stamp=now,
-        )
-        raise
-    except _CaptureNoAudioError:
-        await _discard_creating_capture(request.app, capture_id, nonce, client_ip, now)
-        return _capture_error("no_audio", 409)
-    except Mp3FrameIndexError:
-        await _discard_creating_capture(request.app, capture_id, nonce, client_ip, now)
-        logger.info("moment_capture_rejected reason=format_unavailable")
-        return _capture_error("format_unavailable", 409)
-    except OSError:
-        await _discard_creating_capture(request.app, capture_id, nonce, client_ip, now)
-        logger.warning("moment_capture_rejected reason=write_failed", exc_info=True)
-        return _capture_error("write_failed", 503, retry_after=3)
-
-    publish = True
-    async with request.app.state.capture_lock:
-        record = request.app.state.capture_records.get(capture_id)
-        if (
-            record is None
-            or record.nonce != nonce
-            or record.generation != snapshot.generation
-            or int(getattr(request.app.state, "clip_generation", -1)) != snapshot.generation
-            or record.state != _CaptureState.CREATING
-            or time.monotonic() >= record.build_deadline_monotonic
-        ):
-            publish = False
-        else:
-            record.source_path = build.source_path
-            record.choices = build.choices
-            record.chapters = build.chapters
-            record.duration_sec = build.duration_sec
-            record.frozen_metadata = build.frozen_metadata
-            record.state = _CaptureState.READY
-    if not publish:
-        await asyncio.to_thread(_delete_capture_sources, [build.source_path])
-        await _discard_creating_capture(request.app, capture_id, nonce, client_ip, now)
-        return _capture_error("capture_busy", 503, retry_after=3)
-
-    logger.info("moment_capture_created duration_sec=%.3f choices=%d", build.duration_sec, len(build.choices))
-    return JSONResponse(
-        {
-            "ok": True,
-            "capture_id": capture_id,
-            "audio_path": f"/captures/{capture_id}.mp3",
-            "duration_sec": round(build.duration_sec, 3),
-            "chapters": build.chapters,
-            "choices": [choice.public() for choice in build.choices.values()],
-        },
-        status_code=201,
-    )
-
-
-@router.delete("/api/clip/capture/{capture_id}")
-async def release_clip_capture(capture_id: str, request: Request):
-    """Release one bearer-capability audition; repeated calls are safe."""
-
-    if not _CAPTURE_ID_RE.fullmatch(capture_id):
-        return _capture_error("invalid_request", 400)
-    _ensure_clip_capture_state(request.app)
-    await _collect_expired_captures(request.app)
-    source_path: Path | None = None
-    released = False
-    async with request.app.state.capture_lock:
-        record = request.app.state.capture_records.get(capture_id)
-        if record is None:
-            return {"ok": True, "released": False}
-        if record.state in {_CaptureState.CLAIMED, _CaptureState.DRAINING}:
-            return _capture_error("capture_claimed", 409)
-        released = True
-        record.state = _CaptureState.EXPIRED
-        if record.active_readers == 0 and record.active_writers == 0:
-            request.app.state.capture_records.pop(capture_id, None)
-            source_path = record.source_path
-    if source_path is not None:
-        await asyncio.to_thread(_delete_capture_sources, [source_path])
-    return {"ok": True, "released": released}
-
-
-@router.get("/captures/{capture_id}.mp3")
-async def serve_clip_capture(capture_id: str, request: Request):
-    """Serve a temporary capture under a reader lease; never cache it."""
-
-    if not _CAPTURE_ID_RE.fullmatch(capture_id):
-        return _capture_error("invalid_request", 400)
-    _ensure_clip_capture_state(request.app)
-    await _collect_expired_captures(request.app)
-    source_path: Path | None = None
-    nonce = ""
-    async with request.app.state.capture_lock:
-        record = request.app.state.capture_records.get(capture_id)
-        if record is None or record.state == _CaptureState.EXPIRED:
-            return _capture_error("capture_expired", 404)
-        if record.state != _CaptureState.READY:
-            return _capture_error("capture_claimed", 409)
-        if time.monotonic() >= record.expires_monotonic:
-            record.state = _CaptureState.EXPIRED
-            return _capture_error("capture_expired", 404)
-        if record.source_path is None:
-            return _capture_error("capture_busy", 503, retry_after=3)
-        source_path = record.source_path
-        nonce = record.nonce
-        record.active_readers += 1
-    if not source_path.is_file():
-        await _release_capture_reader(request.app, capture_id, nonce)
-        return _capture_error("capture_busy", 503, retry_after=3)
-    return _CaptureFileResponse(
-        source_path,
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store, private, max-age=0", "Pragma": "no-cache"},
-        app=request.app,
-        capture_id=capture_id,
-        nonce=nonce,
-    )
-
-
-@router.post("/api/clip/commit")
-async def commit_clip_capture(request: Request):
-    """Commit exactly one server-frozen, already auditioned capture choice."""
-
-    body, parse_error = await read_json_object(request)
-    if parse_error is not None:
-        return _capture_error("invalid_request", 400)
-    if (
-        not isinstance(body, dict)
-        or set(body) != {"capture_id", "choice_id"}
-        or not isinstance(body.get("capture_id"), str)
-        or not isinstance(body.get("choice_id"), str)
-        or not _CAPTURE_ID_RE.fullmatch(body["capture_id"])
-        or not body["choice_id"]
-    ):
-        return _capture_error("invalid_request", 400)
-    capture_id = body["capture_id"]
-    choice_id = body["choice_id"]
-    _ensure_clip_capture_state(request.app)
-    await _collect_expired_captures(request.app)
-    source_path: Path | None = None
-    choice: _CaptureChoice | None = None
-    frozen_metadata: dict[str, Any] = {}
-    nonce = ""
-    generation = -1
-    now = time.monotonic()
-    async with request.app.state.capture_lock:
-        record = request.app.state.capture_records.get(capture_id)
-        if record is None or record.state == _CaptureState.EXPIRED or now >= record.expires_monotonic:
-            if record is not None and record.state == _CaptureState.READY:
-                record.state = _CaptureState.EXPIRED
-            return _capture_error("capture_expired", 404)
-        if record.state == _CaptureState.CONSUMED:
-            if (
-                record.claimed_choice_id == choice_id
-                and record.commit_result is not None
-                and record.consumed_monotonic is not None
-                and now < record.consumed_monotonic + CAPTURE_COMMIT_GRACE_SECONDS
-            ):
-                return JSONResponse({**record.commit_result, "idempotent": True}, status_code=200)
-            return _capture_error("capture_claimed", 409)
-        if record.state != _CaptureState.READY:
-            return _capture_error("capture_claimed", 409)
-        choice = record.choices.get(choice_id)
-        if choice is None:
-            return _capture_error("invalid_choice", 409)
-        if not _capture_choice_is_share_safe(choice):
-            return _capture_error("share_not_allowed", 403)
-        if record.source_path is None:
-            return _capture_error("capture_busy", 503, retry_after=3)
-        record.state = _CaptureState.CLAIMED
-        record.claimed_choice_id = choice_id
-        record.active_writers += 1
-        source_path = record.source_path
-        frozen_metadata = dict(record.frozen_metadata)
-        nonce = record.nonce
-        generation = record.generation
-
-    render_task = asyncio.create_task(asyncio.to_thread(_render_capture_choice, source_path, choice))
-    try:
-        clip_data = await asyncio.shield(render_task)
-    except asyncio.CancelledError:
-        try:
-            await render_task
-        except Exception:
-            pass
-        await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=True)
-        raise
-    except (OSError, ValueError):
-        await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=True)
-        logger.warning("moment_capture_commit_failed reason=write_failed", exc_info=True)
-        return _capture_error("write_failed", 503, retry_after=3)
-    except Exception:
-        await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=True)
-        raise
-
-    publish_task = asyncio.create_task(
-        _publish_claimed_capture(
-            request.app,
-            capture_id=capture_id,
-            nonce=nonce,
-            generation=generation,
-            source_path=source_path,
-            choice=choice,
-            frozen_metadata=frozen_metadata,
-            clip_data=clip_data,
-        )
-    )
-    try:
-        result = await asyncio.shield(publish_task)
-    except asyncio.CancelledError:
-        try:
-            await publish_task
-        except _CaptureCommitInvalidatedError:
-            await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=False)
-        except (OSError, ValueError):
-            await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=True)
-        except Exception:
-            await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=True)
-        raise
-    except _CaptureCommitInvalidatedError:
-        await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=False)
-        return _capture_error("capture_expired", 404)
-    except (OSError, ValueError):
-        await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=True)
-        logger.warning("moment_capture_commit_failed reason=write_failed", exc_info=True)
-        return _capture_error("write_failed", 503, retry_after=3)
-    except Exception:
-        await _settle_capture_claim(request.app, capture_id, nonce, restore_ready=True)
-        raise
-
-    logger.info("moment_capture_committed duration_sec=%.3f choice=%s", choice.duration_sec, choice.choice_id)
-    return JSONResponse({**result, "idempotent": False}, status_code=201)
-
-
 _clip_rate: dict[str, float] = {}  # IP -> last clip timestamp
 _clip_rate_lock = asyncio.Lock()
 
@@ -12391,27 +11035,14 @@ def _read_validated_starter_share(snapshot: Mapping[str, Any]) -> bytes | None:
         return None
 
 
-def _legacy_clip_unavailable_response() -> JSONResponse:
-    return JSONResponse(
-        {
-            "ok": False,
-            "error_code": "music_share_unavailable",
-            "message": "Only a complete bundled starter track can be shared.",
-            "retryable": False,
-            "next_action": "Wait for a bundled starter track to finish, then try again.",
-            "stream_status": "unaffected",
-        },
-        status_code=403,
-    )
-
-
 @router.post("/api/clip")
 async def create_clip(request: Request):
     """Share exactly one validated, complete bundled starter track."""
+    from mammamiradio.scheduling.clip import CLIP_TTL_SECONDS, cleanup_old_clips, save_clip
 
     # Rate limit: 1 clip per 10 seconds per IP. Return retry_after (seconds), not
     # tech-lingo prose — the listener UI turns it into warm, actionable copy.
-    client_ip = _clip_listener_identity(request)
+    client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     async with _clip_rate_lock:
         last = _clip_rate.get(client_ip, 0)
@@ -12430,7 +11061,6 @@ async def create_clip(request: Request):
     if not isinstance(now_streaming, dict):
         now_streaming = {}
 
-    snapshot_stop_generation = int(getattr(request.app.state, "clip_stop_generation", 0))
     snap = getattr(request.app.state, "last_shareworthy_starter", None)
     valid_window = (
         isinstance(snap, dict)
@@ -12444,14 +11074,37 @@ async def create_clip(request: Request):
     )
     if not clip_data or not isinstance(snap, dict):
         await _release_clip_stamp(client_ip, now)
-        return _legacy_clip_unavailable_response()
+        return JSONResponse(
+            {
+                "ok": False,
+                "error_code": "music_share_unavailable",
+                "message": "Only a complete bundled starter track can be shared.",
+                "retryable": False,
+                "next_action": "Wait for a bundled starter track to finish, then try again.",
+                "stream_status": "unaffected",
+            },
+            status_code=403,
+        )
 
     clip_title_override = str(snap.get("title") or "").strip()
     clip_artist_override = str(snap.get("artist") or "").strip()
     clip_attribution_override = snap.get("attribution")
 
+    clips_dir = config.cache_dir / "clips"
+
+    # Cap total clips on disk to prevent unbounded writes; prune .json sidecars too
+    existing = sorted(clips_dir.glob("*.mp3"), key=lambda f: f.stat().st_mtime) if clips_dir.is_dir() else []
+    if len(existing) >= CLIP_MAX_SAVED:
+        for old in existing[: len(existing) - (CLIP_MAX_SAVED - 1)]:
+            old.unlink(missing_ok=True)
+            old.with_suffix(".json").unlink(missing_ok=True)
+
+    clip_id = save_clip(clip_data, clips_dir)
+
     # Capture track context at clip creation time as a JSON sidecar.
     # Best-effort: missing now_streaming or schema drift falls back to station_name.
+    import json as _json
+
     # metadata is producer-managed and normally a dict, but a None or an
     # unexpected scalar would crash the .get() below and turn a successful
     # clip into a 500. Normalize to dict before reading fields.
@@ -12472,37 +11125,12 @@ async def create_clip(request: Request):
     }
     if clip_attribution_override is not None:
         sidecar["music_attribution"] = clip_attribution_override
-    clips_dir = config.cache_dir / "clips"
-    _ensure_clip_capture_state(request.app)
     try:
-        async with request.app.state.clip_publish_lock:
-            if int(getattr(request.app.state, "clip_stop_generation", 0)) != snapshot_stop_generation or bool(
-                getattr(station_state, "session_stopped", False)
-            ):
-                await _release_clip_stamp(client_ip, now)
-                return _legacy_clip_unavailable_response()
-            clip_id = await asyncio.to_thread(
-                publish_clip,
-                clip_data,
-                clips_dir,
-                sidecar=sidecar,
-                max_saved=CLIP_MAX_SAVED,
-                max_age_hours=CLIP_TTL_SECONDS // 3600,
-            )
-    except (OSError, TypeError, ValueError):
-        await _release_clip_stamp(client_ip, now)
-        logger.warning("legacy_clip_publish_failed", exc_info=True)
-        return JSONResponse(
-            {
-                "ok": False,
-                "error_code": "write_failed",
-                "message": "The clip could not be saved.",
-                "retryable": True,
-                "next_action": "Try again in a moment.",
-                "stream_status": "unaffected",
-            },
-            status_code=503,
-        )
+        (clips_dir / f"{clip_id}.json").write_text(_json.dumps(sidecar))
+    except OSError as exc:
+        logger.warning("clip sidecar write failed for %s: %s", clip_id, exc)
+
+    cleanup_old_clips(clips_dir, max_age_hours=CLIP_TTL_SECONDS // 3600)
     return {
         "ok": True,
         "clip_id": clip_id,
@@ -12955,15 +11583,6 @@ async def clip_landing(clip_id: str, request: Request):
     station_name = sidecar.get("station_name") or config.display_station_name
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
-    clip_label = str(sidecar.get("clip_label") or "").strip()
-    try:
-        clip_duration_sec = max(0.0, float(sidecar.get("duration_sec") or 0.0))
-    except (TypeError, ValueError):
-        clip_duration_sec = 0.0
-    chapter_summary = sidecar.get("chapter_summary")
-    if not isinstance(chapter_summary, list):
-        chapter_summary = []
-    chapter_summary = [str(label).strip() for label in chapter_summary if str(label).strip()][:3]
 
     return _TEMPLATES.TemplateResponse(
         request,
@@ -12974,9 +11593,6 @@ async def clip_landing(clip_id: str, request: Request):
             "station_name": station_name,
             "track_title": track_title,
             "track_artist": track_artist,
-            "clip_label": clip_label,
-            "clip_duration_sec": clip_duration_sec,
-            "chapter_summary": chapter_summary,
             "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
             "og_image_url": f"{public_base_url}/og-card.png",
             "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",

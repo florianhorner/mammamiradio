@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, cast
+from typing import Any, NamedTuple, cast
 from uuid import uuid4
 
 import httpx
@@ -570,35 +570,6 @@ async def _fetch_producer_context_outcome(
         duration_seconds=max(0.0, time.monotonic() - started_monotonic),
         invalidation_generation=invalidation_generation,
     )
-
-
-# The replay picker must distinguish a known station-owned spoken run from any
-# audio that could carry commercial music.  These values are written by the
-# producer while it still knows how a segment was rendered, then frozen into a
-# playback mark by the streamer.  Do not infer this from SegmentType: a
-# BANTER/NEWS_FLASH may contain a real-song crossfade or music-queue talk bed.
-ClipAudioClass = Literal["speech", "station_bed", "commercial_music", "unknown"]
-_CLIP_AUDIO_CLASS_SPEECH: ClipAudioClass = "speech"
-_CLIP_AUDIO_CLASS_STATION_BED: ClipAudioClass = "station_bed"
-_CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC: ClipAudioClass = "commercial_music"
-_CLIP_AUDIO_CLASS_UNKNOWN: ClipAudioClass = "unknown"
-
-
-def _normalize_clip_audio_class(value: object) -> ClipAudioClass:
-    """Return a conservative producer-owned replay provenance class.
-
-    The timeline consumes this field as a safety boundary, so stale/foreign
-    metadata must fail closed rather than accidentally becoming eligible voice
-    context.  Keep the accepted values explicit instead of treating an
-    arbitrary truthy string as safe.
-    """
-    if value == _CLIP_AUDIO_CLASS_SPEECH:
-        return _CLIP_AUDIO_CLASS_SPEECH
-    if value == _CLIP_AUDIO_CLASS_STATION_BED:
-        return _CLIP_AUDIO_CLASS_STATION_BED
-    if value == _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC:
-        return _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC
-    return _CLIP_AUDIO_CLASS_UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -1300,11 +1271,10 @@ async def _queue_continuity_bridge(
             bridge_flag: True,
             "rescue": True,
             "title": canned_title,
-            "clip_audio_class": _CLIP_AUDIO_CLASS_UNKNOWN,
             **duration_fields,
         }
         if canned_metadata:
-            protected_keys = {"type", "canned", bridge_flag, "rescue", "title", "duration_ms", "clip_audio_class"}
+            protected_keys = {"type", "canned", bridge_flag, "rescue", "title", "duration_ms"}
             metadata.update({key: value for key, value in canned_metadata.items() if key not in protected_keys})
         logger.warning("%s bridge: inserting packaged recovery clip", bridge_type.capitalize())
         ok = await queue_segment(
@@ -1378,7 +1348,6 @@ async def _queue_continuity_bridge(
                 bridge_flag: True,
                 "rescue": True,
                 "audio_source": "emergency_tone",
-                "clip_audio_class": _CLIP_AUDIO_CLASS_UNKNOWN,
             },
             ephemeral=False,
         ),
@@ -1414,7 +1383,6 @@ async def _queue_norm_cache_bridge_segment(
         config.display_station_name,
         bitrate_kbps=config.audio.bitrate,
     )
-    metadata["clip_audio_class"] = _CLIP_AUDIO_CLASS_UNKNOWN
     logger.warning(
         "%s bridge: inserting norm-cache bridge: %s",
         bridge_type.capitalize(),
@@ -1449,7 +1417,6 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
                 "error_recovery": True,
                 "rescue": True,
                 "title": "Station continuity",
-                "clip_audio_class": _CLIP_AUDIO_CLASS_UNKNOWN,
                 **duration_fields,
             },
             ephemeral=False,
@@ -1468,7 +1435,6 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
     )
     if norm_path:
         metadata, log_label = _norm_cache_bridge_payload(norm_path, "error_recovery", config.display_station_name)
-        metadata["clip_audio_class"] = _CLIP_AUDIO_CLASS_UNKNOWN
         logger.warning("Error recovery: using norm-cache rescue instead of silence: %s", log_label)
         return Segment(
             type=SegmentType.MUSIC,
@@ -1512,7 +1478,6 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
                 "artist": last_good_artist,
                 "title_only": last_good_title or last_good.name,
                 "audio_source": "last_known_good",
-                "clip_audio_class": _CLIP_AUDIO_CLASS_UNKNOWN,
             },
             ephemeral=False,
         )
@@ -1546,7 +1511,6 @@ async def _producer_error_recovery_segment(state: StationState, config: StationC
             "error_recovery": True,
             "rescue": True,
             "audio_source": "emergency_tone",
-            "clip_audio_class": _CLIP_AUDIO_CLASS_UNKNOWN,
         },
         ephemeral=False,
     )
@@ -2923,11 +2887,6 @@ async def _enqueue_with_egress(
         # gate or await. A metadata-only source load may deliberately preserve
         # this queued audio while changing ``state.playlist_source``.
         metadata[SEGMENT_PLAYLIST_SOURCE_KIND_KEY] = state.playlist_source.kind
-    # A capture mark must never treat a legacy, recovery, or external segment as
-    # safe context merely because it has a voice-shaped SegmentType. Known render
-    # paths stamp this field at construction; every other producer path is
-    # normalized here to the fail-closed value before it can enter playback.
-    metadata["clip_audio_class"] = _normalize_clip_audio_class(metadata.get("clip_audio_class"))
 
     # Final pre-egress gate: stop, blocklist, and captured cutover state are all
     # reclassified by the same pure helper used after each subsequent await.
@@ -3330,10 +3289,6 @@ async def _enqueue_handoff_with_egress(
     egressed: Segment | None = None
     egressed_owned = False
     try:
-        # Handoff admission bypasses ``_enqueue_with_egress``. Preserve the
-        # same fail-closed provenance boundary before this successor reaches a
-        # playback mark.
-        segment.metadata["clip_audio_class"] = _normalize_clip_audio_class(segment.metadata.get("clip_audio_class"))
         rejection_reason = _enqueue_rejection_reason(state, segment, stale_check)
         if rejection_reason is not None:
             _discard_rejected_admission(state, segment, rejection_reason, phase="pre-egress handoff gate")
@@ -3891,7 +3846,6 @@ async def _build_recovery_sweeper_segment(config: StationConfig, state: StationS
             "title": "Recovery sweeper",
             "error_recovery": True,
             "rescue": True,
-            "clip_audio_class": _CLIP_AUDIO_CLASS_UNKNOWN,
         },
         ephemeral=True,
     )
@@ -4108,7 +4062,6 @@ async def prewarm_first_segment(
                 "crate": crate,
                 "audio_source": "starter" if track.source == "starter" else "prewarm",
                 "source_kind": track.source,
-                "clip_audio_class": _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC,
                 "heading_id": track.heading_id,
             },
             ephemeral=not rendered.cache_hit,
@@ -5937,7 +5890,6 @@ async def _run_producer_inner(
         prepared_handoff: PreparedMusicHandoff | None = None
         fallback_segment: Segment | None = None
         fallback_audio_path: Path | None = None
-        fallback_clip_audio_class: ClipAudioClass | None = None
         rendered_handoff_tail = False
         attempt_owner.begin()
 
@@ -6545,7 +6497,6 @@ async def _run_producer_inner(
                         "rationale": rationale,
                         "crate": crate,
                         "audio_source": audio_source,
-                        "clip_audio_class": _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC,
                         "playlist_index": playlist_idx,
                         "source_kind": getattr(track, "source", ""),
                         "heading_id": track.heading_id,
@@ -6612,7 +6563,6 @@ async def _run_producer_inner(
 
                 impossible_tts = False
                 canned = None
-                banter_audio_class: ClipAudioClass = _CLIP_AUDIO_CLASS_UNKNOWN
                 trans_track_ref: str | None = None
                 loop = asyncio.get_running_loop()
                 first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
@@ -6678,26 +6628,12 @@ async def _run_producer_inner(
                                     fallback_audio_path,
                                     prepared_handoff,
                                 ) = impossible_result
-                                banter_audio_class = (
-                                    _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC
-                                    if prepared_handoff is not None
-                                    else _CLIP_AUDIO_CLASS_SPEECH
-                                )
-                                if prepared_handoff is not None:
-                                    fallback_clip_audio_class = _CLIP_AUDIO_CLASS_SPEECH
                             else:
                                 # Compatibility for patched/legacy synthesis
-                                # seams that return only a path.  A reserved
-                                # predecessor that the seam does not account for
-                                # is never safe named context.
+                                # seams that return only the dry speech path.
                                 audio_path = impossible_result
                                 fallback_audio_path = None
                                 prepared_handoff = None
-                                if prepared_candidate is not None:
-                                    _discard_prepared_handoff(prepared_candidate)
-                                    banter_audio_class = _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC
-                                else:
-                                    banter_audio_class = _CLIP_AUDIO_CLASS_SPEECH
                             attempt_owner.own_paths(audio_path, fallback_audio_path)
                             attempt_owner.own_prepared(prepared_handoff)
                             rendered_handoff_tail = prepared_handoff is not None
@@ -6718,10 +6654,8 @@ async def _run_producer_inner(
                 if canned:
                     logger.info("Using pre-bundled banter clip: %s", canned.name)
                     audio_path = canned
-                    banter_audio_class = _CLIP_AUDIO_CLASS_UNKNOWN
                     state.last_banter_script = [{"host": "Radio", "text": "(pre-recorded banter)"}]
                 elif not impossible_tts:
-                    banter_audio_class = _CLIP_AUDIO_CLASS_SPEECH
                     try:
                         from mammamiradio.core.provenance_ctx import (
                             CallCollector,
@@ -6937,8 +6871,6 @@ async def _run_producer_inner(
                                 banter_path = cast(Path, dialogue_result)
                                 attempt_owner.own_paths(tail_transition_path, banter_path)
                                 attempt_owner.own_prepared(prepared_handoff)
-                                if rendered_handoff_tail:
-                                    banter_audio_class = _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC
                             except BaseException:
                                 await _discard_prepared_handoff_task(handoff_task, config.tmp_dir)
                                 _unlink_path_best_effort(trans_voice_path)
@@ -6955,7 +6887,6 @@ async def _run_producer_inner(
                             try:
                                 if rendered_handoff_tail and prepared_handoff is not None:
                                     fallback_audio_path = config.tmp_dir / f"banter_dry_{uuid4().hex[:8]}.mp3"
-                                    fallback_clip_audio_class = _CLIP_AUDIO_CLASS_SPEECH
                                     attempt_owner.own_path(fallback_audio_path)
                                     render_failure_scratch.add(fallback_audio_path)
                                     banter_concat_tasks = [
@@ -7053,7 +6984,6 @@ async def _run_producer_inner(
                                 banter_expected_min_duration_sec = None
                                 banter_expected_line_count = None
                                 audio_path = canned
-                                banter_audio_class = _CLIP_AUDIO_CLASS_UNKNOWN
                                 # This canned clip never carries the directive/gag on
                                 # air (attach_moment_ids below will be False) — demote
                                 # both receipts now, not just on a successful queue.
@@ -7153,7 +7083,6 @@ async def _run_producer_inner(
                                     fallback_audio_path = None
                                 rendered_handoff_tail = False
                                 canned = fallback_canned
-                                banter_audio_class = _CLIP_AUDIO_CLASS_UNKNOWN
                                 trans_track_ref = None
                                 # Same as the chaos-exception fallback above: this canned
                                 # clip carries neither receipt on air, so demote both now
@@ -7228,7 +7157,6 @@ async def _run_producer_inner(
                                 fallback_prefix="banter_dry",
                             )
                             attempt_owner.own_paths(audio_path, fallback_audio_path)
-                            fallback_clip_audio_class = _CLIP_AUDIO_CLASS_STATION_BED
                         else:
                             audio_path = await _apply_and_adopt_talk_bed(
                                 audio_path,
@@ -7237,11 +7165,6 @@ async def _run_producer_inner(
                                 prefix="banter",
                             )
                             attempt_owner.own_path(audio_path)
-                            if banter_audio_class != _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC:
-                                # ``_apply_talk_bed`` passes no queue track, so
-                                # its successful packaged/synthetic underlay is
-                                # producer-owned station audio.
-                                banter_audio_class = _CLIP_AUDIO_CLASS_STATION_BED
                     except Exception as exc:
                         logger.warning("Talk bed generation failed, using dry banter: %s", exc)
 
@@ -7342,7 +7265,6 @@ async def _run_producer_inner(
                         # rendering this remains false so status never claims a
                         # tail that a later control could invalidate.
                         "has_music_tail": False,
-                        "clip_audio_class": banter_audio_class,
                         "transition_track_ref": trans_track_ref,
                         "ledger_segment_id": _banter_ledger_segment_id(
                             _banter_attempt_id,
@@ -7368,15 +7290,7 @@ async def _run_producer_inner(
                     ephemeral=canned is None,
                 )
                 if fallback_audio_path is not None and prepared_handoff is not None and rendered_handoff_tail:
-                    fallback_segment = replace(
-                        segment,
-                        path=fallback_audio_path,
-                        metadata={
-                            **segment.metadata,
-                            "clip_audio_class": fallback_clip_audio_class or _CLIP_AUDIO_CLASS_UNKNOWN,
-                        },
-                        ephemeral=True,
-                    )
+                    fallback_segment = replace(segment, path=fallback_audio_path, ephemeral=True)
                 # The handoff slot is single-use: consumed into this segment's
                 # metadata (or intentionally not, for canned fallbacks — the
                 # elected row then simply never airs and ages out honestly).
@@ -7452,7 +7366,6 @@ async def _run_producer_inner(
                 logger.info("Producing NEWS FLASH")
                 flash_path = config.tmp_dir / f"flash_{uuid4().hex[:8]}.mp3"
                 render_failure_scratch.add(flash_path)
-                flash_audio_class: ClipAudioClass = _CLIP_AUDIO_CLASS_SPEECH
 
                 try:
                     state.set_gen("writing", "news_flash", "Writing a news flash")
@@ -7520,10 +7433,8 @@ async def _run_producer_inner(
                     if audio_path == crossfade_out and flash_handoff is not None:
                         prepared_handoff = flash_handoff
                         fallback_audio_path = flash_path
-                        fallback_clip_audio_class = _CLIP_AUDIO_CLASS_SPEECH
                         attempt_owner.own_paths(audio_path, fallback_audio_path)
                         rendered_handoff_tail = True
-                        flash_audio_class = _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC
                     try:
                         if fallback_audio_path is not None and prepared_handoff is not None:
                             audio_path, fallback_audio_path = await _apply_paired_talk_beds(
@@ -7535,7 +7446,6 @@ async def _run_producer_inner(
                                 fallback_prefix="news_dry",
                             )
                             attempt_owner.own_paths(audio_path, fallback_audio_path)
-                            fallback_clip_audio_class = _CLIP_AUDIO_CLASS_STATION_BED
                         else:
                             audio_path = await _apply_and_adopt_talk_bed(
                                 audio_path,
@@ -7544,8 +7454,6 @@ async def _run_producer_inner(
                                 prefix="news",
                             )
                             attempt_owner.own_path(audio_path)
-                            if flash_audio_class != _CLIP_AUDIO_CLASS_COMMERCIAL_MUSIC:
-                                flash_audio_class = _CLIP_AUDIO_CLASS_STATION_BED
                     except Exception as exc:
                         logger.warning("Talk bed generation failed, using dry news flash: %s", exc)
 
@@ -7571,19 +7479,10 @@ async def _run_producer_inner(
                         "host": host.name,
                         "title": f"News flash: {category}" if category else "News flash",
                         "has_music_tail": False,
-                        "clip_audio_class": flash_audio_class,
                     },
                 )
                 if fallback_audio_path is not None and prepared_handoff is not None and rendered_handoff_tail:
-                    fallback_segment = replace(
-                        segment,
-                        path=fallback_audio_path,
-                        metadata={
-                            **segment.metadata,
-                            "clip_audio_class": fallback_clip_audio_class or _CLIP_AUDIO_CLASS_UNKNOWN,
-                        },
-                        ephemeral=True,
-                    )
+                    fallback_segment = replace(segment, path=fallback_audio_path, ephemeral=True)
 
                 _bound_cat = category
 

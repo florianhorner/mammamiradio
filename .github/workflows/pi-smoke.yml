@@ -110,12 +110,6 @@ jobs:
       - name: Run normalizer real-ffmpeg integration tests
         run: pytest tests/audio/test_normalizer_real_ffmpeg.py -m requires_ffmpeg -v
 
-      - name: Run Moment Picker real-MP3 capture tests
-        # Default pytest deliberately excludes requires_ffmpeg; this named ARM
-        # step proves frame-aligned temporary captures and final commits decode
-        # on the same class of runtime as the Home Assistant add-on.
-        run: pytest -m requires_ffmpeg tests/web/test_clip_capture_precision.py -v
-
       - name: Fresh-process listener-to-first-byte smoke (<= 2s)
         # The perf smoke assumes an already-running station; this launches a real
         # cold uvicorn on temp cache/tmp, waits separately for TCP readiness, and

@@ -7182,32 +7182,6 @@ async def test_clip_rate_limited_returns_retry_after(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
-async def test_clip_rate_limit_separates_forwarded_listeners_from_trusted_ha_proxy(tmp_path):
-    """Legacy fallback shares use the same trusted-proxy listener identity."""
-    from mammamiradio.web.streamer import _clip_rate
-
-    app = _make_test_app()
-    app.state.config.cache_dir = tmp_path / "cache"
-    app.state.config.cache_dir.mkdir()
-    first_listener = "198.51.100.31"
-    second_listener = "198.51.100.32"
-    transport = httpx.ASGITransport(app=app, client=("172.30.32.5", 12345))
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        first = await client.post("/api/clip", headers={"X-Forwarded-For": first_listener})
-        second = await client.post("/api/clip", headers={"X-Forwarded-For": second_listener})
-        repeated = await client.post("/api/clip", headers={"X-Forwarded-For": first_listener})
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert repeated.status_code == 429
-    assert set(_clip_rate) == {first_listener, second_listener}
-    public_text = first.text + second.text + repeated.text
-    assert all(identity not in public_text for identity in (first_listener, second_listener))
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clear_clip_rate")
 async def test_clip_ad_segment_extends_duration(tmp_path):
     """A live ad cannot enter the share artifact; the last complete starter can."""
     app = _make_test_app()

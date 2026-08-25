@@ -127,13 +127,6 @@ make check
 Notes:
 
 - `tests/test_ads.py` and `tests/test_normalizer_real_ffmpeg.py` exercise audio helpers and need FFmpeg installed. The real-ffmpeg tests skip automatically when FFmpeg is absent; the pi-smoke CI job (`ubuntu-24.04-arm`) runs them on ARM hardware to catch aarch64-specific crashes. On PRs that job runs when audio, scheduling, streamer, startup/core configuration, launch-smoke, Python package/runtime/development dependencies, radio/model configuration, the changed-lanes classifier, or the shared Python CI setup change; every push to `main` still runs it.
-- When changing the clip-capture or frame-index path, run its real-MP3 proof explicitly (normal pytest deliberately excludes `requires_ffmpeg`):
-
-  ```bash
-  .venv/bin/pytest -m requires_ffmpeg tests/web/test_clip_capture_precision.py -v
-  ```
-
-  This creates CBR and VBR fixtures, verifies partial retained-frame edges, and decodes both the temporary audition and final frozen clip. The Pi Smoke audio lane runs the same command on ARM.
 - Home Assistant add-on changes must also pass the local add-on build check:
 
 ```bash

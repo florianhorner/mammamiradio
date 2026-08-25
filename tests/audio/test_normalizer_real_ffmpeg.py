@@ -25,8 +25,13 @@ from mammamiradio.audio.normalizer import (
     generate_transition_sting,
     normalize,
     probe_duration_sec,
+    render_decoder_safe_mp3_window,
 )
-from mammamiradio.web.mp3_frames import split_mpeg1_l3_handoff
+from mammamiradio.web.mp3_frames import (
+    build_mpeg1_layer3_frame_index,
+    mpeg1_l3_decoder_window,
+    split_mpeg1_l3_handoff,
+)
 
 # Use the project-wide `requires_ffmpeg` marker (registered in pyproject.toml)
 # instead of skipif. The default `addopts = "-m 'not requires_ffmpeg'"` means
@@ -194,6 +199,34 @@ def _measure_band_rms(path, start_sec: float, window_sec: float, frequency: int)
 
     match = re.search(r"mean_volume:\s*(-?[\d.]+)\s*dB", result.stderr.decode(errors="ignore"))
     return 10 ** (float(match.group(1)) / 20.0) if match else 0.0
+
+
+def test_decoder_safe_mp3_window_renders_decodable_bounded_audio(tmp_path):
+    """The frame-index bounds and renderer must compose on a real MP3."""
+    source = tmp_path / "source.mp3"
+    decoder_input = tmp_path / "decoder-input.mp3"
+    output = tmp_path / "window.mp3"
+    _make_tone_mp3(source, duration_sec=4.0)
+
+    source_data = source.read_bytes()
+    index = build_mpeg1_layer3_frame_index(source_data)
+    window = mpeg1_l3_decoder_window(index, 20, 80, lower_bound=0)
+    decoder_input.write_bytes(source_data[window.decoder_byte_start : window.decoder_byte_end])
+
+    render_decoder_safe_mp3_window(
+        decoder_input,
+        output,
+        preroll_samples=window.preroll_samples,
+        sample_count=window.audible_sample_count,
+        sample_rate=window.sample_rate,
+    )
+
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(output), "-f", "null", "-"],
+        check=True,
+    )
+    expected_duration = window.audible_sample_count / window.sample_rate
+    assert probe_duration_sec(output) == pytest.approx(expected_duration, abs=0.12)
 
 
 def test_normalize_music_eq_chain_does_not_crash_real_ffmpeg(tmp_path):
