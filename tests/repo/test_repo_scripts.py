@@ -1117,7 +1117,6 @@ VALIDATE_ADDON_BACKUP_CONTRACT = (
     '  - "cache/.ytdlp_tmp"',
     '  - "cache/restart_handoff"',
     '  - "cache/clips"',
-    '  - "cache/captures"',
     '  - "cache/*.mp3"',
     '  - "cache/*.mp3.json"',
     '  - "cache/*.m4a"',

@@ -1042,7 +1042,6 @@ EXPECTED_BACKUP_EXCLUDE_BLOCK=$(cat <<'EOF'
   - "cache/.ytdlp_tmp"
   - "cache/restart_handoff"
   - "cache/clips"
-  - "cache/captures"
   - "cache/*.mp3"
   - "cache/*.mp3.json"
   - "cache/*.m4a"
