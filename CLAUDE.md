@@ -50,7 +50,6 @@ The restart happens once, planned, when the addon updates. Not during the day. N
 **Legitimate operations (no confirmation needed):**
 - `docker ps`, `docker logs`, `docker exec <container> <read-only command>` (cat, ls, grep, env, ps)
 - `ha apps info`, `ha apps list`, `ha apps logs`
-- `ssh root@100.98.177.107 <read-only inspection>`
 - `ha apps start <slug>` when the addon is already stopped/exited (recovery, not experiment)
 
 **Why this rule exists:** On 2026-04-20, an agent live-patched via `docker cp`, the patches got wiped on addon restart, then the agent killed uvicorn assuming s6 would restart it in place. Container exited. Stream dropped. Leadership principle #1 was violated. The PR with the real fix (#213) was already open — the live patches were theater. This rule closes the loophole between "don't restart HA core" and "don't experiment on the running addon."

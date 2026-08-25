@@ -4638,7 +4638,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     state.ha_events_summary = "- La macchina del caffè: spento/a -> acceso/a (1 min fa)"
     state.ha_weather_arc = "Meteo: soleggiato, 22°C."
     state.ha_home_mood = "Musica in casa"
-    state.ha_pending_directive = "Florian è appena tornato a casa. Salutalo subito."
+    state.ha_pending_directive = "Residente uno è appena tornato a casa. Salutalo subito."
     state.played_tracks.append(
         Track(
             title="Test Track",
@@ -4694,7 +4694,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     memory = commit.memory_extraction
     assert memory is not None
     assert memory.youtube_id == "yt123"
-    assert "Florian" in memory.interaction_context["reactive_directive"]
+    assert "Residente uno" in memory.interaction_context["reactive_directive"]
     assert "TRACK MEMORY for Rule Artist" in memory.interaction_context["track_memory"]
 
 
@@ -7351,7 +7351,7 @@ async def test_banter_raw_home_context_forbids_counting_people(config, state):
     config.homeassistant.enabled = True
     config.homeassistant.context_enabled = True
     config.super_italian_mode = True
-    state.ha_context = "Florian: a casa\nSabrina: a casa"
+    state.ha_context = "Residente uno: a casa\nResidente due: a casa"
 
     captured = {}
 
@@ -7377,7 +7377,7 @@ async def test_ad_raw_home_context_forbids_counting_people(config, state):
     """write_ad injects raw ha_context with no director in front of it."""
     config.homeassistant.enabled = True
     config.homeassistant.context_enabled = True
-    state.ha_context = "Florian: a casa\nSabrina: a casa"
+    state.ha_context = "Residente uno: a casa\nResidente due: a casa"
 
     captured = {}
 

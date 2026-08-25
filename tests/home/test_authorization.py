@@ -43,7 +43,7 @@ def _weather(entity_id: str, *, state: str = "sunny", temperature=22.4, unit: st
         "attributes": {
             "temperature": temperature,
             "temperature_unit": unit,
-            "friendly_name": "Florian's exact weather station",
+            "friendly_name": "Operator's exact weather station",
             "attribution": "private location",
             "forecast": [{"temperature": 99}],
         },
@@ -150,7 +150,7 @@ def test_narrow_projection_keeps_only_synthetic_normalized_ambient_basics() -> N
         NARROW_WEATHER_ENTITY_ID: "weather.local",
         NARROW_DAYLIGHT_ENTITY_ID: "sun.sun",
     }
-    assert "Florian" not in repr(projection)
+    assert "Operator" not in repr(projection)
     assert "private location" not in repr(projection)
     assert "weather.local" not in repr(projection)
     assert authorization.allows_household_moments is False
