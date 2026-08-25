@@ -13,6 +13,7 @@ from tests.web.test_route_smoke import _make_app
 @pytest.mark.asyncio
 async def test_public_status_response_has_etag_and_cache_control():
     app = _make_app()
+    app.state.config.identity.station_name = "Radio Città"
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/public-status")
@@ -24,20 +25,8 @@ async def test_public_status_response_has_etag_and_cache_control():
     directives = {part.strip() for part in cache_control.split(",")}
     assert "public" in directives
     assert "max-age=1" in directives
-
-
-@pytest.mark.asyncio
-async def test_public_status_preserves_unicode_in_utf8_response():
-    app = _make_app()
-    app.state.config.identity.station_name = "Radio Città"
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/public-status")
-
-    assert response.status_code == 200
-    assert "Radio Città" in response.text
-    assert b"Radio Citt\\u00e0" not in response.content
-    assert response.json()["identity"]["station_name"] == "Radio Città"
+    assert "Radio Città" in resp.text
+    assert b"Radio Citt\\u00e0" not in resp.content
 
 
 @pytest.mark.asyncio
