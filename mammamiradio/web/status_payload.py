@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import math
+import re
 import time
 from pathlib import Path
 from typing import Any
+
+from fastapi.encoders import jsonable_encoder
 
 from mammamiradio.core.models import (
     LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
@@ -348,9 +353,13 @@ def _nonnegative_milliseconds(value: object) -> int | None:
 
 
 def _positive_seconds(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
 def _ha_mailbox_state(state: StationState) -> tuple[bool, bool, str | None, int | None, bool | None]:
@@ -688,18 +697,18 @@ def _paginated_tracks(
 def _duration_sec_from_payload(payload: dict | None) -> float | None:
     if not payload:
         return None
-    duration = payload.get("duration_sec")
-    if isinstance(duration, int | float) and duration > 0:
-        return float(duration)
+    duration = _positive_seconds(payload.get("duration_sec"))
+    if duration is not None:
+        return duration
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
-    duration_ms = metadata.get("duration_ms")
-    if isinstance(duration_ms, int | float) and duration_ms > 0:
-        return float(duration_ms) / 1000.0
-    duration_s = metadata.get("duration_s")
-    if isinstance(duration_s, int | float) and duration_s > 0:
-        return float(duration_s)
+    duration_ms = _positive_seconds(metadata.get("duration_ms"))
+    if duration_ms is not None:
+        return duration_ms / 1000.0
+    duration_s = _positive_seconds(metadata.get("duration_s"))
+    if duration_s is not None:
+        return duration_s
     return None
 
 
@@ -767,6 +776,10 @@ def _public_segment_metadata(metadata: object) -> dict:
             return [_without_internal(child) for child in value]
         if isinstance(value, tuple):
             return tuple(_without_internal(child) for child in value)
+        if isinstance(value, set | frozenset):
+            return sorted(
+                map(_without_internal, value), key=lambda child: json.dumps(jsonable_encoder(child), sort_keys=True)
+            )
         return copy.deepcopy(value)
 
     public = _without_internal(metadata)
@@ -808,6 +821,79 @@ def _status_now_playback(now_streaming: dict, now_ts: float) -> dict:
     }
 
 
+PUBLIC_STATUS_CACHE_CONTROL = "public, max-age=1"
+
+
+def normalize_public_status_json(payload: dict) -> dict:
+    """Coerce a public-status payload into strict, FastAPI-compatible JSON data."""
+    return json.loads(json.dumps(jsonable_encoder(payload)), parse_constant=lambda _value: None)
+
+
+def _scrub_public_status_for_etag(payload: dict) -> dict:
+    """Remove listener-advanced clock leaves before hashing."""
+    scrubbed = copy.deepcopy(payload)
+    scrubbed.pop("current_progress_sec", None)
+    scrubbed.pop("uptime_sec", None)
+    ha_moments = scrubbed.get("ha_moments")
+    if isinstance(ha_moments, dict):
+        ha_moments.pop("last_event_ago_min", None)
+        recent = ha_moments.get("recent")
+        if isinstance(recent, list):
+            for moment in recent:
+                if isinstance(moment, dict):
+                    moment.pop("ago_min", None)
+    runtime_health = scrubbed.get("runtime_health")
+    if isinstance(runtime_health, dict):
+        runtime_health.pop("queue_empty_elapsed_s", None)
+    return scrubbed
+
+
+def public_status_etag(payload: dict, *, revision: object | None = None) -> str:
+    """Weak ETag for ``/public-status`` based on stable listener facts."""
+    normalized = normalize_public_status_json({"payload": _scrub_public_status_for_etag(payload), "revision": revision})
+    body = json.dumps(normalized, allow_nan=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return f'W/"{hashlib.blake2b(body, digest_size=8).hexdigest()}"'
+
+
+_ETAG_VALUE_RE = re.compile(r'[ \t]*(?:W/)?"([\x21\x23-\x7e\x80-\xff]*)"[ \t]*(?:,|$)')
+
+
+def _etag_opaque_values(field_value: str) -> list[str] | None:
+    """Parse an entity-tag list into opaque values."""
+    values: list[str] = []
+    position = 0
+    for match in _ETAG_VALUE_RE.finditer(field_value):
+        if match.start() != position:
+            return None
+        values.append(match.group(1))
+        position = match.end()
+    if position != len(field_value) or field_value.rstrip(" \t").endswith(","):
+        return None
+    return values or None
+
+
+def public_status_not_modified(request_headers: object, etag: str) -> bool:
+    """Return True when ``If-None-Match`` weakly matches the current ETag."""
+    getter = getattr(request_headers, "get", None)
+    if not callable(getter):
+        return False
+    getlist = getattr(request_headers, "getlist", None)
+    header_values = getlist("if-none-match") if callable(getlist) else []
+    if isinstance(header_values, str):
+        header_values = [header_values]
+    if not header_values:
+        header_values = [getter("If-None-Match") or getter("if-none-match")]
+    if not all(isinstance(value, str) for value in header_values):
+        return False
+    if_none_match = ",".join(header_values)
+    if if_none_match.strip() == "*":
+        return True
+
+    current = _etag_opaque_values(etag)
+    candidates = _etag_opaque_values(if_none_match)
+    return bool(current and len(current) == 1 and candidates and current[0] in candidates)
+
+
 def _serialize_stream_log_entry(entry) -> dict:
     payload = {
         "type": entry.type,
@@ -815,8 +901,8 @@ def _serialize_stream_log_entry(entry) -> dict:
         "timestamp": entry.timestamp,
         "metadata": _public_segment_metadata(entry.metadata),
     }
-    duration_sec = float(getattr(entry, "duration_sec", 0.0) or 0.0)
-    if duration_sec <= 0:
+    duration_sec = _positive_seconds(getattr(entry, "duration_sec", 0.0))
+    if duration_sec is None:
         duration_sec = _duration_sec_from_payload({"metadata": entry.metadata}) or 0.0
     if duration_sec > 0:
         payload["duration_sec"] = duration_sec

@@ -46,6 +46,7 @@ COPY: dict[str, dict[str, str]] = {
         "casa_moments_title": "On-air moments from your home",
         "casa_moments_helper": "This is a record of home moments that made it on air—not every change at home.",
         "casa_moment_airing": "on air now",
+        "casa_moment_age_unknown": "time unavailable",
         "casa_moment_minutes_ago": "{m} min ago",
         "casa_moment_hours_ago": "{h} hr ago",
         "casa_moment_yesterday": "yesterday",
@@ -166,6 +167,7 @@ COPY: dict[str, dict[str, str]] = {
             "Questo è il registro dei momenti di casa andati in onda, non di ogni cambiamento a casa."
         ),
         "casa_moment_airing": "in onda ora",
+        "casa_moment_age_unknown": "ora non disponibile",
         "casa_moment_minutes_ago": "{m} min fa",
         "casa_moment_hours_ago": "{h} h fa",
         "casa_moment_yesterday": "ieri",
