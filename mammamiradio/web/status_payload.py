@@ -776,6 +776,12 @@ def _public_segment_metadata(metadata: object) -> dict:
             return [_without_internal(child) for child in value]
         if isinstance(value, tuple):
             return tuple(_without_internal(child) for child in value)
+        if isinstance(value, set | frozenset):
+            children = [jsonable_encoder(_without_internal(child)) for child in value]
+            return sorted(
+                children,
+                key=lambda child: json.dumps(child, separators=(",", ":"), sort_keys=True),
+            )
         return copy.deepcopy(value)
 
     public = _without_internal(metadata)

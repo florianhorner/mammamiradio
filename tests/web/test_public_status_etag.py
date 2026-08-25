@@ -1,4 +1,7 @@
 import math
+import os
+import subprocess
+import sys
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -14,6 +17,32 @@ from tests.web.test_route_smoke import _make_app
 async def _get_public_status(app, headers=None):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
         return await client.get("/public-status", headers=headers)
+
+
+def test_public_status_etag_is_stable_for_unordered_segment_metadata():
+    script = """
+from mammamiradio.web.status_payload import _public_segment_metadata, public_status_etag
+
+metadata = _public_segment_metadata({
+    "genres": {"jazz", "pop", "rock"},
+    "frozen_genres": frozenset({"jazz", "pop", "rock"}),
+})
+print(public_status_etag({"now_streaming": {"metadata": metadata}}))
+"""
+    etags = []
+    for hash_seed in ("1", "2"):
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = hash_seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+        etags.append(completed.stdout.strip())
+
+    assert etags[0] == etags[1]
 
 
 @pytest.mark.asyncio
