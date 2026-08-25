@@ -4406,6 +4406,7 @@ async def _fire_interrupt(
         logger.error("Interrupt aborted because %d buffered segment(s) could not be drained", len(residual))
         return False
 
+    state.urgent_interrupt_drained_audio = purged > 0
     if purged:
         logger.info("Interrupt: purged %d buffered segments", purged)
     state.queued_segments.clear()
@@ -5935,10 +5936,7 @@ async def _run_producer_inner(
             queue.empty()
             and (
                 _segments_produced > 0
-                or (
-                    state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
-                    and state.discard_by_reason.get(GenerationWasteReason.INTERRUPT, 0) > 0
-                )
+                or (state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT and state.urgent_interrupt_drained_audio)
             )
             and not _drain_guard_queued
             and state.listener_request_handoff is None

@@ -9519,6 +9519,7 @@ async def test_urgent_interrupt_seeds_starter_runway_before_first_producer_bante
     assert fired is True
     assert queue.empty()
     assert state.segments_produced == 0
+    assert state.urgent_interrupt_drained_audio is True
     assert state.interrupt_slot == alert
 
     track = state.playlist[0]
@@ -9556,6 +9557,70 @@ async def test_urgent_interrupt_seeds_starter_runway_before_first_producer_bante
             assert queued[0].metadata.get("audio_source") == "starter"
             assert queued[0].metadata.get("queue_drain_recovery") is True
             assert state.interrupt_slot == alert
+    finally:
+        if producer_task is not None:
+            producer_task.cancel()
+            render_release.set()
+            await asyncio.gather(producer_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_urgent_interrupt_does_not_reuse_an_older_purge_for_drain_recovery(tmp_path):
+    """An empty interrupt cannot turn cumulative discard history into a fresh drain."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    buffered_path = tmp_path / "buffered.mp3"
+    buffered_path.write_bytes(b"buffered music")
+    buffered = Segment(type=SegmentType.MUSIC, path=buffered_path, duration_sec=180.0)
+    queue.put_nowait(buffered)
+    state.queued_segments = [producer._queue_shadow_entry(buffered)]
+    sfx_dir = tmp_path / "sfx"
+    sfx_dir.mkdir()
+    (sfx_dir / "alert.mp3").write_bytes(b"alert")
+
+    with patch(f"{PRODUCER_MODULE}._SFX_DIR", sfx_dir):
+        assert await producer._fire_interrupt(
+            state,
+            InterruptSpec(directive="First safety moment.", urgency="urgent", cooldown=60),
+            queue,
+            None,
+        )
+        assert state.urgent_interrupt_drained_audio is True
+        assert await producer._fire_interrupt(
+            state,
+            InterruptSpec(directive="Second safety moment.", urgency="urgent", cooldown=60),
+            queue,
+            None,
+        )
+
+    assert state.discard_by_reason[GenerationWasteReason.INTERRUPT] == 1
+    assert state.urgent_interrupt_drained_audio is False
+
+    render_started = asyncio.Event()
+    render_release = asyncio.Event()
+
+    async def _slow_urgent_banter(*_args, **_kwargs):
+        render_started.set()
+        await render_release.wait()
+        return [(config.hosts[0], "Avviso urgente.")], BanterCommit()
+
+    bridge = AsyncMock(return_value=True)
+    producer_task = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}._queue_drain_recovery_bridge", bridge),
+            patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+            patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_slow_urgent_banter),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            producer_task = asyncio.create_task(run_producer(queue, state, config))
+            await asyncio.wait_for(render_started.wait(), timeout=3.0)
+            bridge.assert_not_awaited()
     finally:
         if producer_task is not None:
             producer_task.cancel()
