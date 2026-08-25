@@ -59,7 +59,7 @@ ADMIN_TOKEN="external-pinned-token" \
 assert "external ADMIN_TOKEN is honored verbatim" "$TOKEN3" "external-pinned-token"
 assert "persisted file was NOT overwritten by external value" "$(cat "$TMP1/admin_token")" "$TOKEN1"
 
-# Case 4: read-only /data degrades to logging the token.
+# Case 4: read-only /data still generates a token, but must not print it.
 # Skipped under root: uid 0 ignores the directory write bit, so `chmod 555`
 # does not make the path unwritable and the entrypoint would still create the
 # file. The image itself runs as the non-root `radio` user, so the real
