@@ -1189,8 +1189,8 @@
    * Brand-engine PR-F: listener uses /public-status exclusively (no admin endpoints).
    * /public-status returns brand + capabilities + facts in one shape — single fetch
    * replaces the old /status + /api/capabilities pair. #931: visible live versus
-   * idle/stopped polls every 3/3.5s; hidden uses 30/60s. ETags keep ~1,200 live
-   * polls/h header-only (~29 MB/h at 25 KB every 3s) without admin-route 401s. */
+   * idle/stopped polls every 3/3.5s; hidden uses 30/60s. ETags keep
+   * ~1,200 header-only polls/h (~29 MB/h at 25 KB every 3s) without admin-route 401s. */
   const STATUS_POLL_LIVE_MS = 3000;
   const STATUS_POLL_HIDDEN_MS = 30000;
   const STATUS_POLL_STOPPED_MS = 3500;
