@@ -728,6 +728,7 @@ _INTERNAL_SEGMENT_METADATA_KEYS = frozenset(
         "ritual_moment_id",
         "gag_moment_id",
         "transition_track_ref",
+        "clip_audio_class",
         # Render-scoped playlist identity keeps provider truth stable across a
         # metadata-only source swap. It is operational bookkeeping, not part of
         # the public or frozen now-playing contract.
