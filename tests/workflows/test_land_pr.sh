@@ -3,8 +3,9 @@
 #
 # Drives the landing wrapper with a mocked `gh` (PATH shim) and a mocked
 # review-log reader (MMR_LAND_REVIEW_READER), asserting the squad code-state
-# freshness check, the update-branch path, the conflict stop, and the
-# head-pinned arming. No network. Exits non-zero on any mismatch.
+# freshness check, v2 evidence and bot-thread gates (skipped by default here),
+# the update-branch path with post-update strict recheck, the conflict stop,
+# and the head-pinned arming. No network. Exits non-zero on any mismatch.
 
 set -euo pipefail
 
@@ -21,13 +22,19 @@ pass() { echo "PASS: $1"; }
 TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
 
-HEAD_FULL="$(git rev-parse HEAD)"
+SAVE_REF="$(git rev-parse HEAD)"
+HEAD_FULL="$SAVE_REF"
 HEAD_SHORT="$(git rev-parse --short HEAD)"
 # Ancestor cases need HEAD~1 — a depth-1 shallow clone has no parent commit.
 # CI checks out full history (quality.yml), which keeps HEAD~1 available.
-ANC_SHORT="$(git rev-parse --short HEAD~1 2>/dev/null)" \
+ANC_FULL="$(git rev-parse HEAD~1 2>/dev/null)" \
   || fail "HEAD~1 unavailable (shallow clone?) — checkout with fetch-depth >= 2"
+ANC_SHORT="$(git rev-parse --short HEAD~1)"
 BOGUS_SHA="0000000"
+
+# Post-update re-review case needs a second commit object without mutating HEAD.
+HEAD2_FULL="$(git commit-tree "$(git write-tree)" -p "$HEAD_FULL" -m "test: land-pr HEAD2 fixture")"
+HEAD2_SHORT="$(git rev-parse --short "$HEAD2_FULL")"
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if date -u -v-3H +%s >/dev/null 2>&1; then
@@ -38,13 +45,17 @@ else
   VERY_OLD_ISO="$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
+EMPTY_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+
 # ---- mock gh ----------------------------------------------------------------
 # Behavior is driven by env vars:
 #   GH_MOCK_STATE         PR state (default OPEN)
 #   GH_MOCK_MERGE_STATE   mergeStateStatus (default CLEAN)
 #   GH_MOCK_HEAD          headRefOid (default real repo HEAD)
+#   GH_MOCK_BASE          baseRefOid (default real repo HEAD~1)
 #   GH_MOCK_HEAD_AFTER    headRefOid returned after `pr update-branch` ran
 #   GH_MOCK_COMMIT_DATE   committedDate of the newest PR commit (default NOW)
+#   GH_MOCK_GRAPHQL_JSON  GraphQL response for review-thread query
 #   GH_MOCK_HELP_LINES    emit a large help stream for the capability probe
 #   GH_MOCK_UPDATE_FAIL   non-empty => `pr update-branch` exits 1
 # Every invocation is appended to $GH_MOCK_LOG for assertions.
@@ -77,8 +88,8 @@ case "$1 $2" in
       if [ -z "$commits" ]; then
         commits="[{\"committedDate\":\"${GH_MOCK_COMMIT_DATE:?}\"}]"
       fi
-      printf '{"state":"%s","headRefOid":"%s","mergeStateStatus":"%s","commits":%s}\n' \
-        "${GH_MOCK_STATE:-OPEN}" "$head" "$merge_state" "$commits"
+      printf '{"state":"%s","headRefOid":"%s","baseRefOid":"%s","mergeStateStatus":"%s","commits":%s}\n' \
+        "${GH_MOCK_STATE:-OPEN}" "$head" "${GH_MOCK_BASE:?}" "$merge_state" "$commits"
     fi
     ;;
   "pr update-branch")
@@ -86,6 +97,12 @@ case "$1 $2" in
     touch "$GH_MOCK_STATE_DIR/updated"
     ;;
   "pr merge") : ;;
+  "repo view")
+    printf '{"nameWithOwner":"test-owner/test-repo"}\n'
+    ;;
+  "api graphql")
+    printf '%s\n' "${GH_MOCK_GRAPHQL_JSON:-{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[]}}}}}}"
+    ;;
   *) : ;;
 esac
 exit 0
@@ -121,8 +138,11 @@ run_land() {
   RUN_RC=0
   RUN_OUT="$(env PATH="$MOCK_BIN:$PATH" \
       GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_STATE_DIR="$GH_MOCK_STATE_DIR" \
-      GH_MOCK_HEAD="$HEAD_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
+      GH_MOCK_HEAD="$HEAD_FULL" GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
+      GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" \
       MMR_LAND_REVIEW_READER="$reader" MMR_LAND_UPDATE_TIMEOUT=6 \
+      MMR_LAND_SKIP_EVIDENCE_CHECK="${MMR_LAND_SKIP_EVIDENCE_CHECK:-1}" \
+      MMR_LAND_SKIP_THREAD_CHECK="${MMR_LAND_SKIP_THREAD_CHECK:-1}" \
       "$@" bash "$LAND" 7 2>&1)" || RUN_RC=$?
 }
 
@@ -156,13 +176,22 @@ run_land "$(make_reader review "$ANC_SHORT" "$NOW_ISO")"
 merged_with "$HEAD_FULL" || fail "ancestor entry within grace should arm"
 pass "ancestor entry within grace arms"
 
-# Case 3: BEHIND PR => update-branch first, then arm pinned to the NEW head
+# Case 3: BEHIND PR => update-branch, then deny without exact-head re-review
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
-  GH_MOCK_MERGE_STATE=BEHIND GH_MOCK_HEAD_AFTER="deadbeefcafe"
+  GH_MOCK_MERGE_STATE=BEHIND GH_MOCK_HEAD_AFTER="$HEAD2_FULL"
 grep -q "pr update-branch 7" "$GH_MOCK_LOG" || fail "behind PR should call update-branch"
-[ "$RUN_RC" -eq 0 ] || fail "behind PR should arm pinned to post-update head (exit code)"
-merged_with "deadbeefcafe" || fail "behind PR should arm pinned to post-update head"
-pass "behind PR updates then arms on new head"
+[ "$RUN_RC" -ne 0 ] || fail "behind PR without post-update re-review must deny (exit code)"
+never_merged || fail "behind PR without post-update re-review must never merge"
+printf '%s' "$RUN_OUT" | grep -q "exact PR head" || fail "deny message should mention exact-head recheck"
+pass "behind PR denies without post-update exact-head review"
+
+# Case 3b: BEHIND PR with review on the new head => update then arm
+run_land "$(make_reader review "$HEAD2_SHORT" "$NOW_ISO")" \
+  GH_MOCK_MERGE_STATE=BEHIND GH_MOCK_HEAD_AFTER="$HEAD2_FULL"
+grep -q "pr update-branch 7" "$GH_MOCK_LOG" || fail "behind PR should call update-branch"
+[ "$RUN_RC" -eq 0 ] || fail "behind PR with post-update review should arm (exit code)"
+merged_with "$HEAD2_FULL" || fail "behind PR with post-update review should arm on new head"
+pass "behind PR with post-update review arms on new head"
 
 # Case 4: DIRTY (conflict) => stop with way-out, never merge
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_MERGE_STATE=DIRTY
@@ -254,7 +283,7 @@ pass "multi-commit freshness binds to newest commit"
 GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
 GH_MOCK_STATE_DIR="$(mktemp -d "$TMPDIR_T/state.XXXXXX")"
 if env PATH="$MOCK_BIN:$PATH" GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_STATE_DIR="$GH_MOCK_STATE_DIR" \
-    GH_MOCK_HEAD="$HEAD_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
+    GH_MOCK_HEAD="$HEAD_FULL" GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
     MMR_LAND_REVIEW_READER="$(empty_reader)" \
     bash "$LAND" "7; rm -rf /" >/dev/null 2>&1; then
   fail "non-numeric PR arg must be rejected"
@@ -262,5 +291,14 @@ fi
 never_merged || fail "non-numeric PR arg must never reach gh merge"
 pass "non-numeric PR argument rejected"
 
+# Case 17: unresolved Major/Critical bot thread => deny
+BLOCKING_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false,"url":"https://example.test/thread/1","comments":{"nodes":[{"author":{"login":"coderabbitai"},"body":"Major: fix the race"}]}}]}}}}}'
+run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
+  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$BLOCKING_THREADS"
+[ "$RUN_RC" -ne 0 ] || fail "blocking bot thread must deny (exit code)"
+never_merged || fail "blocking bot thread must never merge"
+printf '%s' "$RUN_OUT" | grep -q "bot thread" || fail "deny message should name bot threads"
+pass "unresolved Major/Critical bot thread denies"
+
 echo
-echo "All 16 land-pr cases passed."
+echo "All 18 land-pr cases passed."

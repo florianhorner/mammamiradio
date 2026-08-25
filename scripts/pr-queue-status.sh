@@ -112,8 +112,53 @@ local_base_summary() {
   fi
 }
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+EVIDENCE_CHECKER="${MMR_QUEUE_EVIDENCE_CHECKER:-$SCRIPT_DIR/check-preship-evidence.sh}"
+
+evidence_summary() {
+  local head="$1" base="$2"
+  if [ -n "${MMR_QUEUE_SKIP_EVIDENCE:-}" ]; then
+    printf 'skipped\n'
+    return 0
+  fi
+  if bash "$EVIDENCE_CHECKER" --v2 --target "$head" --base "$base" --mode pr >/dev/null 2>&1; then
+    printf 'ok\n'
+  else
+    printf 'missing/invalid\n'
+  fi
+}
+
+thread_debt_count() {
+  local pr="$1" slug owner repo query response
+  if [ -n "${MMR_QUEUE_SKIP_THREADS:-}" ]; then
+    printf 'skipped\n'
+    return 0
+  fi
+
+  slug="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" || {
+    printf 'unknown\n'
+    return 0
+  }
+  owner="${slug%%/*}"
+  repo="${slug##*/}"
+
+  query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved isOutdated comments(first:1){nodes{author{login} body}}}}}}}'
+  response="$(gh api graphql -f query="$query" -f owner="$owner" -f repo="$repo" -F number="$pr" 2>/dev/null)" || {
+    printf 'unknown\n'
+    return 0
+  }
+
+  printf '%s' "$response" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+    | select(.isResolved == false and .isOutdated == false)
+    | select(.comments.nodes[0].author.login == "coderabbitai"
+        or .comments.nodes[0].author.login == "copilot-pull-request-reviewer"
+        or .comments.nodes[0].author.login == "chatgpt-codex-connector")
+    | select(.comments.nodes[0].body | test("(Major|Critical|P0|P1)"; "i"))
+  ] | length'
+}
+
 recommendation() {
-  local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4"
+  local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4" evidence="$5" thread_debt="$6"
   if [ "$is_draft" = "true" ]; then
     say "draft"
   elif [ "$merge_state" = "DIRTY" ]; then
@@ -122,6 +167,10 @@ recommendation() {
     say "commit dirty work"
   elif [ -z "$worktree" ]; then
     say "inspect/no local worktree"
+  elif [ "$thread_debt" != "0" ] && [ "$thread_debt" != "skipped" ] && [ "$thread_debt" != "unknown" ]; then
+    say "resolve bot threads"
+  elif [ "$evidence" != "ok" ] && [ "$evidence" != "skipped" ]; then
+    say "emit/review evidence"
   elif [ "$merge_state" = "BEHIND" ]; then
     say "update + test"
   elif [ "$merge_state" = "CLEAN" ]; then
@@ -133,7 +182,7 @@ recommendation() {
   fi
 }
 
-prs="$(gh pr list --state open --json number,title,headRefName,headRefOid,mergeStateStatus,isDraft,updatedAt,url 2>/dev/null)" \
+prs="$(gh pr list --state open --json number,title,headRefName,headRefOid,baseRefOid,mergeStateStatus,isDraft,updatedAt,url 2>/dev/null)" \
   || die "could not list open PRs. Check gh auth and repository context."
 
 count="$(printf '%s' "$prs" | jq 'length')"
@@ -151,6 +200,7 @@ printf '%s' "$prs" | jq -c 'sort_by(.number)[]' | while IFS= read -r pr; do
   title="$(printf '%s' "$pr" | jq -r '.title')"
   branch="$(printf '%s' "$pr" | jq -r '.headRefName')"
   head="$(printf '%s' "$pr" | jq -r '.headRefOid')"
+  base="$(printf '%s' "$pr" | jq -r '.baseRefOid')"
   merge_state="$(printf '%s' "$pr" | jq -r '.mergeStateStatus')"
   is_draft="$(printf '%s' "$pr" | jq -r '.isDraft')"
   url="$(printf '%s' "$pr" | jq -r '.url')"
@@ -165,13 +215,17 @@ printf '%s' "$prs" | jq -c 'sort_by(.number)[]' | while IFS= read -r pr; do
     IFS=$'\t' read -r dirty_status dirty <<<"$(dirty_summary "$wt")"
     local_base="$(local_base_summary "$wt")"
   fi
-  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty_status")"
+  evidence="$(evidence_summary "$head" "$base")"
+  thread_debt="$(thread_debt_count "$number")"
+  rec="$(recommendation "$is_draft" "$merge_state" "$wt" "$dirty_status" "$evidence" "$thread_debt")"
 
   say ""
   say "PR #$number: $title"
   say "  branch: $branch"
   say "  head: $short_head"
   say "  merge: $merge_state"
+  say "  evidence: $evidence"
+  say "  bot-thread debt: $thread_debt"
   say "  draft: $is_draft"
   say "  updated: $updated_at"
   say "  url: $url"

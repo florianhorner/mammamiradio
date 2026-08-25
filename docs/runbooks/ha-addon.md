@@ -645,8 +645,10 @@ gates" (single source of truth). The short version:
   review time) until Florian gives the merge signal.
 - On the signal, run `scripts/land-pr.sh <PR#>`. It verifies the pre-ship
   squad entry against the PR head (code-state freshness — a soak of days is
-  fine, a push after the review is not), updates the branch if it is behind
-  (CI re-runs on the integrated state), and arms
+  fine, a push after the review is not), committed v2 pre-ship evidence,
+  and unresolved Major/Critical bot review threads, updates the branch if it
+  is behind (CI re-runs on the integrated state; the post-update head needs a
+  fresh exact-head squad review), and arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified.
 - Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local
@@ -665,8 +667,8 @@ gates" (single source of truth). The short version:
   pre-ship evidence.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
-  `allow_auto_merge`, and the required contexts. Run it if landing behaves
-  oddly.
+  `allow_auto_merge`, required contexts, and that the main-branch ruleset
+  enables review thread resolution. Run it if landing behaves oddly.
 
 ## Pre-merge checklist
 

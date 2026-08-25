@@ -28,6 +28,14 @@ case "$*" in
     [ -n "${GH_MOCK_PROT_FAIL:-}" ] && exit 1
     printf '%s\n' "${GH_MOCK_PROT:?}"
     ;;
+  *"repos/{owner}/{repo}/rulesets/"*)
+    [ -n "${GH_MOCK_RULESET_DETAIL_FAIL:-}" ] && exit 1
+    printf '%s\n' "${GH_MOCK_RULESET_DETAIL:?}"
+    ;;
+  *"repos/{owner}/{repo}/rulesets"*)
+    [ -n "${GH_MOCK_RULESETS_FAIL:-}" ] && exit 1
+    printf '%s\n' "${GH_MOCK_RULESETS:?}"
+    ;;
   *"repos/{owner}/{repo}"*)
     [ -n "${GH_MOCK_REPO_FAIL:-}" ] && exit 1
     printf '%s\n' "${GH_MOCK_REPO:?}"
@@ -39,11 +47,14 @@ chmod +x "$MOCK_BIN/gh"
 
 GOOD_REPO='{"allow_update_branch":true,"allow_auto_merge":true}'
 GOOD_PROT='{"strict":true,"contexts":["quality","pi-smoke"]}'
+GOOD_RULESETS='[{"id":19667058}]'
+GOOD_RULESET_DETAIL='{"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":true}}]}'
 
 run_gate() { # [env overrides...]
   RUN_RC=0
   RUN_OUT="$(env -u CI PATH="$MOCK_BIN:$PATH" \
       GH_MOCK_REPO="$GOOD_REPO" GH_MOCK_PROT="$GOOD_PROT" \
+      GH_MOCK_RULESETS="$GOOD_RULESETS" GH_MOCK_RULESET_DETAIL="$GOOD_RULESET_DETAIL" \
       "$@" bash "$GATE" 2>&1)" || RUN_RC=$?
 }
 
@@ -51,6 +62,7 @@ run_gate() { # [env overrides...]
 run_gate
 [ "$RUN_RC" -eq 0 ] || fail "all-good settings should pass"
 printf '%s' "$RUN_OUT" | grep -q "intact" || fail "all-good run should report intact"
+printf '%s' "$RUN_OUT" | grep -q "review thread resolution" || fail "all-good run should report thread resolution"
 pass "all settings intact passes"
 
 # Case 2: strict=false => FAIL naming the setting
@@ -88,5 +100,11 @@ RUN_OUT="$(env CI=true PATH="$MOCK_BIN:$PATH" bash "$GATE" 2>&1)" || RUN_RC=$?
 printf '%s' "$RUN_OUT" | grep -q "SKIPPED in CI" || fail "CI skip must be loud"
 pass "CI skips loudly with exit 0"
 
+# Case 8: ruleset missing thread resolution => FAIL
+run_gate GH_MOCK_RULESET_DETAIL='{"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":false}}]}'
+[ "$RUN_RC" -ne 0 ] || fail "missing thread resolution must fail"
+printf '%s' "$RUN_OUT" | grep -q "required_review_thread_resolution" || fail "failure should name thread resolution"
+pass "missing review thread resolution fails"
+
 echo
-echo "All 7 check-merge-gate cases passed."
+echo "All 8 check-merge-gate cases passed."

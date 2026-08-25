@@ -50,12 +50,22 @@ def _fake_gh(bin_dir: Path, prs: list[dict[str, object]]) -> None:
     script.chmod(0o755)
 
 
-def _env_with_fake_gh(tmp_path: Path, prs: list[dict[str, object]]) -> dict[str, str]:
+def _env_with_fake_gh(
+    tmp_path: Path,
+    prs: list[dict[str, object]],
+    *,
+    skip_evidence: bool = True,
+    skip_threads: bool = True,
+) -> dict[str, str]:
     bin_dir = tmp_path.parent / f"{tmp_path.name}-bin"
     bin_dir.mkdir()
     _fake_gh(bin_dir, prs)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    if skip_evidence:
+        env["MMR_QUEUE_SKIP_EVIDENCE"] = "1"
+    if skip_threads:
+        env["MMR_QUEUE_SKIP_THREADS"] = "1"
     return env
 
 
@@ -95,6 +105,7 @@ def test_pr_queue_status_marks_clean_and_dirty_worktrees(tmp_path: Path) -> None
                 "title": "clean branch",
                 "headRefName": "feature-clean",
                 "headRefOid": "aaaaaaaaaaaa0000000000000000000000000000",
+                "baseRefOid": "bbbbbbbbbbbb0000000000000000000000000000",
                 "mergeStateStatus": "CLEAN",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:00:00Z",
@@ -105,6 +116,7 @@ def test_pr_queue_status_marks_clean_and_dirty_worktrees(tmp_path: Path) -> None
                 "title": "dirty branch",
                 "headRefName": "feature-dirty",
                 "headRefOid": "bbbbbbbbbbbb0000000000000000000000000000",
+                "baseRefOid": "cccccccccccc0000000000000000000000000000",
                 "mergeStateStatus": "BEHIND",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:01:00Z",
@@ -148,6 +160,7 @@ def test_pr_queue_status_resolves_renamed_local_branch_via_upstream(tmp_path: Pa
                 "title": "renamed workspace branch",
                 "headRefName": "florianhorner/some-feature",
                 "headRefOid": "dddddddddddd0000000000000000000000000000",
+                "baseRefOid": "eeeeeeeeeeee0000000000000000000000000000",
                 "mergeStateStatus": "CLEAN",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:03:00Z",
@@ -174,6 +187,7 @@ def test_pr_queue_status_reports_missing_local_worktree_as_advisory(tmp_path: Pa
                 "title": "remote only",
                 "headRefName": "feature-remote-only",
                 "headRefOid": "cccccccccccc0000000000000000000000000000",
+                "baseRefOid": "dddddddddddd0000000000000000000000000000",
                 "mergeStateStatus": "CLEAN",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:02:00Z",
@@ -246,6 +260,7 @@ def test_pr_queue_status_reports_local_origin_main_unavailable(tmp_path: Path) -
                 "title": "no origin/main ref locally",
                 "headRefName": "feature-no-origin-ref",
                 "headRefOid": "eeeeeeeeeeee0000000000000000000000000000",
+                "baseRefOid": "ffffffffffff0000000000000000000000000000",
                 "mergeStateStatus": "CLEAN",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:04:00Z",
@@ -277,6 +292,7 @@ def test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending
                 "title": "draft PR",
                 "headRefName": "feature-draft",
                 "headRefOid": "1111aaaaaaaa0000000000000000000000000000",
+                "baseRefOid": "2222bbbbbbbb0000000000000000000000000000",
                 "mergeStateStatus": "CLEAN",
                 "isDraft": True,
                 "updatedAt": "2026-07-07T00:05:00Z",
@@ -287,6 +303,7 @@ def test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending
                 "title": "conflicting PR",
                 "headRefName": "feature-conflict",
                 "headRefOid": "2222bbbbbbbb0000000000000000000000000000",
+                "baseRefOid": "3333cccccccc0000000000000000000000000000",
                 "mergeStateStatus": "DIRTY",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:06:00Z",
@@ -297,6 +314,7 @@ def test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending
                 "title": "checks pending, no local worktree",
                 "headRefName": "feature-checks-pending-no-wt",
                 "headRefOid": "3333cccccccc0000000000000000000000000000",
+                "baseRefOid": "4444dddddddd0000000000000000000000000000",
                 "mergeStateStatus": "BLOCKED",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:07:00Z",
@@ -307,6 +325,7 @@ def test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending
                 "title": "checks pending, worktree mapped",
                 "headRefName": "feature-checks-pending-wt",
                 "headRefOid": "4444dddddddd0000000000000000000000000000",
+                "baseRefOid": "5555eeeeeeee0000000000000000000000000000",
                 "mergeStateStatus": "UNSTABLE",
                 "isDraft": False,
                 "updatedAt": "2026-07-07T00:08:00Z",
@@ -331,3 +350,34 @@ def test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending
     # is the actual "wait/checks" precondition.
     assert "PR #23: checks pending, worktree mapped" in result.stdout
     assert "recommendation: wait/checks" in result.stdout
+
+
+def test_pr_queue_status_does_not_recommend_land_now_without_evidence(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _run(["git", "checkout", "-qb", "feature-no-evidence"], cwd=tmp_path)
+
+    env = _env_with_fake_gh(
+        tmp_path,
+        [
+            {
+                "number": 30,
+                "title": "clean but no evidence",
+                "headRefName": "feature-no-evidence",
+                "headRefOid": "aaaa111111110000000000000000000000000000",
+                "baseRefOid": "bbbb222222220000000000000000000000000000",
+                "mergeStateStatus": "CLEAN",
+                "isDraft": False,
+                "updatedAt": "2026-07-07T00:09:00Z",
+                "url": "https://example.test/pr/30",
+            }
+        ],
+        skip_evidence=False,
+        skip_threads=True,
+    )
+
+    result = _run(["bash", str(PR_QUEUE_STATUS)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "evidence: missing/invalid" in result.stdout
+    assert "recommendation: emit/review evidence" in result.stdout
+    assert "recommendation: land now" not in result.stdout
