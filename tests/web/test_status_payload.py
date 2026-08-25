@@ -277,7 +277,7 @@ def test_serialize_stream_log_entry_uses_metadata_duration_fallback():
     }
 
 
-@pytest.mark.parametrize("invalid_duration", [math.inf, -math.inf, math.nan, True])
+@pytest.mark.parametrize("invalid_duration", [math.inf, -math.inf, math.nan, True, 10**1000])
 def test_duration_sec_from_payload_rejects_non_finite_or_boolean_values(invalid_duration):
     payload = {
         "duration_sec": invalid_duration,
@@ -285,10 +285,6 @@ def test_duration_sec_from_payload_rejects_non_finite_or_boolean_values(invalid_
     }
 
     assert status_payload._duration_sec_from_payload(payload) is None
-
-
-def test_duration_sec_from_payload_treats_oversized_integer_as_unavailable():
-    assert status_payload._duration_sec_from_payload({"duration_sec": 10**1000}) is None
 
 
 def test_public_segment_metadata_redacts_private_ritual_internals():

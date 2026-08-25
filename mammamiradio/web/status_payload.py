@@ -360,9 +360,7 @@ def _positive_seconds(value: object) -> float | None:
         seconds = float(value)
     except (TypeError, ValueError, OverflowError):
         return None
-    if not math.isfinite(seconds) or seconds <= 0:
-        return None
-    return seconds
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
 def _ha_mailbox_state(state: StationState) -> tuple[bool, bool, str | None, int | None, bool | None]:

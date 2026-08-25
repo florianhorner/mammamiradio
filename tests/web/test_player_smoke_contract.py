@@ -245,14 +245,6 @@ def test_player_smoke_executes_ad_receipt_contract() -> None:
         "stale status poll restored a cleared ad receipt",
         "stale status race never held poll N after JSON parsing",
         "held response poisoned the conditional validator",
-    ):
-        assert needle in code, f"player smoke missing ad-receipt browser guard: {needle}"
-
-
-def test_player_smoke_executes_conditional_status_scheduler_contract() -> None:
-    """Keep the executable 200/304, clock, race, and cadence scenarios wired."""
-    code = RUN_CODE.read_text(encoding="utf-8")
-    for needle in (
         "conditionalStatusResponses",
         "statusResponses",
         "route.request().headers()['if-none-match']",
@@ -264,7 +256,6 @@ def test_player_smoke_executes_conditional_status_scheduler_contract() -> None:
         "bodyless 304 did not advance progress monotonically",
         "bodyless 304 did not advance uptime and Home-moment ages",
         "same-minute 304 rewrote the Casa live region",
-        "held response poisoned the conditional validator",
         "winning payload ETag was not committed after render",
         "hidden live status polling did not back off to 30 seconds",
         "visible stopped status polling did not use the 3.5-second probe",
@@ -272,7 +263,7 @@ def test_player_smoke_executes_conditional_status_scheduler_contract() -> None:
         "idle-to-live status polling did not restore the live cadence",
         "visible stopped listener did not discover an external resume within 6 seconds",
     ):
-        assert needle in code, f"player smoke lost conditional-status guard: {needle}"
+        assert needle in code, f"player smoke missing ad-receipt browser guard: {needle}"
 
     assert "__playerSmokeFetchStatus" not in code
 
