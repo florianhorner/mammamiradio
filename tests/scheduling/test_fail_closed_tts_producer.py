@@ -797,6 +797,7 @@ async def test_chaos_tts_unavailable_uses_canned_or_propagates_to_recovery(
     if canned_available:
         assert queued.type is SegmentType.BANTER
         assert queued.path == canned
+        assert queued.metadata["clip_audio_class"] == "unknown"
         assert state.last_banter_script == [
             {
                 "host": "Radio",

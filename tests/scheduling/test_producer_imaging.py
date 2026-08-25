@@ -181,6 +181,7 @@ async def test_banter_talk_bed_cold_start_no_last_music_file(tmp_path):
     assert args[2] is None
     assert mock_mix.call_args.args[3] == config.imaging.bed_volume_db
     imaging.pick_stinger.assert_not_called()
+    assert seg.metadata["clip_audio_class"] == "station_bed"
 
 
 @pytest.mark.asyncio
@@ -453,6 +454,7 @@ async def test_error_recovery_tone_after_banter_does_not_get_transition_stinger(
     assert seg.type == SegmentType.MUSIC
     assert seg.metadata.get("error_recovery") is True
     assert seg.metadata.get("audio_source") == "emergency_tone"
+    assert seg.metadata["clip_audio_class"] == "unknown"
     assert seg.path.name == "emergency_tone.mp3"
     assert seg.ephemeral is False
     mock_imaging_cls.return_value.pick_stinger.assert_not_called()
@@ -568,6 +570,7 @@ async def test_banter_handoff_uses_reserved_tail_and_generic_talk_bed(tmp_path):
         "primary_prefix": "banter",
         "fallback_prefix": "banter_dry",
     }
+    assert seg.metadata["clip_audio_class"] == "commercial_music"
 
 
 @pytest.mark.asyncio
@@ -752,6 +755,7 @@ async def test_banter_talk_bed_failure_queues_dry_banter(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.path.name.startswith("banter_full_")
+    assert seg.metadata["clip_audio_class"] == "speech"
     imaging.pick_talk_bed.assert_called_once()
 
 
@@ -783,7 +787,39 @@ async def test_news_flash_uses_talk_bed_when_crossfade_unavailable(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.NEWS_FLASH
     assert seg.path.name.startswith("news_bedded_")
+    assert seg.metadata["clip_audio_class"] == "station_bed"
     assert mock_mix.call_args.args[3] == config.imaging.bed_volume_db
+    imaging.pick_talk_bed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_news_flash_talk_bed_failure_queues_dry_speech(tmp_path):
+    state = _make_state()
+    config = _make_config(tmp_path)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    host = config.hosts[0]
+
+    with (
+        patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.NEWS_FLASH),
+        patch(
+            f"{SCRIPTWRITER_MODULE}.write_news_flash",
+            new_callable=AsyncMock,
+            return_value=(host, "Notizia.", "traffic"),
+        ),
+        patch(f"{PRODUCER_MODULE}.synthesize", new_callable=AsyncMock, side_effect=_write_async_file),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=1.8),
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.ImagingLibrary") as mock_imaging_cls,
+    ):
+        imaging = mock_imaging_cls.return_value
+        imaging.pick_talk_bed.side_effect = RuntimeError("bed failed")
+
+        await _run_until_queued(queue, state, config)
+
+    seg = queue.get_nowait()
+    assert seg.type == SegmentType.NEWS_FLASH
+    assert seg.path.name.startswith("flash_")
+    assert seg.metadata["clip_audio_class"] == "speech"
     imaging.pick_talk_bed.assert_called_once()
 
 
@@ -885,6 +921,7 @@ async def test_news_flash_handoff_uses_reserved_tail(tmp_path):
         "primary_prefix": "news",
         "fallback_prefix": "news_dry",
     }
+    assert seg.metadata["clip_audio_class"] == "commercial_music"
 
 
 @pytest.mark.asyncio
