@@ -45,8 +45,7 @@ surface. Once any listener accepts the first audio bytes, `/readyz` returns HTTP
 Click **Open Web UI** or use the ingress sidebar entry. A fresh unfinished
 install opens directly on **First Listen** before the control room. Follow its
 vertical path; completed and existing installs keep their normal control-room
-landing, and the First Listen tab remains available to review progress or
-repair an unfinished step:
+landing, with review and repair under **Motore → Setup**:
 
 1. The opening card leads with a 27-second authored mini-show: an original music
    bed, a privacy-aware Marco/Giulia welcome, then a handoff to the live stream.
@@ -55,7 +54,7 @@ repair an unfinished step:
    music, recovery cover, or a music repair follows the opening. Recovery audio
    can keep the stream audible, but it is not a music rotation; bundled demo
    music is not a promised song library.
-2. Select **Play the station**. Confirm **Yes, I hear it** only after you hear
+2. Select **Start sound check**. Confirm **Yes, I hear it** only after you hear
    the opening, or **Not yet** for
    [this-device repair](../../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
    Home Assistant speakers remain an
@@ -77,13 +76,13 @@ recommended path. For a useful preview, inspect the filtered entities and mute
 any entity locally if needed. Enabling requires that fresh preview.
 
 If that live privacy choice applies but the setup review cannot be saved, the
-choice is not rolled back. The private path offers **Save private review again**
+choice is not rolled back. The private path offers **Save private choice again**
 without reading Home state. An enabled choice remains active but requires a
-fresh filtered preview before **Save review again**. AI-host setup remains
+fresh filtered preview before **Save shared choice again**. AI-host setup remains
 locked until the review receipt is saved.
 
-Use **AI hosts — optional** afterward to save either `ANTHROPIC_API_KEY` or
-`OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
+Under **Optional enhancement**, select **Set up new conversations** to save
+either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
 admin writes the key to `/config/secrets.env`, applies it live, and checks the
 provider without interrupting audio. First audio never needs it.
 

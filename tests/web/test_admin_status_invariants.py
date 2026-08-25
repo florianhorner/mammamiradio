@@ -91,7 +91,7 @@ def test_media_and_setup_statuses_have_one_css_owned_glyph() -> None:
 
     assert "chip.textContent=word" in media and ".shape" not in media
     assert "return mediaSourceStatusChip(presentation.state)" in jamendo
-    assert "item.shape" not in strip
+    assert "item.shape" not in strip and "aria-label=" not in strip
     assert "setup-strip-chip status-inline ${state}" in strip
     for expected in ("ready')return'ready", "checking')return'working", "not_configured')return'idle"):
         assert expected in mapping

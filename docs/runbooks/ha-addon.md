@@ -63,9 +63,9 @@ speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, First Listen offers **Keep private and continue** without
-reading Home state, or a fresh filtered preview before **Let future hosts use
-this**. If only generic daylight is available, verify that it is disclosed as
+audible verification, First Listen offers **Keep Home private** without reading
+Home state, or a fresh filtered preview before **Let Marco and Giulia use these
+details**. If only generic daylight is available, verify that it is disclosed as
 ambient-only and not meaningful personalization, with the private path
 recommended. AI-host setup comes later.
 

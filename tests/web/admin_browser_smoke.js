@@ -163,9 +163,9 @@ async (page) => {
   // own tab navigation (render-free, exactly like initTabs' landing call).
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
   await exerciseListenerSongFailureRows();
-  const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Ready','ready'],['Checking','checking'],['Unknown','mystery'],['Blocked','blocked'],['Idle','not_configured']].map(([label,status])=>({label,status,display_status:status,shape:'BAD'}))}}};
-  const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent}))},setupStatusFixture);
-  assert(setupChips.map(({state})=>state).join('|')==='ready|working|degraded|blocked|idle'&&setupChips.every(({children,text})=>children===0&&!text.includes('BAD')),`setup status chips lost semantic mapping: ${JSON.stringify(setupChips)}`);
+  const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Music','ready','Ready'],['Sources','checking','Checking'],['Hosts','waiting_ai','Waiting for AI'],['Setup','blocked','Blocked'],['AI','not_configured','Optional']].map(([label,status,display_status])=>({label,status,display_status,shape:'BAD'}))}}};
+  const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent,name:el.getAttribute('aria-label')}))},setupStatusFixture);
+  assert(setupChips.map(({state})=>state).join('|')==='ready|working|degraded|blocked|idle'&&setupChips.every(({children,text,name})=>children===0&&!text.includes('BAD')&&name===null)&&setupChips[2].text==='Hosts: Waiting for AI'&&setupChips[4].text==='AI: Optional',`setup status chips lost semantic mapping or accessible names: ${JSON.stringify(setupChips)}`);
   await page.emulateMedia({forcedColors:'active'});const forcedGlyphs=await page.evaluate(()=>[...setupStripChips.children].map((el)=>getComputedStyle(el,'::before').content));assert(forcedGlyphs.every((glyph)=>!['none','normal','""'].includes(glyph)),`forced colors hid setup status glyphs: ${JSON.stringify(forcedGlyphs)}`);
   await page.emulateMedia({forcedColors:'none'});await page.evaluate(()=>renderGuidedSetupStrip({}));
 

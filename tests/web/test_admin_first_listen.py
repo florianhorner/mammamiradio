@@ -74,6 +74,7 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
         < html.index('id="firstListenAiStep"')
     )
     assert "Hear Mamma Mi Radio right here." in html
+    assert '<header class="mmr-panel-head sr-only">' in html
     assert "Meet Marco and Giulia" in html
     assert "Play it on this device" in html
     assert "Start sound check" in html

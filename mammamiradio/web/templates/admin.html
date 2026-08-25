@@ -2075,7 +2075,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
     <div class="mmr-tabpanels">
 
     <section class="a-panel producer-zone mmr-tabpanel first-listen-panel" id="first-listen-panel" data-panel="setup" role="tabpanel" aria-labelledby="tab-setup" tabindex="0">
-      <header class="mmr-panel-head">
+      <header class="mmr-panel-head sr-only">
         <div>
           <div class="ttl-eyebrow">First Listen</div>
           <h2>Hear Mamma Mi Radio, right here.</h2>
@@ -2804,7 +2804,7 @@ const FIRST_LISTEN_ERRORS={
   service_rejected:{title:'Home Assistant did not start playback',message:'The speaker could not start the station this time.',action:'Check the target and test the exact Live source in Home Assistant, then retry once.'},
   request_in_flight:{title:'We’re still waiting for the station',message:'The first attempt has not finished yet.',action:'Give it a moment before trying again.'},
   receipt_unavailable:{title:'The station started, but the sound check was not saved',message:'Restoring the sound check will not start playback again.',action:'Choose “Restore sound check.”'},
-  receipt_recovery_missing:{title:'That sound check can no longer be restored',message:'The station did not play again.',action:'Refresh First Listen, then play the station on this device once more.'},
+  receipt_recovery_missing:{title:'That sound check can no longer be restored',message:'The station did not play again.',action:'Refresh First Listen, then select “Start sound check” on this device once more.'},
   attempt_mismatch:{title:'This sound check belongs to an earlier play',message:'A newer play replaced it in this tab.',action:'Listen to the latest play, or start this device again.'},
   preview_unavailable:{title:'Your Home details are not available right now',message:'The hosts received nothing, and Home context stays off.',action:'Keep Home context off, or reconnect Home Assistant and try the preview again.'},
   preview_required:{title:'Check your Home details again before turning this on',message:'The earlier preview is out of date.',action:'Show a new preview, then choose whether Marco and Giulia may use it.'},
@@ -5010,7 +5010,7 @@ function renderGuidedSetupStrip(setup){
   if(!entries.length){chips.innerHTML='';actions.innerHTML='';return;}
   chips.innerHTML=entries.map(item=>{
     const state=setupStripVisualState(item.status);
-    return `<span class="setup-strip-chip status-inline ${state}" data-s="${state}" aria-label="${esc(item.label||'Setup')}: status ${state}">${esc(item.label||'Setup')}: ${esc(item.display_status||item.status||'checking')}</span>`;
+    return `<span class="setup-strip-chip status-inline ${state}" data-s="${state}">${esc(item.label||'Setup')}: ${esc(item.display_status||item.status||'checking')}</span>`;
   }).join('');
   const primary=stripData.primary_action||{};
   const primaryKind=primary.kind||'review_setup';

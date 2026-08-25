@@ -155,12 +155,12 @@ Then, in **First Listen** (the automatic fresh-install landing):
 5. Separately, exercise the optional speaker route outside First Listen: in
    Home Assistant, **Media → Mamma Mi Radio → Mamma Mi Radio Live** to **Mac Lab
    Speaker**, and confirm the room by ear.
-6. Select **Keep private and continue** without opening the preview. Confirm
+6. Select **Keep Home private** without opening the preview. Confirm
    First Listen says that no Home Assistant data was requested and that AI
    hosts remain optional.
 7. Reset the radio-only flow, preview Home context, and verify that generic
    daylight is disclosed as ambient-only and not meaningful personalization,
-   with **Keep private and continue** recommended. Do not enable it for the
+   with **Keep Home private** recommended. Do not enable it for the
    acceptance path.
 
 First Listen proof here is browser playback in `/admin` plus human audible

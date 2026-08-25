@@ -457,6 +457,7 @@ async (page) => {
     null,
     { timeout: 5000 },
   );
+  assert(await page.getByRole('heading',{name:'Hear Mamma Mi Radio, right here.',level:2}).count()===1,'First Listen lost its accessible H2');
   await page.evaluate(() => {
     (window.__firstListenSmokeIntervals || []).forEach(({ id }) => clearInterval(id));
   });
