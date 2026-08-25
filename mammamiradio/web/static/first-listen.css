@@ -1968,8 +1968,8 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
     margin-top: 0.4375rem;
   }
 
-  .first-listen-panel :is(.first-listen-action, .first-listen-body .btn) {
-    width: 100%;
+  .first-listen-panel :is(.first-listen-action, .first-listen-body .btn, .setup-actions > .btn) {
+    width:100%;min-width:44px;max-width:100%;justify-content:center;text-align:center;white-space:normal;overflow-wrap:anywhere;
   }
 
   .first-listen-panel :is(.first-listen-fields, .setup-keys),
@@ -2254,7 +2254,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   .first-listen-panel .first-listen-heading { grid-column:2;grid-row:1; }
   .first-listen-panel .first-listen-summary { grid-column:2;grid-row:2; }
   .first-listen-panel .first-listen-head > .status-chip { grid-column:2;grid-row:3;justify-self:start;margin-top:.1875rem; }
-  .first-listen-panel .first-listen-review { grid-column:2;grid-row:4;justify-self:start;min-width:4.625rem;margin-top:.1875rem; }
+  .first-listen-panel .first-listen-review { grid-column:2;grid-row:4;justify-self:start;min-width:44px;max-width:100%;margin-top:.1875rem;white-space:normal;overflow-wrap:anywhere; }
   .first-listen-panel .first-listen-optional .first-listen-head { grid-template-columns:minmax(0,1fr); }
   .first-listen-panel .first-listen-optional .first-listen-heading,
   .first-listen-panel .first-listen-optional .first-listen-summary,
