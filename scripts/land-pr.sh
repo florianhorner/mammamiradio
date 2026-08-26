@@ -7,17 +7,19 @@
 # opened by /ship and never armed for auto-merge. On the operator's explicit
 # merge signal, this wrapper:
 #
-#   1. verifies a pre-ship squad entry that is still about THIS code
-#      (code-state freshness: the entry's commit must be the PR head or an
-#      ancestor of it, and no commits may have been pushed to the PR after
-#      the entry — wall-clock age is irrelevant, a soak of days is fine);
-#   2. verifies committed v2 pre-ship evidence and blocks unresolved
+#   1. verifies committed v2 pre-ship evidence on the PR head (portable proof —
+#      works from cloud agents and CI once the receipt is on the branch);
+#   2. when a local gstack ledger is present, also accepts a squad entry that
+#      is still about THIS code (code-state freshness: the entry's commit must
+#      be the PR head or an ancestor, and nothing was pushed after the entry);
+#      without a ledger, v2 evidence alone satisfies the review gate;
+#   3. blocks unresolved
 #      Major/Critical bot review threads on the PR head;
-#   3. updates the branch from base if it is behind (user-auth gh, so CI
+#   4. updates the branch from base if it is behind (user-auth gh, so CI
 #      retriggers normally; a conflict stops here for a human);
-#   4. re-verifies squad (exact head match), evidence, and bot threads on
-#      the post-update head when update-branch ran;
-#   5. arms GitHub auto-merge pinned to the exact head it verified:
+#   5. re-verifies evidence (exact head match) and bot threads on the
+#      post-update head when update-branch ran;
+#   6. arms GitHub auto-merge pinned to the exact head it verified:
 #      gh pr merge --squash --auto --match-head-commit <sha>.
 #
 # GitHub then merges only when required checks pass on the integrated state
@@ -43,8 +45,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # entry are treated as part of the reviewed push, not new work.
 GRACE_SECONDS="${MMR_LAND_GRACE_SECONDS:-600}"
 UPDATE_TIMEOUT_SECONDS="${MMR_LAND_UPDATE_TIMEOUT:-120}"
-# Reader override exists for tests only; defaults to the real gstack log.
-READER="${MMR_LAND_REVIEW_READER:-$HOME/.claude/skills/gstack/bin/gstack-review-read}"
+# Reader override exists for tests; default is the repo-local ledger dump.
+READER="${MMR_LAND_REVIEW_READER:-$SCRIPT_DIR/read-preship-ledger.sh}"
+if [ ! -x "$READER" ] && [ -x "$HOME/.claude/skills/gstack/bin/gstack-review-read" ]; then
+  READER="$HOME/.claude/skills/gstack/bin/gstack-review-read"
+fi
 EVIDENCE_CHECKER="${MMR_LAND_EVIDENCE_CHECKER:-$SCRIPT_DIR/check-preship-evidence.sh}"
 
 say()  { printf '%s\n' "$*"; }
@@ -82,8 +87,6 @@ iso_to_epoch() {
 squad_check() {
   local pr_head="$1" last_push="$2" strict="${3:-0}" line skill rc ts es resolved
   if [ ! -x "$READER" ]; then
-    say "land-pr: no review log reader at $READER — cannot verify the pre-ship squad."
-    say "         Run /ship (it logs the squad), or fix the gstack install, then re-run."
     return 1
   fi
   while IFS= read -r line; do
@@ -113,7 +116,7 @@ squad_check() {
   if [ "$strict" = "1" ]; then
     say "land-pr: no pre-ship squad entry covers the exact PR head ${pr_head:0:12}."
     say "         Branch update changed the head — re-run the review squad on the new head, then land again."
-  else
+  elif [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
     say "land-pr: no pre-ship squad entry covers the current PR head."
     say "         Either commits were pushed after the last review, or no squad ran."
     say "         Re-run the review squad (/ship or /review) on this branch, then land again."
@@ -221,8 +224,18 @@ thread_check() {
 
 verify_head() {
   local pr="$1" head="$2" base="$3" last_push_epoch="$4" strict_squad="$5"
-  squad_check "$head" "$last_push_epoch" "$strict_squad" || return 1
   evidence_check "$head" "$base" || return 1
+  if squad_check "$head" "$last_push_epoch" "$strict_squad"; then
+    :
+  elif [ "$strict_squad" = "1" ] && [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
+    return 1
+  elif [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
+    return 1
+  elif [ "$strict_squad" = "1" ]; then
+    say "land-pr: no exact ledger squad entry; committed v2 evidence covers updated head ${head:0:12}."
+  else
+    say "land-pr: no local ledger squad entry; committed v2 evidence covers PR head ${head:0:12}."
+  fi
   thread_check "$pr" || return 1
 }
 

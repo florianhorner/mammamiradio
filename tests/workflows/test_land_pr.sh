@@ -157,6 +157,28 @@ empty_reader() {
   echo "$f"
 }
 
+make_passing_evidence_checker() {
+  local f; f="$(mktemp "$TMPDIR_T/evidence.XXXXXX")"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'echo "landing-evidence: OK — pr content stub has 1 matching v2 receipt(s)"'
+    printf '%s\n' 'exit 0'
+  } > "$f"
+  chmod +x "$f"
+  echo "$f"
+}
+
+make_failing_evidence_checker() {
+  local f; f="$(mktemp "$TMPDIR_T/evidence.XXXXXX")"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'echo "landing-evidence: FAIL — PR adds no new v2 review receipt" >&2'
+    printf '%s\n' 'exit 1'
+  } > "$f"
+  chmod +x "$f"
+  echo "$f"
+}
+
 # run_land <reader> [env overrides...] -> sets RUN_RC, RUN_OUT, leaves log at $GH_MOCK_LOG
 run_land() {
   local reader="$1"; shift
@@ -234,29 +256,39 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
 never_merged || fail "failed update must stop before merging"
 pass "failed branch update stops cleanly"
 
-# Case 6: no squad entry => deny, never merge
-run_land "$(empty_reader)"
-[ "$RUN_RC" -ne 0 ] || fail "missing squad entry must deny (exit code)"
-never_merged || fail "missing squad entry must deny"
-printf '%s' "$RUN_OUT" | grep -q "squad" || fail "deny message should name the squad"
-pass "missing squad entry denies"
+# Case 6: no squad entry and no v2 evidence => deny, never merge
+run_land "$(empty_reader)" \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_failing_evidence_checker)"
+[ "$RUN_RC" -ne 0 ] || fail "missing review proof must deny (exit code)"
+never_merged || fail "missing review proof must deny"
+printf '%s' "$RUN_OUT" | grep -q "v2 pre-ship evidence" || fail "deny message should name v2 evidence"
+pass "missing review proof denies"
 
-# Case 7: entry for a bogus commit => deny
-run_land "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")"
-[ "$RUN_RC" -ne 0 ] || fail "bogus-commit entry must deny (exit code)"
-never_merged || fail "bogus-commit entry must deny"
-pass "bogus-commit entry denies"
+# Case 7: bogus ledger commit is ignored when v2 evidence covers the head
+run_land "$(make_reader review "$BOGUS_SHA" "$NOW_ISO")" \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_passing_evidence_checker)"
+[ "$RUN_RC" -eq 0 ] || fail "valid v2 evidence should arm despite bogus ledger entry (exit code)"
+merged_with "$HEAD_FULL" || fail "valid v2 evidence should arm despite bogus ledger entry"
+pass "valid v2 evidence ignores bogus ledger entry"
 
-# Case 8: commits pushed AFTER the entry (beyond grace) => deny — the review
-# saw older code. Entry is 6h old; newest PR commit is 3h old.
-run_land "$(make_reader review "$ANC_SHORT" "$VERY_OLD_ISO")" GH_MOCK_COMMIT_DATE="$OLD_ISO"
-[ "$RUN_RC" -ne 0 ] || fail "post-review push must invalidate the entry (exit code)"
-never_merged || fail "post-review push must invalidate the entry"
-pass "post-review push invalidates entry (code-state freshness)"
+# Case 8: commits pushed AFTER the entry (beyond grace) => deny when v2 is absent.
+# Entry is 6h old; newest PR commit is 3h old.
+run_land "$(make_reader review "$ANC_SHORT" "$VERY_OLD_ISO")" \
+  GH_MOCK_COMMIT_DATE="$OLD_ISO" \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_failing_evidence_checker)"
+[ "$RUN_RC" -ne 0 ] || fail "stale ledger without v2 evidence must deny (exit code)"
+never_merged || fail "stale ledger without v2 evidence must deny"
+pass "stale ledger without v2 evidence denies"
 
 # Case 9: OLD entry, no commits since (newest commit predates entry) => allow.
 # Wall-clock age alone must NOT deny — soak windows are days long by design.
-run_land "$(make_reader review "$HEAD_SHORT" "$OLD_ISO")" GH_MOCK_COMMIT_DATE="$VERY_OLD_ISO"
+run_land "$(make_reader review "$HEAD_SHORT" "$OLD_ISO")" \
+  GH_MOCK_COMMIT_DATE="$VERY_OLD_ISO" \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_passing_evidence_checker)"
 [ "$RUN_RC" -eq 0 ] || fail "old-but-unchanged entry should still arm (no wall-clock staleness) (exit code)"
 merged_with "$HEAD_FULL" || fail "old-but-unchanged entry should still arm (no wall-clock staleness)"
 pass "soaked PR with unchanged head arms (no wall-clock denial)"
@@ -267,11 +299,13 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_STATE=MERGED
 never_merged || fail "non-open PR must stop"
 pass "non-open PR stops"
 
-# Case 11: wrong-skill entry (qa) => deny
-run_land "$(make_reader qa "$HEAD_SHORT" "$NOW_ISO")"
-[ "$RUN_RC" -ne 0 ] || fail "non-review skill must not satisfy the gate (exit code)"
-never_merged || fail "non-review skill must not satisfy the gate"
-pass "wrong-skill entry denies"
+# Case 11: wrong-skill ledger entry is ignored when v2 evidence covers the head
+run_land "$(make_reader qa "$HEAD_SHORT" "$NOW_ISO")" \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_passing_evidence_checker)"
+[ "$RUN_RC" -eq 0 ] || fail "valid v2 evidence should arm despite wrong-skill ledger entry (exit code)"
+merged_with "$HEAD_FULL" || fail "valid v2 evidence should arm despite wrong-skill ledger entry"
+pass "valid v2 evidence ignores wrong-skill ledger entry"
 
 # Case 12: BEHIND, update succeeds, but the head NEVER changes (rebase stuck)
 # => die after the timeout, never arm. Regression guard for the fall-through
@@ -283,14 +317,13 @@ never_merged || fail "stuck branch update must never arm a merge"
 printf '%s' "$RUN_OUT" | grep -q "did not surface" || fail "timeout message should say the head did not surface"
 pass "stuck branch update times out without arming"
 
-# Case 13: review-log reader missing/non-executable => hard DENY (unlike the
-# create-path hook, the landing wrapper fails CLOSED — it cannot verify, so
-# it does not land).
-run_land "$TMPDIR_T/nonexistent-reader"
-[ "$RUN_RC" -ne 0 ] || fail "missing reader must deny the landing (exit code)"
-never_merged || fail "missing reader must never reach gh merge"
-printf '%s' "$RUN_OUT" | grep -q "cannot verify" || fail "missing-reader message should say it cannot verify"
-pass "missing review-log reader fails closed"
+# Case 13: missing ledger reader is OK when committed v2 evidence covers head
+run_land "$TMPDIR_T/nonexistent-reader" \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_passing_evidence_checker)"
+[ "$RUN_RC" -eq 0 ] || fail "missing ledger reader should arm when v2 evidence passes (exit code)"
+merged_with "$HEAD_FULL" || fail "missing ledger reader should arm when v2 evidence passes"
+pass "missing ledger reader is OK when v2 evidence covers head"
 
 # Case 14: PR with an empty commits array => clean die, never merge
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_COMMITS_JSON='[]'
@@ -298,13 +331,16 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" GH_MOCK_COMMITS_JSON='
 never_merged || fail "empty commits array must never reach gh merge"
 pass "empty commits array dies cleanly"
 
-# Case 15: multi-commit PR — freshness binds to the NEWEST commit. Entry is
-# 3h old; an older commit predates it but the newest commit is NOW => deny.
+# Case 15: multi-commit PR — ledger freshness binds to the NEWEST commit.
+# Entry is 3h old; an older commit predates it but the newest commit is NOW =>
+# deny without v2 evidence.
 run_land "$(make_reader review "$ANC_SHORT" "$OLD_ISO")" \
-  GH_MOCK_COMMITS_JSON='[{"committedDate":"'"$VERY_OLD_ISO"'"},{"committedDate":"'"$NOW_ISO"'"}]'
-[ "$RUN_RC" -ne 0 ] || fail "newest commit after entry must deny even when older commits predate it (exit code)"
-never_merged || fail "newest commit after entry must never merge"
-pass "multi-commit freshness binds to newest commit"
+  GH_MOCK_COMMITS_JSON='[{"committedDate":"'"$VERY_OLD_ISO"'"},{"committedDate":"'"$NOW_ISO"'"}]' \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_failing_evidence_checker)"
+[ "$RUN_RC" -ne 0 ] || fail "stale ledger without v2 evidence must deny on newest commit (exit code)"
+never_merged || fail "stale ledger without v2 evidence must deny on newest commit"
+pass "ledger freshness without v2 evidence denies on newest commit"
 
 # Case 16: non-numeric PR argument => usage error, never calls gh merge
 GH_MOCK_LOG="$TMPDIR_T/gh.log"; : > "$GH_MOCK_LOG"
@@ -336,5 +372,15 @@ run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
 never_merged || fail "page-2 blocking thread must never merge"
 pass "paginated reviewThreads scan finds blocking thread on page 2"
 
+# Case 19: no local ledger, committed v2 evidence covers head => arm
+run_land "$(empty_reader)" \
+  MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
+  MMR_LAND_EVIDENCE_CHECKER="$(make_passing_evidence_checker)"
+[ "$RUN_RC" -eq 0 ] || fail "v2-only landing should arm when ledger is absent (exit code)"
+merged_with "$HEAD_FULL" || fail "v2-only landing should arm auto-merge"
+printf '%s' "$RUN_OUT" | grep -q "committed v2 evidence covers" \
+  || fail "v2-only landing should note v2 evidence satisfied the review gate"
+pass "v2 evidence satisfies landing without a local ledger"
+
 echo
-echo "All 19 land-pr cases passed."
+echo "All 20 land-pr cases passed."

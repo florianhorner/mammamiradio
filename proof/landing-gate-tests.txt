@@ -1,7 +1,7 @@
 # landing-gate test proof — 2026-08-26 — branch cursor/land-pr-gates-v2-0cf6
 
 ## bash tests/workflows/test_land_pr.sh
-All 18 land-pr cases passed.
+All 20 land-pr cases passed.
 
 ## bash tests/workflows/test_check_merge_gate.sh
 All 8 check-merge-gate cases passed.
