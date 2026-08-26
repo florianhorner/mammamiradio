@@ -323,11 +323,11 @@ def _golden_path_status(config, state, *, force_refresh: bool = False) -> dict:
         "detail": (
             "Backup audio is ready to keep the route audible, but primary music still needs attention."
             if readiness["recovery_cover_available"]
-            else "Enable live charts, configure Jamendo, or add local MP3 files."
+            else "Enable live charts, configure Jamendo, or add local audio files."
         ),
         "steps": [
             "Enable live charts or configure Jamendo, or",
-            "Place MP3 files in the configured local music directory.",
+            "Add supported audio files to the local music library.",
         ],
         **shared,
     }

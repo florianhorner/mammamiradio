@@ -480,20 +480,38 @@ export MAMMAMIRADIO_LEDGER_ENABLED="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Point runtime data at persistent /data ----
+# ---- Keep runtime state in /data; use native HA Media for operator music ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
-export MAMMAMIRADIO_MUSIC_DIR="/data/music"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
+export MAMMAMIRADIO_LEGACY_MUSIC_DIRS="/data/music"
 
-# ---- Ensure directories exist ----
+# ---- Ensure runtime directories exist ----
 if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.err; then
     FALLBACK_BASE="/tmp/mammamiradio-data"
     echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
     echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
     export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
-    export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"
     export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
-    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"
+    if [ ! -d /data/music ] || [ ! -r /data/music ]; then
+        export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""
+    fi
+    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_TMP_DIR"
+fi
+
+# Home Assistant manages files under /media. The add-on creates only its named
+# library directory. Existing /data/music remains a discovery root; no files
+# are copied, moved, or deleted here.
+if mkdir -p /media/mammamiradio 2>/tmp/mammamiradio-media-mkdir.err; then
+    export MAMMAMIRADIO_MUSIC_DIR="/media/mammamiradio"
+else
+    echo "[mammamiradio] WARNING: Home Assistant Media unavailable ($(cat /tmp/mammamiradio-media-mkdir.err 2>/dev/null || echo unknown error))"
+    if [ -n "$MAMMAMIRADIO_LEGACY_MUSIC_DIRS" ]; then
+        export MAMMAMIRADIO_MUSIC_DIR="$MAMMAMIRADIO_LEGACY_MUSIC_DIRS"
+        export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""
+    else
+        export MAMMAMIRADIO_MUSIC_DIR="${FALLBACK_BASE:-/tmp/mammamiradio-data}/music"
+        mkdir -p "$MAMMAMIRADIO_MUSIC_DIR"
+    fi
 fi
 
 # ---- Validate critical files exist ----

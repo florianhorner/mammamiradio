@@ -1458,6 +1458,38 @@ async (page) => {
     { timeout: 2000 },
   );
 
+  const localLibrary = await page.evaluate(() => {
+    renderLocalLibraryStatus({
+      management: 'home_assistant', complete: true, active: 3, files_found: 4, added: 1, removed: 1,
+      ignored: {unsupported_format: 1},
+      finished_at: Date.now() / 1000,
+      roots: ['/media/mammamiradio', '/data/music'],
+    });
+    const issues = {management: 'home_assistant', complete: true, active: 0, files_found: 0, banned: 1,
+      ignored: {unsupported_format: 1}, roots: ['/media/mammamiradio', '/data/music']};
+    return {
+      label: document.getElementById('localSourceLabel').textContent,
+      detail: document.getElementById('localSourceDetail').textContent,
+      scan: document.getElementById('localSourceScanBtn').textContent,
+      uploadControls: document.querySelectorAll('#localSourceRow input[type="file"], #localSourceRow [data-action="delete"]').length,
+      issues: localLibraryPresentation(issues),
+      issueToast: localLibraryScanToast(issues),
+    };
+  });
+  assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
+  assert(localLibrary.detail.includes('Home Assistant') && localLibrary.detail.includes('My media'),
+    'local library row did not delegate file management to Home Assistant');
+  assert(localLibrary.detail.includes('4 supported files') && localLibrary.detail.includes('1 unsupported format')
+      && localLibrary.detail.includes('/media/mammamiradio') && localLibrary.detail.includes('/data/music'),
+    `local library row hid scan diagnostics or roots: ${localLibrary.detail}`);
+  assert(localLibrary.scan === 'Scan now', 'local library row lost its explicit scan action');
+  assert(localLibrary.uploadControls === 0, 'local library row rebuilt upload/delete controls');
+  assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.label.includes('no playable tracks')
+      && ['0 supported files', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issues.detail.includes(text)),
+    `unplayable local file diagnostics lost their recovery: ${JSON.stringify(localLibrary.issues)}`);
+  assert(['no playable tracks', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issueToast.includes(text)),
+    `Scan now toast hid the actionable result: ${localLibrary.issueToast}`);
+
   for (const width of [320, 375, 414, 600, 768]) {
     await page.setViewportSize({ width, height: 900 });
     const geometry = await page.evaluate(() => {

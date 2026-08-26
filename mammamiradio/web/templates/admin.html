@@ -2119,6 +2119,15 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
         <div class="sub" id="plMeta"></div>
       </header>
       <div class="music-sources" aria-label="Music sources">
+        <div class="music-source-row" id="localSourceRow" data-state="idle">
+          <div class="music-source-copy">
+            <div class="music-source-title"><span id="localSourceChip"><span class="status-chip idle" aria-label="status: waiting">waiting</span></span><span id="localSourceLabel">Local music</span></div>
+            <div class="music-source-detail" id="localSourceDetail">Checking local music…</div>
+          </div>
+          <div class="music-source-actions">
+            <button type="button" class="btn btn-chip" id="localSourceScanBtn" data-stopped-exempt onclick="scanLocalLibrary(this)">Scan now</button>
+          </div>
+        </div>
         <div class="music-source-row" id="jamendoSourceRow" data-state="idle">
           <div class="music-source-copy">
             <div class="music-source-title"><span id="jamendoSourceChip"><span class="status-chip idle" aria-label="status: idle">idle</span></span><span id="jamendoSourceLabel">Jamendo off</span></div>
@@ -4760,6 +4769,80 @@ function mediaSourceStatusChip(state){
   chip.setAttribute('aria-label','status: '+word);
   chip.textContent=word;
   return chip;
+}
+const LOCAL_LIBRARY_IGNORED_LABELS={duplicate:'duplicate',empty_file:'empty file',not_a_file:'non-file item',symlink:'linked item',unreadable:'unreadable item',unsupported_format:'unsupported format'};
+function localLibraryFacts(status){
+  const s=status&&typeof status==='object'?status:{};
+  const count=value=>Math.max(0,Number(value||0)||0);
+  const parts=Object.entries(s.ignored||{}).filter(([,count])=>Number(count)>0).map(([reason,count])=>{
+    const value=Number(count)||0;
+    const label=LOCAL_LIBRARY_IGNORED_LABELS[reason]||String(reason).replace(/_/g,' ');
+    return `${value} ${label}${value===1?'':'s'}`;
+  });
+  const banned=count(s.banned);
+  if(banned)parts.push(`${banned} banned track${banned===1?'':'s'}`);
+  const files=count(s.files_found),active=count(s.active??s.candidates),added=count(s.added),removed=count(s.removed),ignored=parts.join(', ');
+  const summary=`${files} supported file${files===1?'':'s'} · ${active} active · ${added} added · ${removed} removed${ignored?' · '+ignored:''}`;
+  const recovery=banned?'Unban a track or add a supported audio file, then Scan now.':'Add a supported audio file, then Scan now.';
+  return{s,active,ignored,summary,recovery};
+}
+function localLibraryPresentation(status){
+  const {s,active,ignored,summary,recovery}=localLibraryFacts(status);
+  const finished=Number(s.finished_at||0);
+  const age=finished>0?Math.max(0,Math.floor(Date.now()/1000-finished)):null;
+  const when=age===null?'not scanned yet':age<60?'just scanned':age<3600?`scanned ${Math.floor(age/60)}m ago`:`scanned ${Math.floor(age/3600)}h ago`;
+  const roots=Array.isArray(s.roots)?s.roots.map(String).filter(Boolean):[];
+  const manage=(s.management==='home_assistant'?'Manage files in Home Assistant → Media → My media → mammamiradio.':`Manage files in ${roots[0]||'the configured music folder'}.`)
+    +(roots.length?' Watched: '+roots.join(', ')+'.':'');
+  if(s.in_progress)return{state:'working',label:'Scanning local music',detail:manage};
+  if(s.error)return{state:'blocked',label:'Local music needs attention',detail:`Scan failed. ${manage} Check the watched folders and try again.`};
+  if(s.complete===false&&Array.isArray(s.warnings)&&s.warnings.length){
+    return{state:'degraded',label:`Local music · ${active} active`,detail:`${String(s.warnings[0])} Existing tracks kept. ${summary}. ${manage} Check the watched folders and try again.`};
+  }
+  if(active>0)return{state:'ready',label:`Local music · ${active} track${active===1?'':'s'}`,detail:`${when} · ${summary}. ${manage}`};
+  if(ignored)return{state:'degraded',label:'Local music · no playable tracks',detail:`${when} · ${summary}. ${manage} ${recovery}`};
+  return{state:'idle',label:'Local music · empty',detail:`${when} · ${summary}. ${manage} ${recovery}`};
+}
+function localLibraryScanToast(status){
+  const {s,active,ignored,summary,recovery}=localLibraryFacts(status);
+  if(s.already_in_progress)return 'A scan is already running.';
+  if(s.error||s.ok===false)return 'Scan failed. Check the watched folders and try again.';
+  if(s.complete===false)return `Scan incomplete. ${summary}. Existing tracks kept. Try Scan now.`;
+  if(Number(s.added||0)||Number(s.removed||0))return `Local music updated. ${summary}`;
+  if(ignored&&active===0)return `No playable tracks. ${summary}. ${recovery}`;
+  return `No changes. ${summary}. Add or remove files, then Scan now.`;
+}
+function renderLocalLibraryStatus(status){
+  const row=document.getElementById('localSourceRow');
+  const chip=document.getElementById('localSourceChip');
+  const label=document.getElementById('localSourceLabel');
+  const detail=document.getElementById('localSourceDetail');
+  const button=document.getElementById('localSourceScanBtn');
+  if(!row||!chip||!label||!detail||!button)return;
+  const view=localLibraryPresentation(status);
+  row.dataset.state=view.state;
+  chip.replaceChildren(mediaSourceStatusChip(view.state));
+  label.textContent=view.label;
+  detail.textContent=view.detail;
+  button.disabled=Boolean(status?.in_progress);
+  button.setAttribute('aria-busy',status?.in_progress?'true':'false');
+  button.textContent=status?.in_progress?'Scanning…':'Scan now';
+}
+async function scanLocalLibrary(button){
+  if(button?.disabled)return;
+  button.disabled=true;
+  button.setAttribute('aria-busy','true');
+  button.textContent='Scanning…';
+  try{
+    const result=await api('POST','/api/media-sources/local/scan',{});
+    toast(localLibraryScanToast(result));
+    if(!result?.ok)return;
+    await refreshFast();
+  }catch(_){toast(offlineMsg());}
+  finally{
+    const current=document.getElementById('localSourceScanBtn');
+    if(current&&!_st?.local_library?.in_progress){current.disabled=false;current.removeAttribute('aria-busy');current.textContent='Scan now';}
+  }
 }
 function renderStarterCatalogStatus(status){
   const catalog=Array.isArray(status&&status.starter_catalog)?status.starter_catalog:[];
@@ -8094,6 +8177,7 @@ async function refreshFast(){
     updateMoments(_st);
     updateEngineRoom(_st,_caps);
     updateSourceControls(_st,_caps);
+    renderLocalLibraryStatus(_st.local_library||{});
     renderStarterCatalogStatus(_st);
     renderJamendoStatus(_st.jamendo||{enabled:false,state:'disabled'});
     updateChaosState(_st.chaos_mode);

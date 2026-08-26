@@ -24,6 +24,7 @@ ports_description:
   8000/tcp: Web UI and stream
 map:
   - addon_config:rw
+  - media:rw
 backup: hot
 backup_exclude:
   - "tmp"

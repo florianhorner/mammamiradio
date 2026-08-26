@@ -10,7 +10,7 @@ certification that a particular broadcast is cleared in every jurisdiction.
 | Source | Default | Persistence | What the project asserts |
 | --- | --- | --- | --- |
 | Bundled starter collection | On | Packaged with the app | Exact files and attribution are hash-pinned in the release manifest. Every derivative is attribution-only — CC BY 4.0 from Incompetech, CC BY 3.0 from Jamendo — and carries a modification notice. |
-| Operator `music/` files | Available when mounted | Operator-managed | Mamma Mi Radio makes no rights claim. The operator is responsible for the files and their use. |
+| Operator local music | Available when mounted | Operator-managed | Mamma Mi Radio makes no rights claim. The operator is responsible for the files and their use. |
 | Jamendo transient expansion | Off | No audio or lease persistence | Jamendo reports the accepted track's source and CC BY 3.0/4.0 license. That report is attribution data, not a clearance verdict. |
 | External extraction | Off; standalone extra only | Normal standalone cache rules | Technical access is not permission. Both current Home Assistant add-ons omit yt-dlp entirely. |
 
@@ -84,14 +84,18 @@ example and never counts toward a release.
 
 ## Operator-supplied local music
 
-Files mounted in `music/` remain available as local music. They are labelled
-"Provided by the station operator" in listener credits and do not receive a
-project-clearance badge, receipt, or implied license. Upgrades and source
-migrations never delete `music/`.
+Files in configured local roots are labelled "Provided by the station operator"
+in listener credits. They receive no clearance badge or implied license, and
+upgrades never delete them.
 
-The stock Home Assistant add-on does not provide a general local-media upload
-workflow. A standalone operator who mounts local files is responsible for
-their provenance, licenses, and permitted use.
+In the Home Assistant add-on, manage files under **Media → My media →
+mammamiradio**. The scanner runs every minute; use **Rotazione → Local music →
+Scan now** for an immediate refresh. Legacy `/data/music` remains discoverable
+and is never moved.
+
+Discovery recursively accepts MP3, M4A, MP4 audio, AAC, FLAC, OGG, Opus, and WAV.
+`Artist - Title.ext` produces the best label; other filenames use `Unknown` as
+artist. Operators remain responsible for provenance, licenses, and permitted use.
 
 ## Optional transient Jamendo expansion
 
