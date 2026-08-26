@@ -142,15 +142,18 @@ evidence_check() {
 review_threads_json() {
   local owner="$1" repo="$2" pr="$3"
   local cursor="" response combined='[]' has_next
+  local query_initial query_paged
+  # shellcheck disable=SC2016  # GraphQL queries must stay literal for gh api graphql.
+  query_initial='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
+  query_paged='query($owner:String!,$repo:String!,$number:Int!,$after:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
   while true; do
     if [ -z "$cursor" ]; then
-      # shellcheck disable=SC2016  # GraphQL query must stay literal for gh api graphql.
       response="$(gh api graphql \
-        -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}' \
+        -f query="$query_initial" \
         -f owner="$owner" -f repo="$repo" -F number="$pr" 2>/dev/null)" || return 1
     else
       response="$(gh api graphql \
-        -f query='query($owner:String!,$repo:String!,$number:Int!,$after:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}' \
+        -f query="$query_paged" \
         -f owner="$owner" -f repo="$repo" -F number="$pr" -f after="$cursor" 2>/dev/null)" || return 1
     fi
     combined="$(printf '%s' "$response" | jq --argjson acc "$combined" '
