@@ -36,6 +36,22 @@ def test_launch_smoke_names_the_listener_timing_boundary_honestly() -> None:
     assert "does not claim process-spawn-to-audio" in launch_body
     assert "Fresh-process listener-to-first-byte smoke (<= 2s)" in workflow_body
     assert "request-to-first-byte, not" in workflow_body
+    assert 'env = {"PATH": os.environ.get("PATH", os.defpath)}' in launch_body
+    assert '"PYTHONPYCACHEPREFIX"' in launch_body and '"PYTHONNOUSERSITE"' in launch_body
+    assert '"PYTHONSAFEPATH"' in launch_body and '"PYTHON_DOTENV_DISABLED"' in launch_body
+    assert "sys.flags.safe_path" in launch_body and "mammamiradio.main.__file__" in launch_body
+    assert "exec(compile(path.read_bytes()" in launch_body
+
+
+def test_receipt_child_rejects_a_stale_installed_package(tmp_path: Path) -> None:
+    smoke = _load_script(LAUNCH_SMOKE, "ha_green_launch_stale_package_test")
+    package = tmp_path / "mammamiradio"
+    package.mkdir()
+    for name, body in {"__init__.py": "", "main.py": "app = object()\n"}.items():
+        (package / name).write_text(body, encoding="utf-8")
+    command = [smoke.sys.executable, "-c", smoke._OFFLINE_UVICORN, "1", str(ROOT)]
+    env = {"PYTHONPATH": str(tmp_path), "PYTHONSAFEPATH": "1"}
+    assert smoke.subprocess.run(command, env=env).returncode != 0
 
 
 def test_pi_smoke_keeps_required_check_name_when_arm_work_is_path_gated() -> None:
@@ -163,3 +179,17 @@ def test_launch_seed_marker_matches_runtime_recovery_marker() -> None:
     assert marker in launch_body
     assert marker in run_body
     assert '(data_dir / ".provider_recovery_checked")' not in launch_body
+
+
+def test_release_digest_excludes_only_immediate_ha_green_run_receipts() -> None:
+    launch = _load_script(LAUNCH_SMOKE, "ha_green_launch_digest_exclusion_contract_test")
+    validator = launch._validator_module()
+    accepted = b"proof/media/ha-green-release-evidence/run-12345678-1234-4234-8234-123456789abc.json"
+    rejected = (
+        b"proof/media/ha-green-release-evidence/nested/run-12345678-1234-4234-8234-123456789abc.json",
+        b"proof/media/ha-green-release-evidence/notes.json",
+        b"proof/media/ha-green-release-receipt.schema.json",
+    )
+    assert validator.CONTENT_PROFILE == "git-tracked-path-mode-blob-v1"
+    assert validator._is_excluded_receipt_path(accepted)
+    assert all(not validator._is_excluded_receipt_path(path) for path in rejected)

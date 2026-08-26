@@ -149,6 +149,7 @@ they are ever counted as listeners.
      open a fresh `## [Unreleased]`
    - **ha-addon CHANGELOG**: move its `## Unreleased` content under a real
      `## X.Y.Z - <date>` heading
+   - commit/review the cut, commit V1, review again, commit V2; then commit 20 HA receipts and rerun both gates
 
    Both are REQUIRED. `pre-release-check.sh` §2 compares `config.yaml` against the
    first *versioned* heading in each file, skipping `## Unreleased`. The extractor
@@ -165,8 +166,8 @@ they are ever counted as listeners.
    git fetch origin main --tags
    CUT_SHA="$(git rev-parse origin/main)"
    ```
-   The cut must already contain the physical 20-run HA Green receipt set from
-   the exact clean edge source commit, recorded with the commands in
+   The cut must already contain the physical 20-run HA Green receipt set for
+   its complete release content, recorded with the commands in
    [`docs/music-sources.md`](../music-sources.md). Pre-flight fails loud if the
    evidence is missing, stale, or over its two-second p95, or if the tag/version,
    release metadata, changelog head, or either per-arch `:sha` image disagrees.
@@ -175,8 +176,7 @@ they are ever counted as listeners.
    `pyproject.toml` and `ha-addon/**`, both in the build's path filter).
 
    The long judgment soak belongs *before* the cut, on the edge line. If you want a
-   short confirmation that the cut commit itself boots (it differs from its soaked
-   parent only by version strings and changelog text), pin edge to it:
+   short confirmation that the squash-landed cut commit itself boots, pin edge to it:
    ```bash
    make edge-release ARGS="--target-sha $CUT_SHA"
    ```
@@ -250,8 +250,8 @@ no `:sha` image and pre-flight will reject the tag.
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - The promoted image is built from the cut commit, so it differs from the soaked parent by
-  the version strings and changelog text. The bump reaches runtime (the Dockerfile
-  pip-installs `pyproject.toml`, so `_ASSET_VERSION` and `bridge_app_version` change).
+  finalized proof and release metadata. Receipts bind tracked source, not the built image.
+  The bump reaches runtime because the Dockerfile installs `pyproject.toml`.
   Step 2's `--target-sha` soak is what makes "you ran what you tagged" literally true.
 
 ## Addon stage
@@ -480,10 +480,10 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
 `addon-release.yml` does not rebuild the add-on. It first validates at least 20
-physical Home Assistant Green cold-launch receipts bound to the tested source
-commit, requires nearest-rank first-byte p95 at or below two seconds, and proves
-that the tagged commit changed nothing after that source except the receipt JSON
-files. It then verifies that both per-arch `:${git_sha}` images exist, runs the
+physical HA Green cold-launch receipts with one release version and content digest,
+requires p95 at or below two seconds, and proves the tagged tree matches after excluding
+only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag.
+It then verifies that both per-arch `:${git_sha}` images exist, runs the
 launch and host-published-port proofs for each native architecture before stable
 publishing, and promotes those exact
 images to `:X.Y.Z` without changing the source manifest shape, updates `:latest`

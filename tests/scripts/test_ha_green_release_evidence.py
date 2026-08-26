@@ -28,14 +28,22 @@ def _load(path: Path, name: str) -> ModuleType:
 VALIDATOR = _load(VALIDATOR_PATH, "validate_ha_green_release_evidence_tests")
 
 
-def _receipt(*, index: int, source_commit: str, first_byte_ms: float = 1_000.0) -> dict[str, object]:
+def _receipt(
+    index: int,
+    source_commit: str,
+    content_sha256: str = "0" * 64,
+    release_version: str = "3.4.5",
+    first_byte_ms: float = 1_000.0,
+) -> dict[str, object]:
     run_id = str(uuid.UUID(int=index + 1, version=4))
     return {
         "$schema": "../ha-green-release-receipt.schema.json",
-        "schema_version": 1,
+        "schema_version": 2,
         "evidence_kind": "ha_green_cold_launch",
-        "release_version": "3.4.5",
+        "release_version": release_version,
         "source_commit": source_commit,
+        "content_profile": "git-tracked-path-mode-blob-v1",
+        "content_sha256": content_sha256,
         "run_id": run_id,
         "recorded_at": (datetime(2026, 7, 1, tzinfo=UTC) + timedelta(seconds=index)).isoformat().replace("+00:00", "Z"),
         "hardware": {
@@ -63,12 +71,14 @@ def _write_receipts(
     directory: Path,
     *,
     source_commit: str,
+    content_sha256: str = "0" * 64,
+    release_version: str = "3.4.5",
     timings: list[float] | None = None,
 ) -> None:
     directory.mkdir(parents=True)
     values = timings or [1_000.0] * 20
     for index, timing in enumerate(values):
-        payload = _receipt(index=index, source_commit=source_commit, first_byte_ms=timing)
+        payload = _receipt(index, source_commit, content_sha256, release_version, timing)
         (directory / f"run-{payload['run_id']}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -77,14 +87,19 @@ def _git(cwd: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _init_repo(path: Path) -> None:
+def _init_repo(path: Path, *, include_release_config: bool = True) -> None:
     _git(path, "init", "-q")
     _git(path, "config", "user.email", "tests@example.com")
     _git(path, "config", "user.name", "Tests")
     _git(path, "config", "commit.gpgsign", "false")
     _git(path, "config", "core.hooksPath", "/dev/null")
+    _git(path, "config", "core.filemode", "true")
     (path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
-    _git(path, "add", "app.py")
+    if include_release_config:
+        config = path / "ha-addon" / "mammamiradio" / "config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('version: "3.4.5"\n', encoding="utf-8")
+    _git(path, "add", "-A")
     _git(path, "commit", "-qm", "base")
 
 
@@ -119,17 +134,13 @@ def test_validator_fails_when_p95_exceeds_two_seconds(tmp_path: Path) -> None:
     assert any("release limit" in error for error in report["errors"])
 
 
-def test_validator_rejects_wrong_hardware_and_mixed_source_commits(tmp_path: Path) -> None:
+def test_validator_rejects_wrong_hardware(tmp_path: Path) -> None:
     receipt_dir = tmp_path / "receipts"
     _write_receipts(receipt_dir, source_commit="c" * 40)
     first = next(receipt_dir.iterdir())
     payload = json.loads(first.read_text(encoding="utf-8"))
     payload["hardware"]["model"] = "generic arm runner"
     first.write_text(json.dumps(payload), encoding="utf-8")
-    second = sorted(receipt_dir.iterdir())[1]
-    payload = json.loads(second.read_text(encoding="utf-8"))
-    payload["source_commit"] = "d" * 40
-    second.write_text(json.dumps(payload), encoding="utf-8")
 
     report = VALIDATOR.validate_release_evidence(
         receipt_dir=receipt_dir,
@@ -139,42 +150,149 @@ def test_validator_rejects_wrong_hardware_and_mixed_source_commits(tmp_path: Pat
 
     assert report["ok"] is False
     assert any("Home Assistant Green" in error for error in report["errors"])
-    assert any("one tested source commit" in error for error in report["errors"])
 
 
-def test_receipt_only_commit_avoids_sha_self_reference_but_code_change_fails(tmp_path: Path) -> None:
+def test_squash_equivalent_tree_and_mixed_informational_source_commits_pass(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     tested_source = _git(tmp_path, "rev-parse", "HEAD")
+    _, content_sha256 = VALIDATOR._tracked_content_sha256(tmp_path, tested_source)
     receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
-    _write_receipts(receipt_dir, source_commit=tested_source)
+    _write_receipts(receipt_dir, source_commit=tested_source, content_sha256=content_sha256)
+    second = sorted(receipt_dir.iterdir())[1]
+    payload = json.loads(second.read_text(encoding="utf-8"))
+    payload["source_commit"] = "d" * 40
+    second.write_text(json.dumps(payload), encoding="utf-8")
     _git(tmp_path, "add", "proof/media/ha-green-release-evidence")
     _git(tmp_path, "commit", "-qm", "evidence only")
-    evidence_commit = _git(tmp_path, "rev-parse", "HEAD")
-
-    report = VALIDATOR.validate_release_evidence(
-        receipt_dir=receipt_dir,
-        release_version="3.4.5",
-        repo_root=tmp_path,
-        current_commit=evidence_commit,
-    )
-
+    tree = _git(tmp_path, "rev-parse", "HEAD^{tree}")
+    squash_commit = _git(tmp_path, "commit-tree", tree, "-m", "squash-equivalent release")
+    assert _git(tmp_path, "rev-list", "--parents", "-n", "1", squash_commit) == squash_commit
+    _git(tmp_path, "checkout", "-q", "--detach", squash_commit)
+    report = VALIDATOR.validate_release_evidence(receipt_dir=receipt_dir, release_version="3.4.5", repo_root=tmp_path)
     assert report["ok"] is True
-    assert report["tested_source_commit"] == tested_source
-    assert report["release_commit"] == evidence_commit
+    assert report["tested_source_commit"] is None
+    assert set(report["tested_source_commits"]) == {tested_source, "d" * 40}
+    assert report["release_commit"] == squash_commit
+    assert report["receipt_content_sha256"] == content_sha256
+    assert report["release_content_sha256"] == content_sha256
 
-    (tmp_path / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
-    _git(tmp_path, "add", "app.py")
-    _git(tmp_path, "commit", "-qm", "code changed after measurement")
-    changed_commit = _git(tmp_path, "rev-parse", "HEAD")
-    changed = VALIDATOR.validate_release_evidence(
-        receipt_dir=receipt_dir,
-        release_version="3.4.5",
-        repo_root=tmp_path,
-        current_commit=changed_commit,
-    )
 
+@pytest.mark.parametrize("mutation", ["byte", "path", "mode"])
+def test_validator_rejects_any_non_receipt_content_drift(tmp_path: Path, mutation: str) -> None:
+    _init_repo(tmp_path)
+    tested_source = _git(tmp_path, "rev-parse", "HEAD")
+    _, content_sha256 = VALIDATOR._tracked_content_sha256(tmp_path, tested_source)
+    receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
+    _write_receipts(receipt_dir, source_commit=tested_source, content_sha256=content_sha256)
+    _git(tmp_path, "add", "proof/media/ha-green-release-evidence")
+    _git(tmp_path, "commit", "-qm", "evidence only")
+    if mutation == "byte":
+        (tmp_path / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+        _git(tmp_path, "add", "app.py")
+    elif mutation == "path":
+        _git(tmp_path, "mv", "app.py", "renamed.py")
+    else:
+        _git(tmp_path, "update-index", "--chmod=+x", "app.py")
+    _git(tmp_path, "commit", "-qm", f"{mutation} changed after measurement")
+    changed = VALIDATOR.validate_release_evidence(receipt_dir=receipt_dir, release_version="3.4.5", repo_root=tmp_path)
     assert changed["ok"] is False
-    assert any("outside the receipt set: app.py" in error for error in changed["errors"])
+    assert any("does not match release content digest" in error for error in changed["errors"])
+
+
+def test_validator_rejects_wrong_release_version(tmp_path: Path) -> None:
+    receipt_dir = tmp_path / "receipts"
+    _write_receipts(receipt_dir, source_commit="a" * 40, release_version="3.4.4")
+    report = VALIDATOR.validate_release_evidence(
+        receipt_dir=receipt_dir, release_version="3.4.5", verify_git_binding=False
+    )
+    assert report["ok"] is False
+    assert any("do not exactly match 3.4.5" in error for error in report["errors"])
+
+
+@pytest.mark.parametrize("mutation", ["missing", "mixed"])
+def test_validator_rejects_missing_or_mixed_content_digests(tmp_path: Path, mutation: str) -> None:
+    receipt_dir = tmp_path / "receipts"
+    _write_receipts(receipt_dir, source_commit="a" * 40, content_sha256="1" * 64)
+    first = sorted(receipt_dir.iterdir())[0]
+    payload = json.loads(first.read_text(encoding="utf-8"))
+    if mutation == "missing":
+        del payload["content_sha256"]
+    else:
+        payload["content_sha256"] = "2" * 64
+    first.write_text(json.dumps(payload), encoding="utf-8")
+    report = VALIDATOR.validate_release_evidence(
+        receipt_dir=receipt_dir, release_version="3.4.5", verify_git_binding=False
+    )
+    assert report["ok"] is False
+    expected = "missing fields: content_sha256" if mutation == "missing" else "mixed content_sha256"
+    assert any(expected in error for error in report["errors"])
+
+
+@pytest.mark.parametrize("mutation", ["syntax", "duplicate-key", "recursion", "overflow", "bool"])
+def test_validator_rejects_malformed_receipt_json(mutation: str) -> None:
+    payload = _receipt(0, "a" * 40)
+    path = Path(f"run-{payload['run_id']}.json")
+    raw = json.dumps(payload).encode()
+    if mutation == "syntax":
+        raw = b"{not-json\n"
+    elif mutation == "recursion":
+        raw = b"[" * 1_100 + b"0" + b"]" * 1_100
+    elif mutation == "duplicate-key":
+        raw = raw.replace(b'"release_version": "3.4.5"', b'"release_version": "0.0.0", "release_version": "3.4.5"')
+    else:
+        section = payload["timing" if mutation == "overflow" else "assertions"]
+        assert isinstance(section, dict)
+        field = "boot_to_tcp_ms" if mutation == "overflow" else "cache_empty"
+        section[field] = 10**400 if mutation == "overflow" else 1
+        raw = json.dumps(payload).encode()
+    expected = {"overflow": "timing.boot_to_tcp_ms", "bool": "assertions"}.get(mutation, "duplicate JSON key")
+    if mutation in {"syntax", "recursion"}:
+        expected = "cannot read JSON object"
+    with pytest.raises(ValueError, match=expected):
+        VALIDATOR._validate_receipt(path, raw=raw)
+
+
+@pytest.mark.parametrize("case", ["untracked", "substituted"])
+def test_validator_only_counts_receipts_from_the_target_commit(tmp_path: Path, case: str) -> None:
+    _init_repo(tmp_path)
+    source, digest = VALIDATOR._tracked_content_sha256(tmp_path, "HEAD")
+    receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
+    _write_receipts(receipt_dir, source_commit=source, content_sha256=digest)
+    if case == "substituted":
+        first = sorted(receipt_dir.iterdir())[0]
+        valid = first.read_bytes()
+        first.write_text("{broken\n", encoding="utf-8")
+        _git(tmp_path, "add", "proof/media/ha-green-release-evidence")
+        _git(tmp_path, "commit", "-qm", "malformed target receipt")
+        _git(tmp_path, "update-index", "--assume-unchanged", str(first.relative_to(tmp_path)))
+        first.write_bytes(valid)
+        assert _git(tmp_path, "status", "--porcelain") == ""
+    report = VALIDATOR.validate_release_evidence(receipt_dir=receipt_dir, release_version="3.4.5", repo_root=tmp_path)
+    assert report["ok"] is False
+    expected = "cannot read JSON object" if case == "substituted" else "found 0 valid cold runs"
+    assert any(expected in error for error in report["errors"])
+
+
+def test_requested_version_must_match_the_release_commit(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    source, digest = VALIDATOR._tracked_content_sha256(tmp_path, "HEAD")
+    receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
+    _write_receipts(receipt_dir, source_commit=source, content_sha256=digest, release_version="3.4.4")
+    _git(tmp_path, "add", "proof/media/ha-green-release-evidence")
+    _git(tmp_path, "commit", "-qm", "evidence")
+    report = VALIDATOR.validate_release_evidence(receipt_dir=receipt_dir, release_version="3.4.4", repo_root=tmp_path)
+    assert report["ok"] is False
+    assert any("committed release version 3.4.5" in error for error in report["errors"])
+    with pytest.raises(ValueError, match="exactly one strict release version"):
+        VALIDATOR._parse_release_version(b'version: "3.4.5"\n"\\x76ersion": 9.9.9\n', "test config")
+
+
+def test_canonical_content_digest_has_a_fixed_vector_and_writer_validator_parity(tmp_path: Path) -> None:
+    _init_repo(tmp_path, include_release_config=False)
+    smoke = _load(SMOKE_PATH, "ha_green_launch_digest_parity_tests")
+    validator_snapshot = VALIDATOR._tracked_content_sha256(tmp_path, "HEAD")
+    assert validator_snapshot == smoke._validator_module()._tracked_content_sha256(tmp_path, "HEAD")
+    assert validator_snapshot[1] == "6d6d7d861a2f5166457ce850ea0c0db4603f7988bddb521479050af1eba7f13f"
 
 
 def test_validator_example_is_explicitly_non_evidence() -> None:
@@ -221,6 +339,7 @@ def test_smoke_receipt_writer_is_atomic_and_never_overwrites(tmp_path: Path) -> 
         },
         "release_version": "3.4.5",
         "source_commit": "e" * 40,
+        "content_sha256": "1" * 64,
         "boot_to_tcp_s": 4.25,
         "connection_to_first_byte_s": 1.25,
         "run_id": receipt_id,
@@ -230,8 +349,12 @@ def test_smoke_receipt_writer_is_atomic_and_never_overwrites(tmp_path: Path) -> 
     path = smoke._write_release_receipt(**kwargs)
 
     payload = json.loads(path.read_text(encoding="utf-8"))
+    validated = VALIDATOR._validate_receipt(path)
     assert payload["timing"]["boot_to_tcp_ms"] == 4_250.0
     assert payload["timing"]["connection_to_first_byte_ms"] == 1_250.0
+    assert payload["content_profile"] == "git-tracked-path-mode-blob-v1"
+    assert payload["content_sha256"] == "1" * 64
+    assert validated.content_sha256 == payload["content_sha256"]
     assert list(directory.glob("*.tmp")) == []
     with pytest.raises(RuntimeError, match="refusing to overwrite"):
         smoke._write_release_receipt(**kwargs)
@@ -253,18 +376,40 @@ def test_smoke_receipt_mode_requires_detected_ha_green(monkeypatch: pytest.Monke
         smoke._detect_ha_green()
 
 
-def test_smoke_receipt_source_rejects_dirty_code_but_allows_prior_untracked_receipts(tmp_path: Path) -> None:
+@pytest.mark.parametrize("conceal", [None, "--assume-unchanged", "--skip-worktree", "filter", "receipt"])
+def test_smoke_receipt_source_rejects_dirty_code_but_allows_prior_untracked_receipts(
+    tmp_path: Path,
+    conceal: str | None,
+) -> None:
     smoke = _load(SMOKE_PATH, "ha_green_launch_clean_checkout_tests")
     _init_repo(tmp_path)
     receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
     receipt_dir.mkdir(parents=True)
     (receipt_dir / "run-12345678-1234-4234-8234-123456789abc.json").write_text("{}\n", encoding="utf-8")
+    assert smoke._source_snapshot(receipt_dir, repo_root=tmp_path)[0] == _git(tmp_path, "rev-parse", "HEAD")
 
-    assert smoke._source_commit(receipt_dir, repo_root=tmp_path) == _git(tmp_path, "rev-parse", "HEAD")
-
-    (tmp_path / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="clean tested checkout"):
-        smoke._source_commit(receipt_dir, repo_root=tmp_path)
+    if conceal == "receipt":
+        receipt = next(receipt_dir.iterdir())
+        _git(tmp_path, "add", str(receipt.relative_to(tmp_path)))
+        _git(tmp_path, "commit", "-qm", "track prior receipt")
+        _git(tmp_path, "update-index", "--assume-unchanged", str(receipt.relative_to(tmp_path)))
+        receipt.write_text("{changed}\n", encoding="utf-8")
+    elif conceal == "filter":
+        (tmp_path / ".gitattributes").write_text("app.py filter=hide\n")
+        _git(tmp_path, "add", ".gitattributes")
+        _git(tmp_path, "commit", "-qm", "add clean filter")
+        _git(tmp_path, "config", "filter.hide.clean", "sed 's/VALUE = 2/VALUE = 1/'")
+    elif conceal is not None:
+        _git(tmp_path, "update-index", conceal, "app.py")
+    if conceal != "receipt":
+        (tmp_path / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    if conceal is None:
+        (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (tmp_path / ".git/info").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".git/info/exclude").write_text("*.pyc\n", encoding="utf-8")
+        (tmp_path / "shadow.pyc").write_bytes(b"ignored legacy bytecode")
+    with pytest.raises(RuntimeError, match=r"release receipts require|tracked HA Green receipt differs"):
+        smoke._source_snapshot(receipt_dir, repo_root=tmp_path)
 
 
 def test_smoke_refuses_context_receipt_path(tmp_path: Path) -> None:
@@ -279,6 +424,7 @@ def test_smoke_refuses_context_receipt_path(tmp_path: Path) -> None:
             },
             release_version="3.4.5",
             source_commit="f" * 40,
+            content_sha256="1" * 64,
             boot_to_tcp_s=1.0,
             connection_to_first_byte_s=1.0,
         )

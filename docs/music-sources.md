@@ -55,12 +55,13 @@ not fabricate or infer those human decisions.
 
 The ordinary pull-request gate runs one cold aarch64 launch in
 `.github/workflows/pi-smoke.yml`; it does not require physical-device receipts.
+Finalize version, changelogs, and V1/V2 preship evidence before recording.
 For a stable release, start from the exact clean commit running on Home
 Assistant Green and record twenty cold runs locally on that device:
 
 ```bash
 for run in $(seq 1 20); do
-  python3.11 scripts/ha-green-launch-smoke.py \
+  python3.11 -P scripts/ha-green-launch-smoke.py \
     --record-release-receipt proof/media/ha-green-release-evidence
 done
 make ha-green-release-proof
@@ -75,8 +76,7 @@ nearest-rank p95 instead of silently dropping outliers.
 
 Commit only `proof/media/ha-green-release-evidence/run-*.json` after the
 measurements, then rerun `make ha-green-release-proof` and `make pre-release`.
-Every receipt names the tested source commit; the final evidence commit may
-differ from it only by those receipt JSON files. This prevents both stale
+Each schema-v2 digest covers sorted paths, Git modes, and blob bytes, excluding only HA receipt JSON. This prevents both stale
 evidence and the impossible self-reference of asking a committed receipt to
 name the commit that contains itself. The tracked
 `proof/media/ha-green-release-receipt.example.json` is explicitly marked as an

@@ -9,6 +9,8 @@
     "evidence_kind",
     "release_version",
     "source_commit",
+    "content_profile",
+    "content_sha256",
     "run_id",
     "recorded_at",
     "hardware",
@@ -20,7 +22,7 @@
       "type": "string"
     },
     "schema_version": {
-      "const": 1
+      "const": 2
     },
     "evidence_kind": {
       "enum": [
@@ -35,6 +37,13 @@
     "source_commit": {
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
+    },
+    "content_profile": {
+      "const": "git-tracked-path-mode-blob-v1"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "run_id": {
       "type": "string",
