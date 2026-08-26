@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Repo-wide agent guidance lives in `CLAUDE.md` (leadership principles, project
-structure, commands, quality gates) and `docs/agents.md` (repo-local rules).
-Read those first. This file adds only the Cursor Cloud environment notes.
+structure, commands, quality gates) and `docs/agents.md` (repo-local rules,
+including the canonical **Shipping (agents)** checklist). Read those first. This file adds only the Cursor Cloud environment notes.
 
 ## Cursor Cloud specific instructions
 
