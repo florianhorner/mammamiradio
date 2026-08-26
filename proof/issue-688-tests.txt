@@ -5,7 +5,7 @@ Commit: fe46850f324cf4d5bbc0e3288bf3855c510ac8d1
 Branch: issue-688
 Date: 2026-06-25
 
-Local checks run from /Users/florianhorner/conductor/workspaces/mammamiradio/pompeii-v1
+Local checks run from <repo-root>
 (after merging origin/main and applying the pre-ship squad credential-hardening
 fixes):
 
