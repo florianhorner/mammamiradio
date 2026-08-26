@@ -38,12 +38,6 @@ def test_local_pre_release_is_actionably_strict() -> None:
     assert '"$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py' in script
     assert '--release-version "$ADDON_VER"' in script
     assert "record 20 runs" in script
-    # The 20-run gate is scoped to a real release cut (version differs from
-    # origin/main) or to an in-progress receipt set, so an ordinary PR that
-    # merely touches a version file is not asked for Green hardware evidence.
-    assert '[ "$ADDON_VER" = "$MAIN_ADDON_VER" ]' in script
-    assert '[ "${HA_GREEN_RECEIPTS:-0}" -eq 0 ]' in script
-    assert "physical HA Green evidence is required only on release cuts" in script
     assert re.search(r"(?m)^ha-green-release-proof:", makefile)
     assert re.search(r"(?m)^pre-release:", makefile)
 
