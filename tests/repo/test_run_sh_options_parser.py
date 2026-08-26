@@ -50,7 +50,8 @@ EDGE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml"
 def test_run_sh_uses_native_media_and_retains_legacy_music_without_moving_files() -> None:
     script = RUN_SH.read_text(encoding="utf-8")
 
-    assert "mkdir -p /media/mammamiradio" in script
+    assert "mkdir -p /media/mammamiradio" not in script
+    assert "[ -d /media/mammamiradio ] && [ -r /media/mammamiradio ]" in script
     assert 'export MAMMAMIRADIO_MUSIC_DIR="/media/mammamiradio"' in script
     assert 'export MAMMAMIRADIO_LEGACY_MUSIC_DIRS="/data/music"' in script
     assert not re.search(r"\b(?:mv|cp|rm)\b[^\n]*/data/music", script)

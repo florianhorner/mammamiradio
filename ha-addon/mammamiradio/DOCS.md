@@ -197,7 +197,7 @@ HA Supervisor
   |           +-- playback task (streams segments to listeners)
   |           +-- packaged starter catalog (read-only, attributed music)
   |
-  +-- /media/mammamiradio/ (local songs managed in Home Assistant Media)
+  +-- /media/mammamiradio/ (read-only local songs managed in Home Assistant Media)
   |
   +-- /data/ (persistent app data across restarts)
         +-- cache/   (eligible local/generated audio — survives restarts)

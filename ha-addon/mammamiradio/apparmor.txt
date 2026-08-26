@@ -24,6 +24,5 @@ profile mammamiradio flags=(attach_disconnected,mediate_deleted) {
   # Runtime app, persisted add-on state, and temporary audio work directories.
   /app/** r,
   /data/** rwk,
-  /media/** rwk,
   /tmp/** rwk,
 }

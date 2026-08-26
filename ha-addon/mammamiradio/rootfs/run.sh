@@ -498,20 +498,16 @@ if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.e
     mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_TMP_DIR"
 fi
 
-# Home Assistant manages files under /media. The add-on creates only its named
-# library directory. Existing /data/music remains a discovery root; no files
-# are copied, moved, or deleted here.
-if mkdir -p /media/mammamiradio 2>/tmp/mammamiradio-media-mkdir.err; then
+# Home Assistant owns its read-only Media mount. Existing /data/music remains
+# a discovery root; no files are copied, moved, or deleted here.
+if [ -d /media/mammamiradio ] && [ -r /media/mammamiradio ]; then
     export MAMMAMIRADIO_MUSIC_DIR="/media/mammamiradio"
+elif [ -n "$MAMMAMIRADIO_LEGACY_MUSIC_DIRS" ]; then
+    export MAMMAMIRADIO_MUSIC_DIR="$MAMMAMIRADIO_LEGACY_MUSIC_DIRS"
+    export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""
 else
-    echo "[mammamiradio] WARNING: Home Assistant Media unavailable ($(cat /tmp/mammamiradio-media-mkdir.err 2>/dev/null || echo unknown error))"
-    if [ -n "$MAMMAMIRADIO_LEGACY_MUSIC_DIRS" ]; then
-        export MAMMAMIRADIO_MUSIC_DIR="$MAMMAMIRADIO_LEGACY_MUSIC_DIRS"
-        export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""
-    else
-        export MAMMAMIRADIO_MUSIC_DIR="${FALLBACK_BASE:-/tmp/mammamiradio-data}/music"
-        mkdir -p "$MAMMAMIRADIO_MUSIC_DIR"
-    fi
+    export MAMMAMIRADIO_MUSIC_DIR="${FALLBACK_BASE:-/tmp/mammamiradio-data}/music"
+    mkdir -p "$MAMMAMIRADIO_MUSIC_DIR"
 fi
 
 # ---- Validate critical files exist ----

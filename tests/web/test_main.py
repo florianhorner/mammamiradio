@@ -1993,7 +1993,7 @@ async def test_startup_reads_persisted_source_before_fetching():
         order.append("read")
         return persisted
 
-    def _fetch(_config, received):
+    def _fetch(_config, received, **_):
         order.append("fetch")
         assert received is persisted
         return [Track(title="S", artist="A", duration_ms=1, spotify_id="x")], persisted, ""

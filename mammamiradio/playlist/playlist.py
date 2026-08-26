@@ -598,12 +598,15 @@ def load_explicit_source(
 
 
 def fetch_startup_playlist(
-    config: StationConfig, persisted_source: PlaylistSource | None = None
+    config: StationConfig,
+    persisted_source: PlaylistSource | None = None,
+    *,
+    include_local: bool = True,
 ) -> tuple[list[Track], PlaylistSource, str]:
     """Load an explicit base or the local/starter first-run rotation."""
     evidence = _source_evidence_for_config(config)
     migrate_legacy_jamendo = False
-    if persisted_source:
+    if persisted_source and (include_local or persisted_source.kind != "local"):
         migrate_legacy_jamendo = persisted_source.kind == "jamendo" or (
             persisted_source.kind == "url" and urlparse(persisted_source.url or "").scheme == "jamendo"
         )
@@ -625,7 +628,7 @@ def fetch_startup_playlist(
     # Operator-owned local files remain the base when present. They are never
     # blended with bundled files or assigned license claims by the application.
     evidence.mark_attempted("local")
-    local_tracks = load_operator_local_tracks(config)
+    local_tracks = load_operator_local_tracks(config) if include_local else []
     if local_tracks:
         logger.info("Using local music files from %s (%d tracks)", config.music_dir, len(local_tracks))
         tracks = local_tracks

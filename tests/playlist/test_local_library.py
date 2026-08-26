@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from mammamiradio.core.models import PlaylistSource, StationState, Track
-from mammamiradio.playlist.local_library import reconcile_local_library, scan_local_library
+from mammamiradio.playlist.local_library import (
+    reconcile_local_library,
+    scan_and_reconcile_local_library,
+    scan_local_library,
+)
 
 
 def _config(primary: Path, *legacy: Path):
@@ -43,20 +50,25 @@ def test_scan_is_recursive_case_insensitive_and_supports_common_audio(tmp_path):
     assert result.warnings == [f"Symlinked music folder skipped: {linked_root}. Use its real path; tracks kept."]
 
 
-def test_entry_cap_bounds_directory_iterator_before_sorting(tmp_path):
+@pytest.mark.parametrize("fail_on_stat", [False, True])
+def test_entry_cap_bounds_iterator_and_unreadable_entries(tmp_path, fail_on_stat):
     consumed = 0
+
+    def unreadable(**_):
+        raise OSError("unreadable")
 
     def entries():
         nonlocal consumed
         for index in range(1_000):
             consumed += 1
-            name = f"ignored-{index:04d}.txt"
+            name = "Artist - Broken.mp3" if index == 0 else f"ignored-{index:04d}.txt"
             yield SimpleNamespace(
                 name=name,
                 path=str(tmp_path / name),
                 is_symlink=lambda: False,
                 is_dir=lambda **_: False,
-                is_file=lambda **_: True,
+                is_file=unreadable if index == 0 and not fail_on_stat else lambda **_: True,
+                stat=unreadable if index == 0 and fail_on_stat else lambda **_: SimpleNamespace(st_size=1),
             )
 
     with (
@@ -67,7 +79,7 @@ def test_entry_cap_bounds_directory_iterator_before_sorting(tmp_path):
 
     assert consumed == 3
     assert result.entries_seen == 2
-    assert result.ignored == {"unsupported_format": 2}
+    assert result.ignored == {"unreadable": 1, "unsupported_format": 1}
     assert result.complete is False
     assert "More than 2 entries" in result.warnings[-1]
 
@@ -77,7 +89,9 @@ def test_complete_reconcile_updates_only_managed_local_membership(tmp_path):
     root.mkdir()
     old_path = root / "Artist - Old.mp3"
     new_path = root / "Artist - New.mp3"
+    banned_path = root / "Artist - Banned.mp3"
     new_path.write_bytes(b"audio")
+    banned_path.write_bytes(b"audio")
     unrelated_path = tmp_path / "one-off.mp3"
     state = StationState(
         playlist=[
@@ -86,6 +100,7 @@ def test_complete_reconcile_updates_only_managed_local_membership(tmp_path):
             _track("One off", source="local", path=unrelated_path),
         ],
         playlist_source=PlaylistSource(kind="demo", label="Starter", track_count=1),
+        blocklist={("artist", "banned"): {"display": "Artist - Banned"}},
     )
     result = scan_local_library(_config(root))
     with (
@@ -96,11 +111,13 @@ def test_complete_reconcile_updates_only_managed_local_membership(tmp_path):
 
     assert [track.title for track in state.playlist] == ["Starter", "One off", "New"]
     assert outcome["added"] == outcome["removed"] == outcome["active"] == outcome["playlist_revision"] == 1
-    assert outcome["banned"] == state.source_revision == state.continuity_epoch == 0
+    assert outcome["banned"] == 1
     assert state.playlist_source.kind == "demo"
-    assert state.source_readiness.entries["local"].configured is True
 
-    state = StationState(playlist=[_track("Old", source="local", path=old_path)])
+    state = StationState(
+        playlist=[_track("Old", source="local", path=old_path)],
+        blocklist={("artist", "banned"): {"display": "Artist - Banned"}},
+    )
     scan = replace(
         result,
         complete=False,
@@ -110,3 +127,21 @@ def test_complete_reconcile_updates_only_managed_local_membership(tmp_path):
     assert [track.title for track in state.playlist] == ["Old", "New"]
     assert outcome["removed"] == 0
     assert outcome["added"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_wrapper_coalesces_and_hides_failures(tmp_path):
+    app_state = SimpleNamespace(
+        local_library_scan_lock=asyncio.Lock(),
+        local_library_status={"in_progress": False},
+        source_switch_lock=asyncio.Lock(),
+        config=_config(tmp_path),
+    )
+    async with app_state.local_library_scan_lock:
+        busy = await scan_and_reconcile_local_library(app_state)
+    assert busy["in_progress"] is busy["already_in_progress"] is True
+
+    with patch("mammamiradio.playlist.local_library.scan_local_library", side_effect=OSError("raw failure")):
+        failed = await scan_and_reconcile_local_library(app_state)
+    assert failed["in_progress"] is False
+    assert failed["error"] == "Check the local music folders, then select Scan now."

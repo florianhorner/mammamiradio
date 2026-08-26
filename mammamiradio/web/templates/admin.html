@@ -4773,47 +4773,24 @@ function mediaSourceStatusChip(state){
   chip.textContent=word;
   return chip;
 }
-const LOCAL_LIBRARY_IGNORED_LABELS={duplicate:'duplicate',empty_file:'empty file',not_a_file:'non-file item',symlink:'linked item',unreadable:'unreadable item',unsupported_format:'unsupported format'};
-function localLibraryFacts(status){
-  const s=status&&typeof status==='object'?status:{};
-  const count=value=>Math.max(0,Number(value||0)||0);
-  const parts=Object.entries(s.ignored||{}).filter(([,count])=>Number(count)>0).map(([reason,count])=>{
-    const value=Number(count)||0;
-    const label=LOCAL_LIBRARY_IGNORED_LABELS[reason]||String(reason).replace(/_/g,' ');
-    return `${value} ${label}${value===1?'':'s'}`;
-  });
-  const banned=count(s.banned);
-  if(banned)parts.push(`${banned} banned track${banned===1?'':'s'}`);
-  const files=count(s.files_found),active=count(s.active),added=count(s.added),removed=count(s.removed),ignored=parts.join(', ');
-  const summary=`${files} supported file${files===1?'':'s'} · ${active} active · ${added} added · ${removed} removed${ignored?' · '+ignored:''}`;
-  const recovery=banned?'Unban a track or add a supported audio file, then Scan now.':'Add a supported audio file, then Scan now.';
-  return{s,active,ignored,summary,recovery};
-}
 function localLibraryPresentation(status){
-  const {s,active,ignored,summary,recovery}=localLibraryFacts(status);
-  const finished=Number(s.finished_at||0);
-  const age=finished>0?Math.max(0,Math.floor(Date.now()/1000-finished)):null;
-  const when=age===null?'not scanned yet':age<60?'just scanned':age<3600?`scanned ${Math.floor(age/60)}m ago`:`scanned ${Math.floor(age/3600)}h ago`;
-  const roots=Array.isArray(s.roots)?s.roots.map(String).filter(Boolean):[];
-  const manage=(s.management==='home_assistant'?'Manage files in Home Assistant → Media → My media → mammamiradio.':`Manage files in ${roots[0]||'the configured music folder'}.`)
-    +(roots.length?' Watched: '+roots.join(', ')+'.':'');
+  const s=status&&typeof status==='object'?status:{};
+  const active=Math.max(0,Number(s.active||0)||0),files=Math.max(0,Number(s.files_found||0)||0);
+  const summary=`${files} file${files===1?'':'s'} found · ${active} active`;
+  const roots=Array.isArray(s.roots)?s.roots.filter(Boolean):[];
+  const manage=s.management==='home_assistant'?'Manage files in Home Assistant → Media → My media → mammamiradio.':`Manage files in ${roots[0]||'the configured music folder'}.`;
   if(s.in_progress)return{state:'working',label:'Scanning local music',detail:manage};
-  if(s.error)return{state:'blocked',label:'Local music needs attention',detail:`Scan failed. ${manage} Check the watched folders and try again.`};
-  if(s.complete===false&&Array.isArray(s.warnings)&&s.warnings.length){
-    return{state:'degraded',label:`Local music · ${active} active`,detail:`${String(s.warnings[0])} Existing tracks kept. ${summary}. ${manage} Check the watched folders and try again.`};
-  }
-  if(active>0)return{state:'ready',label:`Local music · ${active} track${active===1?'':'s'}`,detail:`${when} · ${summary}. ${manage}`};
-  if(ignored)return{state:'degraded',label:'Local music · no playable tracks',detail:`${when} · ${summary}. ${manage} ${recovery}`};
-  return{state:'idle',label:'Local music · empty',detail:`${when} · ${summary}. ${manage} ${recovery}`};
+  if(s.error||s.complete===false)return{state:'degraded',label:`Local music · ${active} active`,detail:`Scan incomplete. Existing tracks kept. ${manage} Check the folders, then Scan now.`};
+  if(active)return{state:'ready',label:`Local music · ${active} track${active===1?'':'s'}`,detail:`${summary}. ${manage}`};
+  return{state:'idle',label:'Local music · empty',detail:`${summary}. ${manage} Add a supported audio file, then Scan now.`};
 }
 function localLibraryScanToast(status){
-  const {s,active,ignored,summary,recovery}=localLibraryFacts(status);
+  const s=status&&typeof status==='object'?status:{};
   if(s.already_in_progress)return 'A scan is already running.';
   if(s.error||s.ok===false)return 'Scan failed. Check the watched folders and try again.';
-  if(s.complete===false)return `Scan incomplete. ${summary}. Existing tracks kept. Try Scan now.`;
-  if(Number(s.added||0)||Number(s.removed||0))return `Local music updated. ${summary}`;
-  if(ignored&&active===0)return `No playable tracks. ${summary}. ${recovery}`;
-  return `No changes. ${summary}. Add or remove files, then Scan now.`;
+  if(s.complete===false)return 'Scan incomplete. Existing tracks kept. Check the folders, then Scan now.';
+  if(Number(s.added||0)||Number(s.removed||0))return `Local music updated: ${Number(s.added||0)} added, ${Number(s.removed||0)} removed.`;
+  return 'No changes. Add or remove files, then Scan now.';
 }
 function renderLocalLibraryStatus(status){
   const row=document.getElementById('localSourceRow');

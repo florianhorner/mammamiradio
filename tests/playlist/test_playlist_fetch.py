@@ -80,6 +80,22 @@ def test_startup_prefers_operator_local_music(config):
     starter_loader.assert_not_called()
 
 
+def test_startup_can_defer_local_scan_to_background(config):
+    starter_tracks = [_track("Carefree", source="starter")]
+    with (
+        patch(
+            "mammamiradio.playlist.playlist._load_local_music_tracks",
+            side_effect=AssertionError("local scan entered startup"),
+        ),
+        patch("mammamiradio.media.starter.load_starter_rotation_tracks", return_value=starter_tracks),
+    ):
+        tracks, source, error = fetch_startup_playlist(config, include_local=False)
+
+    assert tracks == starter_tracks
+    assert source.kind == "starter"
+    assert error == ""
+
+
 def test_startup_uses_strict_starter_when_local_music_is_empty(config):
     starter_tracks = [_track("Carefree", source="starter"), _track("Cipher", source="starter")]
 

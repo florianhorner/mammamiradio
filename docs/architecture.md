@@ -915,17 +915,18 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 `fetch_startup_playlist()` (in `mammamiradio/playlist/playlist.py`) chooses one
 durable base; Jamendo is deliberately outside this function:
 
-1. **Eligible persisted base.** A prior local or effectively enabled standalone
+1. **Eligible persisted base.** A prior effectively enabled standalone
    external selection may restore. A legacy `jamendo://` selection is retired and
    rewritten to the current base. Both add-ons reject any persisted selection that
    would require extractor authority.
-2. **Operator local files.** Supported audio under configured local roots becomes the base when present. In the Home Assistant add-on the primary root is `/media/mammamiradio`; legacy `/data/music` and standalone `./music` (or `MAMMAMIRADIO_MUSIC_DIR`) remain discoverable. `mammamiradio/playlist/local_library.py` owns recursive discovery, reconciliation, and the 60-second background scan; local tracks overlay an active charts/Jamendo/starter base without switching the selected source. They receive no project license claim; the operator owns their provenance and permitted use.
-3. **Bundled starter catalog.** With no local base, runtime loads the twelve
+2. **Bundled starter catalog.** Runtime loads the twelve
    hash-pinned attribution-only derivatives from the canonical manifest
    (Incompetech under CC BY 4.0, Jamendo under CC BY 3.0).
    They play directly without normalization and complete one full cycle before a
    starter repeat. A release fails unless the exact 12 tracks, at least 45 minutes,
    complete human audition evidence, and no more than 75 MiB pass media proof.
+
+Operator files join after audio startup. In the Home Assistant add-on the read-only primary root is `/media/mammamiradio`; legacy `/data/music` and standalone `./music` (or `MAMMAMIRADIO_MUSIC_DIR`) remain discoverable. `mammamiradio/playlist/local_library.py` is the single owner of recursive discovery, reconciliation, and the 60-second background scan; local tracks overlay an active charts/Jamendo/starter base without switching it. They receive no project license claim; the operator owns their provenance and permitted use.
 
 Two optional expansions sit outside that base:
 

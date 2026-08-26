@@ -54,7 +54,7 @@ def test_addon_apparmor_profile_is_shared_with_edge():
     assert re.search(r"^profile\s+\S+\s+flags=", stable_text, re.MULTILINE)
     assert "network," in stable_text
     assert "/data/** rwk," in stable_text
-    assert "/media/** rwk," in stable_text
+    assert "/media/**" not in stable_text
 
 
 def test_addon_port_8000_consistent_across_config_run_and_runtime_defaults():

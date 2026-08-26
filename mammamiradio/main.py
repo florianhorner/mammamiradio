@@ -647,7 +647,9 @@ async def startup():
     persisted_source = read_persisted_source(config.cache_dir)
     logger.info("Fetching startup playlist")
     try:
-        tracks, playlist_source, startup_source_error = fetch_startup_playlist(config, persisted_source)
+        tracks, playlist_source, startup_source_error = fetch_startup_playlist(
+            config, persisted_source, include_local=False
+        )
     except Exception as e:
         from mammamiradio.media.starter import starter_source
 

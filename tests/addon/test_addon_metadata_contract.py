@@ -37,5 +37,5 @@ def test_both_channels_mount_native_home_assistant_media_for_operator_music() ->
     stable = yaml.safe_load(STABLE_CONFIG.read_text(encoding="utf-8"))
     edge = yaml.safe_load(EDGE_CONFIG.read_text(encoding="utf-8"))
 
-    assert stable["map"] == ["addon_config:rw", "media:rw"]
+    assert stable["map"] == ["addon_config:rw", "media:ro"]
     assert edge["map"] == stable["map"]

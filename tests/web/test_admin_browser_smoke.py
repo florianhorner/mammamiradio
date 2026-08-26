@@ -110,11 +110,11 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "forced colors hid setup status glyphs",
         "local library row did not report active tracks",
         "local library row did not delegate file management to Home Assistant",
-        "local library row hid scan diagnostics or roots",
+        "local library row hid scan counts",
         "local library row lost its explicit scan action",
         "local library row rebuilt upload/delete controls",
-        "unplayable local file diagnostics lost their recovery",
-        "Scan now toast hid the actionable result",
+        "incomplete scan lost its recovery",
+        "incomplete scan toast lost its recovery",
     ):
         assert needle in code, f"admin browser smoke lost behavior guard: {needle}"
     assert "waitForTimeout(" not in code, "admin browser smoke must use state-based waits, not timing sleeps."

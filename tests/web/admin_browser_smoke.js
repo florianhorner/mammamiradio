@@ -1477,8 +1477,7 @@ async (page) => {
       finished_at: Date.now() / 1000,
       roots: ['/media/mammamiradio', '/data/music'],
     });
-    const issues = {management: 'home_assistant', complete: true, active: 0, files_found: 0, banned: 1,
-      ignored: {unsupported_format: 1}, roots: ['/media/mammamiradio', '/data/music']};
+    const issues = {management: 'home_assistant', complete: false, active: 2, roots: ['/media/mammamiradio']};
     return {
       label: document.getElementById('localSourceLabel').textContent,
       detail: document.getElementById('localSourceDetail').textContent,
@@ -1491,16 +1490,14 @@ async (page) => {
   assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
   assert(localLibrary.detail.includes('Home Assistant') && localLibrary.detail.includes('My media'),
     'local library row did not delegate file management to Home Assistant');
-  assert(localLibrary.detail.includes('4 supported files') && localLibrary.detail.includes('1 unsupported format')
-      && localLibrary.detail.includes('/media/mammamiradio') && localLibrary.detail.includes('/data/music'),
-    `local library row hid scan diagnostics or roots: ${localLibrary.detail}`);
+  assert(localLibrary.detail.includes('4 files found') && localLibrary.detail.includes('3 active'),
+    `local library row hid scan counts: ${localLibrary.detail}`);
   assert(localLibrary.scan === 'Scan now', 'local library row lost its explicit scan action');
   assert(localLibrary.uploadControls === 0, 'local library row rebuilt upload/delete controls');
-  assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.label.includes('no playable tracks')
-      && ['0 supported files', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issues.detail.includes(text)),
-    `unplayable local file diagnostics lost their recovery: ${JSON.stringify(localLibrary.issues)}`);
-  assert(['No playable tracks', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issueToast.includes(text)),
-    `Scan now toast hid the actionable result: ${localLibrary.issueToast}`);
+  assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.detail.includes('Existing tracks kept')
+      && localLibrary.issues.detail.includes('Scan now'), 'incomplete scan lost its recovery');
+  assert(localLibrary.issueToast.includes('Existing tracks kept') && localLibrary.issueToast.includes('Scan now'),
+    'incomplete scan toast lost its recovery');
 
   for (const width of [320, 375, 414, 600, 768]) {
     await page.setViewportSize({ width, height: 900 });
