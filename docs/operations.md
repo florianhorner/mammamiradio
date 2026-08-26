@@ -942,7 +942,7 @@ and trusts its own LAN for admin access (see **Admin access model**); set
 
 The dashboard is accessible via HA ingress (sidebar). First Listen shows source readiness, plays the station on the current browser device, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. Home Assistant speakers and AI-host keys are optional later enhancements.
 
-Operator local music lives in **Media → My media → mammamiradio** (`/media/mammamiradio`). Add or remove files through Home Assistant's Media UI, Samba, or a network-storage mount at that path; Mamma Mi Radio scans recursively every 60 seconds and exposes **Rotazione → Local music → Scan now** for an immediate refresh. Legacy `/data/music` remains readable for upgrades and is never moved or deleted by the add-on.
+Operator local music remains under `/data/music`. Populate it through the deployment's supported storage tooling; Mamma Mi Radio scans recursively every 60 seconds and exposes **Rotazione → Local music → Scan now** for an immediate refresh.
 
 First Listen progress is owner-only setup metadata under `/data/cache/state` in
 add-on mode. Its receipt records factual milestones, not the live Home-context

@@ -109,7 +109,7 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "setup status chips lost semantic mapping",
         "forced colors hid setup status glyphs",
         "local library row did not report active tracks",
-        "local library row did not delegate file management to Home Assistant",
+        "local library row did not show the configured music folder",
         "local library row hid scan counts",
         "local library row lost its explicit scan action",
         "local library row rebuilt upload/delete controls",

@@ -47,16 +47,6 @@ STABLE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
 EDGE_CONFIG = REPO_ROOT / "ha-addon" / "mammamiradio-edge" / "config.yaml"
 
 
-def test_run_sh_uses_native_media_and_retains_legacy_music_without_moving_files() -> None:
-    script = RUN_SH.read_text(encoding="utf-8")
-
-    assert "mkdir -p /media/mammamiradio" not in script
-    assert "[ -d /media/mammamiradio ] && [ -r /media/mammamiradio ]" in script
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="/media/mammamiradio"' in script
-    assert 'export MAMMAMIRADIO_LEGACY_MUSIC_DIRS="/data/music"' in script
-    assert not re.search(r"\b(?:mv|cp|rm)\b[^\n]*/data/music", script)
-
-
 def _extract_python_snippet(
     options_file: Path,
     provider_file: Path | None = None,
@@ -195,26 +185,25 @@ def test_parser_exits_zero_on_valid_options():
     assert rc == 0
 
 
-def test_addon_runtime_prefers_native_media_and_falls_back_without_orphaning_legacy_music():
+def test_addon_runtime_exports_one_music_directory_for_persistent_and_fallback_data():
     body = RUN_SH.read_text(encoding="utf-8")
 
+    # The persistent export is the unconditional default...
     fallback_branch_match = re.search(
-        r"(?ms)^if ! mkdir -p /data/cache /data/music /data/tmp\b.*?"
-        r'^    mkdir -p "\$MAMMAMIRADIO_CACHE_DIR" "\$MAMMAMIRADIO_TMP_DIR"\s*^fi$',
+        r"(?ms)^if ! mkdir -p /data/cache /data/music /data/tmp\b.*?^fi$",
         body,
     )
     assert fallback_branch_match, "run.sh lost its /data-not-writable fallback branch"
     fallback_branch = fallback_branch_match.group(0)
     before_branch = body[: fallback_branch_match.start()]
-    assert 'export MAMMAMIRADIO_LEGACY_MUSIC_DIRS="/data/music"' in before_branch
-    assert re.search(
-        r"(?ms)if \[ ! -d /data/music \] \|\| \[ ! -r /data/music \]; then\s+"
-        r'export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""\s+fi',
-        fallback_branch,
-    ), "readable legacy music must survive an unrelated /data write failure"
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="/media/mammamiradio"' in body
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="$MAMMAMIRADIO_LEGACY_MUSIC_DIRS"' in body
-    assert 'export MAMMAMIRADIO_MUSIC_DIR="${FALLBACK_BASE:-/tmp/mammamiradio-data}/music"' in body
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="/data/music"' in before_branch
+    # ... and the fallback export must stay INSIDE the failure branch. An
+    # unconditional fallback would silently move every install off the
+    # persistent /data/music library.
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' in fallback_branch
+    assert 'mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"' in fallback_branch
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in before_branch
+    assert 'export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"' not in body[fallback_branch_match.end() :]
 
 
 def test_parser_exports_anthropic_api_key():

@@ -48,8 +48,7 @@ def _path_key(path: Path | str) -> str:
 
 
 def local_library_roots(config: StationConfig) -> tuple[Path, ...]:
-    roots = {_path_key(root): root for root in map(Path, (config.music_dir, *config.legacy_music_dirs))}
-    return tuple(roots.values())
+    return (Path(config.music_dir),)
 
 
 def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibraryScanResult:
@@ -243,7 +242,6 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
 
 def initial_local_library_status(config: StationConfig) -> dict[str, Any]:
     return {
-        "management": "home_assistant" if config.is_addon else "filesystem",
         **LocalLibraryScanResult(roots=local_library_roots(config), complete=False).status_payload(),
         "active": 0,
         "added": 0,
@@ -264,7 +262,6 @@ async def scan_and_reconcile_local_library(app_state: Any) -> dict[str, Any]:
             async with app_state.source_switch_lock:
                 outcome = reconcile_local_library(app_state.station_state, scan)
             status = {**scan.status_payload(), **outcome}
-            status["management"] = "home_assistant" if app_state.config.is_addon else "filesystem"
         except Exception:  # pragma: no cover - fail-soft audio boundary
             logger.warning("Local music scan failed", exc_info=True)
             status = {**previous, "in_progress": False, "complete": False}

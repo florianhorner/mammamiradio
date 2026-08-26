@@ -480,34 +480,20 @@ export MAMMAMIRADIO_LEDGER_ENABLED="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Keep runtime state in /data; use native HA Media for operator music ----
+# ---- Point runtime data at persistent /data ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
+export MAMMAMIRADIO_MUSIC_DIR="/data/music"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
-export MAMMAMIRADIO_LEGACY_MUSIC_DIRS="/data/music"
 
-# ---- Ensure runtime directories exist ----
+# ---- Ensure directories exist ----
 if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.err; then
     FALLBACK_BASE="/tmp/mammamiradio-data"
     echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
     echo "[mammamiradio] WARNING: Falling back to $FALLBACK_BASE (state will not persist across restarts)"
     export MAMMAMIRADIO_CACHE_DIR="$FALLBACK_BASE/cache"
+    export MAMMAMIRADIO_MUSIC_DIR="$FALLBACK_BASE/music"
     export MAMMAMIRADIO_TMP_DIR="$FALLBACK_BASE/tmp"
-    if [ ! -d /data/music ] || [ ! -r /data/music ]; then
-        export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""
-    fi
-    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_TMP_DIR"
-fi
-
-# Home Assistant owns its read-only Media mount. Existing /data/music remains
-# a discovery root; no files are copied, moved, or deleted here.
-if [ -d /media/mammamiradio ] && [ -r /media/mammamiradio ]; then
-    export MAMMAMIRADIO_MUSIC_DIR="/media/mammamiradio"
-elif [ -n "$MAMMAMIRADIO_LEGACY_MUSIC_DIRS" ]; then
-    export MAMMAMIRADIO_MUSIC_DIR="$MAMMAMIRADIO_LEGACY_MUSIC_DIRS"
-    export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""
-else
-    export MAMMAMIRADIO_MUSIC_DIR="${FALLBACK_BASE:-/tmp/mammamiradio-data}/music"
-    mkdir -p "$MAMMAMIRADIO_MUSIC_DIR"
+    mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_MUSIC_DIR" "$MAMMAMIRADIO_TMP_DIR"
 fi
 
 # ---- Validate critical files exist ----

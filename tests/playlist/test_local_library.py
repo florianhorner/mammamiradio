@@ -17,8 +17,8 @@ from mammamiradio.playlist.local_library import (
 )
 
 
-def _config(primary: Path, *legacy: Path):
-    return SimpleNamespace(music_dir=primary, legacy_music_dirs=legacy, is_addon=False)
+def _config(root: Path):
+    return SimpleNamespace(music_dir=root)
 
 
 def _track(title: str, *, source="starter", path: Path | None = None) -> Track:
@@ -26,11 +26,11 @@ def _track(title: str, *, source="starter", path: Path | None = None) -> Track:
 
 
 def test_scan_is_recursive_case_insensitive_and_supports_common_audio(tmp_path):
-    primary = tmp_path / "primary"
-    legacy = tmp_path / "legacy"
-    album = primary / "Artist" / "Album"
+    root = tmp_path / "music"
+    album = root / "Artist" / "Album"
     album.mkdir(parents=True)
-    legacy.mkdir()
+    duplicate = root / "0-Duplicate"
+    duplicate.mkdir()
     titles = ("One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight")
     suffixes = ("MP3", "flac", "OpUs", "m4a", "AAC", "ogg", "WAV", "MP4")
     for title, suffix in zip(titles, suffixes, strict=True):
@@ -38,15 +38,27 @@ def test_scan_is_recursive_case_insensitive_and_supports_common_audio(tmp_path):
     (album / "cover.jpg").write_bytes(b"image")
     (album / "empty.wav").touch()
     (album / "linked.mp3").symlink_to(album / "Artist - One.MP3")
-    (linked_root := tmp_path / "linked-root").symlink_to(primary, target_is_directory=True)
-    (legacy / "Artist - One.mp3").write_bytes(b"duplicate")
+    (duplicate / "Artist - One.mp3").write_bytes(b"duplicate")
 
-    result = scan_local_library(_config(primary, legacy, linked_root))
+    result = scan_local_library(_config(root))
 
-    assert result.complete is False
+    assert result.complete is True
     assert {track.title for track in result.tracks} == set(titles)
     assert next(track.local_path for track in result.tracks if track.title == "One") == album / "Artist - One.MP3"
     assert result.ignored == {"duplicate": 1, "empty_file": 1, "symlink": 1, "unsupported_format": 1}
+    assert result.warnings == []
+
+
+def test_scan_rejects_a_symlinked_configured_root(tmp_path):
+    real_root = tmp_path / "music"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    result = scan_local_library(_config(linked_root))
+
+    assert result.complete is False
+    assert result.tracks == []
     assert result.warnings == [f"Symlinked music folder skipped: {linked_root}. Use its real path; tracks kept."]
 
 

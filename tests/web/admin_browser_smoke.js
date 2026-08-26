@@ -1472,12 +1472,12 @@ async (page) => {
 
   const localLibrary = await page.evaluate(() => {
     renderLocalLibraryStatus({
-      management: 'home_assistant', complete: true, active: 3, files_found: 4, added: 1, removed: 1,
+      complete: true, active: 3, files_found: 4, added: 1, removed: 1,
       ignored: {unsupported_format: 1},
       finished_at: Date.now() / 1000,
-      roots: ['/media/mammamiradio', '/data/music'],
+      roots: ['/data/music'],
     });
-    const issues = {management: 'home_assistant', complete: false, active: 2, roots: ['/media/mammamiradio']};
+    const issues = {complete: false, active: 2, roots: ['/data/music']};
     return {
       label: document.getElementById('localSourceLabel').textContent,
       detail: document.getElementById('localSourceDetail').textContent,
@@ -1488,8 +1488,8 @@ async (page) => {
     };
   });
   assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
-  assert(localLibrary.detail.includes('Home Assistant') && localLibrary.detail.includes('My media'),
-    'local library row did not delegate file management to Home Assistant');
+  assert(localLibrary.detail.includes('/data/music'),
+    'local library row did not show the configured music folder');
   assert(localLibrary.detail.includes('4 files found') && localLibrary.detail.includes('3 active'),
     `local library row hid scan counts: ${localLibrary.detail}`);
   assert(localLibrary.scan === 'Scan now', 'local library row lost its explicit scan action');

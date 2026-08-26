@@ -926,7 +926,7 @@ durable base; Jamendo is deliberately outside this function:
    starter repeat. A release fails unless the exact 12 tracks, at least 45 minutes,
    complete human audition evidence, and no more than 75 MiB pass media proof.
 
-Operator files join after audio startup. In the Home Assistant add-on the read-only primary root is `/media/mammamiradio`; legacy `/data/music` and standalone `./music` (or `MAMMAMIRADIO_MUSIC_DIR`) remain discoverable. `mammamiradio/playlist/local_library.py` is the single owner of recursive discovery, reconciliation, and the 60-second background scan; local tracks overlay an active charts/Jamendo/starter base without switching it. They receive no project license claim; the operator owns their provenance and permitted use.
+Operator files join after audio startup. The supplied containers use `/data/music`; source checkouts use `./music`, and `MAMMAMIRADIO_MUSIC_DIR` overrides either path. `mammamiradio/playlist/local_library.py` owns recursive discovery, reconciliation, and the 60-second background scan; local tracks overlay an active charts/Jamendo/starter base without switching it. They receive no project license claim; the operator owns their provenance and permitted use.
 
 Two optional expansions sit outside that base:
 

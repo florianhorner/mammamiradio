@@ -31,11 +31,3 @@ def test_edge_catalog_describes_the_deliberate_release_pin() -> None:
     assert "deliberately cut" in description
     assert "may trail main" in description
     assert "always the latest" not in description
-
-
-def test_both_channels_mount_native_home_assistant_media_for_operator_music() -> None:
-    stable = yaml.safe_load(STABLE_CONFIG.read_text(encoding="utf-8"))
-    edge = yaml.safe_load(EDGE_CONFIG.read_text(encoding="utf-8"))
-
-    assert stable["map"] == ["addon_config:rw", "media:ro"]
-    assert edge["map"] == stable["map"]

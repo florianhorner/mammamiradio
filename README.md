@@ -58,8 +58,8 @@ immediately, but it is not the song library. Normal rotation starts with the
 offline, attributed twelve-track starter collection, so no provider
 account or network music source is required. Open the listener and use **Music
 credits** to see the exact source, license, and modification notice for what is
-playing. Add-on music under **Media → My media → mammamiradio** is discovered
-automatically; standalone/Docker installs can set `MAMMAMIRADIO_MUSIC_DIR`.
+playing. Operator-supplied audio in the add-on's `/data/music` directory is
+discovered automatically; standalone installs can set `MAMMAMIRADIO_MUSIC_DIR`.
 
 Jamendo is an optional, default-off transient expansion for acknowledged
 non-commercial API use while provider confirmation is pending. Configure it

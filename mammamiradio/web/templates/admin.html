@@ -4778,7 +4778,7 @@ function localLibraryPresentation(status){
   const active=Math.max(0,Number(s.active||0)||0),files=Math.max(0,Number(s.files_found||0)||0);
   const summary=`${files} file${files===1?'':'s'} found · ${active} active`;
   const roots=Array.isArray(s.roots)?s.roots.filter(Boolean):[];
-  const manage=s.management==='home_assistant'?'Manage files in Home Assistant → Media → My media → mammamiradio.':`Manage files in ${roots[0]||'the configured music folder'}.`;
+  const manage=`Manage files in ${roots[0]||'the configured music folder'}.`;
   if(s.in_progress)return{state:'working',label:'Scanning local music',detail:manage};
   if(s.error||s.complete===false)return{state:'degraded',label:`Local music · ${active} active`,detail:`Scan incomplete. Existing tracks kept. ${manage} Check the folders, then Scan now.`};
   if(active)return{state:'ready',label:`Local music · ${active} track${active===1?'':'s'}`,detail:`${summary}. ${manage}`};

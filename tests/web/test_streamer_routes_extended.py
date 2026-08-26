@@ -328,7 +328,6 @@ async def test_local_scan_updates_rotation_without_switching_source_or_purging_q
     config = app.state.config
     config.music_dir = tmp_path / "music"
     config.music_dir.mkdir()
-    config.legacy_music_dirs = ()
     (config.music_dir / "Local Artist - New Song.FLAC").write_bytes(b"audio")
     app.state.local_library_scan_lock = asyncio.Lock()
     app.state.local_library_status = initial_local_library_status(config)

@@ -89,22 +89,23 @@ Jamendo cannot repair a broken starter package: it is optional, default-off,
 asynchronous enrichment. A Jamendo failure must leave starter/local playback
 unchanged. See [Music sources and rights boundaries](music-sources.md).
 
-For the Home Assistant app, add local audio under **Media → My media →
-mammamiradio**. The scanner finds changes within one minute; use **Rotazione →
-Local music → Scan now** to refresh immediately. Do not patch files into the
-running app container. Docker and source-checkout installs use their mounted
-`music/` directory, or `MAMMAMIRADIO_MUSIC_DIR`.
+For the supplied Docker image or Home Assistant app, local audio belongs in the
+deployment's persistent `/data/music` directory. The scanner finds changes
+within one minute; use **Rotazione → Local music → Scan now** to refresh
+immediately. Populate that data area through the deployment's supported storage
+tooling; do not patch files into a running Home Assistant app container. A
+source checkout uses `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
 
 **"Clear pool" does not delete local music files, and the songs come back.**
 This is by design and is not a bug in the button. `POST /api/playlist/purge`
 empties the in-memory rotation only. The scanner adds files back on its next
-scan, and local music outranks the bundled starter catalog at startup.
+scan and overlays the active music base without restarting the station.
 To stop specific songs permanently, use the per-row **✕ Ban** button, which
 writes a durable blocklist honored at every ingest doorway including norm-cache
-rescue. Delete files through Home Assistant Media (or the standalone
-deployment's storage tooling), then select **Scan now**. Confirm another source
-is ready first: emptying the only music source leaves the crate on the audible
-recovery ladder until music is added again.
+rescue. Delete files through the deployment's storage tooling, then select
+**Scan now**. Confirm another source is ready first: emptying the only music
+source leaves the crate on the audible recovery ladder until music is added
+again.
 
 When listeners are connected, `/readyz` flips back to `503 starting` if playback
 has been truly silent for more than 30 seconds — silent means no listener queue

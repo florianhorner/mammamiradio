@@ -530,17 +530,14 @@ def test_load_local_music_tracks_parses_names_and_paths(tmp_path):
 def test_load_operator_local_tracks_filters_and_applies_one_global_cap(tmp_path):
     from mammamiradio.playlist.playlist import load_operator_local_tracks
 
-    primary = tmp_path / "primary"
-    legacy = tmp_path / "legacy"
-    primary.mkdir()
-    legacy.mkdir()
-    (primary / "Banned Artist - Banned Song.mp3").write_bytes(b"id3")
-    (primary / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    music = tmp_path / "music"
+    music.mkdir()
+    (music / "Banned Artist - Banned Song.mp3").write_bytes(b"id3")
+    (music / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
     for index in range(2):
-        (legacy / f"Legacy Artist {index} - Song {index}.mp3").write_bytes(b"id3")
+        (music / f"Local Artist {index} - Song {index}.mp3").write_bytes(b"id3")
     config = load_config()
-    config.music_dir = primary
-    config.legacy_music_dirs = (legacy,)
+    config.music_dir = music
     config.playlist.shuffle = False
 
     with patch("mammamiradio.playlist.local_library.MAX_LOCAL_LIBRARY_TRACKS", 2):
