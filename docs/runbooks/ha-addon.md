@@ -149,8 +149,6 @@ they are ever counted as listeners.
      open a fresh `## [Unreleased]`
    - **ha-addon CHANGELOG**: move its `## Unreleased` content under a real
      `## X.Y.Z - <date>` heading
-   - commit/review the cut, commit V1, review again, commit V2; then commit 20 HA receipts and rerun both gates
-
    Both are REQUIRED. `pre-release-check.sh` §2 compares `config.yaml` against the
    first *versioned* heading in each file, skipping `## Unreleased`. The extractor
    strips brackets, so `## [X.Y.Z]` and `## X.Y.Z` both parse; the root file uses
@@ -478,7 +476,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
 `addon-release.yml` does not rebuild the add-on. It first validates at least 20
-physical HA Green cold-launch receipts with one release version and hardware-neutral content digest, requires p95 at or below two seconds, and proves the tagged tree matches after excluding only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag.
+physical HA Green cold-launch receipts with one release version and hardware-neutral content digest, requires p95 at or below two seconds, and proves the tagged tree matches after excluding only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag. Recording assumes a trusted single-writer checkout; pre/post snapshots do not attest against concurrent change-and-restore during a run.
 It then verifies that both per-arch `:${git_sha}` images exist, runs the
 launch and host-published-port proofs for each native architecture before stable
 publishing, and promotes those exact

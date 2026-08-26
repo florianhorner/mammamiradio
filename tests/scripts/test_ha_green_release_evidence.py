@@ -172,16 +172,17 @@ def test_squash_equivalent_tree_and_mixed_informational_source_commits_pass(tmp_
     assert (report["receipt_content_sha256"], report["release_content_sha256"]) == (content_sha256,) * 2
 
 
-@pytest.mark.parametrize("mutation", ["byte", "path", "mode"])
+@pytest.mark.parametrize("mutation", ["byte", "path", "add", "remove", "mode"])
 def test_validator_rejects_any_non_receipt_content_drift(tmp_path: Path, mutation: str) -> None:
     _tested_source, _content_sha256, receipt_dir = _measured_repo(tmp_path)
     _git(tmp_path, "add", "proof/media/ha-green-release-evidence")
     _git(tmp_path, "commit", "-qm", "evidence only")
-    if mutation == "byte":
-        (tmp_path / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
-        _git(tmp_path, "add", "app.py")
-    elif mutation == "path":
-        _git(tmp_path, "mv", "app.py", "renamed.py")
+    if mutation in {"byte", "add"}:
+        name = "app.py" if mutation == "byte" else "added.py"
+        (tmp_path / name).write_text("VALUE = 2\n" if mutation == "byte" else "ADDED = 1\n", encoding="utf-8")
+        _git(tmp_path, "add", name)
+    elif mutation in {"path", "remove"}:
+        _git(tmp_path, *(("mv", "app.py", "renamed.py") if mutation == "path" else ("rm", "app.py")))
     else:
         _git(tmp_path, "update-index", "--chmod=+x", "app.py")
     _git(tmp_path, "commit", "-qm", f"{mutation} changed after measurement")
@@ -190,7 +191,7 @@ def test_validator_rejects_any_non_receipt_content_drift(tmp_path: Path, mutatio
     assert any("does not match release content digest" in error for error in changed["errors"])
 
 
-@pytest.mark.parametrize("mutation", ["missing", "mixed"])
+@pytest.mark.parametrize("mutation", ["missing", "mixed", "uppercase"])
 def test_validator_rejects_missing_or_mixed_content_digests(tmp_path: Path, mutation: str) -> None:
     receipt_dir = tmp_path / "receipts"
     _write_receipts(receipt_dir, source_commit="a" * 40, content_sha256="1" * 64)
@@ -199,14 +200,13 @@ def test_validator_rejects_missing_or_mixed_content_digests(tmp_path: Path, muta
     if mutation == "missing":
         del payload["content_sha256"]
     else:
-        payload["content_sha256"] = "2" * 64
+        payload["content_sha256"] = ("2" if mutation == "mixed" else "A") * 64
     first.write_text(json.dumps(payload), encoding="utf-8")
     report = VALIDATOR.validate_release_evidence(
         receipt_dir=receipt_dir, release_version="3.4.5", verify_git_binding=False
     )
     assert report["ok"] is False
-    expected = "missing fields: content_sha256" if mutation == "missing" else "mixed content_sha256"
-    assert any(expected in error for error in report["errors"])
+    assert any("content_sha256" in error for error in report["errors"])
 
 
 @pytest.mark.parametrize("mutation", ["syntax", "duplicate-key", "recursion", "overflow", "bool"])

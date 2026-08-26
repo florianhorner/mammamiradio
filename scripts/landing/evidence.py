@@ -340,7 +340,6 @@ def snapshot_tree(
     receipt_batch: list[TreeEntry] = []
     ha_receipt_batch: list[TreeEntry] = []
     ha_receipt_count = 0
-
     for entry in repo.tree_entries(resolved, max_record_bytes=MAX_TREE_RECORD_BYTES):
         if entry.path == previous_path:
             raise GitError(f"git ls-tree returned duplicate path {_display_path(entry.path)}")
