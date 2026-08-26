@@ -30,16 +30,17 @@ def test_scan_is_recursive_case_insensitive_and_supports_common_audio(tmp_path):
         (album / f"Artist - {title}.{suffix}").write_bytes(b"audio")
     (album / "cover.jpg").write_bytes(b"image")
     (album / "empty.wav").touch()
-    symlink = album / "linked.mp3"
-    symlink.symlink_to(album / "Artist - One.MP3")
+    (album / "linked.mp3").symlink_to(album / "Artist - One.MP3")
+    (linked_root := tmp_path / "linked-root").symlink_to(primary, target_is_directory=True)
     (legacy / "Artist - One.mp3").write_bytes(b"duplicate")
 
-    result = scan_local_library(_config(primary, legacy))
+    result = scan_local_library(_config(primary, legacy, linked_root))
 
-    assert result.complete is True
+    assert result.complete is False
     assert {track.title for track in result.tracks} == set(titles)
     assert next(track.local_path for track in result.tracks if track.title == "One") == album / "Artist - One.MP3"
     assert result.ignored == {"duplicate": 1, "empty_file": 1, "symlink": 1, "unsupported_format": 1}
+    assert result.warnings == [f"Symlinked music folder skipped: {linked_root}. Use its real path; tracks kept."]
 
 
 def test_entry_cap_bounds_directory_iterator_before_sorting(tmp_path):

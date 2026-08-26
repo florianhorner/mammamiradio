@@ -1499,7 +1499,7 @@ async (page) => {
   assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.label.includes('no playable tracks')
       && ['0 supported files', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issues.detail.includes(text)),
     `unplayable local file diagnostics lost their recovery: ${JSON.stringify(localLibrary.issues)}`);
-  assert(['no playable tracks', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issueToast.includes(text)),
+  assert(['No playable tracks', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issueToast.includes(text)),
     `Scan now toast hid the actionable result: ${localLibrary.issueToast}`);
 
   for (const width of [320, 375, 414, 600, 768]) {

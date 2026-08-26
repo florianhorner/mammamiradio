@@ -96,6 +96,10 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
     scan_roots: dict[str, tuple[Path, Path]] = {}
     for root in roots:
         try:
+            if root.is_symlink():
+                result.complete = False
+                result.warnings.append(f"Symlinked music folder skipped: {root}. Use its real path; tracks kept.")
+                continue
             resolved_root = root.resolve(strict=False)
         except (OSError, RuntimeError):
             resolved_root = Path(_path_key(root))
