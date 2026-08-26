@@ -162,12 +162,17 @@ copy the address from the station's own port instead.
 
 ### Optional Jamendo music
 
-Open **Motore → Setup → Music sources** to configure Jamendo. It is off by
-default and is not required for a complete rotation. Enabling it requires a
-client ID and the current non-commercial-use acknowledgement. A legacy client
-ID is migrated into the private settings file once, but remains disabled until
-the acknowledgement is made in the app; the client ID is absent from both
-add-on Configuration schemas.
+Open **Motore**, then **Setup**, then **Music sources** to turn Jamendo on. It is off by
+default and is not required for a complete rotation. Enable it and confirm the
+current non-commercial-use acknowledgement. No signup is needed; the add-on
+includes Jamendo access.
+
+Your own client ID is optional. It takes precedence over shared access and uses
+independently authorized access; the panel shows which one is active. Clearing
+it returns the add-on to shared access. A legacy client ID is
+migrated into the private settings file once, but remains disabled until the
+acknowledgement is made in the app. The client ID is absent from both add-on
+Configuration schemas.
 
 Jamendo preparation is deliberately transient: the add-on holds at most one
 lease and one audio artifact, inserts at most one prepared track after two

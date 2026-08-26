@@ -82,6 +82,8 @@ def test_first_listen_browser_smoke_contract_is_deterministic() -> None:
         "page-hidden guide did not unlock proof controls",
         "page-hidden guide changed proof state",
         "speaker picker returned to First Listen",
+        "Jamendo setup did not replace the required journey",
+        "Clear remained visible for bundled access",
         "[320, 568]",
         "[375, 667]",
         "[430, 932]",
