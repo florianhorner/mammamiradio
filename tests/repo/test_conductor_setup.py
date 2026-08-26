@@ -34,9 +34,10 @@ def _fake_bootstrap(tmp_path: Path) -> None:
     bootstrap.chmod(0o755)
 
 
-def _fake_python(bin_dir: Path, name: str) -> None:
+def _fake_python(bin_dir: Path, name: str, *, supported: bool = True) -> None:
     executable = bin_dir / name
-    executable.write_text("#!/usr/bin/env bash\nexit 0\n")
+    probe_result = "exit 0" if supported else "exit 1"
+    executable.write_text(f'#!/bin/bash\nif [ "${{1:-}}" = "-c" ]; then\n  {probe_result}\nfi\nexit 0\n')
     executable.chmod(0o755)
 
 
@@ -97,6 +98,19 @@ def test_cloud_bootstrap_selects_first_supported_interpreter(tmp_path: Path, she
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "bootstrap-python").read_text() == "python3.12"
+
+
+def test_cloud_bootstrap_rejects_pre_311_fallback_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:
+    cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
+    _fake_bootstrap(tmp_path)
+    _fake_python(tmp_path / "bin", "python3", supported=False)
+    shell_env["PATH"] = _path_without_system_python(tmp_path)
+
+    result = _run(cloud, tmp_path, env=shell_env)
+
+    assert result.returncode == 1
+    assert "Missing a Python 3.11+ interpreter" in result.stderr
+    assert not (tmp_path / "bootstrap-python").exists()
 
 
 def test_cloud_bootstrap_honors_explicit_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:
