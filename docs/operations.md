@@ -903,7 +903,11 @@ docker compose up
 
 The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`.
 
-`ADMIN_TOKEN` is required in `.env` (the container binds to `0.0.0.0`).
+The container binds to `0.0.0.0`. Set `ADMIN_TOKEN` in `.env` to pin a known
+value. If it is unset, the entrypoint generates one and writes it to
+`/data/admin_token` (readable with `docker compose exec mammamiradio cat
+/data/admin_token`). The generated value is not printed in container logs. If
+`/data` is not writable, set `ADMIN_TOKEN` before the next restart.
 
 ## Home Assistant add-on
 
