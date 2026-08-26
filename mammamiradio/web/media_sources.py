@@ -5,14 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from mammamiradio.core.config import JAMENDO_ACK_REVISION
+from mammamiradio.core.config import (
+    JAMENDO_ACK_REVISION,
+    JAMENDO_CLIENT_ID_RE,
+    bundled_jamendo_client_id,
+    resolve_jamendo_client_id,
+)
 from mammamiradio.core.models import GenerationWasteReason
 from mammamiradio.playlist.jamendo_transient import JAMENDO_FAILURE_CODES
 from mammamiradio.scheduling.queue_mutations import drop_matching_segments
@@ -44,7 +48,6 @@ _JAMENDO_STATES = frozenset(
 # and the coercion below turned each of them into "api_failed" — which is why
 # the operator card showed a generic reason for the failures that actually fire.
 _JAMENDO_FAILURE_CODES = frozenset({""}) | JAMENDO_FAILURE_CODES
-_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
 def _media_error(
@@ -87,6 +90,13 @@ def safe_jamendo_status(config: object, provider: object | None = None) -> dict[
     playlist = config.playlist  # type: ignore[attr-defined]
     enabled = bool(getattr(playlist, "jamendo_enabled", False))
     client_configured = bool(str(getattr(playlist, "jamendo_client_id", "") or "").strip())
+    # Expose the active source without exposing the ID. Legacy configs with an
+    # ID and no source marker are treated as operator-owned.
+    client_id_source = str(getattr(playlist, "jamendo_client_id_source", "") or "")
+    if not client_configured:
+        client_id_source = ""
+    elif client_id_source != "bundled":
+        client_id_source = "operator"
     acknowledged = bool(getattr(playlist, "jamendo_noncommercial_acknowledged", False)) and (
         getattr(playlist, "jamendo_ack_revision", "") == JAMENDO_ACK_REVISION
     )
@@ -136,6 +146,9 @@ def safe_jamendo_status(config: object, provider: object | None = None) -> dict[
         "enabled": enabled,
         "state": state,
         "client_id_configured": client_configured,
+        "client_id_source": client_id_source or None,
+        # Used to make the Clear prompt truthful when no bundled access exists.
+        "shared_access_available": bool(bundled_jamendo_client_id()),
         "noncommercial_acknowledged": acknowledged,
         "terms_scope": "noncommercial_api_use",
         # Always "pending" on purpose — Jamendo never clears a station model.
@@ -250,7 +263,35 @@ async def _persist_and_apply_jamendo(
     async with _jamendo_operation_lock(request):
         config = request.app.state.config
         current_id = str(config.playlist.jamendo_client_id or "").strip()
-        effective_id = "" if clear_id else (raw_client_id.strip() if isinstance(raw_client_id, str) else current_id)
+        # Keep the stored operator ID separate from the resolved one. Only the
+        # operator value is persisted, so clearing it can fall back to bundled
+        # access. Both writers set the label through one resolver, so it is the
+        # authority; the value comparison is only a fallback for configs written
+        # before the field existed. Comparing values first would relabel an
+        # operator who pasted the bundled ID verbatim, and Clear would then
+        # delete their stored value under a dialog saying they had none.
+        current_source = str(getattr(config.playlist, "jamendo_client_id_source", "") or "")
+        if current_source == "bundled":
+            stored_operator_id = ""
+        elif current_source == "operator":
+            stored_operator_id = current_id
+        else:
+            stored_operator_id = "" if current_id == bundled_jamendo_client_id() else current_id
+        if clear_id and not stored_operator_id:
+            provider = getattr(request.app.state, "jamendo_provider", None)
+            return {"ok": True, "status": safe_jamendo_status(config, provider)}
+        if clear_id:
+            operator_id = ""
+        elif supplied and isinstance(raw_client_id, str):
+            operator_id = raw_client_id.strip()
+        else:
+            operator_id = stored_operator_id
+        effective_id, effective_source = resolve_jamendo_client_id(operator_id)
+        # Clear is credential-only. Re-read the saved switches under this lock so
+        # an older tab cannot restore stale enablement or acknowledgement choices.
+        if clear_id:
+            acknowledged = bool(config.playlist.jamendo_noncommercial_acknowledged)
+            enabled = bool(config.playlist.jamendo_enabled and effective_id and acknowledged)
         if enabled and not effective_id:
             return _media_error(
                 409,
@@ -276,7 +317,7 @@ async def _persist_and_apply_jamendo(
             "MAMMAMIRADIO_JAMENDO_ACK_REVISION": JAMENDO_ACK_REVISION if acknowledged else "",
         }
         if supplied or clear_id:
-            updates["JAMENDO_CLIENT_ID"] = effective_id
+            updates["JAMENDO_CLIENT_ID"] = operator_id
 
         try:
             await asyncio.to_thread(_save_media_source_settings, updates, addon=bool(config.is_addon))
@@ -299,6 +340,7 @@ async def _persist_and_apply_jamendo(
             else:
                 os.environ.pop(key, None)
         config.playlist.jamendo_client_id = effective_id
+        config.playlist.jamendo_client_id_source = effective_source
         config.playlist.jamendo_enabled = enabled
         config.playlist.jamendo_noncommercial_acknowledged = acknowledged
         config.playlist.jamendo_ack_revision = JAMENDO_ACK_REVISION if acknowledged else ""
@@ -360,7 +402,7 @@ async def configure_jamendo(request: Request, _: None = Depends(require_admin_ac
             retryable=False,
             next_action="Choose Replace or Clear, then save again.",
         )
-    if supplied and (not isinstance(raw_client_id, str) or not _CLIENT_ID_RE.fullmatch(raw_client_id.strip())):
+    if supplied and (not isinstance(raw_client_id, str) or not JAMENDO_CLIENT_ID_RE.match(raw_client_id.strip())):
         return _media_error(
             422,
             "jamendo_client_id_invalid",

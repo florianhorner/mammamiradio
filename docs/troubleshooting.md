@@ -138,8 +138,9 @@ operator's responsibility.
 
 Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
 
-- **Finish Jamendo setup** means the client ID or current non-commercial
-  acknowledgement is missing. A migrated ID remains disabled until reviewed.
+- **Finish Jamendo setup** means the current non-commercial acknowledgement is
+  missing. No client ID is needed; the station brings its own Jamendo access. A
+  migrated operator ID remains disabled until reviewed.
 - **Preparing one Jamendo track** is normal. Starter/local music continues and
   a Jamendo miss never delays the next music slot. When the attempt in progress
   is rejecting candidates, the row states the reason for that attempt in plain
@@ -154,11 +155,12 @@ Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
   configuration or turn Jamendo off.
 
 Every reason line either says the station is retrying, states explicitly that no
-action is needed, or names a step to take. Two carry a real operator lever: a
-client ID Jamendo will not accept, and a working folder the station cannot use.
-Both are reported as blocking failures, so they appear on the **Jamendo track
-could not be used** row, which never claims a retry is coming because a blocked
-provider schedules none.
+action is needed, or names a step to take. Two blocking failures have an operator
+action: access Jamendo will not accept, and a working folder the station cannot
+use. Both appear on the **Jamendo track could not be used** row, which never
+claims a retry is coming because a blocked provider schedules none. Being asked
+to slow down is transient and retries automatically; the reply does not identify
+which request ceiling was reached, so no credential change is presented as a remedy.
 
 `rejected_this_attempt`, `dominant_failure_code_this_attempt` and
 `attempt_rejections` on the admin `/status` payload describe the most recently

@@ -15,7 +15,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-from mammamiradio.core.config import StationConfig
+from mammamiradio.core.config import StationConfig, jamendo_source_configured
 from mammamiradio.core.models import Heading, PlaylistSource, SourceReadinessEvidence, Track
 from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
@@ -64,7 +64,7 @@ def _source_evidence_for_config(config: StationConfig) -> SourceReadinessEvidenc
     """Create bounded configuration evidence before source attempts begin."""
     evidence = SourceReadinessEvidence()
     evidence.configure("charts", config.allow_ytdlp)
-    evidence.configure("jamendo", bool((config.playlist.jamendo_client_id or "").strip()))
+    evidence.configure("jamendo", jamendo_source_configured(config))
     evidence.configure("local", any(root.exists() for root in local_library_roots(config)))
     evidence.configure("demo", True)
     recovery_bundled = _DEMO_ASSETS_RECOVERY_DIR.exists() and any(islice(_DEMO_ASSETS_RECOVERY_DIR.glob("*.mp3"), 1))

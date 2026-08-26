@@ -1327,6 +1327,8 @@ class TestSourceControlVisibilityContract:
     async def test_capabilities_expose_admin_source_control_flags(self, external_media_installed):
         app = _make_app()
         app.state.config.playlist.jamendo_client_id = "jamendo-client"
+        # Capability follows enablement, not the bundled ID.
+        app.state.config.playlist.jamendo_enabled = True
         app.state.config.allow_ytdlp = False
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:

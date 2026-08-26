@@ -9521,6 +9521,8 @@ async def test_capabilities_loopback_returns_flags():
 async def test_capabilities_exposes_jamendo_and_charts_reload_flags(external_media_installed):
     app = _make_test_app()
     app.state.config.playlist.jamendo_client_id = "jamendo-client"
+    # Capability follows enablement, not the bundled ID.
+    app.state.config.playlist.jamendo_enabled = True
     app.state.config.allow_ytdlp = True
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

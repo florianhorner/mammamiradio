@@ -929,9 +929,10 @@ durable base; Jamendo is deliberately outside this function:
 
 Two optional expansions sit outside that base:
 
-- **Jamendo transient provider.** Explicitly off by default; enabling requires an
-  operator client ID and the current non-commercial-use acknowledgement while
-  provider confirmation remains pending. It reads the API's streaming `audio`
+- **Jamendo transient provider.** Explicitly off by default; enabling requires
+  the current non-commercial-use acknowledgement while provider confirmation
+  remains pending. The station ships a bundled application ID, so an operator ID
+  is an optional override rather than part of the gate. It reads the API's streaming `audio`
   field with `audioformat=mp32`, admits only validated CC BY 3.0/4.0 candidates,
   and owns one in-memory lease plus one normalized partial/final artifact total.
   At most one prepared track can follow every two local/starter tracks. Bytes and

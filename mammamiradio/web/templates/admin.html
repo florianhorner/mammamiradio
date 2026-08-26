@@ -2717,14 +2717,14 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               </div>
               <div class="jamendo-settings" id="jamendoSettings" aria-labelledby="jamendoSetupHeading">
                 <div class="jamendo-secret-state" id="jamendoSecretState" hidden>
-                  <span class="jamendo-secret-saved">✓ Client ID saved</span>
+                  <span class="jamendo-secret-saved" id="jamendoSecretLabel">Checking Jamendo access…</span>
                   <div class="jamendo-secret-actions">
-                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="replaceJamendoClientId()">Replace</button>
-                    <button type="button" class="btn btn-util" data-stopped-exempt onclick="clearJamendoClientId(this)">Clear</button>
+                    <button type="button" class="btn btn-util" id="jamendoOwnClientIdAction" data-stopped-exempt onclick="replaceJamendoClientId()">Use own ID</button>
+                    <button type="button" class="btn btn-util" id="jamendoClearClientId" data-stopped-exempt onclick="clearJamendoClientId(this)" hidden>Clear</button>
                   </div>
                 </div>
-                <div id="jamendoClientField">
-                  <label class="setup-title" for="jamendoClientId">Jamendo client ID</label>
+                <div id="jamendoClientField" hidden>
+                  <label class="setup-title" for="jamendoClientId">Your own Jamendo client ID (optional)</label>
                   <input class="input" id="jamendoClientId" type="password" autocomplete="off" spellcheck="false" aria-describedby="jamendoHelp" placeholder="Enter your own client ID">
                 </div>
                 <label class="jamendo-checkbox">
@@ -2735,7 +2735,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <input type="checkbox" id="jamendoNoncommercialAck">
                   <span>I confirm this station's Jamendo API use is non-commercial and understand that Mamma Mi Radio does not certify broadcast rights.</span>
                 </label>
-                <p class="jamendo-help" id="jamendoHelp">Optional. Uses your Jamendo API client ID for non-commercial API use. Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
+                <p class="jamendo-help" id="jamendoHelp"><span id="jamendoAccessHelp">Enable both options to add credited Jamendo songs to rotation. Mamma Mi Radio supplies the access automatically — no Jamendo account or client ID needed.</span> Tracks are prepared one at a time and deleted after play. Provider confirmation for this station model is pending. <a href="https://devportal.jamendo.com/api_terms_of_use" target="_blank" rel="noopener noreferrer">Read Jamendo API terms</a>.</p>
                 <div class="jamendo-form-message" id="jamendoFormMessage" role="status" aria-live="polite" aria-atomic="true"></div>
                 <div class="setup-actions">
                   <button type="button" class="btn btn-trigger" id="jamendoSaveBtn" data-stopped-exempt onclick="saveJamendoSettings(this)">Save and check</button>
@@ -3334,6 +3334,8 @@ function showAdminTab(name,{render=true,persist=true}={}){
   const setupContext=document.getElementById('firstListenSetupContext');
   const setupTab=document.getElementById('tab-setup'),setupPanel=document.getElementById('first-listen-panel');
   const restoreFocus=name!=='setup'&&_activeTab==='setup'&&(setupContext?.contains(document.activeElement)||document.activeElement===setupTab||document.activeElement===setupPanel);
+  delete document.body.dataset.firstListenSetupView;
+  setFirstListenSetupView();
   if(name!=='setup')finalizeFirstListenCompletion();
   if(name==='setup'&&!['required','completing'].includes(document.body.dataset.firstListenEntry))name='motore';
   if(!_adminPanels.some(p=>p.dataset.panel===name))name='scaletta';
@@ -4673,7 +4675,8 @@ const JAMENDO_ERROR_COPY={
 // on the add-on that advice would name a step the reader cannot take.
 function jamendoFailureHint(code){
   return {
-    api_auth_failed:"Jamendo isn't accepting the client ID — check it in your Jamendo account and enter it again.",
+    api_auth_failed:"Jamendo rejected the current access — check setup: use your own client ID, or replace the one you added.",
+    rate_limited:"Jamendo asked the station to pause — retrying automatically. No action needed.",
     temp_root_invalid:"The station can't use its working folder — check that its storage has free space and is writable.",
     api_failed:"Jamendo didn't respond — retrying automatically.",
     api_malformed:"Jamendo sent a reply the station couldn't read — retrying automatically.",
@@ -4703,7 +4706,7 @@ function jamendoPresentation(status){
   const internal=String(s.state||'disabled');
   if(internal==='playing'&&!s.enabled)return{state:'working',shape:'●',label:'Jamendo track finishing',detail:'Jamendo is off. This track will finish and then be deleted.',actions:[],announcement:'Jamendo track finishing'};
   if(!s.enabled||internal==='disabled')return{state:'idle',shape:'○',label:'Jamendo off',detail:'Starter and local music continue.',actions:['setup'],announcement:''};
-  if(internal==='needs_config')return{state:'blocked',shape:'✗',label:'Finish Jamendo setup',detail:'Add a client ID and confirm non-commercial use.',actions:['setup'],announcement:'Jamendo setup needed'};
+  if(internal==='needs_config')return{state:'blocked',shape:'✗',label:'Finish Jamendo setup',detail:s.shared_access_available?'Confirm non-commercial use to finish. No client ID needed — the station brings its own Jamendo access.':'Add your own Jamendo client ID and confirm non-commercial use.',actions:['setup'],announcement:'Jamendo setup needed'};
   if(['idle','discovering','fetching','normalizing','queued','playing','consumed'].includes(internal)){
     // No candidate count here by design. A lifetime total ("823 candidates
     // skipped") reads as catastrophic, says nothing about whether the attempt
@@ -4912,13 +4915,9 @@ function renderJamendoStatus(status){
   renderJamendoSettings(status,false);
 }
 function openJamendoSetup(){
-  openSetupPanel();
-  const heading=document.getElementById('jamendoSetupHeading');
-  setTimeout(()=>{
-    heading?.scrollIntoView({block:'center',behavior:'smooth'});
-    heading?.focus();
-  },80);
+  openSetupPanel('music-sources');
 }
+function setFirstListenSetupView(view=''){for(const [id,display] of [['journeySurface',view==='music-sources'?'none':''],['setupMusicSources',view==='music-sources'?'block':'']]){const el=document.getElementById(id);if(el)el.style.display=display;}}
 function setJamendoFormMessage(message,state='idle'){
   const el=document.getElementById('jamendoFormMessage');
   if(!el)return;
@@ -4931,11 +4930,20 @@ function renderJamendoSettings(status,force){
   const ack=document.getElementById('jamendoNoncommercialAck');
   const secret=document.getElementById('jamendoSecretState');
   const field=document.getElementById('jamendoClientField');
+  const accessHelp=document.getElementById('jamendoAccessHelp');
+  const ownIdAction=document.getElementById('jamendoOwnClientIdAction');
+  const clear=document.getElementById('jamendoClearClientId');
   if(enabled)enabled.checked=Boolean(status.enabled);
   if(ack)ack.checked=Boolean(status.noncommercial_acknowledged);
   const configured=Boolean(status.client_id_configured);
+  const ownsId=configured&&status.client_id_source==='operator';
+  if(accessHelp)accessHelp.textContent=ownsId?'Enable both options to add credited Jamendo songs to rotation. Your own client ID supplies access.':status.shared_access_available?'Enable both options to add credited Jamendo songs to rotation. Mamma Mi Radio supplies the access automatically — no Jamendo account or client ID needed.':'Add your own Jamendo client ID, then enable both options to add credited Jamendo songs to rotation.';
+  const label=document.getElementById('jamendoSecretLabel');
+  if(label&&configured)label.textContent=status.enabled?(ownsId?'✓ Using your own client ID':'✓ Using Mamma Mi Radio’s included Jamendo access'):(ownsId?'Your own client ID is saved':'Jamendo access included — no account needed');
   if(secret)secret.hidden=!configured;
   if(field)field.hidden=configured&&!_jamendoReplaceMode;
+  if(ownIdAction)ownIdAction.textContent=ownsId?'Replace':'Use own ID';
+  if(clear)clear.hidden=!ownsId;
 }
 async function mediaSourceRequest(method,path,payload){
   const controller=new AbortController();
@@ -4990,12 +4998,21 @@ function replaceJamendoClientId(){
   document.getElementById('jamendoClientId')?.focus();
 }
 async function clearJamendoClientId(button){
-  if(!confirm('Clear the saved Jamendo client ID and turn Jamendo off? Starter and local music will continue.'))return;
+  // Clear removes only an operator-owned credential; disabling Jamendo stays a saved setting.
+  const ownsId=Boolean(_st.jamendo?.client_id_configured)&&_st.jamendo?.client_id_source==='operator';
+  if(!ownsId){
+    setJamendoFormMessage('There is no client ID of yours to clear. To turn Jamendo off, clear Enable Jamendo live rotation and choose Save and check.','idle');
+    return;
+  }
+  const canFallBack=Boolean(_st.jamendo?.shared_access_available);
+  const prompt=canFallBack?'Remove your own Jamendo client ID and switch back to Mamma Mi Radio’s included access?':'Clear the saved Jamendo client ID and turn Jamendo off? Starter and local music will continue.';
+  if(!confirm(prompt))return;
   button.disabled=true;
-  const acknowledged=Boolean(document.getElementById('jamendoNoncommercialAck')?.checked);
+  const acknowledged=Boolean(_st.jamendo?.noncommercial_acknowledged);
+  const enabled=canFallBack?Boolean(_st.jamendo?.enabled):false;
   try{
-    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',{enabled:false,noncommercial_acknowledged:acknowledged,clear_client_id:true});
-    applyJamendoResponse(result,'Jamendo client ID cleared. Starter and local music continue.');
+    const result=await mediaSourceRequest('PUT','/api/media-sources/jamendo',{enabled,noncommercial_acknowledged:acknowledged,clear_client_id:true});
+    const current=result.data?.status||{};applyJamendoResponse(result,current.enabled?'Using Mamma Mi Radio’s included Jamendo access. Settings are up to date.':'Jamendo is off. Settings are up to date.');
   }catch(_){setJamendoFormMessage(offlineMsg()+' The saved settings were not changed.','degraded');}
   finally{button.disabled=false;}
 }
@@ -5025,12 +5042,15 @@ function openSetupPanel(focus=''){
   }
   const firstListenRequired=document.body.dataset.firstListenEntry==='required';
   showAdminTab(firstListenRequired?'setup':'motore',{render:true,persist:true});
+  if(focus==='music-sources')document.body.dataset.firstListenSetupView='music-sources';else delete document.body.dataset.firstListenSetupView;
+  setFirstListenSetupView(focus);
   const details=document.getElementById('setupGroup');
   if(details){details.open=true;details.dataset.userPinned='true';}
   const summary=details?.querySelector('summary');
   setTimeout(()=>{
     details?.scrollIntoView({block:'start',behavior:recordHuntReducedMotion()?'auto':'smooth'});
     if(focus==='source')focusFirstListenStep('source');
+    else if(focus==='music-sources')document.getElementById('jamendoSetupHeading')?.focus({preventScroll:true});
     else if(focus==='choices')document.querySelector('#firstListenPrivacyStep[data-state="complete"] .first-listen-review')?.focus({preventScroll:true});
     else if(firstListenRequired)focusCurrentFirstListenStep();
     else summary?.focus({preventScroll:true});

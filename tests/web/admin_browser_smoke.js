@@ -169,6 +169,18 @@ async (page) => {
   await page.emulateMedia({forcedColors:'active'});const forcedGlyphs=await page.evaluate(()=>[...setupStripChips.children].map((el)=>getComputedStyle(el,'::before').content));assert(forcedGlyphs.every((glyph)=>!['none','normal','""'].includes(glyph)),`forced colors hid setup status glyphs: ${JSON.stringify(forcedGlyphs)}`);
   await page.emulateMedia({forcedColors:'none'});await page.evaluate(()=>renderGuidedSetupStrip({}));
 
+  const jamendoControls=await page.evaluate(async()=>{const status=(source,shared,enabled=true,acknowledged=true)=>({enabled,noncommercial_acknowledged:acknowledged,client_id_configured:Boolean(source),client_id_source:source,shared_access_available:shared}),view=()=>({label:jamendoSecretLabel.textContent,action:jamendoOwnClientIdAction.textContent,fieldHidden:jamendoClientField.hidden,clearHidden:jamendoClearClientId.hidden,help:jamendoAccessHelp.textContent});
+    let confirmations=0,requests=[],responseStatus=status('bundled',true);const originalConfirm=window.confirm,originalRequest=window.mediaSourceRequest;window.confirm=()=>{confirmations+=1;return true};window.mediaSourceRequest=async(method,path,payload)=>{requests.push({method,path,payload});return{ok:true,status:200,data:{ok:true,status:responseStatus}}};
+    try{_jamendoFormDirty=false;_jamendoReplaceMode=false;_st={..._st,jamendo:status('bundled',true)};renderJamendoSettings(_st.jamendo,true);const bundled=view();await clearJamendoClientId(jamendoClearClientId);const guarded={confirmations,requests:requests.length,message:jamendoFormMessage.textContent};
+      _st.jamendo=status('',false);renderJamendoSettings(_st.jamendo,true);const required=view();_st.jamendo=status('operator',true);renderJamendoSettings(_st.jamendo,true);const operator=view();await clearJamendoClientId(jamendoClearClientId);
+      const includedMessage=jamendoFormMessage.textContent;responseStatus=status('bundled',true,false,false);_st.jamendo=status('operator',true);renderJamendoSettings(_st.jamendo,true);await clearJamendoClientId(jamendoClearClientId);return{bundled,guarded,required,operator,confirmations,request:requests[0],includedMessage,offMessage:jamendoFormMessage.textContent};
+    }finally{window.confirm=originalConfirm;window.mediaSourceRequest=originalRequest}
+  });
+  assert(jamendoControls.bundled.label.includes('included')&&jamendoControls.bundled.action==='Use own ID'&&jamendoControls.bundled.fieldHidden&&jamendoControls.bundled.clearHidden,`bundled Jamendo controls exposed credential work: ${JSON.stringify(jamendoControls.bundled)}`);
+  assert(jamendoControls.guarded.confirmations===0&&jamendoControls.guarded.requests===0&&jamendoControls.guarded.message.includes('turn Jamendo off'),`bundled Jamendo Clear reached confirmation or network: ${JSON.stringify(jamendoControls.guarded)}`);
+  assert(!jamendoControls.required.fieldHidden&&jamendoControls.required.help.startsWith('Add your own'),`missing Jamendo access did not request an operator ID: ${JSON.stringify(jamendoControls.required)}`);
+  assert(jamendoControls.operator.label.includes('your own')&&jamendoControls.operator.action==='Replace'&&!jamendoControls.operator.clearHidden&&jamendoControls.confirmations===2&&JSON.stringify(jamendoControls.request)===JSON.stringify({method:'PUT',path:'/api/media-sources/jamendo',payload:{enabled:true,noncommercial_acknowledged:true,clear_client_id:true}})&&jamendoControls.includedMessage==='Using Mamma Mi Radio’s included Jamendo access. Settings are up to date.'&&jamendoControls.offMessage==='Jamendo is off. Settings are up to date.',`operator Jamendo Clear lost its credential-removal contract: ${JSON.stringify(jamendoControls)}`);
+
   const seededStoppedFirstPaint = await page.evaluate(() => {
     document.body.setAttribute('data-stopped', 'true');
     stoppedBanner.classList.remove('show');
@@ -1719,7 +1731,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 53,
+    checks: 57,
     viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

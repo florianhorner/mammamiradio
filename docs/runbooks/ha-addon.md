@@ -788,7 +788,13 @@ log `Jamendo provider control failed` with only a `failure_code` set to
 
 `failure_code=api_failed provider_code=3` means Jamendo rejected the request
 format or one of its parameters, so the provider enters the blocked state.
-Invalid or suspended client IDs also block. Rate limits remain retryable.
+Invalid or suspended client IDs also block.
+
+`failure_code=rate_limited provider_code=6` means Jamendo asked the station to
+slow down. It stays retryable and keeps its backoff ladder. The same condition
+arrives as an ordinary HTTP 429 with no provider code, and reports the same way.
+Requests are counted by application or by requesting address, and the reply does
+not say which ceiling was reached, so no credential change is presented as a remedy.
 Starter and local music continue while Jamendo is degraded or blocked. Status
 and logs omit the client ID, private audio URL, raw response text, and raw
 provider exception. The provider removes its single-use artifact after
