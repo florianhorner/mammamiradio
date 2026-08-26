@@ -781,6 +781,7 @@ class StationConfig:
     cache_dir: Path = Path("cache")
     tmp_dir: Path = Path("tmp")
     music_dir: Path = Path("music")
+    legacy_music_dirs: tuple[Path, ...] = field(default_factory=tuple)
     max_cache_size_mb: int = 500
 
     # Secrets from env
@@ -2301,6 +2302,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
     cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "cache"))
     tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "tmp"))
     music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "music"))
+    legacy_music_dirs = tuple(
+        Path(value) for value in os.getenv("MAMMAMIRADIO_LEGACY_MUSIC_DIRS", "").split(os.pathsep) if value.strip()
+    )
 
     # Parse sonic brand section
     sonic_brand_raw = raw.get("sonic_brand", {})
@@ -2355,6 +2359,7 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         cache_dir=cache_dir,
         tmp_dir=tmp_dir,
         music_dir=music_dir,
+        legacy_music_dirs=legacy_music_dirs,
         max_cache_size_mb=_env_clamped_int(
             "MAMMAMIRADIO_MAX_CACHE_MB",
             # The add-on default covers a whole rotation of about 200 tracks at
@@ -2457,6 +2462,9 @@ def load_config(path: str = "radio.toml") -> StationConfig:
         config.cache_dir = Path(os.getenv("MAMMAMIRADIO_CACHE_DIR", "/data/cache"))
         config.tmp_dir = Path(os.getenv("MAMMAMIRADIO_TMP_DIR", "/data/tmp"))
         config.music_dir = Path(os.getenv("MAMMAMIRADIO_MUSIC_DIR", "/data/music"))
+        config.legacy_music_dirs = tuple(
+            Path(value) for value in os.getenv("MAMMAMIRADIO_LEGACY_MUSIC_DIRS", "").split(os.pathsep) if value.strip()
+        )
         # Auto-enable HA context via Supervisor API unless explicitly disabled.
         supervisor_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN", "")
         if supervisor_token and not ha_force_disabled:

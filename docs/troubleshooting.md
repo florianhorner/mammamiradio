@@ -89,28 +89,24 @@ Jamendo cannot repair a broken starter package: it is optional, default-off,
 asynchronous enrichment. A Jamendo failure must leave starter/local playback
 unchanged. See [Music sources and rights boundaries](music-sources.md).
 
-For the supplied Docker image or Home Assistant app, local MP3s belong in the
-  deployment's persistent `/data/music` directory. Populate that data area
-  through the deployment's supported storage tooling; do not patch files into
-  a running Home Assistant app container. A source checkout instead reads
-  repo-local `music/`, or the path set by `MAMMAMIRADIO_MUSIC_DIR`.
+For the Home Assistant app, add local audio under **Media → My media →
+mammamiradio**. Home Assistant owns upload/delete; Mamma Mi Radio discovers
+changes within one minute, or immediately through **Rotazione → Local music →
+Scan now**. Do not patch files into the running app container. Supplied Docker
+and source-checkout installs use their mounted `music/` directory, or the path
+set by `MAMMAMIRADIO_MUSIC_DIR`.
 
 **"Clear pool" does not delete local music files, and the songs come back.**
 This is by design and is not a bug in the button. `POST /api/playlist/purge`
-empties the in-memory rotation only. On the next producer pass with an empty
-crate, `_recover_local_rotation` in `scheduling/producer.py` re-scans the music
-directory and loads whatever MP3s it finds, so operator-supplied songs return
-within one cycle. Local music also outranks the bundled starter catalog at
-startup (`playlist.py`), so a stale `/data/music` can shadow the starter set
-entirely and make the station look like it is ignoring the bundled crate.
+empties the in-memory rotation only. The local-library scanner treats files on
+disk as operator intent and adds them back on its next scan. Local music also
+outranks the bundled starter catalog at startup.
 To stop specific songs permanently, use the per-row **✕ Ban** button, which
 writes a durable blocklist honored at every ingest doorway including norm-cache
-rescue. To remove the files themselves, delete them from the music directory
-through the deployment's storage tooling and restart, or switch to an explicit
-source. Confirm the starter catalog is ready in Motore first: emptying the music
-directory while no other source is available leaves the crate to the recovery
-ladder until the next restart, because no runtime path refills rotation from the
-starter catalog once the station is already running.
+rescue. To remove the files themselves, delete them through Home Assistant
+Media (or the standalone deployment's storage tooling), then select **Scan
+now**. Confirm another source is ready first: emptying the only music source
+leaves the crate on the audible recovery ladder until music is added again.
 
 When listeners are connected, `/readyz` flips back to `503 starting` if playback
 has been truly silent for more than 30 seconds — silent means no listener queue

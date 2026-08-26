@@ -66,6 +66,7 @@ from mammamiradio.playlist.direction import (
 from mammamiradio.playlist.downloader import evict_cache_lru, prune_stale_tmp_files, purge_suspect_cache_files
 from mammamiradio.playlist.jamendo_transient import JamendoStreamProvider
 from mammamiradio.playlist.legacy_media import reconcile_legacy_external_media
+from mammamiradio.playlist.local_library import initial_local_library_status, run_local_library_scanner
 from mammamiradio.playlist.playlist import (
     PERSISTED_HEADING_FILENAME,
     fetch_startup_playlist,
@@ -797,12 +798,15 @@ async def startup():
     app.state.queue = queue
     app.state.skip_event = asyncio.Event()
     app.state.source_switch_lock = asyncio.Lock()
+    app.state.local_library_scan_lock = asyncio.Lock()
     app.state.csrf_token = secrets.token_urlsafe(32)
     app.state.stream_hub = LiveStreamHub()
     app.state.stream_hub.bind_state(state)
     app.state.station_state = state
     app.state.release_campaign = release_campaign
     app.state.config = config
+    app.state.local_library_status = initial_local_library_status(config)
+    app.state.local_library_status["active"] = sum(1 for track in state.playlist if track.source == "local")
     app.state.start_time = time.time()
     app.state.first_listen_store = FirstListenReceiptStore(config.cache_dir)
     app.state.first_listen_receipt = None
@@ -883,6 +887,11 @@ async def startup():
             jamendo_provider=jamendo_provider,
         )
     )
+    local_library_task = asyncio.create_task(
+        run_local_library_scanner(app.state),
+        name="local-library-scanner",
+    )
+    app.state.local_library_task = local_library_task
     # Discovery/preparation must never delay listener-ready startup. The
     # provider itself remains inert unless the current acknowledgement and
     # client ID are both present.
@@ -1066,6 +1075,10 @@ async def shutdown():
     if _playback_task:
         _playback_task.cancel()
         tasks_to_cancel.append(_playback_task)
+    local_library_task = getattr(app.state, "local_library_task", None)
+    if local_library_task and not local_library_task.done():
+        local_library_task.cancel()
+        tasks_to_cancel.append(local_library_task)
     jamendo_start_task = getattr(app.state, "jamendo_start_task", None)
     if jamendo_start_task:
         jamendo_start_task.cancel()
@@ -1114,6 +1127,8 @@ async def shutdown():
         app.state.prewarm_task = None
     if hasattr(app.state, "playback_task"):
         app.state.playback_task = None
+    if hasattr(app.state, "local_library_task"):
+        app.state.local_library_task = None
     if hasattr(app.state, "stream_hub"):
         app.state.stream_hub.close()
     # Stop the ledger AFTER producer/playback are cancelled so final rows drain.

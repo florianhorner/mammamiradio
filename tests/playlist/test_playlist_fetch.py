@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Literal
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
@@ -325,7 +324,7 @@ def test_explicit_local_source(config):
 def test_explicit_local_source_rejects_empty_directory(config):
     with (
         patch("mammamiradio.playlist.playlist._load_local_music_tracks", return_value=[]),
-        pytest.raises(ExplicitSourceError, match="No MP3 files"),
+        pytest.raises(ExplicitSourceError, match="No supported audio files"),
     ):
         load_explicit_source(
             config,
@@ -500,8 +499,8 @@ def test_load_local_music_tracks_parses_names_and_paths(tmp_path):
 
     named = tmp_path / "Lucio Battisti - Emozioni.mp3"
     unnamed = tmp_path / "NoHyphen.mp3"
-    named.write_bytes(b"")
-    unnamed.write_bytes(b"")
+    named.write_bytes(b"id3")
+    unnamed.write_bytes(b"id3")
 
     tracks = {track.title: track for track in _load_local_music_tracks(tmp_path)}
 
@@ -512,19 +511,27 @@ def test_load_local_music_tracks_parses_names_and_paths(tmp_path):
     assert tracks["NoHyphen"].local_path == unnamed
 
 
-def test_load_operator_local_tracks_tags_shuffles_and_drops_blocklisted(tmp_path):
+def test_load_operator_local_tracks_filters_and_applies_one_global_cap(tmp_path):
     from mammamiradio.playlist.playlist import load_operator_local_tracks
 
-    (tmp_path / "Banned Artist - Banned Song.mp3").write_bytes(b"id3")
-    (tmp_path / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    primary = tmp_path / "primary"
+    legacy = tmp_path / "legacy"
+    primary.mkdir()
+    legacy.mkdir()
+    (primary / "Banned Artist - Banned Song.mp3").write_bytes(b"id3")
+    (primary / "Kevin MacLeod - Carefree.mp3").write_bytes(b"id3")
+    for index in range(2):
+        (legacy / f"Legacy Artist {index} - Song {index}.mp3").write_bytes(b"id3")
     config = load_config()
-    config.music_dir = tmp_path
+    config.music_dir = primary
+    config.legacy_music_dirs = (legacy,)
     config.playlist.shuffle = False
 
-    tracks = load_operator_local_tracks(
-        config,
-        blocklist={("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}},
-    )
+    with patch("mammamiradio.playlist.local_library.MAX_LOCAL_LIBRARY_TRACKS", 2):
+        tracks = load_operator_local_tracks(
+            config,
+            blocklist={("banned artist", "banned song"): {"display": "Banned Artist - Banned Song"}},
+        )
 
     assert [track.title for track in tracks] == ["Carefree"]
     assert tracks[0].source == "local"
@@ -537,13 +544,14 @@ def test_load_local_music_tracks_missing_directory_is_empty(tmp_path):
     assert _load_local_music_tracks(tmp_path / "missing") == []
 
 
-def test_load_local_music_tracks_caps_at_200(tmp_path):
+def test_load_local_music_tracks_honors_track_cap(tmp_path):
     from mammamiradio.playlist.playlist import _load_local_music_tracks
 
     for index in range(205):
-        (tmp_path / f"Artist {index:03d} - Song {index:03d}.mp3").write_bytes(b"")
+        (tmp_path / f"Artist {index:03d} - Song {index:03d}.mp3").write_bytes(b"id3")
 
-    assert len(_load_local_music_tracks(tmp_path)) == 200
+    with patch("mammamiradio.playlist.local_library.MAX_LOCAL_LIBRARY_TRACKS", 200):
+        assert len(_load_local_music_tracks(tmp_path)) == 200
 
 
 def test_chart_refresh_filters_existing_ids():
@@ -563,10 +571,11 @@ def test_chart_refresh_propagates_empty_fetch_as_empty():
         assert fetch_chart_refresh(set()) == []
 
 
-def test_local_loader_ignores_non_mp3_files(tmp_path):
+def test_local_loader_ignores_unsupported_and_empty_files(tmp_path):
     from mammamiradio.playlist.playlist import _load_local_music_tracks
 
-    (tmp_path / "Artist - Song.wav").write_bytes(b"")
+    (tmp_path / "Artist - Song.aiff").write_bytes(b"audio")
+    (tmp_path / "Artist - Empty.wav").write_bytes(b"")
     (tmp_path / "README.md").write_text("not music")
 
     assert _load_local_music_tracks(Path(tmp_path)) == []
@@ -578,46 +587,26 @@ def test_local_loader_ignores_non_mp3_files(tmp_path):
 
 
 def test_load_local_music_tracks_unreadable_dir_returns_empty(tmp_path):
-    with patch("mammamiradio.playlist.playlist.os.scandir", side_effect=PermissionError("denied")):
+    with patch("mammamiradio.playlist.local_library.os.scandir", side_effect=PermissionError("denied")):
         result = _load_local_music_tracks(tmp_path)
 
     assert result == []
 
 
 def test_local_directory_enumeration_bounds_raw_entries_before_mp3_filtering(tmp_path):
-    yielded = 0
+    for index in range(10):
+        (tmp_path / f"not-music-{index}.txt").write_text("not music")
 
-    class CountingScandir:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def __iter__(self):
-            nonlocal yielded
-            for index in range(10_000):
-                yielded += 1
-                yield SimpleNamespace(
-                    name=f"not-music-{index}.txt",
-                    path=str(tmp_path / f"not-music-{index}.txt"),
-                    is_file=lambda: True,
-                )
-
-    with (
-        patch("mammamiradio.playlist.playlist.os.scandir", return_value=CountingScandir()),
-        patch("mammamiradio.playlist.playlist._MAX_LOCAL_DIRECTORY_ENTRIES", 8),
-    ):
+    with patch("mammamiradio.playlist.local_library.MAX_LOCAL_LIBRARY_ENTRIES", 8):
         tracks = _load_local_music_tracks(tmp_path)
 
     assert tracks == []
-    assert yielded == 9
 
 
 def test_music_dir_override_drives_chart_local_blend(config, tmp_path):
     music_dir = tmp_path / "operator-music"
     music_dir.mkdir()
-    (music_dir / "Local Artist - Local Song.mp3").touch()
+    (music_dir / "Local Artist - Local Song.mp3").write_bytes(b"id3")
     config.music_dir = music_dir
     config.allow_ytdlp = True
     chart = _track("Chart Song", "Chart Artist")
@@ -642,7 +631,7 @@ def test_source_evidence_records_chart_local_blend_and_recovery(config, tmp_path
     config.allow_ytdlp = True
     config.music_dir = tmp_path / "music"
     config.music_dir.mkdir()
-    (config.music_dir / "Local Artist - Local Song.mp3").touch()
+    (config.music_dir / "Local Artist - Local Song.mp3").write_bytes(b"id3")
     chart = _track("Chart Song", "Chart Artist")
 
     with (
