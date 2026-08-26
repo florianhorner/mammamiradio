@@ -62,6 +62,24 @@ def test_scan_rejects_a_symlinked_configured_root(tmp_path):
     assert result.warnings == [f"Symlinked music folder skipped: {linked_root}. Use its real path; tracks kept."]
 
 
+def test_scanned_track_cannot_escape_library_after_symlink_swap(tmp_path):
+    from mammamiradio.playlist.downloader import _resolve_cached_or_local
+
+    root = tmp_path / "music"
+    root.mkdir()
+    scanned_path = root / "Artist - Song.mp3"
+    scanned_path.write_bytes(b"inside")
+    track = scan_local_library(_config(root)).tracks[0]
+    outside = tmp_path / "outside.mp3"
+    outside.write_bytes(b"outside")
+    scanned_path.unlink()
+    scanned_path.symlink_to(outside)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    assert _resolve_cached_or_local(track, cache, root) is None
+
+
 @pytest.mark.parametrize("fail_on_stat", [False, True])
 def test_entry_cap_bounds_iterator_and_unreadable_entries(tmp_path, fail_on_stat):
     consumed = 0
