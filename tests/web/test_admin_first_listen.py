@@ -85,8 +85,9 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Add new conversations between songs" in html
     assert "Mamma Mi Radio integration through HACS" in html
     assert "restart Home Assistant" in html
+    assert "Settings → Devices &amp; Services → Add Integration" in html
     assert "Media → Mamma Mi Radio" in html
-    assert "Step 2 of 4. Next: play it on this device." in html
+    assert "Step 1 of 4. Next: play it on this device." in html
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
     assert "const current=state==='current'" in step
@@ -948,6 +949,8 @@ def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actio
     assert "firstListenSourcePreview" in sources
     assert "firstListenSourcePreviewDetails" in sources
     assert "healthySourceRows(source)" in sources
+    assert "previousHealth!=='degraded'" in sources
+    assert "previewDetails.dataset.sourceHealth=sourceHealth" in sources
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "const sourceComplete=sourceMilestone&&continuityAvailable" in progress
     assert "sourceKnown&&!continuityAvailable?'repair the music source'" in progress

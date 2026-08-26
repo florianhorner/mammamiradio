@@ -648,12 +648,15 @@ async (page) => {
     assert(await sourceReview.isVisible(), 'completed source row lost its music-readiness review action');
     await sourceReview.click();
     assert(await sourcePreview.isVisible(), 'inline source preview is missing when step 1 is reviewed');
+    const sourcePreviewSummaryBox = await sourcePreview.locator('> summary').boundingBox();
+    assert(sourcePreviewSummaryBox?.height >= 43.5, `source preview summary fell below 44px: ${JSON.stringify(sourcePreviewSummaryBox)}`);
     await sourceReview.click();
     assert(await sourcePreview.isHidden(), 'inline source preview stayed open after review closed');
     const speakerHelp = await page.locator('#firstListenSpeakerBody .use-copy').innerText();
     assert(
       speakerHelp.includes('through HACS')
         && speakerHelp.includes('restart Home Assistant')
+        && speakerHelp.includes('Settings → Devices & Services → Add Integration')
         && speakerHelp.includes('Media → Mamma Mi Radio'),
       'step 2 lost the HA speaker prerequisite and deferral line',
     );
@@ -716,6 +719,13 @@ async (page) => {
     assert((await page.locator('#firstListenSourceChip').innerText()) === 'BACKUP AUDIO AVAILABLE', 'degraded source lost its honest runtime status');
     assert((await page.locator('#firstListenSourceSummary').innerText()).includes('Backup audio'), 'degraded source did not explain what the listener gets');
     assert((await page.locator('#firstListenSourceRepair').innerText()).includes('continue'), 'degraded source blocked an otherwise usable First Listen');
+    assert(await sourcePreview.evaluate((element) => element.open), 'degraded source preview did not open on the health transition');
+    await sourceReview.click();
+    await sourcePreview.locator('> summary').click();
+    assert(!(await sourcePreview.evaluate((element) => element.open)), 'operator could not close the degraded source preview');
+    await page.evaluate(() => renderFirstListenProgress());
+    assert(!(await sourcePreview.evaluate((element) => element.open)), 'routine refresh reopened the source preview after the operator closed it');
+    await sourceReview.click();
 
     const assertEarlyCompletionExit=async(beforeSave)=>{
       const ready=setupProjection({audio:true}),gate=responseGate();await resetUi(ready,audioReadyOverrides());
@@ -1220,6 +1230,8 @@ async (page) => {
       assert(child.start === '1' && child.end === '-1', `technical detail child was left in an implicit grid column: ${JSON.stringify(child)}`);
     }
     await page.locator('#setupAdvancedDetails > summary').click();
+    await sourceReview.click();
+    assert(await sourcePreview.isVisible(), 'source preview was not exposed for responsive geometry checks');
     const viewportResults = [];
     const journeyViewports = [[320, 568], [375, 667], [430, 932], [554, 800], [720, 900], [768, 1024], [1024, 768], [1440, 900]];
     const measureJourneyGeometry = () => page.evaluate(() => {
@@ -1338,6 +1350,7 @@ async (page) => {
         && zoomGeometry.longNameWidth <= zoomGeometry.longNameClientWidth + 1,
       `320px/200% first-listen geometry overflowed: ${JSON.stringify(zoomGeometry)}`,
     );
+    await sourceReview.click();
     const activeZoomJourneyGeometry = await measureJourneyGeometry();
     assertJourneyGeometry(320, activeZoomJourneyGeometry, 'active 200% zoom');
 

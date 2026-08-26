@@ -2446,7 +2446,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <p class="guide-audio-copy" id="guideWelcomeNote"><strong>16 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
                   <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. <strong>Giulia:</strong> Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.</p></details>
                 </div>
-                <p class="progress-line" id="firstListenProgressLine">Step 2 of 4. Next: play it on this device.</p>
+                <p class="progress-line" id="firstListenProgressLine">Step 1 of 4. Next: play it on this device.</p>
               </header>
 
               <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
@@ -2483,7 +2483,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
                   <div class="first-listen-current-meta"><strong>Step 2 of 4</strong><span>Next: check the sound</span></div>
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
-                  <p class="use-copy">The station plays on this device. You choose headphones, Bluetooth, or the speaker. Finishing here is enough to complete setup. For a Home Assistant speaker later, install the optional Mamma Mi Radio integration through HACS, restart Home Assistant, then open Media → Mamma Mi Radio.</p>
+                  <p class="use-copy">The station plays on this device. You choose headphones, Bluetooth, or the speaker. Finishing here is enough to complete setup. For a Home Assistant speaker later, install the optional Mamma Mi Radio integration through HACS, restart Home Assistant, add Mamma Mi Radio under Settings → Devices &amp; Services → Add Integration, then open Media → Mamma Mi Radio.</p>
                   <div class="first-listen-actions" style="margin-top:0">
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)">Start sound check</button>
                   </div>
@@ -5344,14 +5344,17 @@ function firstListenSourcesHtml(source){
 }
 function renderFirstListenSources(source){
   const sourceKnown=Array.isArray(source?.rows)&&source.rows.length>0;
+  const sourceHealth=sourceKnown?(healthySourceRows(source)?'healthy':'degraded'):'unknown';
   const html=sourceKnown?firstListenSourcesHtml(source):'<div class="empty">Checking what can play…</div>';
   const preview=document.getElementById('firstListenSourcePreview');
   const previewDetails=document.getElementById('firstListenSourcePreviewDetails');
   const technical=document.getElementById('firstListenSources');
   if(preview)preview.innerHTML=html;
   if(previewDetails){
+    const previousHealth=previewDetails.dataset.sourceHealth||'unknown';
     previewDetails.hidden=!sourceKnown;
-    if(sourceKnown&&!healthySourceRows(source))previewDetails.open=true;
+    if(sourceHealth==='degraded'&&previousHealth!=='degraded')previewDetails.open=true;
+    previewDetails.dataset.sourceHealth=sourceHealth;
   }
   if(technical)technical.innerHTML=html;
 }
