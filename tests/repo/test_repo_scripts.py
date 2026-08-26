@@ -16,6 +16,7 @@ CHECK_COMMIT_MSG = ROOT / "scripts" / "check-commit-msg.sh"
 CHECK_VERSION_SYNC = ROOT / "scripts" / "check-version-sync.sh"
 CHECK_CHANGELOG_SYNC = ROOT / "scripts" / "check-changelog-sync.sh"
 CHECK_CHANGELOG_LINT = ROOT / "scripts" / "check-changelog-lint.sh"
+CHECK_UI_COPY_LINT = ROOT / "scripts" / "check-ui-copy-lint.sh"
 PRE_RELEASE_CHECK = ROOT / "scripts" / "pre-release-check.sh"
 VALIDATE_ADDON = ROOT / "scripts" / "validate-addon.sh"
 ADDON_BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "addon-build.yml"
@@ -1108,6 +1109,12 @@ def test_check_changelog_lint_rejects_internal_process_phrases(tmp_path: Path) -
     assert r"\binformed the later\b" in result.stdout
     assert r"\bConductor setup fails\b" in result.stdout
     assert r"\bsuperseded\b" in result.stdout
+
+
+def test_check_ui_copy_lint_passes_on_repo() -> None:
+    result = _run(["bash", str(CHECK_UI_COPY_LINT)], cwd=ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "UI copy lint clean" in result.stdout
 
 
 VALIDATE_ADDON_BACKUP_CONTRACT = (
