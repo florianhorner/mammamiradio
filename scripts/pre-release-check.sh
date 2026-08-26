@@ -263,7 +263,28 @@ fi
 echo ""
 echo "9. Physical HA Green release evidence"
 
-if "$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py --release-version "$ADDON_VER"; then
+# The 20-run receipt set is release-cut evidence, not a per-PR gate: it is
+# recorded on physical Home Assistant Green hardware against the version being
+# published. quality.yml re-runs this whole script on any PR that merely touches
+# a version file (an add-on option, a manifest key), and such a PR can never
+# produce Green hardware receipts. So the gate runs when the add-on version
+# differs from the one on origin/main (a real cut), or when receipts are already
+# present (an in-progress evidence set still has to be valid). The publishing
+# gates in addon-release.yml and docker.yml remain unconditional.
+HA_GREEN_RECEIPT_DIR="proof/media/ha-green-release-evidence"
+MAIN_ADDON_VER=""
+if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    MAIN_ADDON_VER=$(git show origin/main:ha-addon/mammamiradio/config.yaml 2>/dev/null \
+        | awk '/^version:/ {print $2; exit}' | tr -d '"' || true)
+fi
+HA_GREEN_RECEIPTS=0
+if [ -d "$HA_GREEN_RECEIPT_DIR" ]; then
+    HA_GREEN_RECEIPTS=$(find "$HA_GREEN_RECEIPT_DIR" -maxdepth 1 -type f -name 'run-*.json' 2>/dev/null | wc -l | tr -d '[:space:]')
+fi
+
+if [ -n "$MAIN_ADDON_VER" ] && [ "$ADDON_VER" = "$MAIN_ADDON_VER" ] && [ "${HA_GREEN_RECEIPTS:-0}" -eq 0 ]; then
+    ok "version unchanged ($ADDON_VER) — physical HA Green evidence is required only on release cuts"
+elif "$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py --release-version "$ADDON_VER"; then
     ok "at least 20 cold Home Assistant Green runs meet the <=2s p95 release contract"
 else
     fail "HA Green release evidence is incomplete — record 20 runs with scripts/ha-green-launch-smoke.py --record-release-receipt proof/media/ha-green-release-evidence, then commit only those receipt JSON files"

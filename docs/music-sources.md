@@ -55,6 +55,12 @@ not fabricate or infer those human decisions.
 
 The ordinary pull-request gate runs one cold aarch64 launch in
 `.github/workflows/pi-smoke.yml`; it does not require physical-device receipts.
+`scripts/pre-release-check.sh` follows the same rule: it asks for the twenty
+receipts only when the add-on version differs from the one on `origin/main` (a
+real cut) or when receipts are already committed, so a pull request that merely
+edits an add-on option is not asked for evidence it cannot record. The
+publication gates in `.github/workflows/addon-release.yml` and
+`.github/workflows/docker.yml` always require the full receipt set.
 For a stable release, start from the exact clean commit running on Home
 Assistant Green and record twenty cold runs locally on that device:
 
