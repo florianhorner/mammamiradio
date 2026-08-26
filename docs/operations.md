@@ -46,13 +46,17 @@ watchdog is not invited to restart it mid-recovery. The required recovery files
 under `mammamiradio/assets/demo/recovery/` are durable package resources, not temp
 renders, and cleanup paths guard them before unlinking anything marked ephemeral.
 On an empty queue the rescue ladder opens after `FIRST_BYTE_GRACE_SECONDS` (1s).
-Resume, idle, and active-playback drain bridges prefer a cached song, then the
-short branded continuity clip, then the emergency tone. Startup first tries the
-restart handoff spool (`cache/restart_handoff/`), admitting already-normalized
-music ahead of the producer/playback tasks (see `docs/architecture.md` →
-"Restart handoff spool"). The producer's multi-segment delivery cushion means a
-timed-out queue read signals genuine starvation rather than a normal segment
-boundary; `QUEUE_FALLBACK_WAIT_SECONDS` (5s) remains only the no-content ceiling.
+Resume and idle bridges prefer a cached song, then the short branded continuity
+clip, with a permissive cache retry before the emergency tone when the clip is
+unavailable. An active-playback drain adds one rung after the strict cache miss:
+when the packaged starter catalog is the active source, it admits a verified
+starter song directly before falling back to the continuity clip. Startup first
+tries the restart handoff spool (`cache/restart_handoff/`), admitting
+already-normalized music ahead of the producer/playback tasks (see
+`docs/architecture.md` → "Restart handoff spool"). The producer's multi-segment
+delivery cushion means a timed-out queue read signals genuine starvation rather
+than a normal segment boundary; `QUEUE_FALLBACK_WAIT_SECONDS` (5s) remains only
+the no-content ceiling.
 `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`)
 denies non-loopback networking and requires first byte within two seconds for
 both a warm-cache station and an empty-cache/package-only station. External chart

@@ -129,9 +129,10 @@ clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. The packaged clip appears only when the cache has nothing eligible, and when it does queue with runway still expected but no cache music behind it, the miss reads `no cache music queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, an active drain backed by the packaged starter catalog queues a `verified starter-catalog runway` directly; starter songs do not need normalization-cache copies. The packaged clip appears only when no eligible runway is admitted. The active-drain miss then reads `no music runway queued behind the canned clip`; Resume and idle retain the narrower `no cache music queued behind the canned clip` message. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
-If the clip still repeats, look for a starter manifest/admission failure first.
+If the clip still repeats after an active drain, look for a starter
+manifest/admission failure first.
 Eligible standalone/local normalized cache may still help the rescue picker,
 but Jamendo artifacts are deliberately excluded and cannot survive for rescue.
 
