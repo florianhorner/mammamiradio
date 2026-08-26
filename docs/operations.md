@@ -46,13 +46,17 @@ watchdog is not invited to restart it mid-recovery. The required recovery files
 under `mammamiradio/assets/demo/recovery/` are durable package resources, not temp
 renders, and cleanup paths guard them before unlinking anything marked ephemeral.
 On an empty queue the rescue ladder opens after `FIRST_BYTE_GRACE_SECONDS` (1s).
-Resume, idle, and active-playback drain bridges prefer a cached song, then the
-short branded continuity clip, then the emergency tone. Startup first tries the
-restart handoff spool (`cache/restart_handoff/`), admitting already-normalized
-music ahead of the producer/playback tasks (see `docs/architecture.md` →
-"Restart handoff spool"). The producer's multi-segment delivery cushion means a
-timed-out queue read signals genuine starvation rather than a normal segment
-boundary; `QUEUE_FALLBACK_WAIT_SECONDS` (5s) remains only the no-content ceiling.
+Resume and idle bridges prefer a cached song, then the short branded continuity
+clip, with a permissive cache retry before the emergency tone when the clip is
+unavailable. An active-playback drain adds one rung after the strict cache miss:
+when the packaged starter catalog is the active source, it admits a verified
+starter song directly before falling back to the continuity clip. Startup first
+tries the restart handoff spool (`cache/restart_handoff/`), admitting
+already-normalized music ahead of the producer/playback tasks (see
+`docs/architecture.md` → "Restart handoff spool"). The producer's multi-segment
+delivery cushion means a timed-out queue read signals genuine starvation rather
+than a normal segment boundary; `QUEUE_FALLBACK_WAIT_SECONDS` (5s) remains only
+the no-content ceiling.
 `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`)
 denies non-loopback networking and requires first byte within two seconds for
 both a warm-cache station and an empty-cache/package-only station. External chart
@@ -398,12 +402,18 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 ### Diagnosing provider fallbacks
 
 `GET /status` includes a redacted top-level `jamendo` object with `enabled`,
-the detailed provider `state`, `client_id_configured`, current
+the detailed provider `state`, `client_id_configured`, `client_id_source`
+(`operator`, `bundled`, or `null`), `shared_access_available`, current
 `noncommercial_acknowledged`, `terms_scope`, `provider_confirmation`,
 `ready`, `in_flight`, last-success age, a coarse last-failure code, the lifetime
 rejected count, and three fields describing the most recently completed
 discovery pass: `rejected_this_attempt`, `dominant_failure_code_this_attempt`,
-and an `attempt_rejections` breakdown keyed by code. The per-pass fields clear
+and an `attempt_rejections` breakdown keyed by code. Note that
+`client_id_configured` no longer means the operator supplied one: the station
+ships a bundled application ID, so an ID resolves on every install and the field
+is true even when Jamendo is off. Read `enabled` for whether the source is on,
+`client_id_source` for the resolved credential lane, and `shared_access_available` for
+whether bundled access exists to fall back on. The per-pass fields clear
 on success, on a settings change, and on Check again, so a prepared track never
 carries a failure reason and a replaced run stops being explained. The dominant
 code names whatever ended the pass, so it can name a timeout or provider failure
@@ -899,7 +909,11 @@ docker compose up
 
 The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`.
 
-`ADMIN_TOKEN` is required in `.env` (the container binds to `0.0.0.0`).
+The container binds to `0.0.0.0`. Set `ADMIN_TOKEN` in `.env` to pin a known
+value. If it is unset, the entrypoint generates one and writes it to
+`/data/admin_token` (readable with `docker compose exec mammamiradio cat
+/data/admin_token`). The generated value is not printed in container logs. If
+`/data` is not writable, set `ADMIN_TOKEN` before the next restart.
 
 ## Home Assistant add-on
 

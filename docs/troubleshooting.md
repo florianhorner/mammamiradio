@@ -129,9 +129,10 @@ clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. The packaged clip appears only when the cache has nothing eligible, and when it does queue with runway still expected but no cache music behind it, the miss reads `no cache music queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, an active drain backed by the packaged starter catalog queues a `verified starter-catalog runway` directly; starter songs do not need normalization-cache copies. The packaged clip appears only when no eligible runway is admitted. The active-drain miss then reads `no music runway queued behind the canned clip`; Resume and idle retain the narrower `no cache music queued behind the canned clip` message. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
-If the clip still repeats, look for a starter manifest/admission failure first.
+If the clip still repeats after an active drain, look for a starter
+manifest/admission failure first.
 Eligible standalone/local normalized cache may still help the rescue picker,
 but Jamendo artifacts are deliberately excluded and cannot survive for rescue.
 
@@ -143,8 +144,9 @@ operator's responsibility.
 
 Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
 
-- **Finish Jamendo setup** means the client ID or current non-commercial
-  acknowledgement is missing. A migrated ID remains disabled until reviewed.
+- **Finish Jamendo setup** means the current non-commercial acknowledgement is
+  missing. No client ID is needed; the station brings its own Jamendo access. A
+  migrated operator ID remains disabled until reviewed.
 - **Preparing one Jamendo track** is normal. Starter/local music continues and
   a Jamendo miss never delays the next music slot. When the attempt in progress
   is rejecting candidates, the row states the reason for that attempt in plain
@@ -159,11 +161,12 @@ Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
   configuration or turn Jamendo off.
 
 Every reason line either says the station is retrying, states explicitly that no
-action is needed, or names a step to take. Two carry a real operator lever: a
-client ID Jamendo will not accept, and a working folder the station cannot use.
-Both are reported as blocking failures, so they appear on the **Jamendo track
-could not be used** row, which never claims a retry is coming because a blocked
-provider schedules none.
+action is needed, or names a step to take. Two blocking failures have an operator
+action: access Jamendo will not accept, and a working folder the station cannot
+use. Both appear on the **Jamendo track could not be used** row, which never
+claims a retry is coming because a blocked provider schedules none. Being asked
+to slow down is transient and retries automatically; the reply does not identify
+which request ceiling was reached, so no credential change is presented as a remedy.
 
 `rejected_this_attempt`, `dominant_failure_code_this_attempt` and
 `attempt_rejections` on the admin `/status` payload describe the most recently
