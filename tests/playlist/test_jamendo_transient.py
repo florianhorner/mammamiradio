@@ -430,11 +430,13 @@ async def test_provider_code_three_failure_log_omits_credentials_and_provider_er
             "Jamendo provider blocked failure_code=api_auth_failed provider_code=5",
             [],
         ),
+        # Provider code 6 is rate limited. Keep retry behavior but expose a
+        # distinct failure code for the private-lane hint.
         (
             6,
             "degraded",
-            "api_failed",
-            "Jamendo provider attempt failed failure_code=api_failed provider_code=6 retry_in_seconds=60",
+            "rate_limited",
+            "Jamendo provider attempt failed failure_code=rate_limited provider_code=6 retry_in_seconds=60",
             [60.0],
         ),
         (
@@ -2644,3 +2646,43 @@ async def test_timeout_that_ends_the_attempt_is_the_reason_shown(tmp_path, monke
         release.set()
         await provider.stop()
         await client.aclose()
+
+
+def test_http_429_reports_rate_limited_not_a_generic_failure() -> None:
+    """429 is the ordinary HTTP shape of the condition ``rate_limited`` names.
+
+    Non-200 short-circuited to ``api_failed`` before the body was parsed, so the
+    code added for a throttle could only ever fire on the in-body provider code
+    and the operator advice written for it never reached anyone throttled.
+    """
+    with pytest.raises(jt._TransientError) as excinfo:
+        jt._validated_api_results(jt._RATE_LIMIT_STATUS_CODE, b"")
+    assert excinfo.value.code == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_bounded_api_results_reports_http_429_as_rate_limited() -> None:
+    """Production metadata requests hit ``_bounded_api_results`` before validation."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(jt._RATE_LIMIT_STATUS_CODE, request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(jt._TransientError) as excinfo:
+            await jt._bounded_api_results(client, {"client_id": "test-client"})
+        assert excinfo.value.code == "rate_limited"
+    finally:
+        await client.aclose()
+
+
+def test_other_non_200_statuses_still_report_a_generic_failure() -> None:
+    with pytest.raises(jt._TransientError) as excinfo:
+        jt._validated_api_results(503, b"")
+    assert excinfo.value.code == "api_failed"
+
+
+def test_auth_statuses_are_still_blocking_not_rate_limited() -> None:
+    with pytest.raises(jt._BlockedError) as excinfo:
+        jt._validated_api_results(403, b"")
+    assert excinfo.value.code == "api_auth_failed"

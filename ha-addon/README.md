@@ -62,8 +62,9 @@ by earlier versions move into the secrets file automatically the first time the
 updated add-on starts; non-empty file values win per key.
 
 Jamendo is a separate, optional music source under **Motore → Setup → Music
-sources**. It is off by default and requires both your client ID and an explicit
-non-commercial-use acknowledgement. Tracks are prepared one at a time and
+sources**. It is off by default and requires an explicit non-commercial-use
+acknowledgement. No signup is needed: the add-on brings its own Jamendo access,
+and your own client ID is an optional override. Tracks are prepared one at a time and
 deleted after play or cancellation. License facts shown by the app are
 provider-reported, and provider confirmation for this station model remains
 pending. Read the [music-source and rights guide](../docs/music-sources.md)

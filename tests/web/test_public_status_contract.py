@@ -21,6 +21,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from mammamiradio.core import config as config_module
 from mammamiradio.core.config import JAMENDO_ACK_REVISION
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentLogEntry, SegmentType
 from tests.web.test_streamer_routes import _make_test_app
@@ -163,10 +164,14 @@ async def test_public_status_returns_capabilities():
 
 
 @pytest.mark.asyncio
-async def test_jamendo_status_is_admin_only_and_now_playing_exposes_only_safe_attribution():
+async def test_jamendo_status_is_admin_only_and_now_playing_exposes_only_safe_attribution(monkeypatch):
+    # Pin bundled access so this payload-shape test stays stable.
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "station-bundled-id")
     app = _make_test_app()
     app.state.config.playlist.jamendo_enabled = True
     app.state.config.playlist.jamendo_client_id = "private_client_123"
+    # Keep the ID and source marker consistent with runtime state.
+    app.state.config.playlist.jamendo_client_id_source = "operator"
     app.state.config.playlist.jamendo_noncommercial_acknowledged = True
     app.state.config.playlist.jamendo_ack_revision = JAMENDO_ACK_REVISION
     app.state.jamendo_provider = SimpleNamespace(
@@ -229,6 +234,9 @@ async def test_jamendo_status_is_admin_only_and_now_playing_exposes_only_safe_at
         "enabled": True,
         "state": "ready",
         "client_id_configured": True,
+        # These fields remain inside the admin-only Jamendo block.
+        "client_id_source": "operator",
+        "shared_access_available": True,
         "noncommercial_acknowledged": True,
         "terms_scope": "noncommercial_api_use",
         # Stays "pending" even with noncommercial_acknowledged=True: it reports

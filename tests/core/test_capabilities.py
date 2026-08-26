@@ -19,6 +19,8 @@ def _config(**overrides):
     cfg.homeassistant.enabled = overrides.get("ha_enabled", False)
     cfg.homeassistant.context_enabled = overrides.get("ha_context_enabled", True)
     cfg.playlist.jamendo_client_id = overrides.get("jamendo_client_id", "")
+    # MagicMock attributes are truthy, so set the enablement flag explicitly.
+    cfg.playlist.jamendo_enabled = overrides.get("jamendo_enabled", False)
     cfg.tts_degraded_voices = overrides.get("tts_degraded_voices", [])
     cfg.allow_ytdlp = overrides.get("allow_ytdlp", False)
     return cfg
@@ -145,12 +147,13 @@ def test_get_capabilities_ignores_stale_context_without_ha_access():
 
 
 def test_get_capabilities_sets_jamendo_flag():
-    caps = get_capabilities(_config(jamendo_client_id="jamendo-client"), _state())
+    caps = get_capabilities(_config(jamendo_client_id="jamendo-client", jamendo_enabled=True), _state())
     assert caps.jamendo is True
 
 
-def test_get_capabilities_jamendo_flag_false_for_whitespace_client_id():
-    caps = get_capabilities(_config(jamendo_client_id="   "), _state())
+def test_get_capabilities_jamendo_flag_false_when_the_source_is_off():
+    """A resolved client ID does not enable the source."""
+    caps = get_capabilities(_config(jamendo_client_id="jamendo-client", jamendo_enabled=False), _state())
     assert caps.jamendo is False
 
 
