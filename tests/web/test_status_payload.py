@@ -404,7 +404,7 @@ def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeyp
         anthropic_api_key = ""
         openai_api_key = ""
         allow_ytdlp = True
-        playlist = SimpleNamespace(jamendo_client_id="")
+        playlist = SimpleNamespace(jamendo_client_id="", jamendo_enabled=False)
 
     monkeypatch.setattr(status_payload, "_golden_path_cache", None)
     monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
@@ -416,10 +416,11 @@ def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeyp
     assert payload["source_readiness"]["sources"]["charts"]["status"] == "configured_unchecked"
 
 
-def _source_config(*, allow_ytdlp: bool = False, jamendo_client_id: str = ""):
+def _source_config(*, allow_ytdlp: bool = False, jamendo_client_id: str = "", jamendo_enabled: bool = False):
     return SimpleNamespace(
         allow_ytdlp=allow_ytdlp,
-        playlist=SimpleNamespace(jamendo_client_id=jamendo_client_id),
+        # Readiness follows enablement, not the bundled ID.
+        playlist=SimpleNamespace(jamendo_client_id=jamendo_client_id, jamendo_enabled=jamendo_enabled),
         anthropic_api_key="",
         openai_api_key="",
     )
@@ -540,7 +541,7 @@ def test_recovery_cover_only_without_on_air_still_reports_backup_audio_ready(mon
 
 def test_configured_source_not_reached_does_not_claim_it_was_checked():
     payload = status_payload._source_readiness_status(
-        _source_config(jamendo_client_id="configured"),
+        _source_config(jamendo_client_id="configured", jamendo_enabled=True),
         StationState(),
     )
 
@@ -548,6 +549,27 @@ def test_configured_source_not_reached_does_not_claim_it_was_checked():
     assert jamendo["status"] == "configured_unchecked"
     assert jamendo["attempted"] is False
     assert jamendo["detail"] == "Configured, but not checked because another source was selected."
+
+
+def test_disabled_jamendo_readiness_drops_stale_evidence_but_keeps_on_air() -> None:
+    evidence = SourceReadinessEvidence()
+    evidence.configure("jamendo", True)
+    evidence.mark_candidates("jamendo", 2)
+    evidence.mark_playable("jamendo")
+    state = StationState(source_readiness=evidence)
+    config = _source_config(jamendo_client_id="bundled", jamendo_enabled=False)
+    off = status_payload._source_readiness_status(config, state)["sources"]["jamendo"]
+    assert (off["configured"], off["status"], off["attempted"], off["candidates"], off["playable"]) == (
+        False,
+        "not_configured",
+        False,
+        0,
+        0,
+    )
+
+    state.source_readiness.mark_on_air("jamendo")
+    finishing = status_payload._source_readiness_status(config, state)["sources"]["jamendo"]
+    assert (finishing["status"], finishing["configured"], finishing["playable"]) == ("on_air", False, 0)
 
 
 def test_source_switch_resets_stale_playable_and_on_air_evidence():
@@ -630,6 +652,25 @@ def test_music_stream_start_maps_each_runtime_source_to_on_air(
         assert payload["advanced"]["status"] == "on_air"
     else:
         assert payload["sources"][projected_kind]["status"] == "on_air"
+
+
+def test_jamendo_readiness_follows_enablement_not_a_bundled_client_id():
+    """A bundled ID must not report an off source as configured."""
+    off = SimpleNamespace(
+        allow_ytdlp=False,
+        playlist=SimpleNamespace(jamendo_client_id="station-bundled-id", jamendo_enabled=False),
+        anthropic_api_key="",
+        openai_api_key="",
+    )
+    on = SimpleNamespace(
+        allow_ytdlp=False,
+        playlist=SimpleNamespace(jamendo_client_id="station-bundled-id", jamendo_enabled=True),
+        anthropic_api_key="",
+        openai_api_key="",
+    )
+
+    assert status_payload._source_readiness_status(off, StationState())["sources"]["jamendo"]["configured"] is False
+    assert status_payload._source_readiness_status(on, StationState())["sources"]["jamendo"]["configured"] is True
 
 
 def test_public_status_etag_is_deterministic_and_ignores_every_listener_advanced_clock():

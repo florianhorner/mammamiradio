@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from mammamiradio.core import config as config_module
 from mammamiradio.core.config import JAMENDO_ACK_REVISION
 from mammamiradio.core.models import Segment, SegmentType, StationState
 from mammamiradio.web import media_sources, persistence
@@ -54,12 +55,19 @@ class _Provider:
         }
 
 
-def _app(*, enabled: bool = False, client_id: str = "", acknowledged: bool = False) -> FastAPI:
+def _app(
+    *,
+    enabled: bool = False,
+    client_id: str = "",
+    acknowledged: bool = False,
+    client_id_source: str = "",
+) -> FastAPI:
     app = FastAPI()
     app.include_router(media_sources.router)
     playlist = SimpleNamespace(
         jamendo_enabled=enabled,
         jamendo_client_id=client_id,
+        jamendo_client_id_source=client_id_source,
         jamendo_noncommercial_acknowledged=acknowledged,
         jamendo_ack_revision=JAMENDO_ACK_REVISION if acknowledged else "",
     )
@@ -116,7 +124,10 @@ def test_disabled_status_preserves_currently_playing_terminal_state(client_id, a
     assert status["in_flight"] is False
 
 
-def test_safe_status_has_exact_redacted_contract_even_with_hostile_provider_facts() -> None:
+def test_safe_status_has_exact_redacted_contract_even_with_hostile_provider_facts(monkeypatch) -> None:
+    # No shared access in this fixture, pinned so the asserted shape does not
+    # move when the shipped station client id does.
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "")
     app = _app(enabled=True, client_id="client_123", acknowledged=True)
     app.state.jamendo_provider.status = lambda: {
         "state": "ready",
@@ -148,6 +159,10 @@ def test_safe_status_has_exact_redacted_contract_even_with_hostile_provider_fact
         "enabled": True,
         "state": "ready",
         "client_id_configured": True,
+        # Legacy IDs without a source marker are operator-owned.
+        "client_id_source": "operator",
+        # The UI uses this to decide whether Clear can fall back to shared access.
+        "shared_access_available": False,
         "noncommercial_acknowledged": True,
         "terms_scope": "noncommercial_api_use",
         "provider_confirmation": "pending",
@@ -331,6 +346,8 @@ def test_mark_provider_apply_failure_is_optional_and_exception_safe() -> None:
 )
 async def test_locked_validation_errors(body: dict, code: str, monkeypatch) -> None:
     monkeypatch.setattr(media_sources, "_save_media_source_settings", lambda *_args, **_kwargs: None)
+    # Exercise the missing-ID path without bundled access.
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "")
     app = _app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -398,7 +415,9 @@ async def test_locked_validation_errors(body: dict, code: str, monkeypatch) -> N
         ),
     ],
 )
-async def test_locked_error_envelopes_are_flat_and_actionable(body, status_code, expected) -> None:
+async def test_locked_error_envelopes_are_flat_and_actionable(body, status_code, expected, monkeypatch) -> None:
+    # The missing-ID envelope requires no bundled access.
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "")
     app = _app()
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -445,6 +464,9 @@ async def test_media_source_routes_require_admin_access_off_loopback() -> None:
 
 @pytest.mark.asyncio
 async def test_omitted_id_retains_and_explicit_clear_removes(monkeypatch) -> None:
+    # Pinned: without this the assertions below read the shipped constant, so
+    # emptying it (a supported configuration) failed here for an unrelated reason.
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
     saved: list[dict[str, str]] = []
     monkeypatch.setattr(
         media_sources,
@@ -466,7 +488,10 @@ async def test_omitted_id_retains_and_explicit_clear_removes(monkeypatch) -> Non
     assert retained.status_code == 200
     assert "JAMENDO_CLIENT_ID" not in saved[0]
     assert saved[1]["JAMENDO_CLIENT_ID"] == ""
-    assert cleared.json()["status"]["client_id_configured"] is False
+    # Clear removes the operator ID and resolves the bundled ID.
+    status = cleared.json()["status"]
+    assert status["client_id_configured"] is True
+    assert status["client_id_source"] == "bundled"
 
 
 @pytest.mark.asyncio
@@ -944,3 +969,273 @@ async def test_retry_failure_stays_safe_and_does_not_leak_exception(caplog) -> N
     assert all(record.levelno == logging.WARNING for record in control_records)
     assert "client_123" not in caplog.text
     assert "retry failed for" not in caplog.text
+
+
+# ── Bundled station client ID ────────────────────────────────────────────────
+#
+# Enabling can use the bundled ID, while persistence keeps the operator ID
+# separate so Clear can restore bundled access.
+
+_BUNDLED_TEST_ID = "station-bundled-id"
+
+
+def _capture_saved_settings(monkeypatch) -> list[dict]:
+    saved: list[dict] = []
+
+    def _record(updates, **_kwargs) -> None:
+        saved.append(dict(updates))
+
+    monkeypatch.setattr(media_sources, "_save_media_source_settings", _record)
+    return saved
+
+
+async def _put(app: FastAPI, payload: dict) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.put("/api/media-sources/jamendo", json=payload)
+
+
+@pytest.mark.asyncio
+async def test_enabling_needs_no_client_id_when_the_station_ships_one(monkeypatch) -> None:
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    saved = _capture_saved_settings(monkeypatch)
+    app = _app()
+
+    response = await _put(app, {"enabled": True, "noncommercial_acknowledged": True})
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is True
+    assert app.state.config.playlist.jamendo_client_id == _BUNDLED_TEST_ID
+    assert app.state.config.playlist.jamendo_client_id_source == "bundled"
+    # Do not persist the resolved bundled ID as the operator's value.
+    assert all("JAMENDO_CLIENT_ID" not in update for update in saved)
+
+
+@pytest.mark.asyncio
+async def test_clearing_your_own_id_falls_back_to_the_shared_one(monkeypatch) -> None:
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    saved = _capture_saved_settings(monkeypatch)
+    app = _app(enabled=True, client_id="operator-own-id", acknowledged=True, client_id_source="operator")
+
+    response = await _put(
+        app,
+        {"enabled": True, "noncommercial_acknowledged": True, "clear_client_id": True},
+    )
+
+    assert response.status_code == 200
+    # Clearing the operator ID keeps the source enabled on bundled access.
+    assert app.state.config.playlist.jamendo_enabled is True
+    assert app.state.config.playlist.jamendo_client_id == _BUNDLED_TEST_ID
+    assert app.state.config.playlist.jamendo_client_id_source == "bundled"
+    # Persist an empty operator slot, not the bundled value.
+    assert saved and saved[-1]["JAMENDO_CLIENT_ID"] == ""
+    saved_count = len(saved)
+    stale = await _put(app, {"enabled": False, "noncommercial_acknowledged": False, "clear_client_id": True})
+    assert stale.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is True
+    assert app.state.config.playlist.jamendo_noncommercial_acknowledged is True
+    assert len(saved) == saved_count
+
+
+@pytest.mark.asyncio
+async def test_clearing_with_no_bundled_id_still_refuses_to_stay_enabled(monkeypatch) -> None:
+    """Without bundled access, clearing the only ID disables the source."""
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "")
+    _capture_saved_settings(monkeypatch)
+    app = _app(enabled=True, client_id="operator-own-id", acknowledged=True, client_id_source="operator")
+
+    response = await _put(
+        app,
+        {"enabled": True, "noncommercial_acknowledged": True, "clear_client_id": True},
+    )
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is False
+    assert app.state.config.playlist.jamendo_client_id == ""
+
+
+@pytest.mark.asyncio
+async def test_saving_without_supplying_an_id_keeps_the_operator_value(monkeypatch) -> None:
+    """A toggle save retains the operator ID."""
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    _capture_saved_settings(monkeypatch)
+    app = _app(enabled=False, client_id="operator-own-id", acknowledged=True, client_id_source="operator")
+
+    response = await _put(app, {"enabled": True, "noncommercial_acknowledged": True})
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_client_id == "operator-own-id"
+    assert app.state.config.playlist.jamendo_client_id_source == "operator"
+
+
+@pytest.mark.asyncio
+async def test_the_acknowledgement_is_still_required_with_a_bundled_id(monkeypatch) -> None:
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    _capture_saved_settings(monkeypatch)
+    app = _app()
+
+    response = await _put(app, {"enabled": True, "noncommercial_acknowledged": False})
+
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "jamendo_ack_required"
+    assert app.state.config.playlist.jamendo_enabled is False
+
+
+@pytest.mark.parametrize(("bundled", "expected"), [("", False), (_BUNDLED_TEST_ID, True)])
+def test_shared_access_availability_is_stated_not_inferred(monkeypatch, bundled, expected) -> None:
+    """Report whether bundled access exists independently of the live source."""
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", bundled)
+    app = _app(enabled=True, client_id="operator-own-id", acknowledged=True, client_id_source="operator")
+
+    status = media_sources.safe_jamendo_status(app.state.config, app.state.jamendo_provider)
+
+    assert status["shared_access_available"] is expected
+    assert status["client_id_source"] == "operator"
+
+
+@pytest.mark.asyncio
+async def test_clear_preserves_newer_disabled_server_switches(monkeypatch) -> None:
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    _capture_saved_settings(monkeypatch)
+    app = _app(enabled=False, client_id="operator-own-id", acknowledged=False, client_id_source="operator")
+
+    response = await _put(
+        app,
+        {"enabled": True, "noncommercial_acknowledged": True, "clear_client_id": True},
+    )
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is False
+    assert app.state.config.playlist.jamendo_noncommercial_acknowledged is False
+    assert app.state.config.playlist.jamendo_client_id_source == "bundled"
+
+
+@pytest.mark.asyncio
+async def test_clear_ignores_stale_disabled_request_switches(monkeypatch) -> None:
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    saved = _capture_saved_settings(monkeypatch)
+    app = _app(enabled=True, client_id="operator-own-id", acknowledged=True, client_id_source="operator")
+
+    response = await _put(
+        app,
+        {"enabled": False, "noncommercial_acknowledged": False, "clear_client_id": True},
+    )
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is True
+    assert app.state.config.playlist.jamendo_noncommercial_acknowledged is True
+    assert saved and saved[-1]["JAMENDO_CLIENT_ID"] == ""
+
+
+@pytest.mark.asyncio
+async def test_the_source_can_still_be_switched_off_on_bundled_access(monkeypatch) -> None:
+    """Widening the removed override would have made the source unstoppable."""
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    saved = _capture_saved_settings(monkeypatch)
+    app = _app(enabled=True, client_id=_BUNDLED_TEST_ID, acknowledged=True, client_id_source="bundled")
+
+    response = await _put(app, {"enabled": False, "noncommercial_acknowledged": True})
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is False
+    assert app.state.config.playlist.jamendo_client_id_source == "bundled"
+    # Nothing was supplied or cleared, so the operator slot stays untouched.
+    assert all("JAMENDO_CLIENT_ID" not in update for update in saved)
+
+
+@pytest.mark.asyncio
+async def test_an_operator_who_pasted_the_bundled_value_keeps_their_label(monkeypatch) -> None:
+    """Deriving the stored operator ID by value relabelled them on the next save.
+
+    The bundled ID is public, so an operator can plausibly paste it. Comparing
+    values flipped the label to ``bundled`` while their own key was still on
+    disk, and Clear then deleted it under a dialog saying they had none.
+    """
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    _capture_saved_settings(monkeypatch)
+    app = _app(enabled=True, client_id=_BUNDLED_TEST_ID, acknowledged=True, client_id_source="operator")
+
+    response = await _put(app, {"enabled": True, "noncommercial_acknowledged": True})
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_client_id_source == "operator"
+
+
+@pytest.mark.asyncio
+async def test_clearing_still_turns_the_source_off_with_no_shared_access(monkeypatch) -> None:
+    """The override is narrow: it only fires when something resolves."""
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "")
+    _capture_saved_settings(monkeypatch)
+    app = _app(enabled=True, client_id="operator-own-id", acknowledged=True, client_id_source="operator")
+
+    response = await _put(
+        app,
+        {"enabled": False, "noncommercial_acknowledged": True, "clear_client_id": True},
+    )
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is False
+    assert app.state.config.playlist.jamendo_client_id == ""
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_bundled_id_is_refused_by_the_route_too(monkeypatch) -> None:
+    """Config load and the write route must agree on what counts as access.
+
+    They did not: the route read the constant raw while config load regex-gated
+    it, so a typo'd station id let the route report Jamendo enabled over an id
+    the provider would never accept, until the next restart silently undid it.
+    """
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", "nope!")
+    _capture_saved_settings(monkeypatch)
+    app = _app()
+
+    response = await _put(app, {"enabled": True, "noncommercial_acknowledged": True})
+
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "jamendo_client_id_required"
+    assert media_sources.safe_jamendo_status(app.state.config)["shared_access_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_clearing_while_staying_enabled_drops_queued_jamendo_segments(monkeypatch, tmp_path: Path) -> None:
+    """The one audio-visible consequence of this change.
+
+    Swapping lanes changes the credential the queued track was fetched under, so
+    the segment is discarded rather than aired on access it no longer belongs to.
+    The operator reads Clear as cosmetic; a queued Jamendo track leaves a live
+    runway. Base music continues, so this costs variety, never silence.
+    """
+    monkeypatch.setattr(config_module, "BUNDLED_JAMENDO_CLIENT_ID", _BUNDLED_TEST_ID)
+    monkeypatch.setattr(media_sources, "_save_media_source_settings", lambda *_args, **_kwargs: None)
+    app = _app(enabled=True, client_id="operator-own-id", acknowledged=True, client_id_source="operator")
+    jamendo = Segment(
+        SegmentType.MUSIC,
+        tmp_path / "jamendo.mp3",
+        metadata={"source_kind": "jamendo", "queue_id": "jamendo-1"},
+        ephemeral=False,
+    )
+    local = Segment(
+        SegmentType.MUSIC,
+        tmp_path / "local.mp3",
+        metadata={"source_kind": "local", "queue_id": "local-1"},
+        ephemeral=False,
+    )
+    app.state.queue.put_nowait(jamendo)
+    app.state.queue.put_nowait(local)
+    app.state.station_state.queued_segments = [
+        {"id": "jamendo-1", "type": "music"},
+        {"id": "local-1", "type": "music"},
+    ]
+
+    response = await _put(
+        app,
+        {"enabled": True, "noncommercial_acknowledged": True, "clear_client_id": True},
+    )
+
+    assert response.status_code == 200
+    assert app.state.config.playlist.jamendo_enabled is True
+    assert app.state.config.playlist.jamendo_client_id_source == "bundled"
+    assert app.state.queue.qsize() == 1
+    assert app.state.queue.get_nowait() is local
+    assert app.state.station_state.queued_segments == [{"id": "local-1", "type": "music"}]
