@@ -26,13 +26,13 @@ ImportError: named semaphores unavailable
 During handling of the above exception, another exception occurred:
 
 Traceback (most recent call last):
-  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 2318, in _run_home_context_projection
+  File "<repo-root>/mammamiradio/home/ha_context.py", line 2318, in _run_home_context_projection
     executor = _get_ha_projection_executor()
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 128, in _get_ha_projection_executor
+  File "<repo-root>/mammamiradio/home/ha_context.py", line 128, in _get_ha_projection_executor
     _ha_projection_executor = _create_ha_projection_executor()
                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 117, in _create_ha_projection_executor
+  File "<repo-root>/mammamiradio/home/ha_context.py", line 117, in _create_ha_projection_executor
     return concurrent.futures.ProcessPoolExecutor(
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/process.py", line 654, in __init__
@@ -50,7 +50,7 @@ NotImplementedError: This Python build lacks multiprocessing.synchronize, usuall
 (spawn defers process creation to submit(), so this is an OSError from the await)
 WARNING: Home context projection worker could not start; Home Assistant colour is paused until it can. Audio is unaffected. Check shared memory (/dev/shm), the container's process limit, and available memory.
 Traceback (most recent call last):
-  File "/Users/florianhorner/conductor/workspaces/mammamiradio/amarillo-v2/mammamiradio/home/ha_context.py", line 2327, in _run_home_context_projection
+  File "<repo-root>/mammamiradio/home/ha_context.py", line 2327, in _run_home_context_projection
     candidate = await asyncio.get_running_loop().run_in_executor(
                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/Users/florianhorner/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/asyncio/base_events.py", line 830, in run_in_executor

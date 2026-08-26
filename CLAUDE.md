@@ -52,9 +52,9 @@ The restart happens once, planned, when the addon updates. Not during the day. N
 - `ha apps info`, `ha apps list`, `ha apps logs`
 - `ha apps start <slug>` when the addon is already stopped/exited (recovery, not experiment)
 
-**Why this rule exists:** On 2026-04-20, an agent live-patched via `docker cp`, the patches got wiped on addon restart, then the agent killed uvicorn assuming s6 would restart it in place. Container exited. Stream dropped. Leadership principle #1 was violated. The PR with the real fix (#213) was already open — the live patches were theater. This rule closes the loophole between "don't restart HA core" and "don't experiment on the running addon."
+**Why this rule exists:** Live patches (`docker cp`, in-container writes, process kills) are wiped on addon restart and can drop the stream with no durable fix. s6-rc in this container does not reliably auto-restart killed services. This rule closes the loophole between "don't restart HA core" and "don't experiment on the running addon."
 
-**When a fix is urgent:** the fastest legitimate path is usually merge → wait ~5-10min for CI → update addon. This is faster than the live-surgery path turned out to be, and it leaves a permanent fix in place instead of an ephemeral one. The legitimate path also preserves the illusion — one planned restart beats three unplanned drops.
+**When a fix is urgent:** merge → wait ~5–10min for CI → update addon. That path is faster than live surgery, leaves a permanent fix in place, and preserves the illusion — one planned restart beats repeated unplanned drops.
 
 ## Docs
 
