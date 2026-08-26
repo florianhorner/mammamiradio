@@ -15,8 +15,6 @@ pytest tests/core/test_config.py -q  # fast loop while editing
 make check                         # complete gate before committing
 ```
 
-**Agents opening a PR:** follow [`docs/agents.md` § Shipping (agents)](docs/agents.md#shipping-agents) — it overrides generic gstack `/ship` (no feature-PR version bump, preship proof commits, QA Impact + Proof body).
-
 Full prerequisites, run modes, tests, lint, and commit-message rules below.
 
 ## Prerequisites

@@ -345,11 +345,6 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
 
 ## Quality gates
 
-**Ship checklist:** gstack `/ship` plus mammamiradio overrides live in
-[`docs/agents.md` § Shipping (agents)](docs/agents.md#shipping-agents). That
-section is canonical when generic `/ship` steps, version bumps, or PR templates
-conflict with this repo.
-
 - **Open via `/ship` — never a bare `gh pr create` (enforced)**: Every PR is
   opened through `/ship`, which runs the mandatory pre-ship review squad
   (adversarial + test-coverage + docs/config-consistency). A `PreToolUse` hook
