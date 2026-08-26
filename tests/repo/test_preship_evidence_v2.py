@@ -301,7 +301,7 @@ def test_raw_recursive_tree_digest_survives_receipt_commit_and_squash(repo: GitR
     assert snapshot_tree(repo, squash).content_sha256 == before.content_sha256
 
 
-def test_v2_before_ha_leaves_both_valid_after_parentless_squash(repo: GitRepository, tmp_path: Path) -> None:
+def test_v2_and_ha_stay_valid_after_parentless_squash(repo: GitRepository, tmp_path: Path, monkeypatch) -> None:
     code = "from scripts.landing.evidence import _ha_release_validator as load;load()"
     subprocess.run([sys.executable, "-S", "-P", "-c", code], cwd=ROOT, env={"PYTHONPATH": str(ROOT)}, check=True)
     config = repo.root / "ha-addon/mammamiradio/config.yaml"
@@ -316,6 +316,7 @@ def test_v2_before_ha_leaves_both_valid_after_parentless_squash(repo: GitReposit
     for run_id in (f"{index:08x}-0000-4000-8000-{index:012x}" for index in range(20)):
         (receipt_root / f"run-{run_id}.json").write_bytes(_ha_receipt_bytes(run_id=run_id, content_digest=ha_digest))
     _commit(repo.root, "add HA Green receipts")
+    monkeypatch.setattr(evidence_module, "RECEIPT_READ_BATCH_SIZE", 20)
     tree = _git(repo.root, "rev-parse", "HEAD^{tree}").stdout.decode().strip()
     squash = _git(repo.root, "commit-tree", tree, input_bytes=b"squash\n").stdout.decode().strip()
     assert verify_v2(repo, target=squash, base=None, mode="main").matching_receipts == (v2_path.as_posix(),)
