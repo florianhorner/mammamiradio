@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from itertools import islice
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
@@ -206,10 +206,7 @@ def _load_classic_italian_tracks(era: str) -> list[Track]:
 
 def _load_local_music_tracks(music_dir: Path | StationConfig) -> list[Track]:
     """Scan one legacy path or one complete station-local library."""
-    from types import SimpleNamespace
-
-    config = SimpleNamespace(music_dir=music_dir, legacy_music_dirs=()) if isinstance(music_dir, Path) else music_dir
-    return scan_local_library(cast(StationConfig, config)).tracks
+    return scan_local_library(music_dir).tracks
 
 
 def _normalized_track_key(track: Track) -> tuple[str, str]:

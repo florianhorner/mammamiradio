@@ -28,7 +28,7 @@ SUPPORTED_LOCAL_AUDIO_SUFFIXES = frozenset({".aac", ".flac", ".m4a", ".mp3", ".m
 @dataclass
 class LocalLibraryScanResult:
     roots: tuple[Path, ...]
-    managed_root_keys: tuple[str, ...] = ()
+    root_keys: tuple[str, ...] = ()
     has_available_root: bool = False
     tracks: list[Track] = field(default_factory=list)
     complete: bool = True
@@ -48,10 +48,10 @@ class LocalLibraryScanResult:
             "finished_at": self.finished_at,
             "entries_seen": self.entries_seen,
             "files_found": self.supported_files,
-            "candidates": len(self.tracks),
             "ignored": dict(sorted(self.ignored.items())),
             "warnings": self.warnings[:5],
             "error": "",
+            "already_in_progress": False,
         }
 
 
@@ -61,17 +61,9 @@ def _path_key(path: Path | str) -> str:
 
 def local_library_roots(config: StationConfig) -> tuple[Path, ...]:
     roots: dict[str, Path] = {}
-    for raw_root in (config.music_dir, *getattr(config, "legacy_music_dirs", ())):
-        root = Path(raw_root)
+    for root in map(Path, (config.music_dir, *config.legacy_music_dirs)):
         roots.setdefault(_path_key(root), root)
     return tuple(roots.values())
-
-
-def _resolved_scan_root(root: Path) -> Path:
-    try:
-        return root.resolve(strict=False)
-    except (OSError, RuntimeError):
-        return Path(_path_key(root))
 
 
 def _track_from_path(path: Path) -> Track:
@@ -88,21 +80,29 @@ def _track_from_path(path: Path) -> Track:
     )
 
 
-def scan_local_library(config: StationConfig) -> LocalLibraryScanResult:
+def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibraryScanResult:
+    if warning:
+        result.complete = False
+        result.warnings.append(warning)
+    result.finished_at = time.time()
+    return result
+
+
+def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
     """Find supported audio files recursively without following symlinks."""
-    roots = local_library_roots(config)
+    roots = (source,) if isinstance(source, Path) else local_library_roots(source)
     result = LocalLibraryScanResult(roots=roots, started_at=time.time())
     seen_identities: set[tuple[str, str]] = set()
     scan_roots: dict[str, tuple[Path, Path]] = {}
     for root in roots:
-        resolved_root = _resolved_scan_root(root)
+        try:
+            resolved_root = root.resolve(strict=False)
+        except (OSError, RuntimeError):
+            resolved_root = Path(_path_key(root))
         scan_roots.setdefault(_path_key(resolved_root), (root, resolved_root))
-    result.managed_root_keys = tuple(scan_roots)
-    stop_scan = False
+    result.root_keys = tuple(scan_roots)
 
     for root, resolved_root in scan_roots.values():
-        if stop_scan:
-            break
         try:
             root_is_dir = resolved_root.is_dir()
         except OSError as exc:
@@ -115,7 +115,7 @@ def scan_local_library(config: StationConfig) -> LocalLibraryScanResult:
         result.has_available_root = True
 
         pending = [resolved_root]
-        while pending and not stop_scan:
+        while pending:
             directory = pending.pop()
             remaining_entries = max(0, MAX_LOCAL_LIBRARY_ENTRIES - result.entries_seen)
             try:
@@ -164,36 +164,24 @@ def scan_local_library(config: StationConfig) -> LocalLibraryScanResult:
                     continue
                 seen_identities.add(identity)
                 if len(result.tracks) >= MAX_LOCAL_LIBRARY_TRACKS:
-                    result.complete = False
-                    result.warnings.append(f"More than {MAX_LOCAL_LIBRARY_TRACKS} songs found; scan stopped.")
-                    stop_scan = True
-                    break
+                    return _finish_scan(result, f"More than {MAX_LOCAL_LIBRARY_TRACKS} songs found; scan stopped.")
                 result.tracks.append(track)
             if entry_limit_reached:
-                result.complete = False
-                result.warnings.append(f"More than {MAX_LOCAL_LIBRARY_ENTRIES} entries found; scan stopped.")
-                stop_scan = True
+                return _finish_scan(result, f"More than {MAX_LOCAL_LIBRARY_ENTRIES} entries found; scan stopped.")
 
-    result.finished_at = time.time()
-    return result
+    return _finish_scan(result)
 
 
 def _path_is_in_root_keys(path: Path | None, root_keys: tuple[str, ...]) -> bool:
     if path is None:
         return False
-    candidate_key = _path_key(path)
-    for root_key in root_keys:
-        try:
-            if os.path.commonpath((candidate_key, root_key)) == root_key:
-                return True
-        except ValueError:
-            continue
-    return False
+    candidate = Path(_path_key(path))
+    return any(candidate.is_relative_to(Path(root_key)) for root_key in root_keys)
 
 
 def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -> dict[str, int]:
     """Apply a scan without changing queued or on-air audio."""
-    root_keys = scan.managed_root_keys or tuple(_path_key(root) for root in scan.roots)
+    root_keys = scan.root_keys or tuple(_path_key(root) for root in scan.roots)
     candidates = [
         track
         for track in scan.tracks
@@ -300,7 +288,6 @@ async def scan_and_reconcile_local_library(app_state: Any) -> dict[str, Any]:
             "in_progress": True,
             "started_at": time.time(),
             "error": "",
-            "already_in_progress": False,
         }
         try:
             scan = await asyncio.to_thread(scan_local_library, app_state.config)
@@ -310,7 +297,6 @@ async def scan_and_reconcile_local_library(app_state: Any) -> dict[str, Any]:
                 **scan.status_payload(),
                 **outcome,
                 "management": "home_assistant" if app_state.config.is_addon else "filesystem",
-                "already_in_progress": False,
             }
         except Exception as exc:  # pragma: no cover - fail-soft audio boundary
             logger.warning("Local music scan failed", exc_info=True)
@@ -320,7 +306,6 @@ async def scan_and_reconcile_local_library(app_state: Any) -> dict[str, Any]:
                 "complete": False,
                 "finished_at": time.time(),
                 "error": str(exc)[:160] or "The local music scan could not finish.",
-                "already_in_progress": False,
             }
         app_state.local_library_status = status
         return dict(status)

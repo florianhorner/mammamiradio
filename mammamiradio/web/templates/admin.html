@@ -4781,7 +4781,7 @@ function localLibraryFacts(status){
   });
   const banned=count(s.banned);
   if(banned)parts.push(`${banned} banned track${banned===1?'':'s'}`);
-  const files=count(s.files_found),active=count(s.active??s.candidates),added=count(s.added),removed=count(s.removed),ignored=parts.join(', ');
+  const files=count(s.files_found),active=count(s.active),added=count(s.added),removed=count(s.removed),ignored=parts.join(', ');
   const summary=`${files} supported file${files===1?'':'s'} · ${active} active · ${added} added · ${removed} removed${ignored?' · '+ignored:''}`;
   const recovery=banned?'Unban a track or add a supported audio file, then Scan now.':'Add a supported audio file, then Scan now.';
   return{s,active,ignored,summary,recovery};
