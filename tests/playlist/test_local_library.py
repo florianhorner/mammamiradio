@@ -68,7 +68,7 @@ def test_entry_cap_bounds_directory_iterator_before_sorting(tmp_path):
     assert result.entries_seen == 2
     assert result.ignored == {"unsupported_format": 2}
     assert result.complete is False
-    assert "more than 2 entries" in result.warnings[-1]
+    assert "More than 2 entries" in result.warnings[-1]
 
 
 def test_complete_reconcile_updates_only_managed_local_membership(tmp_path):

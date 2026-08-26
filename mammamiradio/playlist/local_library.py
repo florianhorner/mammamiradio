@@ -1,4 +1,4 @@
-"""Live discovery and reconciliation for operator-owned local music."""
+"""Scan and reconcile local music."""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def _track_from_path(path: Path) -> Track:
 
 
 def scan_local_library(config: StationConfig) -> LocalLibraryScanResult:
-    """Recursively enumerate supported audio without following symlinks."""
+    """Find supported audio files recursively without following symlinks."""
     roots = local_library_roots(config)
     result = LocalLibraryScanResult(roots=roots, started_at=time.time())
     seen_identities: set[tuple[str, str]] = set()
@@ -166,7 +166,7 @@ def scan_local_library(config: StationConfig) -> LocalLibraryScanResult:
                 if len(result.tracks) >= MAX_LOCAL_LIBRARY_TRACKS:
                     result.complete = False
                     result.warnings.append(
-                        f"The library has more than {MAX_LOCAL_LIBRARY_TRACKS} songs; the scan stopped safely."
+                        f"More than {MAX_LOCAL_LIBRARY_TRACKS} songs found; scan stopped."
                     )
                     stop_scan = True
                     break
@@ -174,7 +174,7 @@ def scan_local_library(config: StationConfig) -> LocalLibraryScanResult:
             if entry_limit_reached:
                 result.complete = False
                 result.warnings.append(
-                    f"The library has more than {MAX_LOCAL_LIBRARY_ENTRIES} entries; the scan stopped safely."
+                    f"More than {MAX_LOCAL_LIBRARY_ENTRIES} entries found; scan stopped."
                 )
                 stop_scan = True
 
@@ -196,7 +196,7 @@ def _path_is_in_root_keys(path: Path | None, root_keys: tuple[str, ...]) -> bool
 
 
 def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -> dict[str, int]:
-    """Apply one scan to future rotation without touching queued/on-air audio."""
+    """Apply a scan without changing queued or on-air audio."""
     root_keys = scan.managed_root_keys or tuple(_path_key(root) for root in scan.roots)
     candidates = [
         track
@@ -293,7 +293,7 @@ def initial_local_library_status(config: StationConfig) -> dict[str, Any]:
 
 
 async def scan_and_reconcile_local_library(app_state: Any) -> dict[str, Any]:
-    """Run and commit one coalesced scan for HTTP and background callers."""
+    """Run one serialized scan for HTTP and background callers."""
     lock = app_state.local_library_scan_lock
     if lock.locked():
         return {**app_state.local_library_status, "in_progress": True, "already_in_progress": True}
@@ -331,7 +331,7 @@ async def scan_and_reconcile_local_library(app_state: Any) -> dict[str, Any]:
 
 
 async def run_local_library_scanner(app_state: Any) -> None:
-    """Keep the operator library current without entering the audio hot path."""
+    """Refresh the local library without entering the audio hot path."""
     while True:
         await scan_and_reconcile_local_library(app_state)
         await asyncio.sleep(LOCAL_LIBRARY_SCAN_INTERVAL_SECONDS)

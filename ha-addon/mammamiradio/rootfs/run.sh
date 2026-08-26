@@ -480,12 +480,12 @@ export MAMMAMIRADIO_LEDGER_ENABLED="true"
 export MAMMAMIRADIO_BIND_HOST="0.0.0.0"
 export MAMMAMIRADIO_PORT="8000"
 
-# ---- Point runtime state at /data and operator music at native HA Media ----
+# ---- Keep runtime state in /data; use native HA Media for operator music ----
 export MAMMAMIRADIO_CACHE_DIR="/data/cache"
 export MAMMAMIRADIO_TMP_DIR="/data/tmp"
 export MAMMAMIRADIO_LEGACY_MUSIC_DIRS="/data/music"
 
-# ---- Ensure private runtime directories exist ----
+# ---- Ensure runtime directories exist ----
 if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.err; then
     FALLBACK_BASE="/tmp/mammamiradio-data"
     echo "[mammamiradio] WARNING: /data is not writable ($(cat /tmp/mammamiradio-data-mkdir.err 2>/dev/null || echo unknown error))"
@@ -498,14 +498,13 @@ if ! mkdir -p /data/cache /data/music /data/tmp 2>/tmp/mammamiradio-data-mkdir.e
     mkdir -p "$MAMMAMIRADIO_CACHE_DIR" "$MAMMAMIRADIO_TMP_DIR"
 fi
 
-# Home Assistant owns upload/delete/folder management under /media. The add-on
-# creates only its named library directory, then treats every file as
-# operator-owned. Existing /data/music remains a read-only discovery root for
-# upgrades; no file is copied, moved, or deleted here.
+# Home Assistant manages files under /media. The add-on creates only its named
+# library directory. Existing /data/music remains a discovery root; no files
+# are copied, moved, or deleted here.
 if mkdir -p /media/mammamiradio 2>/tmp/mammamiradio-media-mkdir.err; then
     export MAMMAMIRADIO_MUSIC_DIR="/media/mammamiradio"
 else
-    echo "[mammamiradio] WARNING: Home Assistant Media is unavailable ($(cat /tmp/mammamiradio-media-mkdir.err 2>/dev/null || echo unknown error))"
+    echo "[mammamiradio] WARNING: Home Assistant Media unavailable ($(cat /tmp/mammamiradio-media-mkdir.err 2>/dev/null || echo unknown error))"
     if [ -n "$MAMMAMIRADIO_LEGACY_MUSIC_DIRS" ]; then
         export MAMMAMIRADIO_MUSIC_DIR="$MAMMAMIRADIO_LEGACY_MUSIC_DIRS"
         export MAMMAMIRADIO_LEGACY_MUSIC_DIRS=""

@@ -301,8 +301,8 @@ Supervisor client ID when possible, but keeps the source disabled until the
 operator reviews and acknowledges the current boundary. Additional candidate
 tuning can be set in `radio.toml` or container env without exposing Supervisor
 UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
-Add-on music lives at `/media/mammamiradio`; `run.sh` exports that path while
-keeping `/data/music` as a legacy discovery root and fallback. No files move.
+Add-on music lives at `/media/mammamiradio`. `/data/music` remains a legacy
+discovery root and fallback; no files move.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -558,9 +558,9 @@ the other retained files hold provider keys, station memory, and history.
 Generated downloads, normalization outputs, renders, and clips warm again after
 restore.
 
-Home Assistant backs up `/media/mammamiradio` when Media is included in the
-backup. Legacy `/data/music` stays in the add-on backup and remains readable;
-the app never migrates or deletes either library.
+Home Assistant backs up `/media/mammamiradio` when Media is included. Legacy
+`/data/music` stays in the add-on backup and remains readable; neither library
+is migrated or deleted.
 
 This is a live, file-level copy, **not a copy taken from one single exact
 moment** of the retained state. SQLite may commit while Supervisor is

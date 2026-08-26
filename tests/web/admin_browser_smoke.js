@@ -1479,15 +1479,15 @@ async (page) => {
   assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
   assert(localLibrary.detail.includes('Home Assistant') && localLibrary.detail.includes('My media'),
     'local library row did not delegate file management to Home Assistant');
-  assert(localLibrary.detail.includes('4 supported files found') && localLibrary.detail.includes('1 unsupported format')
+  assert(localLibrary.detail.includes('4 supported files') && localLibrary.detail.includes('1 unsupported format')
       && localLibrary.detail.includes('/media/mammamiradio') && localLibrary.detail.includes('/data/music'),
     `local library row hid scan diagnostics or roots: ${localLibrary.detail}`);
   assert(localLibrary.scan === 'Scan now', 'local library row lost its explicit scan action');
   assert(localLibrary.uploadControls === 0, 'local library row rebuilt upload/delete controls');
   assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.label.includes('no playable tracks')
-      && ['0 supported files found', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issues.detail.includes(text)),
+      && ['0 supported files', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issues.detail.includes(text)),
     `unplayable local file diagnostics lost their recovery: ${JSON.stringify(localLibrary.issues)}`);
-  assert(['no tracks can play', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issueToast.includes(text)),
+  assert(['no playable tracks', '1 unsupported format', '1 banned track', 'Scan now'].every((text) => localLibrary.issueToast.includes(text)),
     `Scan now toast hid the actionable result: ${localLibrary.issueToast}`);
 
   for (const width of [320, 375, 414, 600, 768]) {

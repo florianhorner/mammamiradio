@@ -19,11 +19,11 @@ Click Start. Watch the log for:
 - `Producer started`
 
 The add-on starts from its attributed 12-track starter catalog: no music
-provider key, download, or outbound network is required. Without an AI key, hosts
-use stock copy and fallback voices. Add songs under **Media → My media →
+provider key, download, or outbound network is required. Without an AI key, the
+hosts use stock copy and fallback voices. Add songs under **Media → My media →
 mammamiradio**; discovery needs no restart. Packaged recovery audio can prove
 transport without reporting a damaged source healthy. A successful start logs
-`Producer started`; `/readyz` stays `503 starting` until a listener accepts audio.
+`Producer started`; `/readyz` stays `503 starting` until a listener connects.
 
 ### 3. Install the HACS integration
 
@@ -192,12 +192,12 @@ HA Supervisor
   |           +-- playback task (streams segments to listeners)
   |           +-- packaged starter catalog (read-only, attributed music)
   |
-  +-- /media/mammamiradio/ (local songs managed through Home Assistant Media)
+  +-- /media/mammamiradio/ (local songs managed in Home Assistant Media)
   |
   +-- /data/ (persistent app data across restarts)
         +-- cache/   (eligible local/generated audio — survives restarts)
         |     +-- keepsakes/ (moments kept with "Keep this" — never expire)
-        +-- music/   (legacy local-song directory; still discovered)
+        +-- music/   (legacy local-song directory; still scanned)
         +-- tmp/     (rendered segments — ephemeral)
 ```
 
@@ -218,17 +218,17 @@ playing.
 
 - **Keeps playing:** the app does not stop for a backup.
 - **Stays with you:** app settings, provider keys, station memory and state,
-  retained history, moments you kept with **Keep this**, and legacy files stored
-  in `/data/music`. New music under Home Assistant Media is covered when Media
-  is included in the HA backup.
+  retained history, moments you kept with **Keep this**, and legacy files in
+  `/data/music`. Home Assistant Media files are included when Media is selected
+  for backup.
 - **Builds again:** temporary renders, downloaded and normalized cache audio,
   share clips, and restart handoff audio. The restored station may take a little
   longer to refill these caches on its first run.
 
 Manage new local music through **Media → My media → mammamiradio**. The station
-scans that native Home Assistant folder automatically once a minute; use
-**Rotazione → Local music → Scan now** for an immediate refresh. Existing files
-in `/data/music` continue to play after upgrade and are never moved.
+scans it every minute; use **Rotazione → Local music → Scan now** to refresh
+immediately. Existing files in `/data/music` continue to play and are never
+moved.
 
 A hot backup copies retained files while the station is active, so it is not a
 copy taken from one single exact moment. After a restore, confirm
@@ -247,8 +247,8 @@ its files by hand.
    enablement settings are ignored.
 4. `mammamiradio/main.py` loads `radio.toml`, validates the packaged starter
    manifest, and makes its direct pre-normalized files available.
-5. The local-library worker scans Home Assistant Media immediately and then
-   once a minute. A manual scan uses the same worker without restarting audio.
+5. The local-library worker scans Home Assistant Media at startup and every
+   minute. A manual scan refreshes it without restarting audio.
 6. Producer and playback tasks start from starter/local music. All twelve
    starter tracks complete before any starter track repeats.
 7. If Jamendo was explicitly enabled and acknowledged, its bounded preparation

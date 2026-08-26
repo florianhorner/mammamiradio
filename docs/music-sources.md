@@ -85,13 +85,13 @@ example and never counts toward a release.
 ## Operator-supplied local music
 
 Files in configured local roots are labelled "Provided by the station operator"
-in listener credits and receive no clearance badge or implied license. Upgrades
-and source migrations never delete operator files.
+in listener credits. They receive no clearance badge or implied license, and
+upgrades never delete them.
 
-The Home Assistant add-on scans `/media/mammamiradio` once a minute; manage it
-under **Media → My media → mammamiradio**, or apply changes with **Rotazione →
-Local music → Scan now**. Home Assistant owns file management, network storage,
-and Media backup. Legacy `/data/music` remains discoverable and is never moved.
+In the Home Assistant add-on, manage files under **Media → My media →
+mammamiradio**. The scanner runs every minute; use **Rotazione → Local music →
+Scan now** for an immediate refresh. Legacy `/data/music` remains discoverable
+and is never moved.
 
 Discovery recursively accepts MP3, M4A, MP4 audio, AAC, FLAC, OGG, Opus, and WAV.
 `Artist - Title.ext` produces the best label; other filenames use `Unknown` as
