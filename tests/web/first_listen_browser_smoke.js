@@ -724,6 +724,19 @@ async (page) => {
     assert((await page.locator('#firstListenSuccessCopy').innerText()).includes('primary music still needs attention'), 'backup completion hid the repair follow-up');
     assert(await page.locator('#firstListenSuccessRepair').isVisible(), 'backup completion hid its primary-music repair action');
     assert((await page.locator('#firstListenSuccess .btn-trigger').innerText()) === 'Open full listener', 'success page lost Open full listener');
+    const successActionStyles = await page.evaluate(() => {
+      const primary = getComputedStyle(document.querySelector('#firstListenSuccess .btn-trigger'));
+      const secondary = getComputedStyle(document.querySelector('#firstListenSuccess .btn-util'));
+      return {
+        primary: { background: primary.backgroundColor, color: primary.color },
+        secondary: { background: secondary.backgroundColor, color: secondary.color },
+      };
+    });
+    assert(
+      successActionStyles.primary.background !== successActionStyles.secondary.background
+        && successActionStyles.primary.color !== successActionStyles.secondary.color,
+      `success primary action lost visual hierarchy: ${JSON.stringify(successActionStyles)}`,
+    );
     await page.evaluate(()=>{document.getElementById('firstListenGuideAudio').src='smoke-guide.mp3';document.getElementById('firstListenStationAudio').src='smoke-station.mp3';});
     await page.getByRole('button', { name: 'Review choices' }).click();
     await page.waitForFunction(() => document.activeElement?.getAttribute('data-review-step') === 'privacy');

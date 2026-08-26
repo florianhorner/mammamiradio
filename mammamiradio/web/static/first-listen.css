@@ -892,14 +892,14 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   transform: translateY(1px);
 }
 
-.first-listen-panel .first-listen-body .btn-trigger {
+.first-listen-panel :is(.first-listen-body, .success-actions) .btn-trigger {
   border-color: var(--sun2);
   color: var(--bg);
   background: var(--sun2);
   box-shadow: 0 2px 12px color-mix(in srgb, var(--sun2) 22%, transparent);
 }
 
-.first-listen-panel .first-listen-body .btn-trigger:not(:disabled):hover {
+.first-listen-panel :is(.first-listen-body, .success-actions) .btn-trigger:not(:disabled):hover {
   background: var(--sun);
 }
 
@@ -2165,7 +2165,7 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   }
 
   .first-listen-panel .first-listen-step[data-state="current"] .first-listen-number,
-  .first-listen-panel .first-listen-body .btn-trigger {
+  .first-listen-panel :is(.first-listen-body, .success-actions) .btn-trigger {
     color: HighlightText;
     background: Highlight;
   }
