@@ -22,7 +22,15 @@ def _install_script_fixture(tmp_path: Path, script: Path) -> Path:
 
 def _fake_bootstrap(tmp_path: Path) -> None:
     bootstrap = tmp_path / "scripts/bootstrap-conductor.sh"
-    bootstrap.write_text("#!/bin/bash\nset -euo pipefail\nprintf '%s' \"${PYTHON_BIN:-unset}\" > bootstrap-python\n")
+    bootstrap.write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p .venv/bin\n"
+        "printf '%s' \"${PYTHON_BIN:-unset}\" > bootstrap-python\n"
+        "printf '%s\\n' 'export PATH=\"$PWD/.venv/bin:$PATH\"' > .venv/bin/activate\n"
+        "printf '%s\\n' '#!/bin/bash' 'printf \"%s\" \"$*\" > .venv/pip-call' > .venv/bin/python\n"
+        "chmod +x .venv/bin/python\n"
+    )
     bootstrap.chmod(0o755)
 
 
@@ -35,7 +43,7 @@ def _fake_python(bin_dir: Path, name: str) -> None:
 def _path_without_system_python(tmp_path: Path) -> str:
     """Provide the POSIX utilities used by the script without system Python."""
     bin_dir = tmp_path / "bin"
-    for utility in ("dirname", "ln", "pwd"):
+    for utility in ("chmod", "dirname", "ln", "mkdir", "pwd"):
         (bin_dir / utility).symlink_to(Path("/usr/bin") / utility)
     return str(bin_dir)
 
@@ -101,6 +109,20 @@ def test_cloud_bootstrap_honors_explicit_interpreter(tmp_path: Path, shell_env: 
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "bootstrap-python").read_text() == "custom-python"
+
+
+def test_cloud_bootstrap_installs_development_requirements_after_activation(
+    tmp_path: Path, shell_env: dict[str, str]
+) -> None:
+    cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
+    _fake_bootstrap(tmp_path)
+    _fake_python(tmp_path / "bin", "python3.12")
+    (tmp_path / "requirements-dev.txt").write_text("pytest\n")
+
+    result = _run(cloud, tmp_path, env=shell_env)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".venv/pip-call").read_text() == "-m pip install -r requirements-dev.txt"
 
 
 def test_cloud_bootstrap_links_workspace_env_when_root_env_is_available(
