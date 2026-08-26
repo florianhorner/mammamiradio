@@ -1,12 +1,13 @@
 {
   "description": "Known UI copy violations baselined until fixed. CI fails on new fingerprints only.",
   "fingerprints": [
+    "27c86ba6d95036e0",
     "2a351c49546a599a",
-    "570b000232d7b7a2",
-    "5c25cb4edf310d2f",
     "70847545d7e2ad57",
-    "a45b15bba73b17c8",
-    "d5842405eecd4a53"
+    "ab757c2cf80ba108",
+    "adf3ddcd1cf123b5",
+    "c7ba57e9f0539750",
+    "cf268763b1343d3b"
   ],
   "violations": [
     {
@@ -24,31 +25,38 @@
       "detail": "pattern=\\bthat speaker is not available\\b"
     },
     {
+      "rule": "no_way_out",
+      "file": "mammamiradio/web/templates/admin.html",
+      "line": 6333,
+      "text": "Clipboard unavailable",
+      "detail": "dead-end toast"
+    },
+    {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
       "line": 384,
-      "text": "Home Assistant found more than one station Keep one Mamma Mi Radio integration entry, then find speakers again.",
+      "text": "Home Assistant found more than one station. Keep one Mamma Mi Radio integration entry, then find speakers again. Review HA entries",
       "detail": "pattern=\\bfind speakers again\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
       "line": 391,
-      "text": "No compatible-looking speaker is available Turn on a Home Assistant media player, wait a moment, then search again.",
-      "detail": "pattern=\\bcompatible-looking speaker\\b"
+      "text": "No compatible-looking speaker is available. Turn on a Home Assistant media player, wait a moment, then search again. Find speakers again",
+      "detail": "pattern=\\bfind speakers again\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
       "line": 398,
-      "text": "That speaker is not available now Choose another speaker or bring this one online, then retry.",
+      "text": "That speaker is not available now. Choose another speaker or bring this one online, then retry. Choose a speaker",
       "detail": "pattern=\\bthat speaker is not available\\b"
     },
     {
       "rule": "stale_speaker_copy",
       "file": "mammamiradio/web/streamer.py",
       "line": 426,
-      "text": "That unsaved listening check is no longer available Nothing was replayed. Refresh Setup, then explicitly start the selected speaker once more.",
+      "text": "That unsaved listening check is no longer available. Nothing was replayed. Refresh Setup, then explicitly start the selected speaker once more. Start once more",
       "detail": "pattern=\\bstart the selected speaker\\b"
     }
   ]

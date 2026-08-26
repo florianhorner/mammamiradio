@@ -104,18 +104,22 @@ def test_jamendo_scalar_error_copy_is_collected() -> None:
     assert "jamendo_form:jamendo_config_save_failed" in contexts
 
 
-def test_listener_text_content_assignment_is_collected(
+def test_listener_js_literals_are_collected(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     lint = _load_lint_module()
     listener_js = tmp_path / "mammamiradio/web/static/listener.js"
     listener_js.parent.mkdir(parents=True)
-    listener_js.write_text('notice.textContent = "The request hit a timeout.";\n', encoding="utf-8")
+    listener_js.write_text(
+        '_t(\n  \'playback_failed\',\n  "Playback failed.",\n);\nnotice.textContent = "The request hit a timeout.";\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(lint, "ROOT", tmp_path)
 
     refs = lint._extract_listener_js()
-    assert [ref.text for ref in refs] == ["The request hit a timeout."]
+    assert [ref.text for ref in refs] == ["Playback failed.", "The request hit a timeout."]
+    assert any(violation.rule == "no_way_out" for violation in lint.check_strings(refs))
     assert any(violation.rule == "tech_lingo" for violation in lint.check_strings(refs))
 
 
@@ -127,14 +131,16 @@ def test_listener_template_static_copy_is_collected(
     listener_template = tmp_path / "mammamiradio/web/templates/listener.html"
     listener_template.parent.mkdir(parents=True)
     listener_template.write_text(
-        "<p>{{ copy.get('status_error', 'The request hit a timeout.') }}</p>\n"
+        '<a\n  class="notice"\n  aria-label="Playback failed due to timeout">\n'
+        "{{ copy.get('status_error', 'The request hit a timeout.') }}</a>\n"
         "<script>const hidden = 'timeout';</script>\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(lint, "ROOT", tmp_path)
 
     refs = lint._extract_listener_template()
-    assert [ref.text for ref in refs] == ["The request hit a timeout."]
+    assert {ref.text for ref in refs} == {"The request hit a timeout.", "Playback failed due to timeout"}
+    assert not any("class=" in ref.text for ref in refs)
     assert any(violation.rule == "tech_lingo" for violation in lint.check_strings(refs))
 
 
@@ -150,6 +156,40 @@ def test_url_does_not_exempt_the_rest_of_copy_from_lingo_check() -> None:
         )
     ]
     assert any(violation.rule == "tech_lingo" for violation in lint.check_strings(refs))
+
+
+def test_lingo_matching_uses_words_and_status_code_context() -> None:
+    lint = _load_lint_module()
+    clean = lint.StringRef("listener.html", 1, "Annulla la richiesta and join 500 listeners.", "listener")
+    status = lint.StringRef("listener.html", 2, "HTTP 500 error.", "listener")
+    assert not any(v.rule == "tech_lingo" for v in lint.check_strings([clean]))
+    assert any(v.rule == "tech_lingo" for v in lint.check_strings([status]))
+
+
+def test_dead_end_failure_does_not_treat_incidental_words_as_actions() -> None:
+    lint = _load_lint_module()
+    ref = lint.StringRef(
+        "ui_copy.py", 1, "We couldn't continue because the check failed.", "listener", "ui_copy:en:playback_failed"
+    )
+    assert any(v.rule == "no_way_out" for v in lint.check_strings([ref]))
+
+
+def test_all_advertised_copy_sources_are_collected() -> None:
+    lint = _load_lint_module()
+    refs = lint.collect_strings()
+    assert {ref.file for ref in refs} == {
+        "ha-addon/mammamiradio-edge/translations/en.yaml",
+        "ha-addon/mammamiradio/translations/en.yaml",
+        "mammamiradio/web/static/listener.js",
+        "mammamiradio/web/streamer.py",
+        "mammamiradio/web/templates/admin.html",
+        "mammamiradio/web/templates/listener.html",
+        "mammamiradio/web/ui_copy.py",
+    }
+    assert any(ref.context == "ui_copy:en:form_network_error" for ref in refs)
+    assert not any(ref.text.startswith("Listener UI copy lookup") for ref in refs)
+    standalone = next(ref for ref in refs if "not connected to Home Assistant" in ref.text)
+    assert "also skip this step" in standalone.text and "Retry connection" in standalone.text
 
 
 def test_informational_phrase_does_not_exempt_other_rules() -> None:
@@ -180,11 +220,11 @@ def test_empty_baseline_is_valid(tmp_path: Path, monkeypatch) -> None:
     assert lint.main() == 0
 
 
-def test_baseline_documents_current_stale_speaker_backlog() -> None:
+def test_baseline_documents_current_copy_backlog() -> None:
     data = json.loads(BASELINE.read_text(encoding="utf-8"))
     rules = {v["rule"] for v in data["violations"]}
-    assert rules == {"stale_speaker_copy"}
-    assert len(data["violations"]) == 6
+    assert rules == {"no_way_out", "stale_speaker_copy"}
+    assert len(data["violations"]) == 7
     files = {v["file"] for v in data["violations"]}
     assert "mammamiradio/web/templates/admin.html" in files
     assert "mammamiradio/web/streamer.py" in files

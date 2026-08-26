@@ -15,9 +15,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-if [ "${1:-}" = "--audit" ]; then
-  exec python3 "$SCRIPT_DIR/ui_copy_lint.py" --audit
+PYTHON_BIN="${MAMMAMIRADIO_PYTHON:-}"
+if [ -z "$PYTHON_BIN" ]; then
+  if [ -x "$SCRIPT_DIR/../.venv/bin/python" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/../.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
 fi
 
-exec python3 "$SCRIPT_DIR/ui_copy_lint.py"
+if [ "${1:-}" = "--audit" ]; then
+  exec "$PYTHON_BIN" "$SCRIPT_DIR/ui_copy_lint.py" --audit
+fi
+
+exec "$PYTHON_BIN" "$SCRIPT_DIR/ui_copy_lint.py"
