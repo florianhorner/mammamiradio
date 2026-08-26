@@ -1230,8 +1230,6 @@ async (page) => {
       assert(child.start === '1' && child.end === '-1', `technical detail child was left in an implicit grid column: ${JSON.stringify(child)}`);
     }
     await page.locator('#setupAdvancedDetails > summary').click();
-    await sourceReview.click();
-    assert(await sourcePreview.isVisible(), 'source preview was not exposed for responsive geometry checks');
     const viewportResults = [];
     const journeyViewports = [[320, 568], [375, 667], [430, 932], [554, 800], [720, 900], [768, 1024], [1024, 768], [1440, 900]];
     const measureJourneyGeometry = () => page.evaluate(() => {
@@ -1322,6 +1320,14 @@ async (page) => {
       const geometry = await measureJourneyGeometry();
       viewportResults.push({ state: 'active', width, ...geometry });assertJourneyGeometry(width, geometry, 'active');
     }
+    await sourceReview.click();
+    if(!(await sourcePreview.evaluate((element) => element.open)))await sourcePreview.locator('> summary').click();
+    assert(await sourcePreview.isVisible(), 'source preview was not exposed for responsive geometry checks');
+    for (const [width, height] of journeyViewports) {
+      await page.setViewportSize({ width, height });
+      const geometry = await measureJourneyGeometry();
+      viewportResults.push({ state: 'source-review', width, ...geometry });assertJourneyGeometry(width, geometry, 'source review');
+    }
 
     await resetUi(completed);
     await assertCompleted();
@@ -1350,9 +1356,12 @@ async (page) => {
         && zoomGeometry.longNameWidth <= zoomGeometry.longNameClientWidth + 1,
       `320px/200% first-listen geometry overflowed: ${JSON.stringify(zoomGeometry)}`,
     );
-    await sourceReview.click();
     const activeZoomJourneyGeometry = await measureJourneyGeometry();
     assertJourneyGeometry(320, activeZoomJourneyGeometry, 'active 200% zoom');
+    await sourceReview.click();
+    if(!(await sourcePreview.evaluate((element) => element.open)))await sourcePreview.locator('> summary').click();
+    const sourceReviewZoomJourneyGeometry = await measureJourneyGeometry();
+    assertJourneyGeometry(320, sourceReviewZoomJourneyGeometry, 'source review 200% zoom');
 
     await resetUi(completed);
     await page.evaluate(() => {document.documentElement.style.fontSize = '200%';});
