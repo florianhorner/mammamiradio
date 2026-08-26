@@ -907,7 +907,7 @@ same structured shape under `active_setup_csrf_stale`.
 docker compose up
 ```
 
-The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`. Set `MAMMAMIRADIO_MUSIC_DIR` to override the default `./music` path; the local-library scanner runs every 60 seconds and **Rotazione → Local music → Scan now** triggers an immediate rescan without restart.
+The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`. Source checkouts default to `./music`; set `MAMMAMIRADIO_MUSIC_DIR` to override either layout. The local-library scanner runs every 60 seconds and **Rotazione → Local music → Scan now** triggers an immediate rescan without restart.
 
 The container binds to `0.0.0.0`. Set `ADMIN_TOKEN` in `.env` to pin a known
 value. If it is unset, the entrypoint generates one and writes it to
