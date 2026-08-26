@@ -75,13 +75,18 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     )
     assert "Hear Mamma Mi Radio right here." in html
     assert '<header class="mmr-panel-head sr-only">' in html
-    assert "Meet Marco and Giulia" in html
+    assert "Check music can continue" in html
+    assert "What plays after the welcome" in html
+    assert 'id="firstListenSourcePreview"' in html
     assert "Play it on this device" in html
     assert "Start sound check" in html
     assert "Check the sound" in html
     assert "Choose whether the hosts can use Home details" in html
     assert "Add new conversations between songs" in html
-    assert "Step 1 of 4. Next: play it on this device." in html
+    assert "Mamma Mi Radio integration through HACS" in html
+    assert "restart Home Assistant" in html
+    assert "Media → Mamma Mi Radio" in html
+    assert "Step 2 of 4. Next: play it on this device." in html
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
     assert "const current=state==='current'" in step
@@ -219,6 +224,7 @@ def test_required_source_truth_rows_and_recovery_boundary_are_explicit() -> None
     render = html[render_start : html.index("function setupProviderLabels", render_start)]
     assert "firstListenListeningCue(state)" in render
     assert html.index('id="setupAdvancedDetails"') < html.index('id="firstListenSources"')
+    assert html.index('id="firstListenSourcePreview"') < html.index('id="setupAdvancedDetails"')
 
 
 def test_speaker_controls_use_active_post_routes_and_exact_media_source() -> None:
@@ -679,7 +685,7 @@ def test_first_listen_controls_have_accessible_busy_and_mobile_contracts() -> No
 def test_first_listen_uses_truthful_action_copy() -> None:
     html = _html()
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
-    for copy in ("Preview 16-second welcome", "Start sound check", "Review opening", "Review playback",
+    for copy in ("Preview 16-second welcome", "Start sound check", "Review music readiness", "Review playback",
                  "Review sound check", "Review privacy choice", "Review AI setup"):  # fmt: skip
         assert copy in html
     for copy in ("Start sound check again", "firstListenSetChip('firstListenSpeakerChip','working','Start here')",
@@ -701,7 +707,7 @@ def test_completed_rows_review_inline_without_stealing_current_step() -> None:
     html = _html()
     assert html.count('onclick="toggleFirstListenReview(') == 4
     for key, body, label in (
-        ("source", "firstListenSourceBody", "Review opening"),
+        ("source", "firstListenSourceBody", "Review music readiness"),
         ("speaker", "firstListenSpeakerBody", "Review playback"),
         ("verify", "firstListenVerifyBody", "Review sound check"),
         ("privacy", "firstListenPrivacyBody", "Review privacy choice"),
@@ -936,8 +942,12 @@ def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actio
     assert "primary.focus" in strip
     assert "openSetupPanel('source')" in strip
 
-    source_state = _function("firstListenSourceState", "renderFirstListenSources")
+    source_state = _function("firstListenSourceState", "firstListenSourcesHtml")
     assert "continuity_available===true" in source_state
+    sources = _function("renderFirstListenSources", "healthySourceRows")
+    assert "firstListenSourcePreview" in sources
+    assert "firstListenSourcePreviewDetails" in sources
+    assert "healthySourceRows(source)" in sources
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "const sourceComplete=sourceMilestone&&continuityAvailable" in progress
     assert "sourceKnown&&!continuityAvailable?'repair the music source'" in progress

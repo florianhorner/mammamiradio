@@ -639,7 +639,24 @@ async (page) => {
     assert(await page.locator('#firstListenAiStep').evaluate((el) => el.closest('#firstListenPath') === null), 'optional AI stayed inside required progress');
     assert(await page.locator('.first-listen-step').count() === 5, 'optional AI left the First Listen surface');
     assert((await page.locator('#firstListenOptionalHeading').textContent()).trim() === 'Optional enhancement', 'optional AI lost its section label');
+    assert((await page.locator('#firstListenProgressLine').innerText()).includes('Step 2 of 4'), 'required progress should open on the first interactive step');
     assert((await page.locator('#firstListenProgressLine').innerText()).includes('of 4'), 'required progress is not Step N of 4');
+    assert((await page.locator('#firstListenSourceHeading').innerText()) === 'Check music can continue', 'step 1 heading drifted from music continuity');
+    const sourcePreview = page.locator('#firstListenSourcePreviewDetails');
+    const sourceReview = page.locator('#firstListenSourceStep > .first-listen-head > .first-listen-review');
+    assert(await sourcePreview.isHidden(), 'completed source preview expanded without operator review');
+    assert(await sourceReview.isVisible(), 'completed source row lost its music-readiness review action');
+    await sourceReview.click();
+    assert(await sourcePreview.isVisible(), 'inline source preview is missing when step 1 is reviewed');
+    await sourceReview.click();
+    assert(await sourcePreview.isHidden(), 'inline source preview stayed open after review closed');
+    const speakerHelp = await page.locator('#firstListenSpeakerBody .use-copy').innerText();
+    assert(
+      speakerHelp.includes('through HACS')
+        && speakerHelp.includes('restart Home Assistant')
+        && speakerHelp.includes('Media → Mamma Mi Radio'),
+      'step 2 lost the HA speaker prerequisite and deferral line',
+    );
     assert((await page.locator('#firstListenPlayBtn').innerText()) === 'Start sound check', 'primary playback action is not Start sound check');
     assert((await page.locator('.guide-audio[data-guide="welcome"] .guide-audio-play').innerText()) === 'Preview 16-second welcome', 'welcome preview copy drifted');
     assert(await page.locator('.program-mark img').getAttribute('src') === '/static/favicon.svg', 'standalone mark is not the canonical favicon');

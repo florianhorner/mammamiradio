@@ -2446,21 +2446,25 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <p class="guide-audio-copy" id="guideWelcomeNote"><strong>16 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
                   <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. <strong>Giulia:</strong> Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.</p></details>
                 </div>
-                <p class="progress-line" id="firstListenProgressLine">Step 1 of 4. Next: play it on this device.</p>
+                <p class="progress-line" id="firstListenProgressLine">Step 2 of 4. Next: play it on this device.</p>
               </header>
 
               <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
               <section class="first-listen-step" id="firstListenSourceStep" data-state="current" aria-labelledby="firstListenSourceHeading">
                 <div class="first-listen-head">
                   <span class="first-listen-number" aria-hidden="true">1</span>
-                  <h3 class="first-listen-heading" id="firstListenSourceHeading" tabindex="-1">Meet Marco and Giulia</h3>
+                  <h3 class="first-listen-heading" id="firstListenSourceHeading" tabindex="-1">Check music can continue</h3>
                   <span class="status-chip working" id="firstListenSourceChip" aria-label="Source status: checking">Checking</span>
                   <div class="first-listen-summary" id="firstListenSourceSummary">The welcome is ready. We’re checking that music can continue afterward.</div>
-                  <button type="button" class="first-listen-review" data-review-step="source" aria-expanded="false" aria-controls="firstListenSourceBody" onclick="toggleFirstListenReview('source',this)" hidden>Review opening</button>
+                  <button type="button" class="first-listen-review" data-review-step="source" aria-expanded="false" aria-controls="firstListenSourceBody" onclick="toggleFirstListenReview('source',this)" hidden>Review music readiness</button>
                 </div>
                 <div class="first-listen-body" id="firstListenSourceBody" role="region" aria-labelledby="firstListenSourceHeading" aria-hidden="false">
-                  <h4 class="benefit-heading">Hear the full Mamma Mi Radio opening.</h4>
-                  <p class="use-copy">You’ll hear Marco and Giulia, then the music starts.</p>
+                  <h4 class="benefit-heading">Music after the welcome.</h4>
+                  <p class="use-copy">Marco and Giulia open the show in the preview above. This step checks that real music can follow.</p>
+                  <details class="first-listen-source-preview" id="firstListenSourcePreviewDetails" hidden>
+                    <summary>What plays after the welcome</summary>
+                    <div class="first-listen-source-list" id="firstListenSourcePreview"><div class="empty">Checking what can play…</div></div>
+                  </details>
                   <div class="first-listen-status" id="firstListenSourceRepair"></div>
                   <div class="first-listen-actions" id="firstListenSourceActions" hidden>
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
@@ -2479,7 +2483,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
                   <div class="first-listen-current-meta"><strong>Step 2 of 4</strong><span>Next: check the sound</span></div>
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
-                  <p class="use-copy">The station plays on this device. You choose headphones, Bluetooth, or the speaker.</p>
+                  <p class="use-copy">The station plays on this device. You choose headphones, Bluetooth, or the speaker. Finishing here is enough to complete setup. For a Home Assistant speaker later, install the optional Mamma Mi Radio integration through HACS, restart Home Assistant, then open Media → Mamma Mi Radio.</p>
                   <div class="first-listen-actions" style="margin-top:0">
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)">Start sound check</button>
                   </div>
@@ -5081,7 +5085,7 @@ const FIRST_LISTEN_STEP_KEYS={
   firstListenAiStep:'ai',
 };
 const FIRST_LISTEN_REVIEW_LABELS={
-  source:'Review opening',
+  source:'Review music readiness',
   speaker:'Review playback',
   verify:'Review sound check',
   privacy:'Review privacy choice',
@@ -5323,9 +5327,7 @@ function firstListenSourceState(projection){
   const recoveryAvailable=recoveryOnAir||source.recovery_cover_available===true||['playable','cover_only'].includes(recoveryStatus);
   return{source,normalized,healthy,recoveryOnAir,recoveryAvailable,continuityAvailable:source.continuity_available===true||healthy||recoveryAvailable};
 }
-function renderFirstListenSources(source){
-  const box=document.getElementById('firstListenSources');
-  if(!box)return;
+function firstListenSourcesHtml(source){
   const rows=firstListenSourceRows(source);
   const requiredHtml=rows.map(item=>{
     const rawStatus=item.row.status||item.row.state||'checking';
@@ -5338,7 +5340,24 @@ function renderFirstListenSources(source){
     const view=firstListenSourceStatus(String(row.kind||''),row.status||row.state);
     return `<div class="first-listen-source-row"><div><div class="first-listen-source-name">${esc(row.label||row.kind||'Custom source')}</div><div class="first-listen-source-detail">${esc(row.detail||row.headline||'Shown separately from live charts.')}</div></div>${statusChip(view.state,view.label)}</div>`;
   }).join('')}`:'';
-  box.innerHTML=requiredHtml+advancedHtml;
+  return requiredHtml+advancedHtml;
+}
+function renderFirstListenSources(source){
+  const sourceKnown=Array.isArray(source?.rows)&&source.rows.length>0;
+  const html=sourceKnown?firstListenSourcesHtml(source):'<div class="empty">Checking what can play…</div>';
+  const preview=document.getElementById('firstListenSourcePreview');
+  const previewDetails=document.getElementById('firstListenSourcePreviewDetails');
+  const technical=document.getElementById('firstListenSources');
+  if(preview)preview.innerHTML=html;
+  if(previewDetails){
+    previewDetails.hidden=!sourceKnown;
+    if(sourceKnown&&!healthySourceRows(source))previewDetails.open=true;
+  }
+  if(technical)technical.innerHTML=html;
+}
+function healthySourceRows(source){
+  const normalized=firstListenSourceRows(source);
+  return source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
 }
 function firstListenPlayerLabel(player){
   const name=String(player?.friendly_name||player?.name||player?.label||'Saved speaker');

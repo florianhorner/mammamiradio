@@ -1450,6 +1450,35 @@ body[data-first-listen-entry="completing"] .first-listen-station-controls{displa
   overflow-wrap: anywhere;
 }
 
+.first-listen-panel .first-listen-source-preview {
+  margin: var(--space-3) 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--cream) 3%, transparent);
+}
+
+.first-listen-panel .first-listen-source-preview > summary {
+  padding: 0.625rem 0.75rem;
+  color: var(--cream-dk);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+  list-style-position: outside;
+}
+
+.first-listen-panel .first-listen-source-preview > summary::-webkit-details-marker {
+  color: var(--sun2);
+}
+
+.first-listen-panel .first-listen-source-preview .first-listen-source-list {
+  padding: 0 0.75rem 0.625rem;
+}
+
+.first-listen-panel .first-listen-source-preview .first-listen-source-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
 /* ── Full completion reward ─────────────────────────────────────────────── */
 
 .first-listen-panel :is(.first-listen-success, .success-surface) {
