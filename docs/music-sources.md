@@ -64,7 +64,6 @@ for run in $(seq 1 20); do
   python3.11 -P scripts/ha-green-launch-smoke.py \
     --record-release-receipt proof/media/ha-green-release-evidence
 done
-make ha-green-release-proof
 ```
 
 Receipt mode detects Home Assistant Green through the aarch64 device tree,
