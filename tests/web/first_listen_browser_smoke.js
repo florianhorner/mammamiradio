@@ -654,12 +654,33 @@ async (page) => {
     assert(await sourcePreview.isHidden(), 'inline source preview stayed open after review closed');
     const speakerHelp = await page.locator('#firstListenSpeakerBody .use-copy').innerText();
     assert(
-      speakerHelp.includes('through HACS')
-        && speakerHelp.includes('restart Home Assistant')
-        && speakerHelp.includes('Settings → Devices & Services → Add Integration')
-        && speakerHelp.includes('Media → Mamma Mi Radio'),
-      'step 2 lost the HA speaker prerequisite and deferral line',
+      speakerHelp.includes('Hearing it here is enough to finish setup') && !speakerHelp.includes('HACS'),
+      'step 2 lost its plain-language local completion path',
     );
+    const homeAssistantGuide = page.locator('#firstListenHomeAssistantGuide');
+    const homeAssistantGuideSummary = homeAssistantGuide.locator('> summary');
+    assert(!(await homeAssistantGuide.evaluate((element) => element.open)), 'optional Home Assistant guide opened before the operator asked');
+    const homeAssistantGuideSummaryBox = await homeAssistantGuideSummary.boundingBox();
+    assert(homeAssistantGuideSummaryBox?.height >= 43.5, `Home Assistant guide summary fell below 44px: ${JSON.stringify(homeAssistantGuideSummaryBox)}`);
+    const homeAssistantGuideCopy = (await homeAssistantGuide.textContent()).replace(/\s+/g, ' ');
+    assert(
+      homeAssistantGuideCopy.includes('Home Assistant Community Store (HACS)')
+        && homeAssistantGuideCopy.includes('optional Mamma Mi Radio connection')
+        && homeAssistantGuideCopy.includes('Custom repositories')
+        && homeAssistantGuideCopy.includes('choose Integration as the category')
+        && homeAssistantGuideCopy.includes('Restart Home Assistant')
+        && homeAssistantGuideCopy.includes('Settings → Devices & Services → Add Integration → Mamma Mi Radio')
+        && homeAssistantGuideCopy.includes('Media → Mamma Mi Radio → Mamma Mi Radio Live'),
+      'optional Home Assistant guide lost an actionable installation or playback step',
+    );
+    assert(
+      (await homeAssistantGuide.locator('a').getAttribute('href')) === 'https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback',
+      'optional Home Assistant guide lost its canonical setup link',
+    );
+    await homeAssistantGuideSummary.click();
+    assert(await homeAssistantGuide.evaluate((element) => element.open), 'optional Home Assistant guide did not open on request');
+    await homeAssistantGuideSummary.click();
+    assert(!(await homeAssistantGuide.evaluate((element) => element.open)), 'optional Home Assistant guide did not close on request');
     assert((await page.locator('#firstListenPlayBtn').innerText()) === 'Start sound check', 'primary playback action is not Start sound check');
     assert((await page.locator('.guide-audio[data-guide="welcome"] .guide-audio-play').innerText()) === 'Preview 16-second welcome', 'welcome preview copy drifted');
     assert(await page.locator('.program-mark img').getAttribute('src') === '/static/favicon.svg', 'standalone mark is not the canonical favicon');

@@ -83,10 +83,16 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Check the sound" in html
     assert "Choose whether the hosts can use Home details" in html
     assert "Add new conversations between songs" in html
-    assert "Mamma Mi Radio integration through HACS" in html
-    assert "restart Home Assistant" in html
-    assert "Settings → Devices &amp; Services → Add Integration" in html
-    assert "Media → Mamma Mi Radio" in html
+    assert "Hearing it here is enough to finish setup." in html
+    assert 'id="firstListenHomeAssistantGuide"' in html
+    assert "Home Assistant Community Store (HACS)" in html
+    assert "optional Mamma Mi Radio connection" in html
+    assert "Custom repositories" in html
+    assert "choose Integration as the category" in html
+    assert "github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md" in html
+    assert "Restart Home Assistant" in html
+    assert "Settings → Devices &amp; Services → Add Integration → Mamma Mi Radio" in html
+    assert "Media → Mamma Mi Radio → Mamma Mi Radio Live" in html
     assert "Step 1 of 4. Next: play it on this device." in html
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
@@ -943,12 +949,16 @@ def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actio
     assert "primary.focus" in strip
     assert "openSetupPanel('source')" in strip
 
+    source_health = _function("firstListenSourceHealthy", "firstListenSourceState")
+    assert "source.healthy===true" in source_health
+    assert "item.kind!=='recovery'" in source_health
     source_state = _function("firstListenSourceState", "firstListenSourcesHtml")
+    assert "firstListenSourceHealthy(source,normalized)" in source_state
     assert "continuity_available===true" in source_state
-    sources = _function("renderFirstListenSources", "healthySourceRows")
+    sources = _function("renderFirstListenSources", "firstListenPlayerLabel")
     assert "firstListenSourcePreview" in sources
     assert "firstListenSourcePreviewDetails" in sources
-    assert "healthySourceRows(source)" in sources
+    assert "firstListenSourceHealthy(source)" in sources
     assert "previousHealth!=='degraded'" in sources
     assert "previewDetails.dataset.sourceHealth=sourceHealth" in sources
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")

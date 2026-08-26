@@ -2483,7 +2483,13 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
                   <div class="first-listen-current-meta"><strong>Step 2 of 4</strong><span>Next: check the sound</span></div>
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
-                  <p class="use-copy">The station plays on this device. You choose headphones, Bluetooth, or the speaker. Finishing here is enough to complete setup. For a Home Assistant speaker later, install the optional Mamma Mi Radio integration through HACS, restart Home Assistant, add Mamma Mi Radio under Settings → Devices &amp; Services → Add Integration, then open Media → Mamma Mi Radio.</p>
+                  <p class="use-copy">The station plays on this device. Choose headphones, Bluetooth, or this device’s speaker. Hearing it here is enough to finish setup.</p>
+                  <details class="guide-transcript" id="firstListenHomeAssistantGuide">
+                    <summary>Optional: play on a Home Assistant speaker later</summary>
+                    <p>Use the Home Assistant Community Store (HACS) to add the optional Mamma Mi Radio connection. In HACS, open the three-dot menu → Custom repositories, enter https://github.com/florianhorner/mammamiradio, choose Integration as the category, and install Mamma Mi Radio.</p>
+                    <p>Restart Home Assistant, then choose Settings → Devices &amp; Services → Add Integration → Mamma Mi Radio. After setup, open Media → Mamma Mi Radio → Mamma Mi Radio Live and choose a speaker.</p>
+                    <p><a href="https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback" target="_blank" rel="noopener noreferrer">Open the full Home Assistant speaker guide</a></p>
+                  </details>
                   <div class="first-listen-actions" style="margin-top:0">
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)">Start sound check</button>
                   </div>
@@ -5337,10 +5343,13 @@ function firstListenSourceRows(source){
     return{...required,row:found||{status:'checking',detail:'Waiting for source evidence.'}};
   });
 }
+function firstListenSourceHealthy(source,normalized=firstListenSourceRows(source)){
+  return source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
+}
 function firstListenSourceState(projection){
   const source=projection?.guided?.source_readiness||{};
   const normalized=firstListenSourceRows(source);
-  const healthy=source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
+  const healthy=firstListenSourceHealthy(source,normalized);
   const recoveryRow=normalized.find(item=>item.kind==='recovery')?.row||{};
   const recoveryStatus=String(recoveryRow.status||recoveryRow.state||'');
   const recoveryOnAir=source.recovery_on_air===true||recoveryStatus==='on_air';
@@ -5364,7 +5373,7 @@ function firstListenSourcesHtml(source){
 }
 function renderFirstListenSources(source){
   const sourceKnown=Array.isArray(source?.rows)&&source.rows.length>0;
-  const sourceHealth=sourceKnown?(healthySourceRows(source)?'healthy':'degraded'):'unknown';
+  const sourceHealth=sourceKnown?(firstListenSourceHealthy(source)?'healthy':'degraded'):'unknown';
   const html=sourceKnown?firstListenSourcesHtml(source):'<div class="empty">Checking what can play…</div>';
   const preview=document.getElementById('firstListenSourcePreview');
   const previewDetails=document.getElementById('firstListenSourcePreviewDetails');
@@ -5377,10 +5386,6 @@ function renderFirstListenSources(source){
     previewDetails.dataset.sourceHealth=sourceHealth;
   }
   if(technical)technical.innerHTML=html;
-}
-function healthySourceRows(source){
-  const normalized=firstListenSourceRows(source);
-  return source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
 }
 function firstListenPlayerLabel(player){
   const name=String(player?.friendly_name||player?.name||player?.label||'Saved speaker');
