@@ -62,8 +62,9 @@ by earlier versions move into the secrets file automatically the first time the
 updated add-on starts; non-empty file values win per key.
 
 Jamendo is a separate, optional music source under **Motore → Setup → Music
-sources**. It is off by default and requires both your client ID and an explicit
-non-commercial-use acknowledgement. Tracks are prepared one at a time and
+sources**. It is off by default and requires an explicit non-commercial-use
+acknowledgement. No signup is needed: the add-on brings its own Jamendo access,
+and your own client ID is an optional override. Tracks are prepared one at a time and
 deleted after play or cancellation. License facts shown by the app are
 provider-reported, and provider confirmation for this station model remains
 pending. Read the [music-source and rights guide](../docs/music-sources.md)
@@ -78,22 +79,25 @@ before enabling it.
    with `"ready": true`; queued work and elapsed startup time do not prove
    readiness. The complete attributed starter rotation works offline without a
    provider key.
-4. If HACS is not installed, follow its [official installation
-   guide](https://www.hacs.xyz/docs/use/download/download/). Then install the
-   [Mamma Mi Radio
-   integration](../docs/integrations/ha-integration.md#install-the-hacs-integration-for-speaker-playback)
-   for native `media-source://mammamiradio/live` playback and restart Home
-   Assistant once.
+4. The HACS integration is optional. First Listen plays on this device. Install
+   the [Mamma Mi Radio
+   integration](../docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback)
+   later if you want native `media-source://mammamiradio/live` playback, then
+   restart Home Assistant once.
 5. A fresh unfinished install opens **First Listen** automatically with an
    authored 27-second mini-show on deck: an original music bed and a
    privacy-aware Marco/Giulia opening, then a source-aware handoff to the live
    stream. It needs no AI key or Home context. The attributed offline starter
    catalog is the normal base rotation; source readiness also distinguishes
    local music, optional Jamendo, and recovery cover.
-6. Select **Find my speakers**, choose one real Home Assistant speaker, then select **Start Mamma Mi Radio**. Confirm **Yes — that’s Mamma Mi Radio** only after the opening reaches the room. Use **Not yet** for repair and same-speaker retry. The tab remains available later, and the media source stays `media-source://mammamiradio/live`.
-7. Select **Keep private and continue** without fetching Home state, or show the fresh filtered preview before selecting **Let future hosts use this**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. Mute any useful entity the hosts should never use; room-presence stays off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** remain separate: turning host context off keeps entity publishing while stopping full-state and timer reads, host-context polling, and Home-derived host work. Filtered context becomes useful to generated host copy after an AI host key is ready.
+6. Select **Start sound check**. Confirm **Yes, I hear it** only after you hear
+   the opening. Use **Not yet** for
+   [this-device repair](../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
+   Home Assistant speakers remain an
+   [optional later route](../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
+7. Select **Keep Home private** without fetching Home state, or show the fresh filtered preview before selecting **Let Marco and Giulia use these details**. A daylight-only preview is disclosed as ambient-only and not meaningful personalization, so the private path is recommended. Mute any useful entity the hosts should never use; room-presence stays off unless you explicitly allow it as a personal on-air moment. The Home Assistant integration and **Host home context** remain separate: turning host context off keeps entity publishing while stopping full-state and timer reads, host-context polling, and Home-derived host work. Filtered context becomes useful to generated host copy after an AI host key is ready.
 8. Set **Station Name** to the name people should see and hear; entity IDs and the media-source URI stay stable.
-9. Add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from the now-unlocked **AI hosts — optional** step if you want generated hosts. It is never required for first audio.
+9. Under **Optional enhancement**, select **Set up new conversations** and add `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if you want generated hosts. It is never required for first audio.
 10. Optionally configure Jamendo under **Motore → Setup → Music sources** after reviewing and accepting the current non-commercial-use boundary.
 
 `/config/secrets.env` is a plaintext file in the add-on config storage, not Home Assistant's `/config/secrets.yaml`. Anyone with host/add-on config access can read it; it exists to keep provider credentials out of Supervisor options and diagnostics.

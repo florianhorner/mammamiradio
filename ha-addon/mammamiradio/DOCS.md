@@ -30,25 +30,22 @@ station ready by themselves.
 
 ### 3. Install the HACS integration
 
-Install the [Mamma Mi Radio HACS
-integration](../../docs/integrations/ha-integration.md#install-the-hacs-integration-for-speaker-playback),
-then restart Home Assistant once. The integration registers the stable
-`media-source://mammamiradio/live` source used by the First Listen
-physical-speaker path. It is optional only for browser-only listening, which
-does not count as First Listen proof.
+The HACS integration is optional. First Listen proof is hearing the station on
+this device in the add-on Web UI. Install the [Mamma Mi Radio HACS
+integration](../../docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback)
+when you want Home Assistant speakers to play
+`media-source://mammamiradio/live`, then restart Home Assistant once.
 
-The setup strip's listener action and `/listen` remain available for a
-browser-only check, but that does not count as physical-speaker proof. Once any
-listener accepts the first audio bytes, `/readyz` returns HTTP `200` with
-`status: "ready"`.
+The setup strip's listener action and `/listen` remain available as the audience
+surface. Once any listener accepts the first audio bytes, `/readyz` returns HTTP
+`200` with `status: "ready"`.
 
-### 4. Follow First Listen to the room
+### 4. Follow First Listen on this device
 
 Click **Open Web UI** or use the ingress sidebar entry. A fresh unfinished
 install opens directly on **First Listen** before the control room. Follow its
 vertical path; completed and existing installs keep their normal control-room
-landing, and the First Listen tab remains available to review progress or
-repair an unfinished step:
+landing, with review and repair under **Motore → Setup**:
 
 1. The opening card leads with a 27-second authored mini-show: an original music
    bed, a privacy-aware Marco/Giulia welcome, then a handoff to the live stream.
@@ -57,22 +54,21 @@ repair an unfinished step:
    music, recovery cover, or a music repair follows the opening. Recovery audio
    can keep the stream audible, but it is not a music rotation; bundled demo
    music is not a promised song library.
-2. Select **Find my speakers**, choose one real Home Assistant speaker, then
-   select **Start Mamma Mi Radio**. The app asks Home Assistant to play
-   `media-source://mammamiradio/live`; it does not count browser playback.
-3. Home Assistant accepting the request is not audible proof. Select **Yes —
-   that’s Mamma Mi Radio** only when the opening reaches the room. **Not yet**
-   opens warm repair guidance for mute, volume, entity selection, HACS, and
-   media-source checks.
+2. Select **Start sound check**. Confirm **Yes, I hear it** only after you hear
+   the opening, or **Not yet** for
+   [this-device repair](../../docs/troubleshooting.md#first-listen-does-not-play-on-this-device).
+   Home Assistant speakers remain an
+   [optional later route](../../docs/integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
 
-See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen-repair) if the room stays quiet.
+See [First-listen repair](../../docs/integrations/ha-integration.md#first-listen-repair) if a later Home Assistant speaker stays quiet.
 
 ### 5. Make the privacy choice; add AI later
 
 On a fresh install, **Host home context** is omitted from saved add-on options
-and remains off. After the speaker is confirmed, select **Keep private and
-continue** without reading Home state, or select **Show filtered preview**
-before **Let future hosts use this**. The preview is a fresh, detached Home
+and remains off. After you confirm you heard the station on this device,
+select **Keep Home private** without reading Home state, or select **See what
+the hosts would receive** before **Let Marco and Giulia use these details**.
+The preview is a fresh, detached Home
 Assistant read: it is not published into host scripts and is not sent to an AI
 provider. A preview containing only generic daylight is disclosed as
 ambient-only and not meaningful personalization; keeping it private is the
@@ -80,13 +76,13 @@ recommended path. For a useful preview, inspect the filtered entities and mute
 any entity locally if needed. Enabling requires that fresh preview.
 
 If that live privacy choice applies but the setup review cannot be saved, the
-choice is not rolled back. The private path offers **Save private review again**
+choice is not rolled back. The private path offers **Save private choice again**
 without reading Home state. An enabled choice remains active but requires a
-fresh filtered preview before **Save review again**. AI-host setup remains
+fresh filtered preview before **Save shared choice again**. AI-host setup remains
 locked until the review receipt is saved.
 
-Use **AI hosts — optional** afterward to save either `ANTHROPIC_API_KEY` or
-`OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
+Under **Optional enhancement**, select **Set up new conversations** to save
+either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. One key unlocks generated host banter and fake ad breaks. The
 admin writes the key to `/config/secrets.env`, applies it live, and checks the
 provider without interrupting audio. First audio never needs it.
 
@@ -166,12 +162,17 @@ copy the address from the station's own port instead.
 
 ### Optional Jamendo music
 
-Open **Motore → Setup → Music sources** to configure Jamendo. It is off by
-default and is not required for a complete rotation. Enabling it requires a
-client ID and the current non-commercial-use acknowledgement. A legacy client
-ID is migrated into the private settings file once, but remains disabled until
-the acknowledgement is made in the app; the client ID is absent from both
-add-on Configuration schemas.
+Open **Motore**, then **Setup**, then **Music sources** to turn Jamendo on. It is off by
+default and is not required for a complete rotation. Enable it and confirm the
+current non-commercial-use acknowledgement. No signup is needed; the add-on
+includes Jamendo access.
+
+Your own client ID is optional. It takes precedence over shared access and uses
+independently authorized access; the panel shows which one is active. Clearing
+it returns the add-on to shared access. A legacy client ID is
+migrated into the private settings file once, but remains disabled until the
+acknowledgement is made in the app. The client ID is absent from both add-on
+Configuration schemas.
 
 Jamendo preparation is deliberately transient: the add-on holds at most one
 lease and one audio artifact, inserts at most one prepared track after two

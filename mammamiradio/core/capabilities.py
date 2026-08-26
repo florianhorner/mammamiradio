@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mammamiradio.core.config import StationConfig
+from mammamiradio.core.config import StationConfig, jamendo_source_configured
 from mammamiradio.core.models import Capabilities, StationState
 from mammamiradio.core.setup_status import home_context_availability
 from mammamiradio.playlist.downloader import external_media_enabled
@@ -22,7 +22,7 @@ def get_capabilities(config: StationConfig, state: StationState) -> Capabilities
         ha=bool(config.homeassistant.enabled and config.ha_token),
         home_context_ready=home_availability.home_context_ready,
         home_context_enabled=home_availability.readiness != "disabled",
-        jamendo=bool((config.playlist.jamendo_client_id or "").strip()),
+        jamendo=jamendo_source_configured(config),
         charts_reload=external_media_enabled(config.allow_ytdlp),
         tts_degraded=bool(getattr(config, "tts_degraded_voices", []))
         or any(

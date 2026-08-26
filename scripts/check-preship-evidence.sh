@@ -7,9 +7,12 @@
 # scripts/emit-review-evidence.sh after the squad runs.
 #
 # Checks: file exists, parses, skill is review/adversarial-review, and the pinned commit
-# is the target head or an ancestor of it (walking ancestry is what survives
-# rebase/amend/squash — the reason the artifact has a fixed name and an internal commit
-# field instead of a SHA-named filename).
+# is the target head or an ancestor of it. This legacy ancestry rule works for later
+# commits on the same history, but rebase, amend, and squash can orphan the reviewed
+# commit. V2 PR verification still requires the reviewed commit object, so a
+# rewrite of reviewed history requires a fresh review and receipt. Main-mode
+# verification uses the surviving content digest, so squash/GC does not break
+# the landed receipt.
 #
 # NO freshness window here, deliberately: the local hook's ±2h window exists because it
 # reads a mutable laptop ledger. A committed artifact is immutable at a commit; wall-clock
@@ -21,10 +24,34 @@
 # evidence. What this changes: skipping the squad from ANY runtime now requires
 # fabricating a diffable, commit-pinned artifact instead of being silently invisible.
 #
-# Usage: scripts/check-preship-evidence.sh [evidence-file] [target-head]
+# Compatibility phase:
+#   scripts/check-preship-evidence.sh [evidence-file] [target-head]  verify v1
+#   scripts/check-preship-evidence.sh --v2 --target SHA --base SHA --mode pr|main
+#
+# Usage: scripts/check-preship-evidence.sh [--v2 ... | evidence-file target-head]
 #   evidence-file  default proof/preship-review.json
 #   target-head    default HEAD (CI passes the PR head SHA)
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ "${1-}" == "--v2" ]]; then
+  shift
+  if [[ -n "${MAMMAMIRADIO_PYTHON:-}" ]]; then
+    PYTHON_BIN="$MAMMAMIRADIO_PYTHON"
+  elif [[ -x "$SOURCE_ROOT/.venv/bin/python" ]]; then
+    PYTHON_BIN="$SOURCE_ROOT/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+  if ! "$PYTHON_BIN" -S -P -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+    echo "check-preship-evidence: v2 requires Python 3.11+ (set MAMMAMIRADIO_PYTHON)" >&2
+    exit 1
+  fi
+  export PYTHONPATH="$SOURCE_ROOT"
+  exec "$PYTHON_BIN" -S -P -m scripts.landing evidence verify "$@"
+fi
 
 FILE="${1:-proof/preship-review.json}"
 TARGET="${2-HEAD}"

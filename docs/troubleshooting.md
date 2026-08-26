@@ -129,9 +129,10 @@ clear the persisted stop; press **Resume** explicitly.
 
 ## The same short host line loops every few seconds after Resume or a queue drain
 
-This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. The packaged clip appears only when the cache has nothing eligible, and when it does queue with runway still expected but no cache music behind it, the miss reads `no cache music queued behind the canned clip`. Either way you should not see the same `continuity_1.mp3` line every few seconds.
+This means the station is living on continuity audio while the producer is still rendering the next segment. Current builds reach for cached music first: on a warm cache, Resume, idle wake-up, and an active-playback drain queue a normalized cached song with no clip in front of it, so the healthy path in the logs is a queued `norm-cache bridge` on its own. On a cold cache, an active drain backed by the packaged starter catalog queues a `verified starter-catalog runway` directly; starter songs do not need normalization-cache copies. The packaged clip appears only when no eligible runway is admitted. The active-drain miss then reads `no music runway queued behind the canned clip`; Resume and idle retain the narrower `no cache music queued behind the canned clip` message. Either way you should not see the same `continuity_1.mp3` line every few seconds.
 
-If the clip still repeats, look for a starter manifest/admission failure first.
+If the clip still repeats after an active drain, look for a starter
+manifest/admission failure first.
 Eligible standalone/local normalized cache may still help the rescue picker,
 but Jamendo artifacts are deliberately excluded and cannot survive for rescue.
 
@@ -143,8 +144,9 @@ operator's responsibility.
 
 Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
 
-- **Finish Jamendo setup** means the client ID or current non-commercial
-  acknowledgement is missing. A migrated ID remains disabled until reviewed.
+- **Finish Jamendo setup** means the current non-commercial acknowledgement is
+  missing. No client ID is needed; the station brings its own Jamendo access. A
+  migrated operator ID remains disabled until reviewed.
 - **Preparing one Jamendo track** is normal. Starter/local music continues and
   a Jamendo miss never delays the next music slot. When the attempt in progress
   is rejecting candidates, the row states the reason for that attempt in plain
@@ -159,11 +161,12 @@ Open **Motore -> Setup -> Music sources** and use the persistent Jamendo row:
   configuration or turn Jamendo off.
 
 Every reason line either says the station is retrying, states explicitly that no
-action is needed, or names a step to take. Two carry a real operator lever: a
-client ID Jamendo will not accept, and a working folder the station cannot use.
-Both are reported as blocking failures, so they appear on the **Jamendo track
-could not be used** row, which never claims a retry is coming because a blocked
-provider schedules none.
+action is needed, or names a step to take. Two blocking failures have an operator
+action: access Jamendo will not accept, and a working folder the station cannot
+use. Both appear on the **Jamendo track could not be used** row, which never
+claims a retry is coming because a blocked provider schedules none. Being asked
+to slow down is transient and retries automatically; the reply does not identify
+which request ceiling was reached, so no credential change is presented as a remedy.
 
 `rejected_this_attempt`, `dominant_failure_code_this_attempt` and
 `attempt_rejections` on the admin `/status` payload describe the most recently
@@ -379,12 +382,22 @@ Voice validation now runs at config load, not at synthesis time:
 - When any voice was substituted at load or during live synthesis, `/api/capabilities` reports `tts_degraded: true` so the dashboard can show a degraded-TTS badge.
 - If Edge fallback also fails — every configured route for that segment is down — required speech is never silenced: any partial audio is deleted, `TTSUnavailableError` is raised, and the segment falls through to the existing rescue ladder (packaged clip → norm-cache rescue → recovery sweeper → emergency tone), or for Chaos Mode banter, a canned clip. Grep logs for `all configured TTS routes are unavailable` to confirm this is what happened rather than a stuck queue.
 
-## First Listen cannot find any speakers
+## First Listen does not play on this device
 
-Speaker discovery asks Home Assistant for its `media_player` entities, so it
-finds nothing when the station has no Home Assistant connection. Check
+Required First Listen proof is hearing the station in the add-on Web UI on this
+device. If **Start sound check** is quiet, check mute and volume on this tab,
+confirm the sound is coming from this browser and not another app, then try
+**Start sound check** again. Technical details under the journey name the stream
+URL. Home Assistant speakers are an optional later route, not this step.
+
+## First Listen: the optional Home Assistant speaker route is quiet
+
+First Listen no longer discovers or plays to speakers; it proves the station on
+the device you are reading it on. The Home Assistant speaker route is optional
+and lives in Home Assistant's own media browser, so it needs a working Home
+Assistant connection and the HACS integration installed. Check
 `/api/capabilities`: `ha: false` and `homeassistant_access: false` mean there is
-nothing to search.
+no connection to send audio over.
 
 On a standalone station (anything not run as the Home Assistant add-on), set
 `HA_URL` and `HA_TOKEN` in `.env` and restart. `HA_TOKEN` is a long-lived access

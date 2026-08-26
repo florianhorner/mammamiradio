@@ -163,6 +163,23 @@ async (page) => {
   // own tab navigation (render-free, exactly like initTabs' landing call).
   await page.evaluate(() => showAdminTab('scaletta', { render: false, persist: false }));
   await exerciseListenerSongFailureRows();
+  const setupStatusFixture={guided_setup:{strip:{attention_required:true,items:[['Music','ready','Ready'],['Sources','checking','Checking'],['Hosts','waiting_ai','Waiting for AI'],['Setup','blocked','Blocked'],['AI','not_configured','Optional']].map(([label,status,display_status])=>({label,status,display_status,shape:'BAD'}))}}};
+  const setupChips=await page.evaluate((setup)=>{renderGuidedSetupStrip(setup);return[...setupStripChips.children].map((el)=>({state:el.dataset.s,children:el.childElementCount,text:el.textContent,name:el.getAttribute('aria-label')}))},setupStatusFixture);
+  assert(setupChips.map(({state})=>state).join('|')==='ready|working|degraded|blocked|idle'&&setupChips.every(({children,text,name})=>children===0&&!text.includes('BAD')&&name===null)&&setupChips[2].text==='Hosts: Waiting for AI'&&setupChips[4].text==='AI: Optional',`setup status chips lost semantic mapping or accessible names: ${JSON.stringify(setupChips)}`);
+  await page.emulateMedia({forcedColors:'active'});const forcedGlyphs=await page.evaluate(()=>[...setupStripChips.children].map((el)=>getComputedStyle(el,'::before').content));assert(forcedGlyphs.every((glyph)=>!['none','normal','""'].includes(glyph)),`forced colors hid setup status glyphs: ${JSON.stringify(forcedGlyphs)}`);
+  await page.emulateMedia({forcedColors:'none'});await page.evaluate(()=>renderGuidedSetupStrip({}));
+
+  const jamendoControls=await page.evaluate(async()=>{const status=(source,shared,enabled=true,acknowledged=true)=>({enabled,noncommercial_acknowledged:acknowledged,client_id_configured:Boolean(source),client_id_source:source,shared_access_available:shared}),view=()=>({label:jamendoSecretLabel.textContent,action:jamendoOwnClientIdAction.textContent,fieldHidden:jamendoClientField.hidden,clearHidden:jamendoClearClientId.hidden,help:jamendoAccessHelp.textContent});
+    let confirmations=0,requests=[],responseStatus=status('bundled',true);const originalConfirm=window.confirm,originalRequest=window.mediaSourceRequest;window.confirm=()=>{confirmations+=1;return true};window.mediaSourceRequest=async(method,path,payload)=>{requests.push({method,path,payload});return{ok:true,status:200,data:{ok:true,status:responseStatus}}};
+    try{_jamendoFormDirty=false;_jamendoReplaceMode=false;_st={..._st,jamendo:status('bundled',true)};renderJamendoSettings(_st.jamendo,true);const bundled=view();await clearJamendoClientId(jamendoClearClientId);const guarded={confirmations,requests:requests.length,message:jamendoFormMessage.textContent};
+      _st.jamendo=status('',false);renderJamendoSettings(_st.jamendo,true);const required=view();_st.jamendo=status('operator',true);renderJamendoSettings(_st.jamendo,true);const operator=view();await clearJamendoClientId(jamendoClearClientId);
+      const includedMessage=jamendoFormMessage.textContent;responseStatus=status('bundled',true,false,false);_st.jamendo=status('operator',true);renderJamendoSettings(_st.jamendo,true);await clearJamendoClientId(jamendoClearClientId);return{bundled,guarded,required,operator,confirmations,request:requests[0],includedMessage,offMessage:jamendoFormMessage.textContent};
+    }finally{window.confirm=originalConfirm;window.mediaSourceRequest=originalRequest}
+  });
+  assert(jamendoControls.bundled.label.includes('included')&&jamendoControls.bundled.action==='Use own ID'&&jamendoControls.bundled.fieldHidden&&jamendoControls.bundled.clearHidden,`bundled Jamendo controls exposed credential work: ${JSON.stringify(jamendoControls.bundled)}`);
+  assert(jamendoControls.guarded.confirmations===0&&jamendoControls.guarded.requests===0&&jamendoControls.guarded.message.includes('turn Jamendo off'),`bundled Jamendo Clear reached confirmation or network: ${JSON.stringify(jamendoControls.guarded)}`);
+  assert(!jamendoControls.required.fieldHidden&&jamendoControls.required.help.startsWith('Add your own'),`missing Jamendo access did not request an operator ID: ${JSON.stringify(jamendoControls.required)}`);
+  assert(jamendoControls.operator.label.includes('your own')&&jamendoControls.operator.action==='Replace'&&!jamendoControls.operator.clearHidden&&jamendoControls.confirmations===2&&JSON.stringify(jamendoControls.request)===JSON.stringify({method:'PUT',path:'/api/media-sources/jamendo',payload:{enabled:true,noncommercial_acknowledged:true,clear_client_id:true}})&&jamendoControls.includedMessage==='Using Mamma Mi Radio’s included Jamendo access. Settings are up to date.'&&jamendoControls.offMessage==='Jamendo is off. Settings are up to date.',`operator Jamendo Clear lost its credential-removal contract: ${JSON.stringify(jamendoControls)}`);
 
   const seededStoppedFirstPaint = await page.evaluate(() => {
     document.body.setAttribute('data-stopped', 'true');
@@ -1478,6 +1495,9 @@ async (page) => {
           preference: -1,
         },
       ], { total: 2, offset: 0, limit: 2, has_more: false }, true);
+      _sR=[{artist:'Artista molto lungo',title:'Titolo di ricerca abbastanza lungo da occupare due righe senza separarsi dalla sua azione'}];
+      _sExt=[];
+      renderSearchResults('titolo');
       updateNow({
         type: 'music',
         label: 'Un titolo molto lungo per verificare che il nome della canzone non venga tagliato sul telefono',
@@ -1521,7 +1541,7 @@ async (page) => {
         const rowRect = row.getBoundingClientRect();
         const title = row.querySelector('.pl-t');
         const metadata = row.querySelector('.pl-meta');
-        const controls = [...row.querySelectorAll('.pl-check-hit, .pl-grip, .pl-pref, .pl-a .pl-btn, .pl-ban')];
+        const controls = [...row.querySelectorAll('.pl-check-hit, .pl-pref, .pl-a .pl-btn, .pl-ban')];
         return {
           rowWidth: row.clientWidth,
           rowScrollWidth: row.scrollWidth,
@@ -1529,6 +1549,7 @@ async (page) => {
           titleVisible: title ? visible(title) : false,
           metadataText: metadata?.innerText || '',
           metadataVisible: metadata ? visible(metadata) : false,
+          gripVisible: visible(row.querySelector('.pl-grip')),
           controls: controls.map((element) => controlGeometry(element)),
           clippedControls: controls
             .filter((element) => {
@@ -1546,6 +1567,8 @@ async (page) => {
         const rect = element.getBoundingClientRect();
         return rect.left < -0.5 || rect.right > innerWidth + 0.5;
       }).map((element) => ({ tag: element.tagName, id: element.id, className: String(element.className) }));
+      const searchRows=[...document.querySelectorAll('.sr-row')].map((row)=>{const r=row.getBoundingClientRect(),a=row.querySelector('.sr-add').getBoundingClientRect();return{overflow:row.scrollWidth>row.clientWidth+1,actionInside:a.left>=r.left-.5&&a.right<=r.right+.5,actionSize:[a.width,a.height]}});
+      const poolStyle=getComputedStyle(document.getElementById('plBody'));
       const airNext = [...document.querySelectorAll('.mmr-console-triggers .a-trigger')]
         .map((element) => controlGeometry(element, element.querySelector('.lb')));
       updateStopState(false);
@@ -1560,6 +1583,8 @@ async (page) => {
         airNext,
         coreTransport,
         catalogue,
+        searchRows,
+        pool:{maxHeight:poolStyle.maxHeight,overflowY:poolStyle.overflowY},
         titleFits: nowTitle.scrollWidth <= nowTitle.clientWidth,
         productionFits: productionFeed.scrollWidth <= productionFeed.clientWidth,
         recoveryFits: recoveryLabel.scrollHeight <= recoveryLabel.clientHeight + 1,
@@ -1589,10 +1614,12 @@ async (page) => {
       `${width}px catalogue control escaped its row: ${JSON.stringify(geometry.catalogue)}`,
     );
     assert(
-      geometry.catalogue.every((row) => row.controls.length === 6
+      geometry.catalogue.every((row) => !row.gripVisible && row.controls.length === 5
         && row.controls.every((control) => control.visible && control.width >= 44 && control.height >= 44)),
       `${width}px catalogue controls lost visibility or touch size: ${JSON.stringify(geometry.catalogue)}`,
     );
+    assert(geometry.searchRows.length===1&&geometry.searchRows.every((row)=>!row.overflow&&row.actionInside&&row.actionSize[0]>=44&&row.actionSize[1]>=44),`${width}px search result lost its row/action association: ${JSON.stringify(geometry.searchRows)}`);
+    assert(geometry.pool.maxHeight==='none'&&geometry.pool.overflowY==='visible',`${width}px catalogue kept an internal vertical scroller: ${JSON.stringify(geometry.pool)}`);
     assert(geometry.airNext.length === 4, `${width}px lost an Air Next control: ${JSON.stringify(geometry.airNext)}`);
     assert(
       geometry.airNext.map((control) => control.text).join('|') === 'Banter|Ad break|News flash|More chaos',
@@ -1613,6 +1640,10 @@ async (page) => {
       `${width}px control label clipped internally: ${JSON.stringify(measuredControls)}`,
     );
   }
+
+  await page.setViewportSize({width:1024,height:900});
+  const desktopCatalogue=await page.evaluate(()=>{const grip=document.querySelector('.pl-grip'),style=getComputedStyle(document.getElementById('plBody'));return{gripVisible:Boolean(grip?.getClientRects().length),maxHeight:style.maxHeight,overflowY:style.overflowY}});
+  assert(desktopCatalogue.gripVisible&&desktopCatalogue.maxHeight==='400px'&&desktopCatalogue.overflowY==='auto',`desktop catalogue lost drag or bounded scrolling: ${JSON.stringify(desktopCatalogue)}`);
 
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const normalMotionRows = await page.evaluate(() => {
@@ -1668,7 +1699,7 @@ async (page) => {
 
   return {
     ok: true,
-    checks: 53,
+    checks: 57,
     viewports: [320, 375, 414, 600, 768],
     normalMotionRows: normalMotionRows.length,
     reducedMotionRows: reducedRows.length,

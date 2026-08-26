@@ -46,13 +46,17 @@ watchdog is not invited to restart it mid-recovery. The required recovery files
 under `mammamiradio/assets/demo/recovery/` are durable package resources, not temp
 renders, and cleanup paths guard them before unlinking anything marked ephemeral.
 On an empty queue the rescue ladder opens after `FIRST_BYTE_GRACE_SECONDS` (1s).
-Resume, idle, and active-playback drain bridges prefer a cached song, then the
-short branded continuity clip, then the emergency tone. Startup first tries the
-restart handoff spool (`cache/restart_handoff/`), admitting already-normalized
-music ahead of the producer/playback tasks (see `docs/architecture.md` →
-"Restart handoff spool"). The producer's multi-segment delivery cushion means a
-timed-out queue read signals genuine starvation rather than a normal segment
-boundary; `QUEUE_FALLBACK_WAIT_SECONDS` (5s) remains only the no-content ceiling.
+Resume and idle bridges prefer a cached song, then the short branded continuity
+clip, with a permissive cache retry before the emergency tone when the clip is
+unavailable. An active-playback drain adds one rung after the strict cache miss:
+when the packaged starter catalog is the active source, it admits a verified
+starter song directly before falling back to the continuity clip. Startup first
+tries the restart handoff spool (`cache/restart_handoff/`), admitting
+already-normalized music ahead of the producer/playback tasks (see
+`docs/architecture.md` → "Restart handoff spool"). The producer's multi-segment
+delivery cushion means a timed-out queue read signals genuine starvation rather
+than a normal segment boundary; `QUEUE_FALLBACK_WAIT_SECONDS` (5s) remains only
+the no-content ceiling.
 `scripts/ha-green-launch-smoke.py` (`make launch-smoke`, run in `pi-smoke.yml`)
 denies non-loopback networking and requires first byte within two seconds for
 both a warm-cache station and an empty-cache/package-only station. External chart
@@ -383,14 +387,14 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
   `GET /api/clip/keep` (list what is kept), `DELETE /api/clip/keep/{id}`
   (remove one kept moment)
 - `PUT /api/media-sources/jamendo`, `POST /api/media-sources/jamendo/retry`
-- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
+- `GET /api/setup/status`, `POST /api/setup/recheck`, `POST /api/setup/first-listen/players`, `POST /api/setup/first-listen/play`, `POST /api/setup/first-listen/receipt/retry`, `POST /api/setup/first-listen/verify`, `POST /api/setup/first-listen/listener-confirm`, `POST /api/setup/home-context-preview`, `PATCH /api/setup/home-context-choice`, `POST /api/setup/provider-check`, `POST /api/setup/save-keys`, `GET /api/setup/addon-snippet`
 - `POST /api/shuffle`, `POST /api/skip`, `POST /api/purge`, `POST /api/stop`, `POST /api/resume`, `POST /api/trigger`
 - `GET /api/pacing`, `PATCH /api/pacing`
 - `GET /api/hosts`, `PATCH /api/hosts/{host_name}/personality`, `POST /api/hosts/{host_name}/personality/reset`
 - `POST /api/credentials`, `POST /api/track-rules`
 - `GET /api/listener-requests`, `POST /api/listener-requests/dismiss`
 - `GET /api/search`, `POST /api/playlist/add`, `POST /api/playlist/remove`, `POST /api/playlist/move`, `POST /api/playlist/move_to_next`, `POST /api/playlist/load`, `POST /api/playlist/add-external`
-- `POST /api/hot-reload` — reload `prompt_world.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results). `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction.
+- `POST /api/hot-reload` — reload `language_policy.py`, `prompt_world.py`, `relationship.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place without stopping the stream. Requires `--workers 1` (importlib reloads only the worker that handles the request; multi-worker deployments get inconsistent results). `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction.
 - `POST /api/homeassistant/labels/regenerate` — force a background refresh of generated device labels; returns `{"scheduled": true}`, `{"scheduled": false, "reason": ...}` when HA context or an Anthropic key is unavailable, or 409 if a refresh is already running.
 - `GET /api/homeassistant/context-candidates` — admin-only sanitized Home Assistant preview; includes additive `entities` rows plus legacy `sent_now`, `candidates`, and `muted` arrays.
 - `PATCH /api/homeassistant/entity-policy` — apply exactly one idempotent `muted` or `personal_moment_enabled` property to one Home Assistant entity; the response returns effective consent, policy revision, and the count of queued host breaks removed by a mute or a personal-moment consent revocation.
@@ -398,12 +402,18 @@ Admin (require `ADMIN_PASSWORD` or `ADMIN_TOKEN` unless on loopback):
 ### Diagnosing provider fallbacks
 
 `GET /status` includes a redacted top-level `jamendo` object with `enabled`,
-the detailed provider `state`, `client_id_configured`, current
+the detailed provider `state`, `client_id_configured`, `client_id_source`
+(`operator`, `bundled`, or `null`), `shared_access_available`, current
 `noncommercial_acknowledged`, `terms_scope`, `provider_confirmation`,
 `ready`, `in_flight`, last-success age, a coarse last-failure code, the lifetime
 rejected count, and three fields describing the most recently completed
 discovery pass: `rejected_this_attempt`, `dominant_failure_code_this_attempt`,
-and an `attempt_rejections` breakdown keyed by code. The per-pass fields clear
+and an `attempt_rejections` breakdown keyed by code. Note that
+`client_id_configured` no longer means the operator supplied one: the station
+ships a bundled application ID, so an ID resolves on every install and the field
+is true even when Jamendo is off. Read `enabled` for whether the source is on,
+`client_id_source` for the resolved credential lane, and `shared_access_available` for
+whether bundled access exists to fall back on. The per-pass fields clear
 on success, on a settings change, and on Check again, so a prepared track never
 carries a failure reason and a replaced run stops being explained. The dominant
 code names whatever ended the pass, so it can name a timeout or provider failure
@@ -865,12 +875,31 @@ the Supervisor network. To require a credential on the add-on, set `admin_token`
 in the add-on options; a configured token is then enforced even on the LAN.
 
 The active First Listen/setup surface is stricter than the general matrix:
-`GET /api/setup/status` plus setup recheck, speaker playback, privacy preview,
-privacy choice, entity privacy controls, provider check, and key-save actions
-require the injected CSRF token and either a literal local/private IP host or
-genuine Home Assistant ingress. This prevents DNS-rebinding pages from using
-the token they can read from a rebound dashboard. Automation through a custom
-hostname must use `X-Radio-Admin-Token`.
+`GET /api/setup/status` plus setup recheck, listener confirmation, speaker
+playback, privacy preview, privacy choice, entity privacy controls, provider
+check, and key-save actions accept one of three proofs of origin, checked in
+this order:
+
+1. **`X-Radio-Admin-Token`**, for automation. Checked first and returns
+   immediately on a match — no CSRF token is read or required on this path,
+   because it is a caller-supplied secret, not a browser mechanism CSRF
+   defends.
+2. **Verified HTTP Basic admin credentials** (`ADMIN_PASSWORD` configured),
+   **plus** the injected CSRF token. A credential is an unguessable secret a
+   rebound page cannot manufacture, so this is the supported browser path for
+   a custom hostname; CSRF is still required as a second proof the write came
+   from this dashboard.
+3. **A literal local/private IP host, or genuine Home Assistant ingress,
+   plus** the injected CSRF token. This is the credential-less path, and it is
+   host-restricted precisely because a per-process CSRF secret is no defense
+   once an attacker can fetch a page from the rebound host and read the
+   embedded token.
+
+A custom hostname with no `ADMIN_PASSWORD` and no admin token is refused with a
+`403` whose body is a structured object (`{"code":
+"active_setup_host_untrusted", "title", "message", "action"}`) naming the fix,
+rather than a bare string. A missing or stale CSRF token on paths 2-3 gets the
+same structured shape under `active_setup_csrf_stale`.
 
 ## Docker
 
@@ -880,7 +909,11 @@ docker compose up
 
 The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`.
 
-`ADMIN_TOKEN` is required in `.env` (the container binds to `0.0.0.0`).
+The container binds to `0.0.0.0`. Set `ADMIN_TOKEN` in `.env` to pin a known
+value. If it is unset, the entrypoint generates one and writes it to
+`/data/admin_token` (readable with `docker compose exec mammamiradio cat
+/data/admin_token`). The generated value is not printed in container logs. If
+`/data` is not writable, set `ADMIN_TOKEN` before the next restart.
 
 ## Home Assistant add-on
 
@@ -907,7 +940,7 @@ Supervisor value. The add-on binds `0.0.0.0` with no admin credential by default
 and trusts its own LAN for admin access (see **Admin access model**); set
 `admin_token` in the add-on options to require a credential.
 
-The dashboard is accessible via HA ingress (sidebar). The first-run flow shows source readiness, starts the exact Live media source on one selected Home Assistant speaker, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. AI-host keys are optional and come afterward.
+The dashboard is accessible via HA ingress (sidebar). First Listen shows source readiness, plays the station on the current browser device, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. Home Assistant speakers and AI-host keys are optional later enhancements.
 
 First Listen progress is owner-only setup metadata under `/data/cache/state` in
 add-on mode. Its receipt records factual milestones, not the live Home-context

@@ -271,10 +271,10 @@ Do not resolve either path from a third workspace.
 
 Dependabot is the automated exception to the human and feature landing path.
 Patch and minor Python PRs may use
-`.github/workflows/dependabot-automerge.yml`. Batch handling follows
-`docs/agents.md`, including nudge/recreate steps and manual major-Action
-landings through `scripts/land-pr.sh`. Do not attach Dependabot branches to
-Conductor feature slots.
+`.github/workflows/dependabot-automerge.yml`. Stale PR handling follows
+`docs/agents.md`: rejected or behind PRs park for an authenticated maintainer,
+including manual major-Action landings through `scripts/land-pr.sh`. Do not
+attach Dependabot branches to Conductor feature slots.
 
 ## Explicitly out of scope
 
