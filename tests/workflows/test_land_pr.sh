@@ -104,7 +104,13 @@ case "$1 $2" in
     printf '{"nameWithOwner":"test-owner/test-repo"}\n'
     ;;
   "api graphql")
-    printf '%s\n' "${GH_MOCK_GRAPHQL_JSON:-{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[]}}}}}}"
+    if [ -n "${GH_MOCK_GRAPHQL_PAGE2:-}" ] && [[ "$*" == *"after:"* || "$*" == *"after "* ]]; then
+      printf '%s\n' "${GH_MOCK_GRAPHQL_PAGE2:?}"
+    elif [ -n "${GH_MOCK_GRAPHQL_PAGE2:-}" ]; then
+      printf '%s\n' "${GH_MOCK_GRAPHQL_JSON:?}"
+    else
+      printf '%s\n' "${GH_MOCK_GRAPHQL_JSON:-{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[]}}}}}}"
+    fi
     ;;
   *) : ;;
 esac
@@ -321,5 +327,14 @@ never_merged || fail "blocking bot thread must never merge"
 printf '%s' "$RUN_OUT" | grep -q "bot thread" || fail "deny message should name bot threads"
 pass "unresolved Major/Critical bot thread denies"
 
+# Case 18: blocking thread on page 2 of paginated reviewThreads => deny
+PAGE1='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"page2"},"nodes":[]}}}}}'
+PAGE2='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"isOutdated":false,"url":"https://example.test/thread/page2","comments":{"nodes":[{"author":{"login":"coderabbitai"},"body":"Major: second page debt"}]}}]}}}}}'
+run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
+  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$PAGE1" GH_MOCK_GRAPHQL_PAGE2="$PAGE2"
+[ "$RUN_RC" -ne 0 ] || fail "page-2 blocking thread must deny (exit code)"
+never_merged || fail "page-2 blocking thread must never merge"
+pass "paginated reviewThreads scan finds blocking thread on page 2"
+
 echo
-echo "All 18 land-pr cases passed."
+echo "All 19 land-pr cases passed."

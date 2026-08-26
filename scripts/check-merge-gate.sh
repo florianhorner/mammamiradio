@@ -65,7 +65,7 @@ for ctx in quality pi-smoke; do
   fi
 done
 
-rulesets_json="$(gh api 'repos/{owner}/{repo}/rulesets' 2>/dev/null)" || {
+rulesets_json="$(gh api --paginate --slurp 'repos/{owner}/{repo}/rulesets' 2>/dev/null | jq 'add')" || {
   echo "check-merge-gate: FAIL — could not read repo rulesets (needs admin-scoped gh auth)." >&2
   exit 1
 }
@@ -75,9 +75,20 @@ while IFS= read -r ruleset_id; do
   [ -n "$ruleset_id" ] || continue
   detail="$(gh api "repos/{owner}/{repo}/rulesets/${ruleset_id}" 2>/dev/null)" || continue
   if printf '%s' "$detail" | jq -e '
-    [.rules[]?
-      | select(.type == "pull_request")
-      | .parameters.required_review_thread_resolution] | index(true)
+    .enforcement == "active"
+    and (
+      (.conditions.ref_name.include // [])
+      | any(. == "refs/heads/main" or . == "~DEFAULT_BRANCH" or . == "~ALL")
+    )
+    and (
+      (.conditions.ref_name.exclude // [])
+      | all(. != "refs/heads/main" and . != "~ALL")
+    )
+    and (
+      [.rules[]?
+        | select(.type == "pull_request")
+        | .parameters.required_review_thread_resolution] | index(true)
+    )
   ' >/dev/null 2>&1; then
     thread_resolution=true
     break

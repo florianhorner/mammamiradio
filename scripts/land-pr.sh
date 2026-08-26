@@ -138,8 +138,34 @@ evidence_check() {
   return 0
 }
 
+# review_threads_json <owner> <repo> <pr> -> combined reviewThreads JSON document.
+review_threads_json() {
+  local owner="$1" repo="$2" pr="$3"
+  local cursor="" response combined='[]' has_next
+  while true; do
+    if [ -z "$cursor" ]; then
+      # shellcheck disable=SC2016  # GraphQL query must stay literal for gh api graphql.
+      response="$(gh api graphql \
+        -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}' \
+        -f owner="$owner" -f repo="$repo" -F number="$pr" 2>/dev/null)" || return 1
+    else
+      response="$(gh api graphql \
+        -f query='query($owner:String!,$repo:String!,$number:Int!,$after:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}' \
+        -f owner="$owner" -f repo="$repo" -F number="$pr" -f after="$cursor" 2>/dev/null)" || return 1
+    fi
+    combined="$(printf '%s' "$response" | jq --argjson acc "$combined" '
+      $acc + (.data.repository.pullRequest.reviewThreads.nodes // [])
+    ')"
+    has_next="$(printf '%s' "$response" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')"
+    cursor="$(printf '%s' "$response" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')"
+    [ "$has_next" = "true" ] && [ -n "$cursor" ] || break
+  done
+  jq -n --argjson nodes "$combined" \
+    '{data:{repository:{pullRequest:{reviewThreads:{nodes:$nodes}}}}}'
+}
+
 thread_check() {
-  local pr="$1" slug owner repo query response blocked
+  local pr="$1" slug owner repo response blocked
   if [ "${MMR_LAND_SKIP_THREAD_CHECK:-0}" = "1" ]; then
     return 0
   fi
@@ -153,9 +179,7 @@ thread_check() {
   owner="${slug%%/*}"
   repo="${slug##*/}"
 
-  # shellcheck disable=SC2016  # GraphQL query must stay literal for gh api graphql.
-  query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved isOutdated url comments(first:1){nodes{author{login} body}}}}}}}'
-  response="$(gh api graphql -f query="$query" -f owner="$owner" -f repo="$repo" -F number="$pr" 2>/dev/null)" \
+  response="$(review_threads_json "$owner" "$repo" "$pr")" \
     || {
       say "land-pr: could not query review threads for PR #$pr."
       say "         Check gh auth, then re-run. Use MMR_LAND_SKIP_THREAD_CHECK=1 only for hotfix escape."
@@ -171,10 +195,14 @@ thread_check() {
     printf '%s' "$response" | jq -r '
       .data.repository.pullRequest.reviewThreads.nodes[]
       | select(.isResolved == false and .isOutdated == false)
-      | select(.comments.nodes[0].author.login == "coderabbitai"
-          or .comments.nodes[0].author.login == "copilot-pull-request-reviewer"
-          or .comments.nodes[0].author.login == "chatgpt-codex-connector")
-      | select(.comments.nodes[0].body | test("(Major|Critical|P0|P1)"; "i"))
+      | select(
+          [.comments.nodes[]?
+            | select(.author.login == "coderabbitai"
+                or .author.login == "copilot-pull-request-reviewer"
+                or .author.login == "chatgpt-codex-connector")
+            | .body // ""
+          ] | any(test("(Major|Critical|P0|P1)"; "i"))
+        )
       | .url
     '
   )

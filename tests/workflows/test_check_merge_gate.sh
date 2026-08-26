@@ -47,8 +47,8 @@ chmod +x "$MOCK_BIN/gh"
 
 GOOD_REPO='{"allow_update_branch":true,"allow_auto_merge":true}'
 GOOD_PROT='{"strict":true,"contexts":["quality","pi-smoke"]}'
-GOOD_RULESETS='[{"id":19667058}]'
-GOOD_RULESET_DETAIL='{"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":true}}]}'
+GOOD_RULESETS='[[{"id":19667058}]]'
+GOOD_RULESET_DETAIL='{"enforcement":"active","conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":true}}]}'
 
 run_gate() { # [env overrides...]
   RUN_RC=0
@@ -101,10 +101,20 @@ printf '%s' "$RUN_OUT" | grep -q "SKIPPED in CI" || fail "CI skip must be loud"
 pass "CI skips loudly with exit 0"
 
 # Case 8: ruleset missing thread resolution => FAIL
-run_gate GH_MOCK_RULESET_DETAIL='{"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":false}}]}'
+run_gate GH_MOCK_RULESET_DETAIL='{"enforcement":"active","conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":false}}]}'
 [ "$RUN_RC" -ne 0 ] || fail "missing thread resolution must fail"
 printf '%s' "$RUN_OUT" | grep -q "required_review_thread_resolution" || fail "failure should name thread resolution"
 pass "missing review thread resolution fails"
 
+# Case 9: inactive ruleset => FAIL even when thread resolution is enabled
+run_gate GH_MOCK_RULESET_DETAIL='{"enforcement":"disabled","conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":true}}]}'
+[ "$RUN_RC" -ne 0 ] || fail "inactive ruleset must fail"
+pass "inactive ruleset fails"
+
+# Case 10: non-main ruleset => FAIL
+run_gate GH_MOCK_RULESET_DETAIL='{"enforcement":"active","conditions":{"ref_name":{"include":["refs/heads/develop"],"exclude":[]}},"rules":[{"type":"pull_request","parameters":{"required_review_thread_resolution":true}}]}'
+[ "$RUN_RC" -ne 0 ] || fail "non-main ruleset must fail"
+pass "non-main ruleset fails"
+
 echo
-echo "All 8 check-merge-gate cases passed."
+echo "All 10 check-merge-gate cases passed."
