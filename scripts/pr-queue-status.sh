@@ -142,6 +142,7 @@ thread_debt_count() {
   owner="${slug%%/*}"
   repo="${slug##*/}"
 
+  # shellcheck disable=SC2016  # GraphQL query must stay literal for gh api graphql.
   query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved isOutdated comments(first:1){nodes{author{login} body}}}}}}}'
   response="$(gh api graphql -f query="$query" -f owner="$owner" -f repo="$repo" -F number="$pr" 2>/dev/null)" || {
     printf 'unknown\n'

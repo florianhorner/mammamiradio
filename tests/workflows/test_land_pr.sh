@@ -33,7 +33,10 @@ ANC_SHORT="$(git rev-parse --short HEAD~1)"
 BOGUS_SHA="0000000"
 
 # Post-update re-review case needs a second commit object without mutating HEAD.
-HEAD2_FULL="$(git commit-tree "$(git write-tree)" -p "$HEAD_FULL" -m "test: land-pr HEAD2 fixture")"
+HEAD2_FULL="$(
+  git -c user.name='land-pr test' -c user.email='tests@example.com' \
+    commit-tree "$(git write-tree)" -p "$HEAD_FULL" -m 'test: land-pr HEAD2 fixture'
+)"
 HEAD2_SHORT="$(git rev-parse --short "$HEAD2_FULL")"
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
