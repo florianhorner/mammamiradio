@@ -139,12 +139,13 @@ evidence_check() {
 }
 
 # review_threads_json <owner> <repo> <pr> -> combined reviewThreads JSON document.
+# shellcheck disable=SC2016  # GraphQL queries must stay literal for gh api graphql.
 review_threads_json() {
   local owner="$1" repo="$2" pr="$3"
   local cursor="" response combined='[]' has_next
   local query_initial query_paged
-  # shellcheck disable=SC2016  # GraphQL queries must stay literal for gh api graphql.
   query_initial='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
+  # shellcheck disable=SC2016  # GraphQL query must stay literal for gh api graphql.
   query_paged='query($owner:String!,$repo:String!,$number:Int!,$after:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
   while true; do
     if [ -z "$cursor" ]; then
