@@ -166,8 +166,7 @@ they are ever counted as listeners.
    git fetch origin main --tags
    CUT_SHA="$(git rev-parse origin/main)"
    ```
-   The cut must already contain the physical 20-run HA Green receipt set for
-   its complete release content, recorded with the commands in
+   The cut must already contain the physical 20-run HA Green receipt set for its complete release content, recorded with the commands in
    [`docs/music-sources.md`](../music-sources.md). Pre-flight fails loud if the
    evidence is missing, stale, or over its two-second p95, or if the tag/version,
    release metadata, changelog head, or either per-arch `:sha` image disagrees.
@@ -250,8 +249,7 @@ no `:sha` image and pre-flight will reject the tag.
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - The promoted image is built from the cut commit, so it differs from the soaked parent by
-  finalized proof and release metadata. Receipts bind tracked source, not the built image.
-  The bump reaches runtime because the Dockerfile installs `pyproject.toml`.
+  finalized proof and release metadata; receipts bind tracked source, not the built image, and the bump reaches runtime because the Dockerfile installs `pyproject.toml`.
   Step 2's `--target-sha` soak is what makes "you ran what you tagged" literally true.
 
 ## Addon stage
@@ -480,9 +478,7 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
 `addon-release.yml` does not rebuild the add-on. It first validates at least 20
-physical HA Green cold-launch receipts with one release version and content digest,
-requires p95 at or below two seconds, and proves the tagged tree matches after excluding
-only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag.
+physical HA Green cold-launch receipts with one release version and hardware-neutral content digest, requires p95 at or below two seconds, and proves the tagged tree matches after excluding only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag.
 It then verifies that both per-arch `:${git_sha}` images exist, runs the
 launch and host-published-port proofs for each native architecture before stable
 publishing, and promotes those exact

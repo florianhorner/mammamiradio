@@ -76,7 +76,7 @@ nearest-rank p95 instead of silently dropping outliers.
 
 Commit only `proof/media/ha-green-release-evidence/run-*.json` after the
 measurements, then rerun `make ha-green-release-proof` and `make pre-release`.
-Each schema-v2 digest covers sorted paths, Git modes, and blob bytes, excluding only HA receipt JSON. This prevents both stale
+The hardware-neutral `mammamiradio-release-content-v1` profile covers sorted paths, Git modes, and blob bytes, excluding only HA receipt JSON. This prevents both stale
 evidence and the impossible self-reference of asking a committed receipt to
 name the commit that contains itself. The tracked
 `proof/media/ha-green-release-receipt.example.json` is explicitly marked as an

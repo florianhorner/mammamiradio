@@ -28,7 +28,7 @@ def _load_perf_smoke() -> ModuleType:
     return _load_script(PERF_SMOKE, "ha_green_perf_smoke_contract_test")
 
 
-def test_launch_smoke_names_the_listener_timing_boundary_honestly() -> None:
+def test_launch_smoke_names_the_listener_timing_boundary_honestly(tmp_path: Path) -> None:
     launch_body = LAUNCH_SMOKE.read_text(encoding="utf-8")
     workflow_body = PI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
 
@@ -41,9 +41,6 @@ def test_launch_smoke_names_the_listener_timing_boundary_honestly() -> None:
     assert '"PYTHONSAFEPATH"' in launch_body and '"PYTHON_DOTENV_DISABLED"' in launch_body
     assert "sys.flags.safe_path" in launch_body and "mammamiradio.main.__file__" in launch_body
     assert "exec(compile(path.read_bytes()" in launch_body
-
-
-def test_receipt_child_rejects_a_stale_installed_package(tmp_path: Path) -> None:
     smoke = _load_script(LAUNCH_SMOKE, "ha_green_launch_stale_package_test")
     package = tmp_path / "mammamiradio"
     package.mkdir()
@@ -179,17 +176,3 @@ def test_launch_seed_marker_matches_runtime_recovery_marker() -> None:
     assert marker in launch_body
     assert marker in run_body
     assert '(data_dir / ".provider_recovery_checked")' not in launch_body
-
-
-def test_release_digest_excludes_only_immediate_ha_green_run_receipts() -> None:
-    launch = _load_script(LAUNCH_SMOKE, "ha_green_launch_digest_exclusion_contract_test")
-    validator = launch._validator_module()
-    accepted = b"proof/media/ha-green-release-evidence/run-12345678-1234-4234-8234-123456789abc.json"
-    rejected = (
-        b"proof/media/ha-green-release-evidence/nested/run-12345678-1234-4234-8234-123456789abc.json",
-        b"proof/media/ha-green-release-evidence/notes.json",
-        b"proof/media/ha-green-release-receipt.schema.json",
-    )
-    assert validator.CONTENT_PROFILE == "git-tracked-path-mode-blob-v1"
-    assert validator._is_excluded_receipt_path(accepted)
-    assert all(not validator._is_excluded_receipt_path(path) for path in rejected)

@@ -251,14 +251,10 @@ def _ha_receipt_bytes(*, run_id: str, content_digest: str) -> bytes:
 
 
 def test_ha_validator_loads_under_trusted_base_isolation() -> None:
-    code = "from scripts.landing.evidence import _ha_release_validator as load\n"
-    code += "assert load()._parse_release_version(b'version: 2.18.0\\n', 'config') == '2.18.0'"
-    subprocess.run(
-        [sys.executable, "-S", "-P", "-c", code],
-        cwd=ROOT,
-        env={"PYTHONPATH": str(ROOT)},
-        check=True,
-    )
+    code = "from scripts.landing.evidence import _ha_release_validator as load;m=load();"
+    code += "assert m._parse_release_version(b'version: 2.18.0\\n', 'config') == '2.18.0';"
+    code += "assert m._tracked_content_sha256.func.__module__ == '_mammamiradio_release_content'"
+    subprocess.run([sys.executable, "-S", "-P", "-c", code], cwd=ROOT, env={"PYTHONPATH": str(ROOT)}, check=True)
 
 
 def _add_receipt(
@@ -342,11 +338,7 @@ def test_legacy_v2_profile_is_readable_but_cannot_be_emitted_for_new_content(rep
 
 
 @pytest.mark.parametrize("mutation", ["mode", "json", "run-id", "count", "overflow"])
-def test_malformed_ha_receipts_cannot_hide_from_v2_review(
-    repo: GitRepository,
-    monkeypatch: pytest.MonkeyPatch,
-    mutation: str,
-) -> None:
+def test_malformed_ha_receipts_cannot_hide_from_v2_review(repo, monkeypatch, mutation):
     run_id = "12345678-1234-4234-8234-123456789abc"
     path = repo.root / HA_RECEIPT_ROOT / f"run-{run_id}.json"
     path.parent.mkdir(parents=True)

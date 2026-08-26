@@ -44,7 +44,6 @@ HA_RECEIPT_ROOT = "proof/media/ha-green-release-evidence"
 HA_RECEIPT_ROOT_BYTES = (HA_RECEIPT_ROOT + "/").encode("ascii")
 MAX_HA_RECEIPT_BYTES = 64 * 1024
 MAX_HA_RECEIPTS = 1_000
-MAX_HA_RECEIPT_BATCH_BYTES = MAX_HA_RECEIPT_BYTES * RECEIPT_READ_BATCH_SIZE
 
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 _RECEIPT_PATH_RE = re.compile(rb"^proof/preship-reviews/v2/([0-9a-f]{64})/([0-9a-f]{64})\.json$")
@@ -311,15 +310,20 @@ def snapshot_tree(
     expected_repository = repository or repository_identity(repo)
     retained: dict[bytes, Receipt] = {}
 
-    def validate_batch(batch: list[TreeEntry], *, keep_all: bool) -> None:
+    def validate_batch(batch: list[TreeEntry], *, keep_all: bool, ha_green: bool = False) -> None:
         if not batch:
             return
+        max_bytes = MAX_HA_RECEIPT_BYTES if ha_green else MAX_RECEIPT_BYTES
+        max_total_bytes = MAX_HA_RECEIPT_BYTES * RECEIPT_READ_BATCH_SIZE if ha_green else MAX_RECEIPT_BATCH_BYTES
         blobs = repo.read_blobs(
             (entry.oid for entry in batch),
-            max_bytes=MAX_RECEIPT_BYTES,
-            max_total_bytes=MAX_RECEIPT_BATCH_BYTES,
+            max_bytes=max_bytes,
+            max_total_bytes=max_total_bytes,
         )
         for entry in batch:
+            if ha_green:
+                _validate_ha_release_receipt(entry=entry, raw=blobs[entry.oid])
+                continue
             receipt = _validate_receipt(
                 repo=repo,
                 repository=expected_repository,
@@ -336,17 +340,6 @@ def snapshot_tree(
     receipt_batch: list[TreeEntry] = []
     ha_receipt_batch: list[TreeEntry] = []
     ha_receipt_count = 0
-
-    def validate_ha_batch(batch: list[TreeEntry]) -> None:
-        if not batch:
-            return
-        blobs = repo.read_blobs(
-            (entry.oid for entry in batch),
-            max_bytes=MAX_HA_RECEIPT_BYTES,
-            max_total_bytes=MAX_HA_RECEIPT_BATCH_BYTES,
-        )
-        for entry in batch:
-            _validate_ha_release_receipt(entry=entry, raw=blobs[entry.oid])
 
     for entry in repo.tree_entries(resolved, max_record_bytes=MAX_TREE_RECORD_BYTES):
         if entry.path == previous_path:
@@ -379,7 +372,7 @@ def snapshot_tree(
                 raise EvidenceError(f"tree contains more than {MAX_HA_RECEIPTS} HA Green receipts")
             ha_receipt_batch.append(entry)
             if len(ha_receipt_batch) == RECEIPT_READ_BATCH_SIZE:
-                validate_ha_batch(ha_receipt_batch)
+                validate_batch(ha_receipt_batch, keep_all=False, ha_green=True)
                 ha_receipt_batch = []
             continue
 
@@ -391,7 +384,7 @@ def snapshot_tree(
             raise GitError(f"git ls-tree returned more than {MAX_TREE_BYTES} ordinary bytes")
         digest.update(entry.raw_with_nul)
     validate_batch(receipt_batch, keep_all=retain_all_receipts)
-    validate_ha_batch(ha_receipt_batch)
+    validate_batch(ha_receipt_batch, keep_all=False, ha_green=True)
 
     content_digest = digest.hexdigest()
     if retain_matching_receipts:

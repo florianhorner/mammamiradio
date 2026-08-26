@@ -39,7 +39,7 @@
       "pattern": "^[0-9a-f]{40}$"
     },
     "content_profile": {
-      "const": "git-tracked-path-mode-blob-v1"
+      "const": "mammamiradio-release-content-v1"
     },
     "content_sha256": {
       "type": "string",

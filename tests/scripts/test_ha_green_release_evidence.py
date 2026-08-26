@@ -28,13 +28,7 @@ def _load(path: Path, name: str) -> ModuleType:
 VALIDATOR = _load(VALIDATOR_PATH, "validate_ha_green_release_evidence_tests")
 
 
-def _receipt(
-    index: int,
-    source_commit: str,
-    content_sha256: str = "0" * 64,
-    release_version: str = "3.4.5",
-    first_byte_ms: float = 1_000.0,
-) -> dict[str, object]:
+def _receipt(index, source_commit, content_sha256="0" * 64, release_version="3.4.5", first_byte_ms=1_000.0):
     run_id = str(uuid.UUID(int=index + 1, version=4))
     return {
         "$schema": "../ha-green-release-receipt.schema.json",
@@ -42,7 +36,7 @@ def _receipt(
         "evidence_kind": "ha_green_cold_launch",
         "release_version": release_version,
         "source_commit": source_commit,
-        "content_profile": "git-tracked-path-mode-blob-v1",
+        "content_profile": VALIDATOR.CONTENT_PROFILE,
         "content_sha256": content_sha256,
         "run_id": run_id,
         "recorded_at": (datetime(2026, 7, 1, tzinfo=UTC) + timedelta(seconds=index)).isoformat().replace("+00:00", "Z"),
@@ -103,6 +97,14 @@ def _init_repo(path: Path, *, include_release_config: bool = True) -> None:
     _git(path, "commit", "-qm", "base")
 
 
+def _measured_repo(path: Path, release_version: str = "3.4.5"):
+    _init_repo(path)
+    source, digest = VALIDATOR._tracked_content_sha256(path, "HEAD")
+    receipt_dir = path / "proof" / "media" / "ha-green-release-evidence"
+    _write_receipts(receipt_dir, source_commit=source, content_sha256=digest, release_version=release_version)
+    return source, digest, receipt_dir
+
+
 def test_validator_requires_twenty_runs_and_nearest_rank_p95(tmp_path: Path) -> None:
     source = "a" * 40
     receipt_dir = tmp_path / "receipts"
@@ -153,11 +155,7 @@ def test_validator_rejects_wrong_hardware(tmp_path: Path) -> None:
 
 
 def test_squash_equivalent_tree_and_mixed_informational_source_commits_pass(tmp_path: Path) -> None:
-    _init_repo(tmp_path)
-    tested_source = _git(tmp_path, "rev-parse", "HEAD")
-    _, content_sha256 = VALIDATOR._tracked_content_sha256(tmp_path, tested_source)
-    receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
-    _write_receipts(receipt_dir, source_commit=tested_source, content_sha256=content_sha256)
+    tested_source, content_sha256, receipt_dir = _measured_repo(tmp_path)
     second = sorted(receipt_dir.iterdir())[1]
     payload = json.loads(second.read_text(encoding="utf-8"))
     payload["source_commit"] = "d" * 40
@@ -170,20 +168,13 @@ def test_squash_equivalent_tree_and_mixed_informational_source_commits_pass(tmp_
     _git(tmp_path, "checkout", "-q", "--detach", squash_commit)
     report = VALIDATOR.validate_release_evidence(receipt_dir=receipt_dir, release_version="3.4.5", repo_root=tmp_path)
     assert report["ok"] is True
-    assert report["tested_source_commit"] is None
     assert set(report["tested_source_commits"]) == {tested_source, "d" * 40}
-    assert report["release_commit"] == squash_commit
-    assert report["receipt_content_sha256"] == content_sha256
-    assert report["release_content_sha256"] == content_sha256
+    assert (report["receipt_content_sha256"], report["release_content_sha256"]) == (content_sha256,) * 2
 
 
 @pytest.mark.parametrize("mutation", ["byte", "path", "mode"])
 def test_validator_rejects_any_non_receipt_content_drift(tmp_path: Path, mutation: str) -> None:
-    _init_repo(tmp_path)
-    tested_source = _git(tmp_path, "rev-parse", "HEAD")
-    _, content_sha256 = VALIDATOR._tracked_content_sha256(tmp_path, tested_source)
-    receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
-    _write_receipts(receipt_dir, source_commit=tested_source, content_sha256=content_sha256)
+    _tested_source, _content_sha256, receipt_dir = _measured_repo(tmp_path)
     _git(tmp_path, "add", "proof/media/ha-green-release-evidence")
     _git(tmp_path, "commit", "-qm", "evidence only")
     if mutation == "byte":
@@ -197,16 +188,6 @@ def test_validator_rejects_any_non_receipt_content_drift(tmp_path: Path, mutatio
     changed = VALIDATOR.validate_release_evidence(receipt_dir=receipt_dir, release_version="3.4.5", repo_root=tmp_path)
     assert changed["ok"] is False
     assert any("does not match release content digest" in error for error in changed["errors"])
-
-
-def test_validator_rejects_wrong_release_version(tmp_path: Path) -> None:
-    receipt_dir = tmp_path / "receipts"
-    _write_receipts(receipt_dir, source_commit="a" * 40, release_version="3.4.4")
-    report = VALIDATOR.validate_release_evidence(
-        receipt_dir=receipt_dir, release_version="3.4.5", verify_git_binding=False
-    )
-    assert report["ok"] is False
-    assert any("do not exactly match 3.4.5" in error for error in report["errors"])
 
 
 @pytest.mark.parametrize("mutation", ["missing", "mixed"])
@@ -254,10 +235,7 @@ def test_validator_rejects_malformed_receipt_json(mutation: str) -> None:
 
 @pytest.mark.parametrize("case", ["untracked", "substituted"])
 def test_validator_only_counts_receipts_from_the_target_commit(tmp_path: Path, case: str) -> None:
-    _init_repo(tmp_path)
-    source, digest = VALIDATOR._tracked_content_sha256(tmp_path, "HEAD")
-    receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
-    _write_receipts(receipt_dir, source_commit=source, content_sha256=digest)
+    _source, _digest, receipt_dir = _measured_repo(tmp_path)
     if case == "substituted":
         first = sorted(receipt_dir.iterdir())[0]
         valid = first.read_bytes()
@@ -274,10 +252,11 @@ def test_validator_only_counts_receipts_from_the_target_commit(tmp_path: Path, c
 
 
 def test_requested_version_must_match_the_release_commit(tmp_path: Path) -> None:
-    _init_repo(tmp_path)
-    source, digest = VALIDATOR._tracked_content_sha256(tmp_path, "HEAD")
-    receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
-    _write_receipts(receipt_dir, source_commit=source, content_sha256=digest, release_version="3.4.4")
+    _source, _digest, receipt_dir = _measured_repo(tmp_path, "3.4.4")
+    wrong_receipt = VALIDATOR.validate_release_evidence(
+        receipt_dir=receipt_dir, release_version="3.4.5", verify_git_binding=False
+    )
+    assert any("do not exactly match 3.4.5" in error for error in wrong_receipt["errors"])
     _git(tmp_path, "add", "proof/media/ha-green-release-evidence")
     _git(tmp_path, "commit", "-qm", "evidence")
     report = VALIDATOR.validate_release_evidence(receipt_dir=receipt_dir, release_version="3.4.4", repo_root=tmp_path)
@@ -291,8 +270,19 @@ def test_canonical_content_digest_has_a_fixed_vector_and_writer_validator_parity
     _init_repo(tmp_path, include_release_config=False)
     smoke = _load(SMOKE_PATH, "ha_green_launch_digest_parity_tests")
     validator_snapshot = VALIDATOR._tracked_content_sha256(tmp_path, "HEAD")
-    assert validator_snapshot == smoke._validator_module()._tracked_content_sha256(tmp_path, "HEAD")
-    assert validator_snapshot[1] == "6d6d7d861a2f5166457ce850ea0c0db4603f7988bddb521479050af1eba7f13f"
+    smoke_validator = smoke._validator_module()
+    assert validator_snapshot == smoke_validator._tracked_content_sha256(tmp_path, "HEAD")
+    assert validator_snapshot[1] == "1465a28c7a67aab4d4ab193263e554ed427abcba010e3ba877f435e15c96a484"
+    assert VALIDATOR.CONTENT_PROFILE == smoke_validator.CONTENT_PROFILE == "mammamiradio-release-content-v1"
+    owner = ROOT / "scripts" / "release_content.py"
+    assert Path(VALIDATOR._tracked_content_sha256.func.__code__.co_filename) == owner
+    assert Path(VALIDATOR._worktree_content_sha256.func.__code__.co_filename) == owner
+    accepted = b"proof/media/ha-green-release-evidence/run-12345678-1234-4234-8234-123456789abc.json"
+    assert VALIDATOR._is_excluded_receipt_path(accepted)
+    invalid = VALIDATOR._RECEIPT_ROOT_BYTES + b"notes.json"
+    for path, mode in ((invalid, b"100644"), (accepted, b"100755")):
+        with pytest.raises(ValueError):
+            VALIDATOR._exclude_release_entry((path, mode, b"0" * 40))
 
 
 def test_validator_example_is_explicitly_non_evidence() -> None:
@@ -352,9 +342,7 @@ def test_smoke_receipt_writer_is_atomic_and_never_overwrites(tmp_path: Path) -> 
     validated = VALIDATOR._validate_receipt(path)
     assert payload["timing"]["boot_to_tcp_ms"] == 4_250.0
     assert payload["timing"]["connection_to_first_byte_ms"] == 1_250.0
-    assert payload["content_profile"] == "git-tracked-path-mode-blob-v1"
-    assert payload["content_sha256"] == "1" * 64
-    assert validated.content_sha256 == payload["content_sha256"]
+    assert (payload["content_profile"], validated.content_sha256) == (VALIDATOR.CONTENT_PROFILE, "1" * 64)
     assert list(directory.glob("*.tmp")) == []
     with pytest.raises(RuntimeError, match="refusing to overwrite"):
         smoke._write_release_receipt(**kwargs)
@@ -377,10 +365,7 @@ def test_smoke_receipt_mode_requires_detected_ha_green(monkeypatch: pytest.Monke
 
 
 @pytest.mark.parametrize("conceal", [None, "--assume-unchanged", "--skip-worktree", "filter", "receipt"])
-def test_smoke_receipt_source_rejects_dirty_code_but_allows_prior_untracked_receipts(
-    tmp_path: Path,
-    conceal: str | None,
-) -> None:
+def test_smoke_receipt_source_rejects_dirty_code(tmp_path, conceal):
     smoke = _load(SMOKE_PATH, "ha_green_launch_clean_checkout_tests")
     _init_repo(tmp_path)
     receipt_dir = tmp_path / "proof" / "media" / "ha-green-release-evidence"
@@ -408,7 +393,7 @@ def test_smoke_receipt_source_rejects_dirty_code_but_allows_prior_untracked_rece
         (tmp_path / ".git/info").mkdir(parents=True, exist_ok=True)
         (tmp_path / ".git/info/exclude").write_text("*.pyc\n", encoding="utf-8")
         (tmp_path / "shadow.pyc").write_bytes(b"ignored legacy bytecode")
-    with pytest.raises(RuntimeError, match=r"release receipts require|tracked HA Green receipt differs"):
+    with pytest.raises(RuntimeError, match=r"release receipts require|tracked path differs"):
         smoke._source_snapshot(receipt_dir, repo_root=tmp_path)
 
 

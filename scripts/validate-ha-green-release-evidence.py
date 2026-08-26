@@ -12,20 +12,18 @@ blob-byte change fails closed.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
 import re
-import stat
-import struct
-import subprocess
 import sys
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -36,10 +34,7 @@ MINIMUM_RUNS = 20
 P95_LIMIT_MS = 2_000.0
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_RECEIPTS = 1_000
-CONTENT_PROFILE = "git-tracked-path-mode-blob-v1"
-_CONTENT_DOMAIN = b"mammamiradio/ha-green-release-content\0\x01"
 _RECEIPT_ROOT_BYTES = b"proof/media/ha-green-release-evidence/"
-_SUPPORTED_BLOB_MODES = frozenset({b"100644", b"100755", b"120000"})
 _SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 _VERSION_VALUE = re.compile(r"^(?:([0-9]+\.[0-9]+\.[0-9]+)|\"([0-9]+\.[0-9]+\.[0-9]+)\"|'([0-9]+\.[0-9]+\.[0-9]+)')$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -70,6 +65,36 @@ _REQUIRED_ASSERTIONS = {
     "basis": "bundled_manifest",
 }
 _REQUIRED_ASSERTIONS_JSON = json.dumps(_REQUIRED_ASSERTIONS, sort_keys=True)
+
+
+def _is_excluded_receipt_path(path: bytes) -> bool:
+    if not path.startswith(_RECEIPT_ROOT_BYTES):
+        return False
+    leaf = path.removeprefix(_RECEIPT_ROOT_BYTES)
+    return b"/" not in leaf and leaf.startswith(b"run-") and leaf.endswith(b".json")
+
+
+def _exclude_release_entry(entry: tuple[bytes, bytes, bytes]) -> bool:
+    path, mode, _oid = entry
+    if not path.startswith(_RECEIPT_ROOT_BYTES):
+        return False
+    if not _is_excluded_receipt_path(path):
+        raise ValueError(f"unexpected entry in HA Green receipt directory: {os.fsdecode(path)!r}")
+    if mode != b"100644":
+        raise ValueError(f"HA Green receipt {os.fsdecode(path)!r} must be a non-executable regular blob")
+    return True
+
+
+_RELEASE_CONTENT_PATH = REPO_ROOT / "scripts" / "release_content.py"
+_RELEASE_CONTENT = ModuleType("_mammamiradio_release_content")
+_RELEASE_CONTENT.__file__ = str(_RELEASE_CONTENT_PATH)
+sys.modules[_RELEASE_CONTENT.__name__] = _RELEASE_CONTENT
+exec(compile(_RELEASE_CONTENT_PATH.read_bytes(), str(_RELEASE_CONTENT_PATH), "exec"), _RELEASE_CONTENT.__dict__)
+CONTENT_PROFILE = "mammamiradio-release-content-v1"
+_git = _RELEASE_CONTENT.git
+_tracked_entries = partial(_RELEASE_CONTENT.partitioned_entries, exclude_entry=_exclude_release_entry)
+_tracked_content_sha256 = partial(_RELEASE_CONTENT.tracked_content_sha256, exclude_entry=_exclude_release_entry)
+_worktree_content_sha256 = partial(_RELEASE_CONTENT.worktree_content_sha256, exclude_entry=_exclude_release_entry)
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,179 +233,12 @@ def _validate_receipt(path: Path, *, raw: bytes | None = None, allow_example: bo
     )
 
 
-def _git_env() -> dict[str, str]:
-    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")} | {
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "LC_ALL": "C",
-    }
-
-
-def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ["git", "--no-replace-objects", *args],
-        cwd=cwd,
-        env=_git_env(),
-        capture_output=True,
-        check=False,
-    )
-
-
-def _resolve_commit(repo_root: Path, ref: str) -> str:
-    result = _git("rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}", cwd=repo_root)
-    value = result.stdout.strip().decode("ascii", errors="replace").casefold()
-    if result.returncode != 0 or not _COMMIT.fullmatch(value):
-        raise ValueError(f"cannot resolve release commit {ref!r}")
-    return value
-
-
-def _is_excluded_receipt_path(path: bytes) -> bool:
-    if not path.startswith(_RECEIPT_ROOT_BYTES):
-        return False
-    leaf = path.removeprefix(_RECEIPT_ROOT_BYTES)
-    return b"/" not in leaf and leaf.startswith(b"run-") and leaf.endswith(b".json")
-
-
-def _tracked_entries(
-    repo_root: Path,
-    commit: str,
-) -> tuple[str, list[tuple[bytes, bytes, bytes]], list[tuple[bytes, bytes]]]:
-    resolved = _resolve_commit(repo_root, commit)
-    tree = _git("ls-tree", "-r", "-z", "--full-tree", resolved, cwd=repo_root)
-    if tree.returncode != 0:
-        detail = tree.stderr.decode("utf-8", errors="replace").strip() or "git ls-tree failed"
-        raise ValueError(f"cannot enumerate release content: {detail}")
-    if tree.stdout and not tree.stdout.endswith(b"\0"):
-        raise ValueError("git ls-tree returned a non-NUL-terminated record")
-    entries: list[tuple[bytes, bytes, bytes]] = []
-    receipts: list[tuple[bytes, bytes]] = []
-    seen: set[bytes] = set()
-    for record in tree.stdout.split(b"\0"):
-        if not record:
-            continue
-        try:
-            header, path = record.split(b"\t", 1)
-            mode, kind, oid = header.split(b" ", 2)
-        except ValueError as exc:
-            raise ValueError("git ls-tree returned a malformed record") from exc
-        if not path or path in seen:
-            raise ValueError("git ls-tree returned an empty or duplicate tracked path")
-        seen.add(path)
-        if kind != b"blob" or mode not in _SUPPORTED_BLOB_MODES:
-            raise ValueError(f"unsupported tracked entry at {os.fsdecode(path)!r}: {mode!r} {kind!r}")
-        if path.startswith(_RECEIPT_ROOT_BYTES):
-            if not _is_excluded_receipt_path(path):
-                raise ValueError(f"unexpected entry in HA Green receipt directory: {os.fsdecode(path)!r}")
-            if mode != b"100644":
-                raise ValueError(f"HA Green receipt {os.fsdecode(path)!r} must be a non-executable regular blob")
-            receipts.append((path, oid))
-            continue
-        entries.append((path, mode, oid))
-    entries.sort(key=lambda entry: entry[0])
-    return resolved, entries, receipts
-
-
-def _tracked_content_sha256(repo_root: Path, commit: str) -> tuple[str, str]:
-    """Hash sorted tracked paths, canonical Git modes, and exact blob bytes."""
-    resolved, entries, _receipts = _tracked_entries(repo_root, commit)
-    digest = hashlib.sha256(_CONTENT_DOMAIN + struct.pack(">Q", len(entries)))
-    with tempfile.TemporaryFile() as stderr:
-        process = subprocess.Popen(
-            ["git", "--no-replace-objects", "cat-file", "--batch"],
-            cwd=repo_root,
-            env=_git_env(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=stderr,
-        )
-        if process.stdin is None or process.stdout is None:
-            process.kill()
-            process.wait()
-            raise ValueError("cannot open git cat-file pipes")
-        try:
-            for path, mode, oid in entries:
-                process.stdin.write(oid + b"\n")
-                process.stdin.flush()
-                header = process.stdout.readline(512)
-                if not header.endswith(b"\n"):
-                    raise ValueError("git cat-file returned a malformed blob header")
-                fields = header[:-1].split(b" ")
-                if len(fields) != 3 or fields[0] != oid or fields[1] != b"blob":
-                    raise ValueError("git cat-file returned an unexpected object")
-                try:
-                    blob_size = int(fields[2])
-                except ValueError as exc:
-                    raise ValueError("git cat-file returned an invalid blob size") from exc
-                if not 0 <= blob_size < 2**64:
-                    raise ValueError("git cat-file returned an out-of-range blob size")
-                digest.update(struct.pack(">Q", len(path)) + path)
-                digest.update(struct.pack(">I", int(mode, 8)) + struct.pack(">Q", blob_size))
-                remaining = blob_size
-                while remaining:
-                    chunk = process.stdout.read(min(1024 * 1024, remaining))
-                    if not chunk:
-                        raise ValueError("git cat-file truncated a blob")
-                    digest.update(chunk)
-                    remaining -= len(chunk)
-                if process.stdout.read(1) != b"\n":
-                    raise ValueError("git cat-file returned a malformed blob terminator")
-            process.stdin.close()
-            status = process.wait()
-        except BaseException:
-            try:
-                process.stdin.close()
-            except (BrokenPipeError, OSError):
-                pass
-            process.kill()
-            process.wait()
-            raise
-        if status != 0:
-            stderr.seek(0)
-            detail = stderr.read().decode("utf-8", errors="replace").strip() or "git cat-file failed"
-            raise ValueError(f"cannot read release blobs: {detail}")
-        if process.stdout.read(1):
-            raise ValueError("git cat-file returned unexpected trailing output")
-    return resolved, digest.hexdigest()
-
-
-def _worktree_content_sha256(repo_root: Path, commit: str) -> tuple[str, str]:
-    """Hash exact checked-out bytes and modes using the release content profile."""
-    resolved, entries, receipts = _tracked_entries(repo_root, commit)
-    digest = hashlib.sha256(_CONTENT_DOMAIN + struct.pack(">Q", len(entries)))
-    root = os.fsencode(repo_root.resolve())
-    for path, mode, oid in entries + [(path, b"100644", oid) for path, oid in receipts]:
-        full_path = os.path.join(root, path)
-        try:
-            metadata = os.lstat(full_path)
-            if mode == b"120000":
-                if not stat.S_ISLNK(metadata.st_mode):
-                    raise ValueError(f"tracked symlink {os.fsdecode(path)!r} is not checked out as a symlink")
-                blob = os.readlink(full_path)
-            else:
-                executable = bool(metadata.st_mode & 0o111)
-                if not stat.S_ISREG(metadata.st_mode) or executable != (mode == b"100755"):
-                    raise ValueError(f"tracked file mode differs from HEAD at {os.fsdecode(path)!r}")
-                with open(full_path, "rb") as handle:
-                    blob = handle.read()
-        except OSError as exc:
-            raise ValueError(f"cannot read tracked worktree path {os.fsdecode(path)!r}: {exc}") from exc
-        if _is_excluded_receipt_path(path):
-            committed = _git("cat-file", "blob", oid.decode("ascii"), cwd=repo_root)
-            if committed.returncode != 0 or committed.stdout != blob:
-                raise ValueError(f"tracked HA Green receipt differs from HEAD at {os.fsdecode(path)!r}")
-            continue
-        digest.update(struct.pack(">Q", len(path)) + path)
-        digest.update(struct.pack(">I", int(mode, 8)) + struct.pack(">Q", len(blob)) + blob)
-    return resolved, digest.hexdigest()
-
-
 def _committed_receipt_inputs(repo_root: Path, commit: str) -> list[tuple[Path, bytes]]:
     _resolved, _ordinary, entries = _tracked_entries(repo_root, commit)
     if len(entries) > MAX_RECEIPTS:
         raise ValueError(f"release commit contains more than {MAX_RECEIPTS} HA Green receipts")
     inputs: list[tuple[Path, bytes]] = []
-    for path, oid in entries:
+    for path, _mode, oid in entries:
         size = _git("cat-file", "-s", oid.decode("ascii"), cwd=repo_root)
         if size.returncode != 0 or not size.stdout.strip().isdigit() or int(size.stdout) > MAX_RECEIPT_BYTES:
             raise ValueError(f"HA Green receipt {os.fsdecode(path)!r} is unreadable or oversized")
