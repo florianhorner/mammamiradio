@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cloud Conductor workspace bootstrap (Amazon Linux / CONDUCTOR_IS_LOCAL=0).
-# Machine install provides python3.11; this script builds .venv.
+# Machine install provides a supported Python interpreter; this script builds .venv.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,9 +12,17 @@ if [ -L .env ] || [ ! -e .env ]; then
   fi
 fi
 
-export PYTHON_BIN="${PYTHON_BIN:-python3.11}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "Missing $PYTHON_BIN. Add python3.11 to the Cloud Computer install script." >&2
+if [ -z "${PYTHON_BIN:-}" ]; then
+  for candidate in python3.11 python3.12 python3.13 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      export PYTHON_BIN="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "${PYTHON_BIN:-}" ] || ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "Missing a Python 3.11+ interpreter. Install Python 3.11+ or set PYTHON_BIN." >&2
   exit 1
 fi
 
