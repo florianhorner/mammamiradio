@@ -14,7 +14,7 @@ Files touched:
   .github/workflows/commit-lint.yml
   CLAUDE.md
   CONTRIBUTING.md
-  /Users/florianhorner/repos/mammamiradio/.git/hooks/commit-msg
+  <repo-root>/.git/hooks/commit-msg
   proof/2026-05-17-commit-standards-bootstrap-runtime.txt
 
 Verification:

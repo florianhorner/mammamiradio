@@ -54,7 +54,7 @@ The restart happens once, planned, when the addon updates. Not during the day. N
 
 **Why this rule exists:** Live patches (`docker cp`, in-container writes, process kills) are wiped on addon restart and can drop the stream with no durable fix. s6-rc in this container does not reliably auto-restart killed services. This rule closes the loophole between "don't restart HA core" and "don't experiment on the running addon."
 
-**When a fix is urgent:** merge → wait ~5–10min for CI → update addon. That path is faster than live surgery, leaves a permanent fix in place, and preserves the illusion — one planned restart beats repeated unplanned drops.
+**When a fix is urgent:** merge → wait ~5–10 min for CI → update addon. That path is faster than live surgery, leaves a permanent fix in place, and preserves the illusion — one planned restart beats repeated unplanned drops.
 
 ## Docs
 
