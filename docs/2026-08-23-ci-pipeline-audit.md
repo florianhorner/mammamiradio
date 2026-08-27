@@ -2,7 +2,7 @@
 
 > **Facts only.** This document records validated findings from repository,
 > GitHub, and Conductor session evidence. It does not prescribe remediation.
-> Remediation is tracked separately in the landing-pipeline remediation plan.
+> Remediation is outside this historical audit's scope.
 
 **Evidence cutoff:** `origin/main` at `6fc4a851` (2026-08-23).  
 **Audit scope:** mammamiradio Conductor corpus (631 workspaces, 1,829 sessions,
@@ -26,6 +26,137 @@ PRs, and read-only inspection of landing scripts and workflows.
 
 Conversation statements were treated as leads and corroborated against canonical
 Git/GitHub evidence before inclusion.
+
+---
+
+## Evidence anchors and reproduction
+
+This is a historical snapshot. “Current” in quoted source material means current
+at the cutoff below, not current when this document is read. GitHub review-thread
+state and the Conductor database are mutable, so a later rerun can legitimately
+produce different totals.
+
+| Evidence | Observation completed | Immutable output recorded by this audit |
+|----------|-----------------------|-----------------------------------------|
+| Repository | `2026-08-23T00:41:40Z` | `origin/main` = `6fc4a851127aac8fa2b93b9d87d50330c52f9892` |
+| Conductor corpus | `2026-08-23T01:02:51.229Z` | 631 workspaces; 1,829 sessions; 1,099,023 message rows |
+| All merged-PR review threads | `2026-08-23T01:20:27.119Z` | 766 PRs; 276 PRs with 893 unresolved, non-outdated threads |
+| Recent merged-PR cohort | `2026-08-23T01:20:08.336Z` | PRs #882–#1014: 36/100 PRs with 107 such threads; 61 CodeRabbit Major/Critical threads |
+
+The Conductor totals came from this exact read-only query. The repository ID is
+the `mammamiradio` row in the local Conductor database's `repos` table.
+
+```bash
+sqlite3 -readonly -header -column \
+  "$HOME/Library/Application Support/com.conductor.app/conductor.db" \
+  "SELECT count(*) AS workspaces FROM workspaces WHERE repository_id='2be936a0-e847-4ca6-a2be-c09037abe7ec';
+   SELECT count(*) AS sessions FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.repository_id='2be936a0-e847-4ca6-a2be-c09037abe7ec';
+   SELECT count(*) AS messages FROM session_messages sm JOIN sessions s ON s.id=sm.session_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.repository_id='2be936a0-e847-4ca6-a2be-c09037abe7ec';"
+```
+
+The recent-cohort result came from this exact GraphQL query and filter. “Active”
+means `isResolved == false` and `isOutdated == false`; Major/Critical means a
+CodeRabbit-authored first comment containing its `_🟠 Major_` or `_🔴 Critical_`
+label.
+
+```bash
+gh api graphql \
+  -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests(first:100,states:MERGED,orderBy:{field:CREATED_AT,direction:DESC}){nodes{number mergedAt reviewThreads(first:100){nodes{isResolved isOutdated comments(first:1){nodes{author{login}createdAt body}}}}}}}}' \
+  -F owner=florianhorner -F name=mammamiradio \
+  --jq '
+  [.data.repository.pullRequests.nodes[] as $pr |
+    [$pr.reviewThreads.nodes[] |
+      select(.isResolved == false and .isOutdated == false) |
+      {author:(.comments.nodes[0].author.login // ""),
+       createdAt:.comments.nodes[0].createdAt,
+       body:(.comments.nodes[0].body // "")}] as $u |
+    {number:$pr.number,
+     mergedAt:$pr.mergedAt,
+     unresolved:($u|length),
+     coderabbit:([$u[]|select(.author=="coderabbitai")]|length),
+     cr_major:([$u[]|select(.author=="coderabbitai" and
+       (.body|test("_🟠 Major_|_🔴 Critical_")))]|length),
+     after_merge:([$u[]|select(.createdAt > $pr.mergedAt)]|length)}
+  ] as $rows |
+  {range:[($rows|map(.number)|min),($rows|map(.number)|max)],
+   cohort_prs:($rows|length),
+   prs_with_unresolved:([$rows[]|select(.unresolved>0)]|length),
+   unresolved_threads:([$rows[].unresolved]|add),
+   unresolved_coderabbit_threads:([$rows[].coderabbit]|add),
+   prs_with_cr_major:([$rows[]|select(.cr_major>0)]|length),
+   cr_major_or_critical_threads:([$rows[].cr_major]|add),
+   prs_with_postmerge_threads:([$rows[]|select(.after_merge>0)]|length),
+   postmerge_threads:([$rows[].after_merge]|add)}'
+```
+
+The all-merged-PR totals used the same active-thread predicate while paginating
+every merged PR to `hasNextPage == false`. This minimal reproduction command
+uses the same query fields, pagination, and counting predicate:
+
+```bash
+python3 - <<'PY'
+import json
+import subprocess
+import time
+
+query = r'''
+query($after:String) {
+  repository(owner:"florianhorner", name:"mammamiradio") {
+    pullRequests(first:50, after:$after, states:MERGED,
+                 orderBy:{field:CREATED_AT, direction:DESC}) {
+      nodes {
+        number
+        reviewThreads(first:100) {
+          totalCount
+          nodes { isResolved isOutdated }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}'''
+
+after = None
+pull_requests = []
+while True:
+    command = ["gh", "api", "graphql", "-f", f"query={query}"]
+    if after:
+        command += ["-f", f"after={after}"]
+    for attempt in range(5):
+        result = subprocess.run(command, text=True, capture_output=True)
+        if result.returncode == 0:
+            break
+        time.sleep(attempt + 1)
+    result.check_returncode()
+    page = json.loads(result.stdout)["data"]["repository"]["pullRequests"]
+    pull_requests.extend(page["nodes"])
+    if not page["pageInfo"]["hasNextPage"]:
+        break
+    after = page["pageInfo"]["endCursor"]
+
+active = [
+    (pull_request["number"], thread)
+    for pull_request in pull_requests
+    for thread in pull_request["reviewThreads"]["nodes"]
+    if not thread["isResolved"] and not thread["isOutdated"]
+]
+truncated = [
+    pull_request["number"]
+    for pull_request in pull_requests
+    if pull_request["reviewThreads"]["totalCount"] > 100
+]
+print(json.dumps({
+    "merged_prs": len(pull_requests),
+    "active": len(active),
+    "pr_count": len({number for number, _ in active}),
+    "truncated": truncated,
+}, indent=2))
+PY
+```
+
+Recorded output: `{"merged_prs":766,"active":893,"pr_count":276,
+"truncated":[]}`. The empty `truncated` list establishes that the
+`reviewThreads(first:100)` bound omitted no thread-bearing PR in this snapshot.
 
 ---
 
@@ -69,7 +200,7 @@ not for preship evidence validity after squash.
 
 ---
 
-## Current structural failures
+## Structural failures at the evidence cutoff
 
 ### 1. Review-thread resolution is not a merge condition
 
@@ -223,5 +354,4 @@ since occurrence:
 ## Boundary
 
 This document is **read-only analysis**. It does not authorize merges, ruleset
-changes, workflow flips to blocking, or code changes. Remediation is specified
-in the separate landing-pipeline remediation plan.
+changes, workflow flips to blocking, or code changes.
