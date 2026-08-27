@@ -47,10 +47,6 @@ def _path_key(path: Path | str) -> str:
     return os.path.normcase(os.path.abspath(os.path.normpath(os.fspath(path))))
 
 
-def local_library_roots(config: StationConfig) -> tuple[Path, ...]:
-    return (Path(config.music_dir),)
-
-
 def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibraryScanResult:
     if warning:
         result.complete = False
@@ -59,7 +55,7 @@ def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibr
 
 
 def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
-    roots = (source,) if isinstance(source, Path) else local_library_roots(source)
+    roots = (source,) if isinstance(source, Path) else (Path(source.music_dir),)
     result = LocalLibraryScanResult(roots=roots)
     seen_identities: set[tuple[str, str]] = set()
     scan_roots: dict[str, tuple[Path, Path]] = {}
@@ -90,6 +86,7 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                 with os.scandir(directory) as entries:
                     bounded_entries = list(islice(entries, remaining_entries + 1))
             except OSError as exc:
+                logger.warning("Could not read local music directory %s: %s", directory, exc)
                 result.complete = False
                 result.warnings.append(f"Could not read {directory}: {exc}")
                 continue
@@ -242,7 +239,8 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
 
 def initial_local_library_status(config: StationConfig) -> dict[str, Any]:
     return {
-        **LocalLibraryScanResult(roots=local_library_roots(config), complete=False).status_payload(),
+        **LocalLibraryScanResult(roots=(Path(config.music_dir),), complete=False).status_payload(),
+        "in_progress": True,
         "active": 0,
         "added": 0,
         "removed": 0,

@@ -1490,10 +1490,11 @@ async (page) => {
   assert(localLibrary.label.includes('3 tracks'), 'local library row did not report active tracks');
   assert(localLibrary.detail.includes('/data/music'),
     'local library row did not show the configured music folder');
-  assert(localLibrary.detail.includes('4 files found') && localLibrary.detail.includes('3 active'),
+  assert(localLibrary.detail.includes('4 files found') && localLibrary.detail.includes('3 active')
+      && localLibrary.detail.includes('Joins the current rotation'),
     `local library row hid scan counts: ${localLibrary.detail}`);
-  assert(localLibrary.scan === 'Scan now', 'local library row lost its explicit scan action');
-  assert(localLibrary.uploadControls === 0, 'local library row rebuilt upload/delete controls');
+  assert(localLibrary.scan === 'Scan now' && localLibrary.uploadControls === 0,
+    'local library row lost its explicit scan action; local library row rebuilt upload/delete controls');
   assert(localLibrary.issues.state === 'degraded' && localLibrary.issues.detail.includes('Existing tracks kept')
       && localLibrary.issues.detail.includes('Scan now'), 'incomplete scan lost its recovery');
   assert(localLibrary.issueToast.includes('Existing tracks kept') && localLibrary.issueToast.includes('Scan now'),

@@ -4781,7 +4781,7 @@ function localLibraryPresentation(status){
   const manage=`Manage files in ${roots[0]||'the configured music folder'}.`;
   if(s.in_progress)return{state:'working',label:'Scanning local music',detail:manage};
   if(s.error||s.complete===false)return{state:'degraded',label:`Local music · ${active} active`,detail:`Scan incomplete. Existing tracks kept. ${manage} Check the folders, then Scan now.`};
-  if(active)return{state:'ready',label:`Local music · ${active} track${active===1?'':'s'}`,detail:`${summary}. ${manage}`};
+  if(active)return{state:'ready',label:`Local music · ${active} track${active===1?'':'s'}`,detail:`${summary}. Joins the current rotation. ${manage}`};
   return{state:'idle',label:'Local music · empty',detail:`${summary}. ${manage} Add a supported audio file, then Scan now.`};
 }
 function localLibraryScanToast(status){

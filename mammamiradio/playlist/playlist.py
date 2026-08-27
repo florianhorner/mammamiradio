@@ -20,7 +20,7 @@ from mammamiradio.core.models import Heading, PlaylistSource, SourceReadinessEvi
 from mammamiradio.core.models import normalized_track_key as _core_normalized_track_key
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.playlist.cover_art import upscale_itunes_artwork
-from mammamiradio.playlist.local_library import local_library_roots, scan_local_library
+from mammamiradio.playlist.local_library import scan_local_library
 
 _DEMO_ASSETS_RECOVERY_DIR = Path(__file__).resolve().parent.parent / "assets" / "demo" / "recovery"
 _CLASSIC_ERA_QUERIES: dict[str, tuple[str, int]] = {
@@ -65,7 +65,7 @@ def _source_evidence_for_config(config: StationConfig) -> SourceReadinessEvidenc
     evidence = SourceReadinessEvidence()
     evidence.configure("charts", config.allow_ytdlp)
     evidence.configure("jamendo", jamendo_source_configured(config))
-    evidence.configure("local", any(root.exists() for root in local_library_roots(config)))
+    evidence.configure("local", config.music_dir.exists())
     evidence.configure("demo", True)
     recovery_bundled = _DEMO_ASSETS_RECOVERY_DIR.exists() and any(islice(_DEMO_ASSETS_RECOVERY_DIR.glob("*.mp3"), 1))
     evidence.configure("recovery", recovery_bundled, bundled=recovery_bundled)
@@ -245,7 +245,7 @@ def _merge_local_music_tracks(chart_tracks: list[Track], local_tracks: list[Trac
     return merged
 
 
-def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
+def _load_chart_source_tracks(config: StationConfig, *, include_local: bool = True) -> list[Track]:
     """Load chart tracks and blend local music tracks, then shuffle if configured.
 
     Local MP3s are an enrichment of the charts source, not a fallback. If the
@@ -260,7 +260,7 @@ def _load_chart_source_tracks(config: StationConfig) -> list[Track]:
     chart_tracks = list(_fetch_current_italy_charts())
     if not chart_tracks:
         return []
-    local_tracks = load_operator_local_tracks(config)
+    local_tracks = load_operator_local_tracks(config) if include_local else []
     if local_tracks:
         merged_count = _merge_local_music_tracks(chart_tracks, local_tracks)
         logger.info(
@@ -503,6 +503,7 @@ def load_explicit_source(
     source: PlaylistSource,
     *,
     readiness: SourceReadinessEvidence | None = None,
+    include_local: bool = True,
 ) -> tuple[list[Track], PlaylistSource]:
     """Load a user-chosen source without any silent fallback."""
     evidence = readiness or _source_evidence_for_config(config)
@@ -571,7 +572,7 @@ def load_explicit_source(
             )
         # Existing explicit chart/URL operations retain their standalone
         # behavior behind the single effective capability gate.
-        tracks = _load_chart_source_tracks(config)
+        tracks = _load_chart_source_tracks(config, include_local=include_local)
         if not tracks:
             evidence.mark_failure("charts", "Live charts returned no candidates")
             raise ExplicitSourceError("Current Italian charts are temporarily unavailable")
@@ -615,7 +616,9 @@ def fetch_startup_playlist(
             error = "Saved Jamendo playlist retired; selected the current base source."
         else:
             try:
-                tracks, source = load_explicit_source(config, persisted_source, readiness=evidence)
+                tracks, source = load_explicit_source(
+                    config, persisted_source, readiness=evidence, include_local=include_local
+                )
                 return tracks, source, ""
             except ExplicitSourceError as exc:
                 logger.warning("Persisted source restore failed: %s", exc)
@@ -625,9 +628,10 @@ def fetch_startup_playlist(
     else:
         error = ""
 
-    # Operator-owned local files remain the base when present. They are never
-    # blended with bundled files or assigned license claims by the application.
-    evidence.mark_attempted("local")
+    # Direct callers may still choose local as a base. Production startup defers
+    # discovery, then overlays local files without delaying starter audio.
+    if include_local:
+        evidence.mark_attempted("local")
     local_tracks = load_operator_local_tracks(config) if include_local else []
     if local_tracks:
         logger.info("Using local music files from %s (%d tracks)", config.music_dir, len(local_tracks))
@@ -640,7 +644,8 @@ def fetch_startup_playlist(
             except OSError:
                 logger.warning("Could not rewrite retired Jamendo base source", exc_info=True)
         return tracks, _attach_source_evidence(source, tracks, evidence), error
-    evidence.mark_failure("local", "No supported audio files were found in the local library")
+    if include_local:
+        evidence.mark_failure("local", "No supported audio files were found in the local library")
 
     from mammamiradio.media.starter import StarterCatalogError, load_starter_rotation_tracks, starter_source
 

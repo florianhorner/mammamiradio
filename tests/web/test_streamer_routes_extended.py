@@ -331,6 +331,7 @@ async def test_local_scan_updates_rotation_without_switching_source_or_purging_q
     (config.music_dir / "Local Artist - New Song.FLAC").write_bytes(b"audio")
     app.state.local_library_scan_lock = asyncio.Lock()
     app.state.local_library_status = initial_local_library_status(config)
+    assert app.state.local_library_status["in_progress"] is True
     app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=tmp_path / "runway.mp3"))
     state = app.state.station_state
     source_revision = state.source_revision

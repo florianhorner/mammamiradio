@@ -74,7 +74,7 @@ rematerializes an older Supervisor value.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
 3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
-5. Restores an eligible persisted base selection. A retired `jamendo://` source is rewritten to the current base; add-on-external selections cannot restore extractor authority. Without an eligible selection, operator-owned local `music/` files win when present, otherwise the hash-pinned attributed starter catalog is the offline base.
+5. Restores an eligible persisted base selection without scanning local files; otherwise the hash-pinned attributed starter catalog is the offline base. A retired `jamendo://` source is rewritten, and add-on-external selections cannot restore extractor authority. Local discovery starts after audio and overlays future rotation.
 6. Initializes the clip ring buffer for WTF clip sharing.
 7. Restores `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or the HA add-on's Supervisor-generated, read-only `/data/options.json` startup projection without arming a first strike.
 8. Creates shared app state, then synchronously admits any safe, receipted,
@@ -915,18 +915,18 @@ The dashboard derives a tier label from these flags: Demo Radio, Full AI Radio, 
 `fetch_startup_playlist()` (in `mammamiradio/playlist/playlist.py`) chooses one
 durable base; Jamendo is deliberately outside this function:
 
-1. **Eligible persisted base.** A prior effectively enabled standalone
+1. **Eligible persisted base.** A prior local or effectively enabled standalone
    external selection may restore. A legacy `jamendo://` selection is retired and
    rewritten to the current base. Both add-ons reject any persisted selection that
    would require extractor authority.
-2. **Bundled starter catalog.** Runtime loads the twelve
+2. **Operator local files.** Direct callers may use them as a base; production overlays after startup.
+   They receive no project license claim; the operator owns their provenance and permitted use.
+3. **Bundled starter catalog.** With no local base, runtime loads the twelve
    hash-pinned attribution-only derivatives from the canonical manifest
    (Incompetech under CC BY 4.0, Jamendo under CC BY 3.0).
    They play directly without normalization and complete one full cycle before a
    starter repeat. A release fails unless the exact 12 tracks, at least 45 minutes,
    complete human audition evidence, and no more than 75 MiB pass media proof.
-
-Operator files join after audio startup. The supplied containers use `/data/music`; source checkouts use `./music`, and `MAMMAMIRADIO_MUSIC_DIR` overrides either path. `mammamiradio/playlist/local_library.py` owns recursive discovery, reconciliation, and the 60-second background scan; local tracks overlay an active charts/Jamendo/starter base without switching it. They receive no project license claim; the operator owns their provenance and permitted use.
 
 Two optional expansions sit outside that base:
 
@@ -1382,7 +1382,6 @@ Host or genuine HA-ingress rule described under [CSRF protection](#csrf-protecti
 | `/api/playlist/add-external` | POST | Admin | Standalone-only external add; add-ons return actionable `403 external_media_unavailable_in_addon` |
 | `/api/media-sources/jamendo` | PUT | Admin | Retain/replace/clear the client ID and persist explicit enabled + non-commercial acknowledgement intent; returns redacted status |
 | `/api/media-sources/jamendo/retry` | POST | Admin | Coalesce a transient-provider retry (`202` enabled; `409 jamendo_retry_disabled` when off) |
-| `/api/media-sources/local/scan` | POST | Admin | Run the local-library scanner immediately; concurrent requests coalesce on the in-flight scan and return `in_progress` state |
 | `/api/interrupt` | POST | Admin | Immediately interrupt the stream — hosts deliver pissed/urgent banter with a custom directive. Body: `{"directive": str, "urgency": "pissed"\|"urgent"\|"gentle"}`. 60s cooldown enforced; returns 429 on spam. |
 | `/api/hot-reload` | POST | Admin | Reload `language_policy.py`, `prompt_world.py`, `relationship.py`, `transitions.py`, `fallbacks.py`, `station_name_guard.py`, then `scriptwriter.py` (leaves-first) in-place via `importlib.reload()` — stream continues uninterrupted, next banter uses new code. Requires `--workers 1`. `memory_extractor.py` is deliberately excluded — it holds live in-flight task/apply-lock state a reload would reset mid-extraction. |
 
@@ -1543,7 +1542,6 @@ The rich path is richer, but the failure path still produces a stream.
 | `mammamiradio/core/sync.py` | SQLite database initialization and schema migration |
 | `mammamiradio/media/starter.py` | Canonical starter-manifest loading, release readiness, attribution, and cycle construction |
 | `mammamiradio/playlist/playlist.py` | Local-or-starter base loading plus optional standalone external source compatibility |
-| `mammamiradio/playlist/local_library.py` | Recursive local-root discovery, scan status, playlist reconciliation, and background scanner task |
 | `mammamiradio/playlist/downloader.py` | Local/starter resolution plus capability-gated standalone external handling |
 | `mammamiradio/playlist/jamendo_transient.py` | One-lease/one-artifact Jamendo discovery, streaming normalization, and destruction lifecycle |
 | `mammamiradio/hosts/memory_extractor.py` | Post-air banter memory extraction for persona updates and LLM reaction cues |

@@ -80,20 +80,26 @@ def test_startup_prefers_operator_local_music(config):
     starter_loader.assert_not_called()
 
 
-def test_startup_can_defer_local_scan_to_background(config):
+@pytest.mark.parametrize("persisted_source", [None, PlaylistSource(kind="charts")])
+def test_startup_can_defer_local_scan_to_background(config, persisted_source):
     starter_tracks = [_track("Carefree", source="starter")]
+    chart_tracks = [_track("Chart Song")]
+    config.allow_ytdlp = True
     with (
+        patch("mammamiradio.playlist.downloader.external_media_enabled", return_value=True),
+        patch("mammamiradio.playlist.playlist._fetch_current_italy_charts", return_value=chart_tracks),
         patch(
-            "mammamiradio.playlist.playlist._load_local_music_tracks",
+            "mammamiradio.playlist.playlist.load_operator_local_tracks",
             side_effect=AssertionError("local scan entered startup"),
         ),
         patch("mammamiradio.media.starter.load_starter_rotation_tracks", return_value=starter_tracks),
     ):
-        tracks, source, error = fetch_startup_playlist(config, include_local=False)
+        tracks, source, error = fetch_startup_playlist(config, persisted_source, include_local=False)
 
-    assert tracks == starter_tracks
-    assert source.kind == "starter"
+    assert tracks == (chart_tracks if persisted_source else starter_tracks)
+    assert source.kind == ("charts" if persisted_source else "starter")
     assert error == ""
+    assert source.readiness_evidence.entries["local"].attempted is False
 
 
 def test_startup_uses_strict_starter_when_local_music_is_empty(config):
