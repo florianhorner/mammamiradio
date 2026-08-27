@@ -11,6 +11,7 @@ from .gitops import GitRepository
 
 
 def _parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the landing command-line tool."""
     parser = argparse.ArgumentParser(prog="python -m scripts.landing")
     commands = parser.add_subparsers(dest="command", required=True)
     evidence = commands.add_parser("evidence", help="emit or verify pre-ship review evidence")
@@ -34,6 +35,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Execute the landing command-line tool, returning an exit code."""
     args = _parser().parse_args(argv)
     try:
         repo = GitRepository.discover()
