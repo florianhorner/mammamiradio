@@ -291,11 +291,14 @@ audit history.
 
 Two proof/ conventions coexist, on purpose. Append-only receipts are never
 overwritten: that includes dated human-review receipts like the one above and
-content-addressed pre-ship receipts under `proof/preship-reviews/v2/`. Fixed-name
+content-addressed pre-ship receipts under `proof/preship-reviews/v2/` (never
+edited in place; `--reattest` retires only a branch's own pre-integration
+receipts before they land — a landed receipt is never removed). Fixed-name
 current-state files (`proof/checks.txt`, `proof/review-findings.json`) use Git
-history as their audit trail. The legacy `proof/preship-review.json` remains a
-fixed-name file only during the v1/v2 compatibility phase. New proof artifacts
-should say which convention they follow.
+history as their audit trail. The legacy fixed-name `proof/preship-review.json`
+is retired — pre-ship evidence is v2 receipts only, precisely because a
+fixed-name evidence file made every pair of concurrent PRs conflict. New proof
+artifacts should say which convention they follow.
 
 Content-addressing makes a v2 receipt deterministic and binds it to the reviewed
 tree; it does not authenticate who created it. `source_record_sha256` identifies

@@ -353,26 +353,35 @@ Why: the scriptwriter generates fake ads in the brand's voice, makes false produ
   logged for HEAD (or a recent ancestor) within 2h. The hook is fail-open,
   project-scoped, and Claude-only; Codex has no hook layer.
 
-  The runtime-independent evidence gate is temporarily dual-run and
-  report-only. For the final branch content: commit the implementation, run the
-  review, run `scripts/emit-review-evidence.sh`, and commit legacy
-  `proof/preship-review.json`; then review that exact commit, run
-  `scripts/emit-review-evidence.sh --v2`, and commit the immutable receipt under
-  `proof/preship-reviews/v2/`. The second review is required because the legacy
-  v1 file is ordinary reviewed content in the v2 digest. V2 hashes the raw
-  recursive Git tree while excluding only valid v2 receipts, so a receipt-only
-  commit and the eventual squash preserve the reviewed content identity.
+  The runtime-independent evidence gate is the immutable v2 receipt, and the
+  ceremony is single-pass: commit the implementation, run the review on that
+  exact content, run `scripts/emit-review-evidence.sh`, and commit the receipt
+  it writes under `proof/preship-reviews/v2/`. V2 hashes the raw recursive Git
+  tree while excluding valid v2 receipts and validated HA Green receipts, so
+  the receipt-only commit and the eventual squash preserve the reviewed content
+  identity. After integrating the base locally (`git merge origin/main` — a
+  `gh pr update-branch` at landing has no reattest window; integrate and
+  reattest before the landing signal), run
+  `scripts/emit-review-evidence.sh --reattest`: when git's own three-way
+  merge proves HEAD is exactly the reviewed content merged with the base and
+  nothing else, it derives a receipt for the integrated content with no
+  re-review and retires the branch's superseded receipts in the same step —
+  commit the new receipt and the removals together; a conflicted merge, a
+  hand-edited merge commit, or any post-review content change fails closed
+  into a fresh squad run. Receipts are
+  content-addressed additions, so concurrent PRs never conflict on evidence.
+  (The legacy fixed-name `proof/preship-review.json` is retired — 43 commits
+  touched it, a guaranteed merge conflict between any two open PRs.)
 
-  `preship-evidence.yml` checks v1 and v2 independently using code from the PR's
-  trusted base. This bootstrap PR reports v2 as not evaluated because its base
-  has no v2 verifier; the first subsequent PR exercises it. Both results remain
-  annotations until the separately approved blocking cutover. The receipt is a
-  deterministic, diffable process record for trusted repository writers, not a
-  cryptographic attestation: CI can validate its structure and content binding,
-  but cannot retrieve the local ledger named by `source_record_sha256`. Likewise,
-  the current `pull_request` workflow definition is PR-controlled even though the
-  checker checkout is base-owned. A blocking cutover must first move orchestration
-  to a base-owned control plane that reports against the exact PR head.
+  `preship-evidence.yml` checks the v2 receipt using checker code from the PR's
+  trusted base. The result remains an annotation until the separately approved
+  blocking cutover. The receipt is a deterministic, diffable process record for
+  trusted repository writers, not a cryptographic attestation: CI can validate
+  its structure and content binding, but cannot retrieve the local ledger named
+  by `source_record_sha256`. Likewise, the current `pull_request` workflow
+  definition is PR-controlled even though the checker checkout is base-owned. A
+  blocking cutover must first move orchestration to a base-owned control plane
+  that reports against the exact PR head.
 - **Landing contract — human and feature PRs merge through `scripts/land-pr.sh`, never raw `gh pr merge` or `gh api` merge calls (single source of truth; the runbook links here)**: The sole automated exception is `.github/workflows/dependabot-automerge.yml` for eligible Dependabot patch and minor updates. `/ship` opens human and feature PRs and never arms auto-merge. The PR soaks (CodeRabbit, review time) until Florian's explicit merge signal. On the signal, run `scripts/land-pr.sh <PR#>`: it (1) verifies a pre-ship squad entry against the **PR head** with code-state freshness — the entry's commit must be the head or an ancestor, and nothing may have been pushed after the entry (wall-clock age is irrelevant; a soak of days is fine, a new push means re-review); (2) updates the branch via `gh pr update-branch` if behind (user-auth gh, so CI re-runs on the integrated state; a conflict stops for a human); (3) arms `gh pr merge --squash --auto --match-head-commit <head>` so GitHub merges only when required checks pass AND the head is still the one verified — a later push cancels the landing instead of shipping unseen code. The same hook denies raw `gh pr merge` (`--disable-auto` is allowed for disarming), REST `gh api` PUT calls to `/pulls/<n>/merge`, and GraphQL `gh api graphql` mutation payloads containing `mergePullRequest` or `enablePullRequestAutoMerge` (inline or loaded from an inspectable local file; stdin/unreadable payloads are denied because the hook cannot inspect them safely). Branch protection on `main` requires branches to be up to date before merging (strict status checks, set 2026-06-12) — this is what retires hand-rolled rebase/reset base-integration, the cause of the 2026-06-11 phantom-revert near-miss. Dependabot auto-merge is opportunistic, not a self-landing guarantee: a behind PR parks until an authenticated maintainer handles that specific PR. GitHub Actions must not post Dependabot rebase or recreate commands; the batch-wide nudge was retired after its GitHub Actions actor was rejected by Dependabot, causing repeated comments and CI churn after subsequent merges. Settings drift tripwire: `scripts/check-merge-gate.sh` (in `make pre-release`). Honest scope: the hook is a local guard, not a security boundary (fail-open, bypassable via the GitHub UI), and forced update+CI **reduces** the stale-branch-claim class — it does not eliminate non-conflicting staleness.
 - **QA gates (mandatory, risk-scoped)**: Manual `/qa` is required for the surfaces a PR can affect, and every release candidate must pass both surfaces before user-facing release.
   1. **Player QA** (`/qa` on `/` dashboard) is required for listener-facing changes: stream playback, now-playing, up-next, Casa card, song requests, clip sharing, public status, listener routes/assets, or playback-visible behavior.
