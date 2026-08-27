@@ -119,12 +119,17 @@ commercial radio licence for direct or indirect commercial activity. Read the
 enabling it.
 
 Configure it in **Motore -> Setup -> Music sources**. On a fresh install the
-card appears after the First Listen journey is finished, so the guided setup
-keeps a single obvious action. Saving applies live and
-does not restart or interrupt the station. A client ID saved by an older
-version is imported to owner-only secrets where possible, remains disabled,
-and requires a fresh acknowledgement before use. The admin UI never echoes the
-ID. Bundled users see **Use own ID**; **Replace** and **Clear** appear only after an operator ID is saved.
+card normally appears after the First Listen journey is finished, so the guided
+setup keeps a single obvious action. There is one repair exception: if First
+Listen has no playable music and live-chart tools are unavailable, **Open music
+source setup** temporarily replaces the journey with this card. **Station
+controls** returns to First Listen. A charts-capable standalone install instead
+opens the visible chart controls in **Rotazione**. Saving applies live and does
+not restart or interrupt the station. A client ID saved by an older version is
+imported to owner-only secrets where possible, remains disabled, and requires a
+fresh acknowledgement before use. The admin UI never echoes the ID. Bundled
+users see **Use own ID**; **Replace** and **Clear** appear only after an operator
+ID is saved.
 
 The transient boundary is deliberately narrow:
 

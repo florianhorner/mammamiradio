@@ -35,6 +35,8 @@ async (page) => {
   let setupResponseGate = null;
   let nextSetupStatusError = null;
   function responseGate(){let arrive,release;return{arrived:new Promise((resolve)=>{arrive=resolve;}),wait:new Promise((resolve)=>{release=resolve;}),arrive,release};}
+  const initialCapabilitiesGate = responseGate();
+  let capabilitiesResponseGate = initialCapabilitiesGate;
 
   const sourceRows = ({ primary = 'playable', recovery = 'cover_only' } = {}) => [
     { kind: 'charts', label: 'Live charts', status: primary, detail: 'Live chart evidence' },
@@ -441,6 +443,7 @@ async (page) => {
     await fulfillJson(route, setupStatusProjection);
   });
   await page.route('**/api/capabilities', async (route) => {
+    if(capabilitiesResponseGate){const gate=capabilitiesResponseGate;capabilitiesResponseGate=null;gate.arrive();await gate.wait;}
     await fulfillJson(route, { capabilities: {}, golden_path: {} });
   });
 
@@ -457,6 +460,20 @@ async (page) => {
     null,
     { timeout: 5000 },
   );
+  await initialCapabilitiesGate.arrived;
+  await page.evaluate((projection) => {
+    _lastSetupJson = null;
+    renderSetup(projection);
+  }, setupProjection({ primary: 'unavailable' }));
+  const pendingChartDetail = await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"] .first-listen-source-detail').textContent();
+  assert(pendingChartDetail === 'Checking whether live charts are available…', `pending capabilities fabricated chart availability: ${pendingChartDetail}`);
+  assert(await page.locator('#firstListenRepairMusicBtn').isDisabled(), 'music repair stayed actionable before capabilities resolved');
+  initialCapabilitiesGate.release();
+  await page.waitForFunction(() => _capsState === 'ready');
+  const resolvedChartDetail = await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"] .first-listen-source-detail').textContent();
+  assert(resolvedChartDetail === 'Live charts are not available in this setup. Use Jamendo or add local music instead.', `capability resolution did not repair chart guidance: ${resolvedChartDetail}`);
+  assert((await page.locator('#firstListenRepairMusicBtn').innerText()) === 'Open music source setup', 'resolved add-on repair did not name the available setup path');
+  await page.locator('#firstListenSourcePreviewDetails').evaluate((element) => { element.open = false; });
   assert(await page.getByRole('heading',{name:'Hear Mamma Mi Radio, right here.',level:2}).count()===1,'First Listen lost its accessible H2');
   await page.evaluate(() => {
     (window.__firstListenSmokeIntervals || []).forEach(({ id }) => clearInterval(id));
@@ -631,7 +648,11 @@ async (page) => {
       await assertUnfinished('firstListenVerifyStep', 'firstListenHeardBtn');
     };
 
-    await resetUi(setupProjection());
+    const initialJourneyProjection = setupProjection();
+    initialJourneyProjection.guided_setup.source_readiness.advanced = {
+      kind: 'custom_rotation', label: 'Custom rotation', status: 'configured_unchecked',
+    };
+    await resetUi(initialJourneyProjection);
     assert(await page.locator('#tab-setup').getAttribute('aria-selected') === 'true', 'fresh install did not land on First Listen');
     assert(await page.locator('#first-listen-panel').isVisible(), 'First Listen is not the primary setup surface');
     assert(await page.locator('#journeySurface').isVisible(), 'calm First Listen surface is missing');
@@ -642,6 +663,11 @@ async (page) => {
     assert((await page.locator('#firstListenProgressLine').innerText()).includes('Step 2 of 4'), 'required progress should open on the first interactive step');
     assert((await page.locator('#firstListenProgressLine').innerText()).includes('of 4'), 'required progress is not Step N of 4');
     assert((await page.locator('#firstListenSourceHeading').innerText()) === 'Check music can continue', 'step 1 heading drifted from music continuity');
+    const sourceStepCopy = await page.locator('#firstListenSourceBody > .use-copy').innerText();
+    assert(
+      sourceStepCopy.includes('a song or backup music can follow') && !sourceStepCopy.includes('real music can follow'),
+      `step 1 overpromised primary music readiness: ${sourceStepCopy}`,
+    );
     const sourcePreview = page.locator('#firstListenSourcePreviewDetails');
     const sourceReview = page.locator('#firstListenSourceStep > .first-listen-head > .first-listen-review');
     assert(await sourcePreview.isHidden(), 'completed source preview expanded without operator review');
@@ -661,6 +687,24 @@ async (page) => {
     assert(
       !/proves transport|Configured · not checked|Candidates only|Cover only|Not bundled/.test(sourcePreviewCopy),
       `required journey leaked machine readiness vocabulary: ${sourcePreviewCopy}`,
+    );
+    assert(
+      sourcePreviewCopy.includes('Optional. Open music source setup to turn it on.')
+        && sourcePreviewCopy.includes('No local songs were found. Add MP3 files to the station’s music folder.')
+        && sourcePreviewCopy.includes('No demo songs are included here. Use Jamendo or add local music instead.')
+        && !sourcePreviewCopy.includes('Add your own, or use live charts.'),
+      `source preview lost setup-specific guidance: ${sourcePreviewCopy}`,
+    );
+    const plainStatusLabels = await page.locator('#firstListenSourcePreview .status-chip').evaluateAll((chips) => chips.map((chip) => ({
+      ariaLabel: chip.getAttribute('aria-label'),
+      source: chip.closest('.first-listen-source-row')?.querySelector('.first-listen-source-name')?.textContent?.trim(),
+      text: chip.textContent?.trim(),
+      title: chip.getAttribute('title'),
+    })));
+    assert(
+      plainStatusLabels.length === 6
+        && plainStatusLabels.every(({ ariaLabel, source, text, title }) => ariaLabel === `${source}: ${text}` && title === text),
+      `plain source chips exposed internal states: ${JSON.stringify(plainStatusLabels)}`,
     );
     await sourcePreview.locator('> summary').click();
     await sourceReview.click();
@@ -769,7 +813,7 @@ async (page) => {
     );
     assert(
       degradedPreviewCopy.includes('Backup music only. It keeps the station on while real music is found.')
-        && degradedPreviewCopy.includes('Open music source tools to point it somewhere else.'),
+        && degradedPreviewCopy.includes('Live charts are not available in this setup. Use Jamendo or add local music instead.'),
       `degraded source preview lost its plain-language way out: ${degradedPreviewCopy}`,
     );
     await sourceReview.click();
@@ -784,8 +828,28 @@ async (page) => {
     const recoveryPreviewCopy = (await page.locator('#firstListenSourcePreview').innerText()).replace(/\s+/g, ' ');
     assert(
       recoveryPreviewCopy.includes('Backup music is playing, so the station stays on.')
+        && recoveryPreviewCopy.includes('open music source setup')
+        && !recoveryPreviewCopy.includes('open music source tools')
         && !recoveryPreviewCopy.includes('proves transport'),
       `recovery-on-air preview still speaks machine: ${recoveryPreviewCopy}`,
+    );
+    const sourceFallbackProjection = setupProjection({ recovery: 'not_bundled' });
+    sourceFallbackProjection.guided_setup.source_readiness.rows.find((row) => row.kind === 'jamendo').status = 'candidates_only';
+    await resetUi(sourceFallbackProjection);
+    const candidatesRow = page.locator('#firstListenSourcePreview [data-source-kind="jamendo"]');
+    const notBundledRecoveryRow = page.locator('#firstListenSourcePreview [data-source-kind="recovery"]');
+    const sourceFallbackMatrixCopy = {
+      candidatesDetail: await candidatesRow.locator('.first-listen-source-detail').textContent(),
+      candidatesLabel: await candidatesRow.locator('.status-chip').textContent(),
+      recoveryDetail: await notBundledRecoveryRow.locator('.first-listen-source-detail').textContent(),
+      recoveryLabel: await notBundledRecoveryRow.locator('.status-chip').textContent(),
+    };
+    assert(
+      sourceFallbackMatrixCopy.candidatesDetail === 'Songs found. Still listening to check they play cleanly.'
+        && sourceFallbackMatrixCopy.candidatesLabel === 'Almost ready'
+        && sourceFallbackMatrixCopy.recoveryDetail === 'No backup music is included here. Use Jamendo or add local music instead.'
+        && sourceFallbackMatrixCopy.recoveryLabel === 'Not included',
+      `source fallback matrix lost its plain-language copy: ${JSON.stringify(sourceFallbackMatrixCopy)}`,
     );
 
     const assertEarlyCompletionExit=async(beforeSave)=>{
@@ -838,6 +902,70 @@ async (page) => {
     await page.waitForFunction(() => _firstListenUi.privacyChoice === false && !_firstListenUi.privacySaving);
     assert(await page.locator('#firstListenSuccess').isHidden(), 'missing continuity falsely exposed the success screen');
     await assertUnfinished('firstListenSourceStep', 'firstListenRepairMusicBtn');
+    const addOnRecoveryUnavailable = await page.locator('#firstListenSourcePreview [data-source-kind="recovery"] .first-listen-source-detail').textContent();
+    assert(
+      addOnRecoveryUnavailable.includes('Open music source setup') && !addOnRecoveryUnavailable.includes('Open music source tools'),
+      `add-on unavailable source exposed the wrong repair path: ${addOnRecoveryUnavailable}`,
+    );
+    await page.locator('#firstListenRepairMusicBtn').click();
+    await page.waitForFunction(() => (
+      document.body.dataset.firstListenSetupView === 'music-sources'
+        && document.activeElement?.id === 'jamendoSetupHeading'
+    ));
+    assert(
+      await page.locator('#setupMusicSources').isVisible() && await page.locator('#journeySurface').isHidden(),
+      'add-on repair action did not open an available music-source setup path',
+    );
+    await page.locator('.first-listen-station-controls').click();
+    await page.locator('#tab-setup').click();
+    assert(
+      await page.locator('#journeySurface').isVisible() && await page.locator('#setupMusicSources').isHidden(),
+      'Setup tab did not restore First Listen after source repair',
+    );
+    await page.evaluate(() => {
+      _caps = null;
+      _capsState = 'error';
+      renderFirstListenProgress();
+    });
+    const erroredChartDetail = await page.locator('#firstListenSourcePreview [data-source-kind="live_charts"] .first-listen-source-detail').textContent();
+    assert(
+      erroredChartDetail === 'Live charts could not be checked. Use Jamendo or add local music instead.',
+      `capability error fabricated chart availability: ${erroredChartDetail}`,
+    );
+    assert((await page.locator('#firstListenRepairMusicBtn').innerText()) === 'Open music source setup', 'capability error exposed unavailable chart tools');
+    await page.evaluate(() => {
+      _caps = { capabilities: { charts_reload: true } };
+      _capsState = 'ready';
+      updateSourceControls(_st, _caps);
+      renderFirstListenProgress();
+    });
+    assert((await page.locator('#firstListenRepairMusicBtn').innerText()) === 'Open music source tools', 'charts-capable repair lost its library-tools path');
+    const chartsRecoveryUnavailable = await page.locator('#firstListenSourcePreview [data-source-kind="recovery"] .first-listen-source-detail').textContent();
+    assert(
+      chartsRecoveryUnavailable.includes('Open music source tools') && !chartsRecoveryUnavailable.includes('Open music source setup'),
+      `charts-capable unavailable source lost its repair path: ${chartsRecoveryUnavailable}`,
+    );
+    await page.locator('#firstListenRepairMusicBtn').click();
+    await page.waitForFunction(() => (
+      _activeTab === 'rotazione'
+        && document.getElementById('libraryTools')?.open
+        && document.activeElement?.id === 'sourceChartsBtn'
+    ));
+    assert(await page.locator('#sourceChartsBtn').isVisible(), 'charts-capable repair focused a hidden source control');
+    await page.locator('#tab-setup').click();
+    await resetUi(setupProjection({ primary: 'unavailable', recovery: 'on_air' }));
+    const chartsRecoveryCopy = await page.locator('#firstListenSourcePreview [data-source-kind="recovery"] .first-listen-source-detail').textContent();
+    assert(
+      chartsRecoveryCopy.includes('Real music still needs a source — open music source tools.')
+        && !chartsRecoveryCopy.includes('open music source setup'),
+      `charts-capable recovery guidance lost its available repair path: ${chartsRecoveryCopy}`,
+    );
+    await page.evaluate(() => {
+      _caps = { capabilities: {} };
+      _capsState = 'ready';
+      updateSourceControls(_st, _caps);
+      renderFirstListenProgress();
+    });
 
     await resetUi(setupProjection());
     await assertUnfinished('firstListenSpeakerStep', 'firstListenPlayBtn');
