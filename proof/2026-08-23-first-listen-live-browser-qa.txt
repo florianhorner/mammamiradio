@@ -1,0 +1,82 @@
+First Listen: live browser QA — runtime proof
+2026-08-23
+
+Ran the actual First Listen flow end to end in a real browser against a
+running instance (Conductor workspace port), not string-matching tests.
+
+=== Player QA (/) ===
+Landing page: clean render, no console errors.
+Listen Now: station starts, waveform animates, blue .playing state, track
+title updates live. No issues found.
+
+=== Admin QA (/admin) — First Listen golden path ===
+Fresh install lands on First Listen step 2. Play the station: verified via
+direct JS inspection that the <audio> element genuinely plays
+(paused:false, currentTime advancing, src=/stream?first_listen=1).
+Guide narration clicked mid-playback: station pauses (src stays present,
+not hard-stopped) rather than layering two audio streams. Golden path
+completes: Yes I hear it -> HEARD -> step 4 (Home context choice), correct
+blue badges, no stale speaker/room copy anywhere on the rendered page.
+
+=== Issue found and fixed live ===
+sound-check.mp3 (9.336s) froze at 8.595s in the browser and never fired
+'ended'. welcome.mp3 (11.856s) played through correctly in the same
+session; the MP3 file itself decodes cleanly under ffmpeg/ffprobe with an
+exact duration match, so this is a browser-side playback quirk on this one
+asset, not a corrupt file. Consequence: the station-resume mechanism built
+across this branch's prior 4 commits depends entirely on 'ended' firing, so
+a stalled clip left the station paused indefinitely with no recovery.
+
+Fix (commit 5632e4d3): a duration-keyed watchdog timer forces the same
+stopFirstListenGuide() teardown regardless of whether 'ended' fires.
+
+Reproduced live twice:
+  t=8.595s guide_paused=true guide_ended=false station_paused=true (stuck)
+  -> after fix, same stall reproduced, then simulated under controlled
+     timing via forced audio.pause(); watchdog fired
+     (console.warn 'first_listen_guide_audio_stall'), confirmed via direct
+     DOM inspection: guide_src_present=false, containerState='idle',
+     station_paused=false, station_ct advancing.
+
+Regression test: test_guide_playback_stall_is_recovered_by_a_watchdog
+(tests/web/test_admin_first_listen.py), mutation-verified to fail if the
+watchdog is removed.
+
+=== Investigated and ruled out ===
+A 403 on /api/setup/status appeared after editing admin.html mid-session.
+Root cause: start.sh runs uvicorn --reload --reload-dir mammamiradio, which
+watches templates; the edit restarted the process, rotating the
+per-process CSRF token (main.py:791) underneath an already-open tab. A
+fresh page load resolved it. Dev-loop artifact, not a product defect --
+would never occur in a deployed install.
+
+=== Re-verified after the narration rewrite and re-record ===
+
+The QA above predates the guide-narration rewrite, the re-recorded audio
+pack, and the resume/playing-handler fixes, so both surfaces were checked
+again on the current tree against a server started on an empty cache dir.
+
+Admin (/admin), real browser, zero console errors:
+  Setup tab auto-opens on a fresh install (onboarding entry intact).
+  All seven guide blocks render the new transcripts, and each declared
+  duration matches its clip: welcome 16s, sound-check 14s, not-yet 12s,
+  receipt-recovery 10s, privacy 8s, ai 12s, success 11s.
+  FIRST_LISTEN_GUIDES cache-busting hashes equal the manifest sha256
+  prefixes for all seven entries.
+  Welcome clip played for real, not asserted from strings:
+    src=welcome.mp3?v=1971b4d1bc72 paused=false currentTime=2.20
+    duration=16.46 (manifest declares 16.464) container state 'playing'.
+  stopFirstListenGuide() torn down cleanly afterwards: container 'idle',
+  element paused, guideKey cleared, stationPausedForGuide false.
+  Brand elements intact: gold .mi accent in h1, tricolor stripe present.
+
+Listener (/listen), real browser, zero console errors:
+  Play control present and enabled, .mi accent renders rgb(244, 208, 72)
+  (#F4D048), tricolor band present, /public-status answers with live keys.
+  listener.html is untouched by this branch.
+
+Real-browser First Listen journey: all 25 scenarios pass end to end
+(tests/web/test_first_listen_browser_smoke.py), run three times against a
+clean server with no failures. The full browser-smoke job sequence that CI
+runs (make player-smoke, admin browser smoke, First Listen browser smoke)
+was reproduced locally and passes in full.

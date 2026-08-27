@@ -108,9 +108,11 @@ def test_console_and_tabbar_share_one_sticky_deck() -> None:
 
 
 def test_first_listen_tab_alert_is_wired() -> None:
-    """Setup attention belongs on the dedicated First Listen tab."""
+    """Setup attention on the First Listen tab applies only while entry is required."""
     html = _html()
     assert "getElementById('firstListenTabAlert')" in html
+    setup = html[html.index("function renderSetup(") : html.index("async function setupRecheck")]
+    assert "firstListenEntry==='required'" in setup
     assert "getElementById('motoreTabAlert')" not in html
 
 
@@ -155,10 +157,11 @@ def test_active_tab_persists_in_sessionstorage() -> None:
     """The chosen tab persists across reloads; an unknown stored tab falls back to
     Scaletta so the work area is never blank."""
     html = _html()
-    show = html[html.index("function showAdminTab(") : html.index("function initFirstListenPanelMount")]
+    show = html[html.index("function showAdminTab(") : html.index("function syncFirstListenSetupMount")]
     init = html[html.index("function initTabs()") : html.index("initTabs();")]
     assert "sessionStorage.setItem('adminTab'" in show
     assert "sessionStorage.getItem('adminTab')" in init
+    assert "if(initTab==='setup')initTab='scaletta'" in init
     assert "name='scaletta'" in show  # unknown-tab fallback
 
 

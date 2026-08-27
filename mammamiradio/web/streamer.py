@@ -10,6 +10,7 @@ import functools
 import hashlib
 import importlib
 import ipaddress
+import json
 import logging
 import math
 import os
@@ -77,8 +78,10 @@ from mammamiradio.core.config import (
 from mammamiradio.core.first_listen import (
     FirstListenAttemptMismatchError,
     FirstListenInstallOriginStatus,
+    FirstListenReceiptLoadStatus,
     FirstListenReceiptStore,
     FirstListenReceiptUnavailableError,
+    is_complete_listener_proof,
 )
 from mammamiradio.core.first_listen_show import (
     approved_first_listen_show_path,
@@ -118,6 +121,7 @@ from mammamiradio.core.setup_status import (
     addon_options_snippet,
     build_setup_status,
     classify_station_mode,
+    first_listen_continuity_available,
 )
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
@@ -235,6 +239,7 @@ from mammamiradio.web.auth import (  # noqa: F401  facade re-export — routes/t
     _is_loopback_client,
     _is_private_network,
     _same_origin,
+    has_valid_admin_basic_credentials,
     require_admin_access,
     security,
 )
@@ -259,6 +264,7 @@ from mammamiradio.web.provider_verdict import (
     _run_provider_verdict,
 )
 from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export — routes/tests read these as streamer.*; only some are used in-module
+    PUBLIC_STATUS_CACHE_CONTROL,
     _admin_track_id,
     _cached_cache_size_mb,
     _duration_sec_from_payload,
@@ -278,6 +284,9 @@ from mammamiradio.web.status_payload import (  # noqa: F401  facade re-export �
     _serialize_stream_log_entry,
     _serialize_track,
     _status_now_playback,
+    normalize_public_status_json,
+    public_status_etag,
+    public_status_not_modified,
 )
 from mammamiradio.web.ui_copy import copy_strings
 
@@ -325,7 +334,8 @@ async def _run_addon_persistence(operation: Callable[..., Any], /, *args: Any) -
 router = APIRouter()
 
 _FIRST_LISTEN_HELP_URL = (
-    "https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#first-listen-repair"
+    "https://github.com/florianhorner/mammamiradio/blob/main/docs/troubleshooting.md"
+    "#first-listen-does-not-play-on-this-device"
 )
 _HOME_PREVIEW_PROOF_TTL_SECONDS = 5 * 60.0
 _HOME_PREVIEW_TOTAL_TIMEOUT_SECONDS = 16.0
@@ -442,10 +452,10 @@ _SETUP_ERRORS: dict[str, tuple[str, str, bool, str, int]] = {
         409,
     ),
     "first_listen_required": (
-        "Finish the speaker check first",
-        "Confirm that you heard Mamma Mi Radio on a Home Assistant speaker before reviewing Home context.",
+        "Finish First Listen first",
+        "Play Mamma Mi Radio and confirm that you heard it before reviewing Home context.",
         True,
-        "Return to listening check",
+        "Return to First Listen",
         409,
     ),
     "privacy_persist_failed": (
@@ -594,6 +604,21 @@ def _home_access_fingerprint(config) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
+def _active_setup_csrf_stale_detail() -> dict[str, str]:
+    """The structured 403 body for a missing or stale active-setup CSRF token.
+
+    Shares the {code,title,message,action} shape the client's
+    firstListenErrorCopy reads directly from HTTPException.detail, so its
+    authored next step reaches the screen instead of the generic fallback.
+    """
+    return {
+        "code": "active_setup_csrf_stale",
+        "title": "Reload the dashboard",
+        "message": "This setup page's security check has expired.",
+        "action": "Reload /admin, then continue First Listen.",
+    }
+
+
 def _require_active_setup_access(request: Request, credentials=Depends(security)) -> None:
     """Authorize active setup writes and require an unguessable browser token.
 
@@ -607,6 +632,16 @@ def _require_active_setup_access(request: Request, credentials=Depends(security)
     supplied_token = request.headers.get("X-Radio-Admin-Token", "")
     if config.admin_token and supplied_token and secrets.compare_digest(supplied_token, config.admin_token):
         return
+    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
+    csrf_valid = bool(csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)))
+    # A verified Basic credential is an unguessable secret that a DNS-rebinding
+    # page cannot manufacture. This is the supported browser path for a
+    # configured hostname; retain the injected-CSRF requirement as a second
+    # proof that the write came from this dashboard.
+    if has_valid_admin_basic_credentials(credentials, config):
+        if csrf_valid:
+            return
+        raise HTTPException(status_code=403, detail=_active_setup_csrf_stale_detail())
     # A per-process CSRF secret is not a DNS-rebinding defense when an attacker
     # can first fetch a page from the rebound host and read the embedded token.
     # Active setup therefore accepts browser-token auth only on a literal local
@@ -629,17 +664,29 @@ def _require_active_setup_access(request: Request, credentials=Depends(security)
         and (host_address.is_loopback or any(host_address in network for network in _TRUSTED_NETWORKS))
     )
     if not (trusted_ingress or trusted_literal_host):
+        if config.is_addon:
+            title = "Open Mamma Mi Radio from Home Assistant"
+            action = "In Home Assistant, open Mamma Mi Radio from the sidebar, then continue First Listen there."
+        else:
+            title = "Open this setup from a trusted address"
+            action = (
+                "Reopen /admin using this machine's local IP, or configure ADMIN_PASSWORD and sign in, "
+                "then continue First Listen."
+            )
         raise HTTPException(
             status_code=403,
-            detail="Active setup host is not trusted. Use a local address, Home Assistant ingress, or an admin token.",
+            detail={
+                "code": "active_setup_host_untrusted",
+                "title": title,
+                "message": (
+                    "This direct hostname can show the producer desk, but it cannot securely save First Listen choices."
+                ),
+                "action": action,
+            },
         )
-    csrf_token = request.headers.get("X-Radio-CSRF-Token", "")
-    if csrf_token and secrets.compare_digest(csrf_token, _get_csrf_token(request.app)):
+    if csrf_valid:
         return
-    raise HTTPException(
-        status_code=403,
-        detail="Active setup request blocked. Reload the dashboard and retry.",
-    )
+    raise HTTPException(status_code=403, detail=_active_setup_csrf_stale_detail())
 
 
 def _admin_target_error() -> JSONResponse:
@@ -796,6 +843,7 @@ QUEUE_FALLBACK_WAIT_SECONDS = 5.0
 # QUEUE_FALLBACK_WAIT_SECONDS (asserted in test_streamer_routes).
 FIRST_BYTE_GRACE_SECONDS = 1.0
 FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS = 0.5
+FIRST_LISTEN_RESUME_WAIT_SECONDS = 8.0
 assert FIRST_LISTEN_SHOW_APPROVAL_TIMEOUT_SECONDS <= FIRST_BYTE_GRACE_SECONDS
 STARTUP_GRACE_SECONDS = 30.0
 # Keep the admin "On air" verdict stable across a normal segment handoff. This
@@ -2683,6 +2731,17 @@ def _first_listen_store(app_state) -> FirstListenReceiptStore:
     return store
 
 
+def _adopt_first_listen_receipt(app_state, candidate):
+    """Publish receipt state without letting stale work reopen completed steps."""
+    current = getattr(app_state, "first_listen_receipt", None)
+    if is_complete_listener_proof(current) and not is_complete_listener_proof(candidate):
+        return current
+    if bool(getattr(current, "privacy_complete", False)) and not bool(getattr(candidate, "privacy_complete", False)):
+        return current
+    app_state.first_listen_receipt = candidate
+    return candidate
+
+
 async def _first_listen_audio_gate_open(app_state) -> bool:
     """Require audible proof before widening a fresh or unknown install.
 
@@ -2693,14 +2752,26 @@ async def _first_listen_audio_gate_open(app_state) -> bool:
     origin = getattr(app_state, "first_listen_install_origin", None)
     if getattr(origin, "status", None) is FirstListenInstallOriginStatus.EXISTING:
         return True
-    receipt = getattr(app_state, "first_listen_receipt", None)
-    if receipt is None:
-        try:
-            receipt = await _first_listen_store(app_state).load()
-        except Exception:
-            receipt = None
-        app_state.first_listen_receipt = receipt
-    return bool(getattr(receipt, "audio_complete", False))
+    cached_receipt = getattr(app_state, "first_listen_receipt", None)
+    try:
+        load_result = await _first_listen_store(app_state).load_result()
+    except Exception:
+        load_result = None
+    durable_receipt = (
+        load_result.receipt
+        if load_result is not None and load_result.status is FirstListenReceiptLoadStatus.PRESENT
+        else None
+    )
+    if durable_receipt is None:
+        # Missing or malformed durable state fails closed. Do not erase a
+        # listener proof that another request published while this read ran.
+        if getattr(app_state, "first_listen_receipt", None) is cached_receipt:
+            app_state.first_listen_receipt = None
+        return False
+    _adopt_first_listen_receipt(app_state, durable_receipt)
+    # Authorization follows the durable candidate, not whichever monotonic
+    # receipt the UI cache retained against an older callback.
+    return bool(durable_receipt.audio_complete)
 
 
 def _ha_playback_access_snapshot(config) -> tuple[str, str, str]:
@@ -2727,7 +2798,7 @@ def _ha_playback_service(app_state) -> HAPlaybackService:
 
     async def _persist_attempt(entity_id: str) -> str:
         receipt = await _first_listen_store(app_state).record_accepted(entity_id)
-        app_state.first_listen_receipt = receipt
+        receipt = _adopt_first_listen_receipt(app_state, receipt)
         if not receipt.accepted_attempt_id:  # defensive; the store contract supplies one
             raise FirstListenReceiptUnavailableError("accepted attempt id missing")
         return receipt.accepted_attempt_id
@@ -4307,7 +4378,15 @@ def _first_listen_entry_state(app_state) -> str:
     }:
         return "complete"
     receipt = getattr(app_state, "first_listen_receipt", None)
-    complete = bool(getattr(receipt, "audio_complete", False)) and bool(getattr(receipt, "privacy_complete", False))
+    audio_and_privacy_complete = bool(getattr(receipt, "audio_complete", False)) and bool(
+        getattr(receipt, "privacy_complete", False)
+    )
+    if not audio_and_privacy_complete:
+        return "required"
+    config = app_state.config
+    state = app_state.station_state
+    continuity_available = first_listen_continuity_available(config, state, _golden_path_status(config, state))
+    complete = audio_and_privacy_complete and continuity_available
     return "complete" if complete else "required"
 
 
@@ -6290,14 +6369,47 @@ def _next_first_listen_chunk(chunk_iter: Iterator[bytes]) -> bytes | None:
         return None
 
 
-async def _audio_generator(request: Request):
+async def _wait_for_first_listen_resume(request: Request) -> bool:
+    """Wait briefly for the explicit Start request paired with First Listen.
+
+    The stream request is deliberately read-only.  It only observes the
+    existing ``/api/resume`` transaction, which publishes running state before
+    setting ``resume_event``.  A failed Start or a vanished listener therefore
+    exits without subscribing to the shared station.
+    """
+    state: StationState = request.app.state.station_state
+    deadline = time.monotonic() + FIRST_LISTEN_RESUME_WAIT_SECONDS
+    while state.session_stopped:
+        if await request.is_disconnected():
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning("First Listen stream ended because the explicit station start did not complete")
+            return False
+        try:
+            await asyncio.wait_for(state.resume_event.wait(), timeout=min(0.25, remaining))
+        except TimeoutError:
+            continue
+        # /api/resume sets the event only after persistence and live state have
+        # committed.  A set event while still stopped is stale, not permission
+        # for this GET to repair or alter control state.
+        if state.session_stopped:
+            logger.warning("First Listen stream observed a stale resume signal while the station remained stopped")
+            return False
+    return True
+
+
+async def _audio_generator(request: Request, *, first_listen: bool = False):
     """Stream an eligible first-listen prelude, then the shared live station.
 
     The packaged show is emitted before subscribing to ``LiveStreamHub``.  It
     therefore cannot alter the shared queue or now-playing state, and its bytes
-    give the speaker a runway while the ordinary station wakes for this client.
+    give this listening path a runway while the ordinary station wakes for this client.
     """
     hub = request.app.state.stream_hub
+    state: StationState = request.app.state.station_state
+    if first_listen and state.session_stopped and not await _wait_for_first_listen_resume(request):
+        return
     show_path = None
     if first_listen_show_required(request.app.state):
         try:
@@ -6431,7 +6543,7 @@ async def admin_panel(request: Request):
 
 @router.get("/listen", response_class=HTMLResponse)
 async def listener(request: Request):
-    """Backwards-compatible alias for the listener UI."""
+    """Serve the listener UI on an unambiguous route, including under HA ingress."""
     prefix = request.headers.get("X-Ingress-Path", "")
     config = request.app.state.config
     return _TEMPLATES.TemplateResponse(
@@ -6702,8 +6814,13 @@ async def stream(request: Request):
     # Omit ``icy-genre`` when no listener-facing tagline survives header folding.
     if icy_genre:
         headers["icy-genre"] = icy_genre
+    audio = (
+        _audio_generator(request, first_listen=True)
+        if request.query_params.get("first_listen") == "1"
+        else _audio_generator(request)
+    )
     return StreamingResponse(
-        _audio_generator(request),
+        audio,
         headers=headers,
         media_type=audio_format["mime_type"],
     )
@@ -6750,7 +6867,7 @@ async def setup_first_listen_players(request: Request, _: None = Depends(_requir
             receipt = await _first_listen_store(request.app.state).load()
         except Exception:
             receipt = None
-        request.app.state.first_listen_receipt = receipt
+        receipt = _adopt_first_listen_receipt(request.app.state, receipt)
     candidates = [
         {
             "entity_id": candidate.entity_id,
@@ -6866,7 +6983,7 @@ async def setup_first_listen_verify(request: Request, _: None = Depends(_require
         return _setup_error("attempt_mismatch")
     except (FirstListenReceiptUnavailableError, OSError):
         return _setup_error("receipt_unavailable", accepted=True, receipt_persisted=False)
-    request.app.state.first_listen_receipt = receipt
+    receipt = _adopt_first_listen_receipt(request.app.state, receipt)
     heard = bool(body["heard"])
     return {
         "ok": True,
@@ -6882,6 +6999,72 @@ async def setup_first_listen_verify(request: Request, _: None = Depends(_require
                 "Confirm the selected speaker is the one you expected.",
                 "Open HA's media browser and test media-source://mammamiradio/live.",
                 "If it is missing, reload the HACS integration and recheck add-on connectivity.",
+            ],
+        },
+    }
+
+
+@router.post("/api/setup/first-listen/listener-confirm")
+async def setup_first_listen_listener_confirm(
+    request: Request,
+    _: None = Depends(_require_active_setup_access),
+):
+    """Record the operator's transport-neutral current-device confirmation."""
+    body, error = await _strict_setup_json(request, {"heard": bool})
+    if error is not None:
+        return error
+
+    app_state = request.app.state
+    store = _first_listen_store(app_state)
+    heard = bool(body["heard"])
+    if heard:
+        try:
+            saved_receipt = await store.record_listener_heard()
+        except (FirstListenReceiptUnavailableError, OSError):
+            return _setup_error("receipt_unavailable", accepted=True, receipt_persisted=False)
+        # The durable store is the transaction boundary.  Never let an
+        # optimistic in-memory receipt unlock the next setup step.
+        saved_receipt = _adopt_first_listen_receipt(app_state, saved_receipt)
+        return {
+            "ok": True,
+            "heard": True,
+            "first_listen_achieved": bool(saved_receipt.audio_complete),
+            "receipt_persisted": True,
+            "attempt_id": saved_receipt.accepted_attempt_id,
+        }
+
+    # "Not yet" is observational, but completion is a durable claim. Reload the
+    # receipt so missing, malformed, or unreadable state fails closed without
+    # erasing a newer cache value published while this read was in flight.
+    cached_receipt = getattr(app_state, "first_listen_receipt", None)
+    try:
+        load_result = await store.load_result()
+    except Exception:
+        logger.warning("Could not refresh First Listen receipt for a Not yet response", exc_info=True)
+        load_result = None
+    durable_receipt = (
+        load_result.receipt
+        if load_result is not None and load_result.status is FirstListenReceiptLoadStatus.PRESENT
+        else None
+    )
+    if durable_receipt is None:
+        # Completion is a durable claim. A cached receipt cannot stand in for a
+        # missing or malformed file, but a concurrently published replacement
+        # owns the newer cache state and must not be erased by this older read.
+        if getattr(app_state, "first_listen_receipt", None) is cached_receipt:
+            app_state.first_listen_receipt = None
+    else:
+        _adopt_first_listen_receipt(app_state, durable_receipt)
+    return {
+        "ok": True,
+        "heard": False,
+        "first_listen_achieved": bool(getattr(durable_receipt, "audio_complete", False)),
+        "repair": {
+            "title": "Let's try this device again",
+            "steps": [
+                "Check this device's volume and make sure it is not muted.",
+                "Tap Retry on this device.",
+                "If you still hear nothing, open Station controls and confirm the station is running.",
             ],
         },
     }
@@ -7031,7 +7214,7 @@ async def setup_home_context_choice(request: Request, _: None = Depends(_require
                 "privacy_receipt_unavailable",
                 extra={"enabled": enabled, "persisted": True},
             )
-        app_state.first_listen_receipt = receipt
+        receipt = _adopt_first_listen_receipt(app_state, receipt)
         return {
             "ok": True,
             "enabled": enabled,
@@ -8210,12 +8393,12 @@ async def api_interrupt(request: Request, _: None = Depends(require_admin_access
 async def hot_reload_modules(request: Request, _: None = Depends(require_admin_access)):
     """Reload scriptwriter and its data submodules in-place. Stream continues uninterrupted.
 
-    Safe to reload: language_policy / prompt_world / transitions / fallbacks (language
-    contract, prompt-fiction + stock copy)
+    Safe to reload: language_policy / prompt_world / relationship / transitions / fallbacks
+    (language contract, prompt-fiction + stock copy + exchange-shape bank)
     + scriptwriter (stateless functions + lazy-init clients). Data submodules reload FIRST
     (leaves-first) so the scriptwriter facade re-imports fresh values — reloading the facade
-    alone would rebind its ``from .prompt_world`` / ``.transitions`` / ``.fallbacks`` import
-    names to the stale submodules.
+    alone would rebind its ``from .prompt_world`` / ``.relationship`` / ``.transitions`` /
+    ``.fallbacks`` import names to the stale submodules.
     NOT reloaded: producer, streamer, persona, memory_extractor (hold live
     task/instance state), auth (reloading would fork require_admin_access from
     the identity the router captured at import — auth edits would silently not
@@ -8225,6 +8408,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
     import mammamiradio.hosts.fallbacks as _fallbacks_mod
     import mammamiradio.hosts.language_policy as _language_policy_mod
     import mammamiradio.hosts.prompt_world as _prompt_world_mod
+    import mammamiradio.hosts.relationship as _relationship_mod
     import mammamiradio.hosts.scriptwriter as _scriptwriter_mod
     import mammamiradio.hosts.station_name_guard as _station_name_guard_mod
     import mammamiradio.hosts.transitions as _transitions_mod
@@ -8256,6 +8440,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         # generation rather than serving a stale cache.
         importlib.reload(_language_policy_mod)
         importlib.reload(_prompt_world_mod)
+        importlib.reload(_relationship_mod)
         importlib.reload(_transitions_mod)
         importlib.reload(_fallbacks_mod)
         importlib.reload(_station_name_guard_mod)
@@ -8263,8 +8448,8 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
         duration_ms = int((time.monotonic() - t0) * 1000)
         request.app.state._last_hot_reload_ts = now
         logger.info(
-            "hot-reload: reloaded language_policy + prompt_world + transitions + "
-            "fallbacks + station_name_guard + scriptwriter in %dms",
+            "hot-reload: reloaded language_policy + prompt_world + relationship + "
+            "transitions + fallbacks + station_name_guard + scriptwriter in %dms",
             duration_ms,
         )
         return {
@@ -8272,6 +8457,7 @@ async def hot_reload_modules(request: Request, _: None = Depends(require_admin_a
             "reloaded_modules": [
                 "mammamiradio.hosts.language_policy",
                 "mammamiradio.hosts.prompt_world",
+                "mammamiradio.hosts.relationship",
                 "mammamiradio.hosts.transitions",
                 "mammamiradio.hosts.fallbacks",
                 "mammamiradio.hosts.station_name_guard",
@@ -10685,7 +10871,7 @@ async def reset_host_personality(host_name: str, request: Request, _: None = Dep
     return {"ok": True, "host": host.name, "personality": host.personality.to_dict()}
 
 
-def _public_status_payload(request: Request) -> dict:
+def _public_status_payload(request: Request, *, include_etag_revision: bool = False) -> dict:
     """Build the read-only status payload shared by public and admin APIs.
 
     The listener page polls this endpoint every ~3s. The admin /status route
@@ -10719,6 +10905,9 @@ def _public_status_payload(request: Request) -> dict:
     # unauthenticated endpoint. An "airing" row shows only while it belongs to
     # the segment now_streaming is playing (send-start is provisional).
     recent_moments: list[dict] = []
+    recent_revision: tuple[str, ...] = ()
+    event_revision: str | None = None
+    event_key = bytes.fromhex(_home_access_fingerprint(config))
     ha_capable = bool(config.ha_token and config.homeassistant.enabled and config.homeassistant.context_enabled)
     moment_store = getattr(state, "moment_store", None)
     authorization = state.home_authorization or HomeAuthorization.narrow()
@@ -10726,7 +10915,11 @@ def _public_status_payload(request: Request) -> dict:
         try:
             _ns_meta = (state.now_streaming or {}).get("metadata") or {}
             _active_ids = {str(_ns_meta.get(_key) or "") for _key in ("ritual_moment_id", "gag_moment_id")} - {""}
-            recent_moments = moment_store.to_public_rows(now=now_ts, active_ids=_active_ids, limit=3)
+            recent_moments = moment_store.to_public_rows(
+                now=now_ts, active_ids=_active_ids, limit=3, include_revision=include_etag_revision
+            )
+            if include_etag_revision:
+                recent_revision = tuple(moment.pop("_etag_revision") for moment in recent_moments)
         except Exception:  # pragma: no cover - receipts must never break status
             logger.debug("Moment receipt public rows failed", exc_info=True)
             recent_moments = []
@@ -10742,6 +10935,10 @@ def _public_status_payload(request: Request) -> dict:
         if state.ha_last_event_ts > 0 and (_now - state.ha_last_event_ts) < _retention:
             ha_moments["last_event_label"] = state.ha_last_event_label
             ha_moments["last_event_ago_min"] = max(1, round((_now - state.ha_last_event_ts) / 60))
+            if config.ha_token:
+                event_revision = hashlib.blake2b(
+                    str(state.ha_last_event_ts).encode(), key=event_key, digest_size=8
+                ).hexdigest()
         if state.ha_ritual_public_families:
             ha_moments["ritual_families"] = list(state.ha_ritual_public_families[:4])
         if recent_moments:
@@ -10785,6 +10982,7 @@ def _public_status_payload(request: Request) -> dict:
             ),
         },
         "ha_moments": ha_moments,
+        **({"_etag_revision": (event_revision, recent_revision)} if include_etag_revision else {}),
         # Process-local receipt counts reused by the admin status payload.
         "ad_experiment": _ad_experiment_status(state),
         # Brand-fiction layer (PR-A schema). Listener renders against this.
@@ -11476,9 +11674,20 @@ async def readyz(request: Request):
 
 
 @router.get("/public-status")
-async def public_status(request: Request):
-    """Return listener-safe station metadata and render-ready upcoming segments."""
-    return _public_status_payload(request)
+async def public_status(request: Request) -> Response:
+    """Return listener-safe status with semantic ETag/304 revalidation."""
+    raw_payload = _public_status_payload(request, include_etag_revision=True)
+    revision = raw_payload.pop("_etag_revision", None)
+    payload = normalize_public_status_json(raw_payload)
+    etag = public_status_etag(payload, revision=revision)
+    headers = {
+        "ETag": etag,
+        "Cache-Control": PUBLIC_STATUS_CACHE_CONTROL,
+    }
+    if public_status_not_modified(request.headers, etag):
+        return Response(status_code=304, media_type="application/json", headers=headers)
+    body = json.dumps(payload, allow_nan=False, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @router.get("/status")

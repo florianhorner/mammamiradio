@@ -254,11 +254,18 @@ def test_prompt_world_constants_byte_stable():
             pw.CHAOS_MODE_BLOCK,
             pw.FESTIVAL_MODE_BLOCK,
             repr(pw.CHAOS_SUBTYPE_BLOCKS),
+            repr(pw.EXCHANGE_SHAPES),
+            repr(pw.EXCHANGE_SHAPE_WEIGHTS),
+            repr(pw.GENERIC_EXCHANGE_SHAPES),
+            repr(pw.GENERIC_EXCHANGE_SHAPE_WEIGHTS),
+            repr(pw.HOST_SEED_LORE),
+            repr(sorted((tuple(sorted(pair)), lore) for pair, lore in pw.HOST_SEED_LORE_BY_PAIR.items())),
+            repr(pw.LORE_SAMPLE_RATE),
         ]
     )
     assert (
         hashlib.sha256(blob.encode("utf-8")).hexdigest()
-        == "c68bf92a2c5650e78d988efc5a308b0378773ca8260fd923ae5744481cdb29d7"
+        == "d56fb2b20a338cf21d29aa8652b948b43cf6413158c5e129cbe9f84f0d9ca299"
     ), "prompt-fiction constants changed — if intentional, re-capture the hash"
 
 
@@ -843,6 +850,24 @@ def _banter_user_prompt(mock_cls) -> str:
     return create.call_args.kwargs["messages"][0]["content"]
 
 
+def _no_deferred_mutations(commit) -> bool:
+    """True when commit is None or only carries exchange-shape observability."""
+    if commit is None:
+        return True
+    if not isinstance(commit, scriptwriter_module.BanterCommit):
+        return False
+    return (
+        commit.listener_request is None
+        and commit.heading_announcement is None
+        and commit.release_beat is None
+        and commit.guest_host_cooldown is None
+        and commit.memory_extraction is None
+        and commit.companionship is None
+        and commit.persona_milestone is None
+        and commit.pending_joke is None
+    )
+
+
 class _GuestGateReleaseCampaign:
     def begin_attempt(self):
         return ReleaseBeatOffer(
@@ -889,7 +914,7 @@ async def test_write_banter_closed_guest_gate_prompt_and_parser_drop(config, sta
         (regulars[0].name, "No, restiamo noi."),
         (regulars[1].name, "Esatto, resta fuori."),
     ]
-    assert commit is None
+    assert _no_deferred_mutations(commit)
 
 
 @pytest.mark.asyncio
@@ -919,7 +944,7 @@ async def test_write_banter_closed_guest_gate_treats_short_hans_tag_as_guest_att
         (regulars[0].name, "No, restiamo noi."),
         (regulars[1].name, "Senza travestimenti."),
     ]
-    assert commit is None
+    assert _no_deferred_mutations(commit)
 
 
 @pytest.mark.asyncio
@@ -1048,7 +1073,7 @@ async def test_write_banter_guest_cooldown_not_armed_when_hans_deduped_out(confi
         (regulars[0].name, "Stessa battuta."),
         (regulars[1].name, "E andiamo avanti."),
     ]
-    assert commit is None
+    assert _no_deferred_mutations(commit)
     assert state.guest_host_banter_cooldown_remaining == 0
 
 
@@ -1305,7 +1330,7 @@ async def test_write_banter_normal_mode_retries_all_italian_response(config, sta
         "That outro had teeth, mamma mia, and now we keep the room moving.",
         "Exactly. A little Italian sparkle, amici, but the facts stay in English, grazie.",
     ]
-    assert commit is None
+    assert _no_deferred_mutations(commit)
     assert mock_generate.await_count == 2
     assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
     assert list(state.running_jokes) == []
@@ -1366,7 +1391,7 @@ async def test_write_banter_normal_mode_keeps_all_lines_when_repair_is_english_h
 
     assert len(result) == 6
     assert [line.text for line in result] == repaired_texts
-    assert commit is None
+    assert _no_deferred_mutations(commit)
     assert mock_generate.await_count == 2
     assert "NORMAL MODE LANGUAGE REPAIR" in mock_generate.await_args_list[1].kwargs["prompt"]
 
@@ -1400,7 +1425,7 @@ async def test_write_banter_normal_mode_accepts_english_heavy_first_response(con
         result, commit = await write_banter(state, config)
 
     assert [line.text for line in result] == texts
-    assert commit is None
+    assert _no_deferred_mutations(commit)
     assert mock_generate.await_count == 1
 
 
@@ -1567,7 +1592,7 @@ async def test_write_banter_super_italian_accepts_all_italian_response(config, s
         "Questa canzone finisce benissimo e adesso restiamo tutti qui in studio con calma.",
         "Si, la casa respira piano e la musica continua senza nessuna fretta.",
     ]
-    assert commit is None
+    assert _no_deferred_mutations(commit)
     assert mock_generate.await_count == 1
 
 
@@ -1783,7 +1808,7 @@ async def test_write_banter_has_no_connection_arrival_prompt(config, state):
         (regulars[0].name, "No, we welcome them ourselves, piano piano."),
         (regulars[1].name, "Exactly. Guest mic closed, warm room open."),
     ]
-    assert commit is None
+    assert _no_deferred_mutations(commit)
 
 
 @pytest.mark.asyncio
@@ -1855,7 +1880,7 @@ async def test_write_banter_companionship_without_matching_model_proof_is_ordina
         lines, commit = await write_banter(state, config, companionship_context=context)
 
     assert lines
-    assert commit is None
+    assert _no_deferred_mutations(commit)
 
 
 @pytest.mark.asyncio
@@ -1882,7 +1907,7 @@ async def test_write_banter_companionship_model_fields_without_spoken_context_ar
         lines, commit = await write_banter(state, config, companionship_context=context)
 
     assert lines
-    assert commit is None
+    assert _no_deferred_mutations(commit)
 
 
 @pytest.mark.asyncio
@@ -4613,7 +4638,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     state.ha_events_summary = "- La macchina del caffè: spento/a -> acceso/a (1 min fa)"
     state.ha_weather_arc = "Meteo: soleggiato, 22°C."
     state.ha_home_mood = "Musica in casa"
-    state.ha_pending_directive = "Florian è appena tornato a casa. Salutalo subito."
+    state.ha_pending_directive = "Residente uno è appena tornato a casa. Salutalo subito."
     state.played_tracks.append(
         Track(
             title="Test Track",
@@ -4669,7 +4694,7 @@ async def test_write_banter_prompt_includes_optional_context_blocks(config, stat
     memory = commit.memory_extraction
     assert memory is not None
     assert memory.youtube_id == "yt123"
-    assert "Florian" in memory.interaction_context["reactive_directive"]
+    assert "Residente uno" in memory.interaction_context["reactive_directive"]
     assert "TRACK MEMORY for Rule Artist" in memory.interaction_context["track_memory"]
 
 
@@ -5670,7 +5695,7 @@ async def test_write_banter_survives_persona_get_failure(config, state, tmp_path
 
     assert len(result) == 1
     assert result[0][1] == "Funziona comunque!"
-    assert commit is None
+    assert _no_deferred_mutations(commit)
 
 
 @pytest.mark.asyncio
@@ -7060,7 +7085,7 @@ async def test_write_transition_default_song_cues_is_none(config, state):
 
 
 def test_personality_modifier_produces_distinct_strings_for_high_chaos_pair():
-    """Marco and Giulia both have high chaos/energy — their modifiers must differ."""
+    """Marco and Giulia both have high chaos/energy — tone still differs by other axes."""
     from mammamiradio.core.models import HostPersonality, PersonalityAxes
 
     marco_axes = PersonalityAxes(energy=100, chaos=100, warmth=55, verbosity=68, nostalgia=75)
@@ -7072,28 +7097,16 @@ def test_personality_modifier_produces_distinct_strings_for_high_chaos_pair():
     marco_modifier = _personality_modifier("Marco", marco_axes, other_host=giulia_host)
     giulia_modifier = _personality_modifier("Giulia", giulia_axes, other_host=marco_host)
 
-    # Both should produce non-empty modifiers
     assert marco_modifier, "Marco should get a non-empty modifier"
     assert giulia_modifier, "Giulia should get a non-empty modifier"
-
-    # The modifiers must not be identical — the contrast is the whole point
-    assert marco_modifier != giulia_modifier, (
-        "Marco and Giulia received identical personality modifiers; relative contrast logic is not working."
-    )
-
-    # Marco (higher energy) should contain runaway/lead framing
-    assert "runaway" in marco_modifier.lower() or "lead" in marco_modifier.lower(), (
-        f"Marco (higher energy) should contain 'runaway' or 'lead' framing, got: {marco_modifier!r}"
-    )
-
-    # Giulia (lower energy) should contain surgical/controlled framing
-    assert "surgical" in giulia_modifier.lower() or "controlled" in giulia_modifier.lower(), (
-        f"Giulia (lower energy) should contain 'surgical' or 'controlled' framing, got: {giulia_modifier!r}"
-    )
+    assert marco_modifier != giulia_modifier
+    combined = f"{marco_modifier}\n{giulia_modifier}".lower()
+    for structural_instruction in ("tangent", "runaway", "surgical", "cut off", "interrupt", "counter"):
+        assert structural_instruction not in combined
 
 
-def test_personality_modifier_tie_energy_picks_single_deterministic_leader():
-    """Equal-energy high-chaos pairs must still produce one leader and one contrast host."""
+def test_personality_modifier_tie_energy_is_deterministic_and_has_no_leader_framing():
+    """Equal-energy high-chaos pairs stay deterministic and do not assign a leader."""
     from mammamiradio.core.models import HostPersonality, PersonalityAxes
 
     marco_axes = PersonalityAxes(energy=90, chaos=95, warmth=50, verbosity=55, nostalgia=40)
@@ -7110,17 +7123,15 @@ def test_personality_modifier_tie_energy_picks_single_deterministic_leader():
     assert marco_modifier and giulia_modifier
     assert marco_modifier == marco_modifier_again
     assert giulia_modifier == giulia_modifier_again
-
-    runaway_count = sum("runaway" in m.lower() or "lead" in m.lower() for m in (marco_modifier, giulia_modifier))
-    surgical_count = sum(
-        "surgical" in m.lower() or "controlled" in m.lower() for m in (marco_modifier, giulia_modifier)
-    )
-    assert runaway_count == 1
-    assert surgical_count == 1
+    combined = f"{marco_modifier}\n{giulia_modifier}".lower()
+    assert "runaway" not in combined
+    assert "surgical" not in combined
+    assert "interrupt" not in combined
+    assert "cut off" not in combined
 
 
-def test_personality_modifier_energy_controls_runaway_when_axes_conflict():
-    """If hosts split energy/chaos leadership, energy decides the runaway role."""
+def test_personality_modifier_ignores_other_host_for_conflict_roles():
+    """Who-leads-whom no longer lives on the cached personality modifier."""
     from mammamiradio.core.models import HostPersonality, PersonalityAxes
 
     host_a_axes = PersonalityAxes(energy=95, chaos=80, warmth=45, verbosity=55, nostalgia=40)
@@ -7131,12 +7142,30 @@ def test_personality_modifier_energy_controls_runaway_when_axes_conflict():
 
     host_a_modifier = _personality_modifier("HostA", host_a_axes, other_host=host_b)
     host_b_modifier = _personality_modifier("HostB", host_b_axes, other_host=host_a)
+    host_a_alone = _personality_modifier("HostA", host_a_axes, other_host=None)
+    host_b_alone = _personality_modifier("HostB", host_b_axes, other_host=None)
 
     assert host_a_modifier
     assert host_b_modifier
-    assert host_a_modifier != host_b_modifier
-    assert "runaway" in host_a_modifier.lower() or "lead" in host_a_modifier.lower()
-    assert "surgical" in host_b_modifier.lower() or "controlled" in host_b_modifier.lower()
+    assert host_a_modifier == host_a_alone
+    assert host_b_modifier == host_b_alone
+    combined = f"{host_a_modifier}\n{host_b_modifier}".lower()
+    assert "runaway" not in combined
+    assert "surgical" not in combined
+    assert "manic" in host_a_modifier.lower()
+    assert "tangent" not in combined
+
+
+def test_personality_modifier_chaos_only_is_structurally_neutral():
+    """Chaos is selected per break; it cannot freeze conflict into the cached prompt."""
+    from mammamiradio.core.models import PersonalityAxes
+
+    modifier = _personality_modifier(
+        "Custom Host",
+        PersonalityAxes(energy=50, chaos=100, warmth=50, verbosity=50, nostalgia=50),
+    )
+
+    assert modifier == ""
 
 
 def test_fix_wrong_station_names_replaces_competitor():
@@ -7322,7 +7351,7 @@ async def test_banter_raw_home_context_forbids_counting_people(config, state):
     config.homeassistant.enabled = True
     config.homeassistant.context_enabled = True
     config.super_italian_mode = True
-    state.ha_context = "Florian: a casa\nSabrina: a casa"
+    state.ha_context = "Residente uno: a casa\nResidente due: a casa"
 
     captured = {}
 
@@ -7348,7 +7377,7 @@ async def test_ad_raw_home_context_forbids_counting_people(config, state):
     """write_ad injects raw ha_context with no director in front of it."""
     config.homeassistant.enabled = True
     config.homeassistant.context_enabled = True
-    state.ha_context = "Florian: a casa\nSabrina: a casa"
+    state.ha_context = "Residente uno: a casa\nResidente due: a casa"
 
     captured = {}
 
@@ -8161,3 +8190,297 @@ async def test_record_hunt_waits_behind_listener_request(config, state):
     assert "RECORD HUNT:" not in prompt
     assert state.heading_pending_announcement == "Anni '80"
     assert state.heading_pending_narration_kind == "hunt_start"
+
+
+def _two_host_banter_payload(config) -> dict:
+    regulars = _regular_hosts(config)
+    return {
+        "lines": [
+            {"host": regulars[0].name, "text": "The studio keeps moving, amici."},
+            {"host": regulars[1].name, "text": "Exactly, the next record is ready."},
+        ],
+        "new_joke": None,
+    }
+
+
+def test_system_prompt_frames_shape_over_standing_conflict(config):
+    prompt = _build_system_prompt(config)
+    assert "per-segment exchange-shape directive" in prompt
+    assert "sole authority" in prompt
+    assert "including segments with no conflict at all" in prompt
+    assert "Roast listeners and Italy" in prompt
+    assert "Roast another host only when the exchange-shape directive" in prompt
+    assert config.station.theme in prompt
+    for host in config.hosts:
+        assert host.name in prompt
+        assert host.style in prompt
+    assert "CONFLICT IS MANDATORY" not in prompt
+    assert "Giulia CUTS MARCO OFF" not in prompt
+    assert "Roast listeners, roast each other" not in prompt
+    assert "interrupt yourself" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_injects_exchange_shape_on_normal_success(config, state):
+    config.party_mode = None
+    payload = _two_host_banter_payload(config)
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert "EXCHANGE SHAPE (" in prompt
+    assert result
+    assert commit is not None
+    assert commit.exchange_shape_id in {
+        "marco_runaway_giulia_contains",
+        "giulia_leads_marco_derails",
+        "shared_memory_callback",
+        "temporary_alliance",
+        "marco_surprisingly_right",
+        "no_conflict_joint_observation",
+        "bit_escalation_clean_landing",
+        "giulia_small_confession_marco_misreads",
+    }
+    assert commit.exchange_shape_skip_reason is None
+    assert list(state.recent_shapes) == []
+    commit.apply(state, config)
+    assert list(state.recent_shapes) == [commit.exchange_shape_id]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_uses_generic_shape_for_custom_pair(config, state):
+    from mammamiradio.hosts import prompt_world
+
+    config.party_mode = None
+    config.hosts = [
+        HostPersonality(name="Alice", voice="it-IT-IsabellaNeural", style="warm and observant"),
+        HostPersonality(name="Bob", voice="it-IT-DiegoNeural", style="dry and concise"),
+    ]
+    payload = _two_host_banter_payload(config)
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert result
+    assert commit is not None
+    assert commit.exchange_shape_id in prompt_world.GENERIC_EXCHANGE_SHAPES
+    assert commit.exchange_shape_skip_reason is None
+    assert list(state.recent_shapes) == []
+    commit.apply(state, config)
+    assert list(state.recent_shapes) == [commit.exchange_shape_id]
+    shape_prompt = mock_generate.await_args.kwargs["prompt"].split("EXCHANGE SHAPE (", maxsplit=1)[1]
+    assert "SHARED HISTORY" not in shape_prompt
+    assert "Marco" not in shape_prompt
+    assert "Giulia" not in shape_prompt
+
+
+@pytest.mark.asyncio
+async def test_write_banter_skips_shape_for_single_host_roster(config, state):
+    config.super_italian_mode = True
+    config.party_mode = None
+    config.hosts = [
+        HostPersonality(name="Solo", voice="it-IT-IsabellaNeural", style="calm and direct"),
+    ]
+    payload = {"lines": [{"host": "Solo", "text": "La musica continua."}], "new_joke": None}
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        return_value=payload,
+    ) as mock_generate:
+        result, commit = await write_banter(state, config)
+
+    assert result
+    assert commit is not None
+    assert commit.exchange_shape_id is None
+    assert commit.exchange_shape_skip_reason == "ineligible_roster"
+    commit.apply(state, config)
+    assert "EXCHANGE SHAPE (" not in mock_generate.await_args.kwargs["prompt"]
+    assert list(state.recent_shapes) == []
+    assert list(state.recent_lore) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("line_count", [1, 2])
+async def test_write_banter_does_not_claim_shape_for_single_speaker_result(config, state, line_count):
+    config.super_italian_mode = True
+    config.party_mode = None
+    host_name = _regular_hosts(config)[0].name
+    authored = [
+        {"host": host_name, "text": "La musica continua."},
+        {"host": host_name, "text": "Il prossimo disco è pronto."},
+    ][:line_count]
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value={"lines": authored, "new_joke": None},
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+
+    assert len(result) == line_count
+    assert commit is not None
+    assert commit.exchange_shape_id is None
+    assert commit.exchange_shape_skip_reason == "single_host_result"
+    commit.apply(state, config)
+    assert list(state.recent_shapes) == []
+    assert list(state.recent_lore) == []
+
+
+@pytest.mark.asyncio
+async def test_write_banter_skips_shape_for_festival_guest_and_chaos(config, state):
+    payload = _two_host_banter_payload(config)
+
+    config.party_mode = "festival"
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        _result, commit = await write_banter(state, config)
+    assert "EXCHANGE SHAPE (" not in mock_generate.await_args.kwargs["prompt"]
+    assert commit is not None
+    assert commit.exchange_shape_id is None
+    assert commit.exchange_shape_skip_reason == "festival"
+    assert list(state.recent_shapes) == []
+
+    config.party_mode = None
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.0),
+    ):
+        _result, commit = await write_banter(state, config)
+    assert "EXCHANGE SHAPE (" not in mock_generate.await_args.kwargs["prompt"]
+    assert commit is not None
+    assert commit.exchange_shape_skip_reason == "guest"
+    assert list(state.recent_shapes) == []
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ) as mock_generate,
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        _result, commit = await write_banter(state, config, chaos_subtype=ChaosSubtype.FOURTH_WALL)
+    prompt = mock_generate.await_args.kwargs["prompt"]
+    assert "EXCHANGE SHAPE (" not in prompt
+    assert commit is not None
+    assert commit.exchange_shape_skip_reason == "chaos"
+    assert list(state.recent_shapes) == []
+    assert list(state.recent_lore) == []
+
+
+@pytest.mark.asyncio
+async def test_write_banter_defers_recency_until_queue_acceptance(config, state):
+    config.party_mode = None
+    payload = _two_host_banter_payload(config)
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        _result, commit = await write_banter(state, config)
+    assert commit is not None
+    assert list(state.recent_shapes) == []
+    commit.apply(state, config)
+    assert list(state.recent_shapes) == [commit.exchange_shape_id]
+
+
+def test_banter_commit_queue_acceptance_records_shape_and_lore(state):
+    commit = scriptwriter_module.BanterCommit(
+        exchange_shape_id="shared_memory_callback",
+        exchange_lore_id="demo_tape",
+    )
+
+    assert list(state.recent_shapes) == []
+    assert list(state.recent_lore) == []
+    commit.apply_queue_acceptance(state)
+    assert list(state.recent_shapes) == ["shared_memory_callback"]
+    assert list(state.recent_lore) == ["demo_tape"]
+
+
+@pytest.mark.asyncio
+async def test_write_banter_no_llm_does_not_record_shape_recency(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    result, commit = await write_banter(state, config)
+    assert result
+    assert commit is None
+    assert list(state.recent_shapes) == []
+    assert list(state.recent_lore) == []
+
+
+@pytest.mark.asyncio
+async def test_write_banter_generation_exception_does_not_record_shape_recency(config, state):
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("provider down"),
+    ):
+        result, commit = await write_banter(state, config)
+    assert result
+    assert commit is None
+    assert list(state.recent_shapes) == []
+    assert list(state.recent_lore) == []
+
+
+@pytest.mark.asyncio
+async def test_write_banter_empty_fallback_and_post_restart_empty_deques(config, state):
+    config.party_mode = None
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value={"lines": [], "new_joke": None},
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        result, commit = await write_banter(state, config)
+    assert result
+    assert commit is None
+    assert list(state.recent_shapes) == []
+
+    restarted = StationState(playlist=list(state.playlist))
+    assert list(restarted.recent_shapes) == []
+    assert list(restarted.recent_lore) == []
+    payload = _two_host_banter_payload(config)
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ),
+        patch("mammamiradio.hosts.scriptwriter.random.random", return_value=0.99),
+    ):
+        lines, success_commit = await write_banter(restarted, config)
+    assert lines
+    assert success_commit is not None
+    assert list(restarted.recent_shapes) == []
+    success_commit.apply(restarted, config)
+    assert success_commit.exchange_shape_id in restarted.recent_shapes

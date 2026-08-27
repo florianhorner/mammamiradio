@@ -211,8 +211,9 @@ class MomentStore:
         now: float | None = None,
         active_ids: set[str] | None = None,
         limit: int = 3,
+        include_revision: bool = False,
     ) -> list[dict]:
-        """Listener-safe rows: generic label + coarse age, nothing else.
+        """Listener-safe rows with an optional opaque validator revision.
 
         ``aired`` rows are always eligible; an ``airing`` row appears only while
         its id is in ``active_ids`` (i.e. the carrying segment is what
@@ -236,6 +237,7 @@ class MomentStore:
                     "label": row.public_label,
                     "ago_min": max(1, round(max(0.0, ref_now - shown_ts) / 60)),
                     "status": "airing" if row.status == STATUS_AIRING else "aired",
+                    **({"_etag_revision": row.id} if include_revision else {}),
                 }
             )
             if len(out) >= limit:

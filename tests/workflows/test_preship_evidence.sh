@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Self-test for scripts/check-preship-evidence.sh and scripts/emit-review-evidence.sh
 #
-# Builds a throwaway git repo (two commits, so ancestor cases are real) and a mock gstack
-# ledger (via GSTACK_HOME), then asserts the checker rejects every bad-evidence shape and
-# both tools agree on the happy path. No network, no gh CLI, no real ~/.gstack.
-#
-# The checker is exercised exactly as CI runs it: from the repo root, with an explicit
-# target head. Exits non-zero on any mismatch.
+# Builds a throwaway git repo and asserts the retired legacy v1 form is a loud no-op,
+# while every current verb (default emit, the --v2 compatibility alias, --reattest, and
+# --v2 verification) dispatches into the trusted Python package. Deep receipt semantics
+# live in tests/repo/test_preship_evidence_v2.py; this file guards the shell adapters
+# exactly as CI and operators invoke them. No network, no gh CLI, no real ~/.gstack.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -17,187 +16,140 @@ EMIT="$REPO_ROOT/scripts/emit-review-evidence.sh"
 fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
-command -v jq >/dev/null 2>&1 || fail "jq is required"
 [ -f "$CHECK" ] || fail "checker not found at $CHECK"
 [ -f "$EMIT" ] || fail "emitter not found at $EMIT"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# --- fixture repo: two commits so HEAD~1 is a real ancestor -----------------------------
+# Structural guard: GSTACK_HOME is exported file-wide to a nonexistent decoy path, so
+# any invocation that forgets a per-call override dies on the missing-ledger guard
+# instead of silently walking the real ~/.gstack on a developer machine.
+export GSTACK_HOME="$TMP/gstack-DECOY-must-not-be-read"
+
+PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+[ -x "$PYTHON_BIN" ] || PYTHON_BIN="python3"
+export MAMMAMIRADIO_PYTHON="$PYTHON_BIN"
+export PYTHONPATH="$REPO_ROOT"
+
+# --- fixture repo: two commits so an ancestor base is real -----------------------------
 FIX="$TMP/repo"
 mkdir -p "$FIX"
 git -C "$FIX" init -q -b main
 git -C "$FIX" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q --allow-empty -m one
 git -C "$FIX" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q --allow-empty -m two
-HEAD_SHA="$(git -C "$FIX" rev-parse --short=7 HEAD)"
-ANC_SHA="$(git -C "$FIX" rev-parse --short=7 HEAD~1)"
+git -C "$FIX" remote add origin https://github.com/florianhorner/mammamiradio.git
+HEAD_SHA="$(git -C "$FIX" rev-parse HEAD)"
+ANC_SHA="$(git -C "$FIX" rev-parse HEAD~1)"
+# A resolvable origin/main so reattest's base-trust check (base must be landed
+# content) is satisfied and the assertions below reach the code paths they target.
+git -C "$FIX" update-ref refs/remotes/origin/main "$HEAD_SHA"
 
-evidence() { # <commit> [skill] — write a syntactically valid artifact into the fixture
-  mkdir -p "$FIX/proof"
-  jq -cn --arg c "$1" --arg s "${2:-review}" \
-    '{schema_version:"1.0.0",skill:$s,commit:$c,timestamp:"2026-07-30T12:00:00Z",status:"clean",emitted_at:"2026-07-30T12:00:01Z"}' \
-    > "$FIX/proof/preship-review.json"
-}
+# 1. Legacy positional v1 invocation is retired: loud notice, exit 0, no artifact read.
+#    Old branches' report-only workflows still call this form against the base checker,
+#    so it must never fail and must say where the real evidence lives.
+if ! out="$(cd "$FIX" && bash "$CHECK" proof/preship-review.json "$HEAD_SHA" 2>&1)"; then
+  fail "legacy positional form must exit 0"
+fi
+printf '%s' "$out" | grep -q "v1 evidence is retired" || fail "legacy form must announce the retirement"
+printf '%s' "$out" | grep -q "proof/preship-reviews/v2" || fail "legacy form must point at the v2 receipts"
+pass "legacy positional v1 form is a loud, pointed no-op"
 
-run_check() { (cd "$FIX" && bash "$CHECK" proof/preship-review.json HEAD); }
-
-# 1. Missing artifact fails with the emit instruction.
-rm -rf "$FIX/proof"
-if run_check 2>"$TMP/err"; then fail "missing artifact must fail"; fi
-grep -q "no evidence artifact" "$TMP/err" || fail "missing-artifact message wrong"
-pass "missing artifact rejected"
-
-# 2. Malformed JSON fails.
+# 1b. The no-op holds with no arguments and with an artifact-shaped file present.
 mkdir -p "$FIX/proof"
 printf 'not json{' > "$FIX/proof/preship-review.json"
-if run_check 2>"$TMP/err"; then fail "malformed JSON must fail"; fi
-grep -q "not valid JSON" "$TMP/err" || fail "malformed-JSON message wrong"
-pass "malformed JSON rejected"
+(cd "$FIX" && bash "$CHECK" >/dev/null 2>&1) || fail "legacy no-arg form must exit 0"
+(cd "$FIX" && bash "$CHECK" proof/preship-review.json HEAD >/dev/null 2>&1) \
+  || fail "legacy form must not parse or validate a leftover artifact"
+rm -f "$FIX/proof/preship-review.json"
+pass "legacy form ignores leftover artifacts instead of validating them"
 
-# 2b. Multiple top-level JSON documents fail — the evidence file must be one document,
-# not repeated copies of the same object.
-evidence "$HEAD_SHA"
-printf '%s\n' "$(cat "$FIX/proof/preship-review.json")" >> "$FIX/proof/preship-review.json"
-if run_check 2>"$TMP/err"; then fail "multiple JSON documents must fail"; fi
-grep -q "contains 2 JSON documents" "$TMP/err" || fail "multiple-document message wrong"
-pass "multiple top-level JSON documents rejected"
+# 2. Default emit dispatches to the Python v2 emitter (missing-ledger guard proves it).
+if (cd "$FIX" && bash "$EMIT" 2>"$TMP/err"); then
+  fail "default emit must refuse without a review ledger"
+fi
+grep -q "no exact review ledger directory" "$TMP/err" \
+  || fail "default emit did not dispatch to the Python v2 emitter"
+pass "default emit dispatches to the v2 emitter"
 
-# 3. Wrong skill fails — a design-review-lite entry is not squad evidence.
-evidence "$HEAD_SHA" "design-review-lite"
-if run_check 2>"$TMP/err"; then fail "non-squad skill must fail"; fi
-grep -q "not a squad review" "$TMP/err" || fail "wrong-skill message wrong"
-pass "non-squad skill rejected"
+# 2b. The --v2 compatibility alias reaches the same emitter.
+if (cd "$FIX" && bash "$EMIT" --v2 2>"$TMP/err"); then
+  fail "--v2 emit must refuse without a review ledger"
+fi
+grep -q "no exact review ledger directory" "$TMP/err" \
+  || fail "--v2 alias did not dispatch to the Python v2 emitter"
+pass "--v2 compatibility alias still dispatches"
 
-# 4. Sentinel commit fails — the squad must run on committed work.
-evidence "uncommitted"
-if run_check 2>"$TMP/err"; then fail "sentinel commit must fail"; fi
-grep -q "no usable commit" "$TMP/err" || fail "sentinel-commit message wrong"
-pass "sentinel commit rejected"
+# 3. --reattest dispatches and fails closed when there is no receipt to derive from.
+if (cd "$FIX" && bash "$EMIT" --reattest --base "$ANC_SHA" 2>"$TMP/err"); then
+  fail "--reattest must refuse without an existing receipt"
+fi
+grep -q "no v2 receipt exists on this branch to derive from" "$TMP/err" \
+  || fail "--reattest did not dispatch to the Python reattest path"
+pass "--reattest dispatches and fails closed without a source receipt"
 
-# 5. Unknown commit fails (not in history).
-evidence "0000000"
-if run_check 2>"$TMP/err"; then fail "unknown commit must fail"; fi
-grep -q "not in this repository" "$TMP/err" || fail "unknown-commit message wrong"
-pass "unknown commit rejected"
-
-# 6. Non-ancestor commit fails: a commit on a side branch that HEAD does not contain.
+# 3b. --reattest demands an integrated base before deriving anything.
 git -C "$FIX" checkout -q -b side "$ANC_SHA"
 git -C "$FIX" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q --allow-empty -m side
-SIDE_SHA="$(git -C "$FIX" rev-parse --short=7 HEAD)"
+SIDE_SHA="$(git -C "$FIX" rev-parse HEAD)"
 git -C "$FIX" checkout -q main
-evidence "$SIDE_SHA"
-if run_check 2>"$TMP/err"; then fail "non-ancestor commit must fail"; fi
-grep -q "not an ancestor" "$TMP/err" || fail "non-ancestor message wrong"
-pass "non-ancestor commit rejected"
-
-# 7. Happy path: evidence at HEAD passes.
-evidence "$HEAD_SHA"
-run_check >/dev/null || fail "evidence at HEAD must pass"
-pass "evidence at HEAD accepted"
-
-# 8. Ancestor path: evidence from a prior commit on the branch passes (this is what
-#    survives a rebase/amend — the reviewed state is contained in the new head).
-evidence "$ANC_SHA"
-run_check >/dev/null || fail "evidence at an ancestor must pass"
-pass "evidence at an ancestor accepted"
-
-# 8b. Symbolic rev in the commit field is rejected. `HEAD` resolves fresh on EVERY pr
-#     head, so a symbolic artifact would pass forever — the forgery the hex guard kills.
-evidence "HEAD"
-if run_check 2>"$TMP/err"; then fail "symbolic rev commit must fail"; fi
-grep -q "not a commit SHA" "$TMP/err" || fail "symbolic-rev message wrong"
-pass "symbolic rev (HEAD) rejected — hex object ids only"
-
-# 8c. adversarial-review is the OTHER accepted skill; prove acceptance, not just the
-#     rejection of a bad skill.
-evidence "$HEAD_SHA" "adversarial-review"
-run_check >/dev/null || fail "adversarial-review evidence must pass"
-pass "adversarial-review skill accepted"
-
-# 8d. Empty target must fail loud, not silently mis-scope to HEAD.
-evidence "$HEAD_SHA"
-if (cd "$FIX" && bash "$CHECK" proof/preship-review.json "" 2>"$TMP/err"); then
-  fail "empty target must fail"
+if (cd "$FIX" && bash "$EMIT" --reattest --base "$SIDE_SHA" 2>"$TMP/err"); then
+  fail "--reattest must refuse a base that is not an ancestor of HEAD"
 fi
-grep -q "empty target head" "$TMP/err" || fail "empty-target message wrong"
-pass "empty target head rejected"
+grep -q "integrate the base first" "$TMP/err" \
+  || fail "--reattest non-ancestor base message wrong"
+pass "--reattest refuses an unintegrated base"
 
-# --- emitter, against a mock ledger -----------------------------------------------------
-# The fixture repo has no origin remote, so the emitter scopes by toplevel dirname:
-# "$FIX" is .../repo, so qualifying ledger dirs are exactly `repo` and `*-repo`.
-#
-# Structural guard (test-audit finding): GSTACK_HOME is exported file-wide to a
-# nonexistent decoy path, so any future emitter invocation that forgets the per-call
-# override dies on "no gstack ledger found" instead of silently walking the real
-# ~/.gstack on a developer machine.
-export GSTACK_HOME="$TMP/gstack-DECOY-must-not-be-read"
-LEDGER="$TMP/gstack/projects/owner-repo"
-OTHER="$TMP/gstack/projects/some-other-project"
-mkdir -p "$LEDGER" "$OTHER"
-
-# 9. Emitter refuses when the ledger root is missing entirely (the most likely real-world
-#    path: a machine or CI runner with no ~/.gstack at all).
-if (cd "$FIX" && GSTACK_HOME="$TMP/nonexistent" bash "$EMIT" 2>"$TMP/err"); then
-  fail "emitter must refuse when the ledger root is missing"
+# 4. --v2 verification dispatches into the trusted package (PR receipt gate proves it).
+if (cd "$FIX" && bash "$CHECK" --v2 --target "$HEAD_SHA" --base "$HEAD_SHA" --mode pr 2>"$TMP/err"); then
+  fail "v2 checker must reject a PR with no v2 receipt"
 fi
-grep -q "no gstack ledger found" "$TMP/err" || fail "missing-ledger-root message wrong"
-pass "missing ledger root rejected with problem/cause/fix"
+grep -q "PR adds no new v2 review receipt" "$TMP/err" \
+  || fail "--v2 checker did not dispatch to the Python receipt gate"
+pass "--v2 verification dispatches to the Python receipt gate"
 
-# 9b. Emitter refuses when no qualifying entry exists (wrong skill + sentinel commit only).
-jq -cn '{skill:"ship",commit:"'"$HEAD_SHA"'"}' > "$LEDGER/b-reviews.jsonl"
-jq -cn '{skill:"review",commit:"uncommitted"}' >> "$LEDGER/b-reviews.jsonl"
-if (cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" 2>"$TMP/err"); then
-  fail "emitter must refuse with no qualifying entry"
-fi
-grep -q "no review evidence in the ledger" "$TMP/err" || fail "emitter no-entry message wrong"
-pass "emitter refuses without a qualifying ledger entry"
-
-# 10. Cross-project scoping (adversarial P1): a qualifying entry in ANOTHER project's
-#     ledger must NOT satisfy this repo's gate, even though its commit is a real
-#     ancestor here. Before scoping, this exact shape produced false green evidence.
-LONG_HEAD="$(git -C "$FIX" rev-parse HEAD)"
-jq -cn --arg c "$LONG_HEAD" \
-  '{skill:"review",commit:$c,timestamp:"2026-07-30T12:00:00Z",status:"clean"}' \
-  > "$OTHER/b-reviews.jsonl"
-rm -f "$FIX/proof/preship-review.json"
-if (cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" 2>"$TMP/err"); then
-  fail "another project's review must not satisfy this repo's gate"
-fi
-[ ! -f "$FIX/proof/preship-review.json" ] || fail "cross-project entry must not produce an artifact"
-pass "cross-project ledger entries are ignored (scoped to *-repo)"
-
-# 10b. Emitter picks the NEWEST qualifying entry (both are ancestors — sort order is the
-#      only thing deciding), resolves to the full 40-char SHA, skips non-ancestors, and
-#      the checker accepts its output end-to-end.
-LONG_ANC="$(git -C "$FIX" rev-parse HEAD~1)"
-{
-  jq -cn --arg c "$LONG_HEAD" \
-    '{skill:"review",commit:$c,timestamp:"2026-07-30T11:00:00Z",status:"clean"}'
-  # older — must lose to the HEAD entry:
-  jq -cn --arg c "$LONG_ANC" \
-    '{skill:"review",commit:$c,timestamp:"2026-07-30T10:00:00Z",status:"clean"}'
-  # newest but NOT an ancestor of main — must be skipped:
-  jq -cn --arg c "$SIDE_SHA" \
-    '{skill:"review",commit:$c,timestamp:"2026-07-30T13:00:00Z",status:"clean"}'
-} >> "$LEDGER/b-reviews.jsonl"
-rm -f "$FIX/proof/preship-review.json"
-(cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" >/dev/null) || fail "emitter happy path failed"
-got="$(jq -r '.commit' "$FIX/proof/preship-review.json")"
-[ "$got" = "$LONG_HEAD" ] || fail "emitter must pick the newest ancestor and pin the FULL resolved SHA (got '$got', want '$LONG_HEAD')"
-run_check >/dev/null || fail "checker must accept the emitter's own output"
-pass "newest qualifying entry wins, full SHA pinned, non-ancestors skipped, checker round-trip"
-
-# 11. Corrupt ledger lines — single-line torn JSON AND the legacy multi-line
-#     pretty-printed shape (retro/docs/upstream-drafts/01) — are skipped, not fatal,
-#     and do not change which commit is selected.
-printf '{"torn": tru\n' >> "$LEDGER/b-reviews.jsonl"
-printf '{\n  "skill": "review",\n  "commit": "%s",\n  "timestamp": "2026-07-30T23:00:00Z"\n}\n' \
-  "$LONG_ANC" >> "$LEDGER/b-reviews.jsonl"
-rm -f "$FIX/proof/preship-review.json"
-(cd "$FIX" && GSTACK_HOME="$TMP/gstack" bash "$EMIT" >/dev/null) || fail "corrupt ledger lines must not be fatal"
-got="$(jq -r '.commit' "$FIX/proof/preship-review.json")"
-[ "$got" = "$LONG_HEAD" ] || fail "corrupt lines must not change the selected commit (got '$got')"
-pass "torn and pretty-printed ledger lines skipped without changing selection"
+# 5. Full operator ceremony through the real wrappers on a scratch repo: review
+#    ledger -> emit -> commit -> advance+integrate base -> reattest (documented
+#    no --base form) -> commit swap -> verify pr-mode. Guards the happy path the
+#    failure-only cases above never reach.
+CEREMONY="$TMP/ceremony"
+mkdir -p "$CEREMONY"
+git -C "$CEREMONY" init -q -b main
+git -C "$CEREMONY" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q --allow-empty -m seed
+git -C "$CEREMONY" remote add origin https://github.com/florianhorner/mammamiradio.git
+FORK="$(git -C "$CEREMONY" rev-parse HEAD)"
+git -C "$CEREMONY" update-ref refs/remotes/origin/main "$FORK"
+git -C "$CEREMONY" checkout -q -b feature
+printf 'feature\n' > "$CEREMONY/feature.txt"
+git -C "$CEREMONY" add feature.txt
+git -C "$CEREMONY" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q -m "feature"
+REVIEWED="$(git -C "$CEREMONY" rev-parse HEAD)"
+CLEDGER="$TMP/ceremony-gstack/projects/florianhorner-mammamiradio"
+mkdir -p "$CLEDGER"
+printf '{"skill":"review","timestamp":"2026-08-27T00:00:00Z","status":"clean","findings":[],"commit":"%s"}\n' \
+  "$REVIEWED" > "$CLEDGER/branch-reviews.jsonl"
+( cd "$CEREMONY" && GSTACK_HOME="$TMP/ceremony-gstack" bash "$EMIT" >/dev/null ) \
+  || fail "ceremony: emit must succeed for reviewed content"
+git -C "$CEREMONY" add proof
+git -C "$CEREMONY" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q -m "receipt"
+# Advance real main and integrate it.
+git -C "$CEREMONY" checkout -q main
+printf 'mainwork\n' > "$CEREMONY/mainwork.txt"
+git -C "$CEREMONY" add mainwork.txt
+git -C "$CEREMONY" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q -m "main advances"
+NEWBASE="$(git -C "$CEREMONY" rev-parse HEAD)"
+git -C "$CEREMONY" update-ref refs/remotes/origin/main "$NEWBASE"
+git -C "$CEREMONY" checkout -q feature
+git -C "$CEREMONY" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null merge -q --no-edit "$NEWBASE"
+# Reattest via the documented no-argument form (defaults --base origin/main).
+( cd "$CEREMONY" && bash "$EMIT" --reattest > "$TMP/reattest.out" ) \
+  || fail "ceremony: reattest must succeed after a clean base integration"
+grep -q "wrote proof/preship-reviews/v2/" "$TMP/reattest.out" || fail "ceremony: reattest did not write a receipt"
+grep -q "superseded proof/preship-reviews/v2/" "$TMP/reattest.out" || fail "ceremony: reattest did not retire the stale receipt"
+git -C "$CEREMONY" add -A
+git -C "$CEREMONY" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null commit -q -m "reattested"
+( cd "$CEREMONY" && bash "$CHECK" --v2 --target HEAD --base "$NEWBASE" --mode pr >/dev/null ) \
+  || fail "ceremony: pr-mode verification must accept the reattested branch"
+pass "full emit -> integrate -> reattest -> verify ceremony succeeds through the wrappers"
 
 echo "test_preship_evidence: all assertions passed"

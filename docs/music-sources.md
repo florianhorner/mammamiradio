@@ -55,15 +55,15 @@ not fabricate or infer those human decisions.
 
 The ordinary pull-request gate runs one cold aarch64 launch in
 `.github/workflows/pi-smoke.yml`; it does not require physical-device receipts.
+Finalize version, changelogs, and the V2 preship receipt before recording.
 For a stable release, start from the exact clean commit running on Home
 Assistant Green and record twenty cold runs locally on that device:
 
 ```bash
 for run in $(seq 1 20); do
-  python3.11 scripts/ha-green-launch-smoke.py \
+  python3.11 -P scripts/ha-green-launch-smoke.py \
     --record-release-receipt proof/media/ha-green-release-evidence
 done
-make ha-green-release-proof
 ```
 
 Receipt mode detects Home Assistant Green through the aarch64 device tree,
@@ -75,8 +75,7 @@ nearest-rank p95 instead of silently dropping outliers.
 
 Commit only `proof/media/ha-green-release-evidence/run-*.json` after the
 measurements, then rerun `make ha-green-release-proof` and `make pre-release`.
-Every receipt names the tested source commit; the final evidence commit may
-differ from it only by those receipt JSON files. This prevents both stale
+The hardware-neutral `mammamiradio-release-content-v1` profile covers sorted paths, Git modes, and blob bytes, excluding only HA receipt JSON. This prevents both stale
 evidence and the impossible self-reference of asking a committed receipt to
 name the commit that contains itself. The tracked
 `proof/media/ha-green-release-receipt.example.json` is explicitly marked as an
@@ -96,10 +95,26 @@ their provenance, licenses, and permitted use.
 ## Optional transient Jamendo expansion
 
 Jamendo is an explicit, default-off option while written provider confirmation
-for this station model is pending. It may be enabled only with the operator's
-own client ID and a current acknowledgement that the API use is
-non-commercial. Commercial, sponsored, affiliate, or monetized operation needs
-separate authorization from Jamendo. Read the
+for this station model is pending. To enable it, acknowledge that the API use
+is non-commercial. This acknowledgement describes the operator's station, so
+the checkbox is never preselected.
+
+The station includes a Jamendo application ID. Jamendo issues one ID per
+application, not per listener, and its terms reserve the right to delete
+duplicate applications. Operators can provide their own ID for independently
+authorized access; it overrides the bundled ID, and the admin panel shows which
+one is active. Clearing it returns to shared access. A malformed environment or
+startup-config override falls back with a warning; the admin rejects an invalid
+new ID and keeps the current settings.
+
+Jamendo counts requests per application or per requesting IP, and its reply
+does not say which ceiling was reached. When the station is asked to slow down,
+it reports that plainly and keeps retrying without presenting a credential
+change as a fix.
+
+Commercial, sponsored, affiliate, or monetized operation needs separate
+authorization from Jamendo. Their radio documentation also requires a
+commercial radio licence for direct or indirect commercial activity. Read the
 [Jamendo API terms](https://devportal.jamendo.com/api_terms_of_use) before
 enabling it.
 
@@ -109,7 +124,7 @@ keeps a single obvious action. Saving applies live and
 does not restart or interrupt the station. A client ID saved by an older
 version is imported to owner-only secrets where possible, remains disabled,
 and requires a fresh acknowledgement before use. The admin UI never echoes the
-ID; Replace and Clear are explicit actions.
+ID. Bundled users see **Use own ID**; **Replace** and **Clear** appear only after an operator ID is saved.
 
 The transient boundary is deliberately narrow:
 
@@ -119,8 +134,9 @@ The transient boundary is deliberately narrow:
   Creative Commons URLs are admitted;
 - one provider operation and one app-owned audio artifact may exist across
   fetching, normalization, ready, queued, and playing states;
-- HTTP bytes stream directly into FFmpeg; there is no raw input file or
-  persistent metadata sidecar;
+- HTTP response bytes stay under the size cap in memory until FFmpeg admission,
+  then pass through a nonblocking pipe; there is no raw input file or persistent
+  metadata sidecar;
 - the normalized artifact authorizes one playback attempt in the current
   process and is deleted after play, cancellation, disablement, a source
   change, validation failure, shutdown, or startup pruning;
@@ -145,7 +161,7 @@ copyright status.
 | Visible state | Provider detail | Meaning and action |
 | --- | --- | --- |
 | `idle` | disabled | Jamendo is off; starter and local music continue. |
-| `blocked` | needs configuration | Add a client ID and confirm non-commercial use. |
+| `blocked` | needs configuration | Confirm non-commercial use; if included access is unavailable, add an operator client ID. |
 | `working` | idle, discovering, fetching, normalizing, queued, playing, or consumed | One single-use track is being prepared; base music continues. |
 | `ready` | ready | One track is prepared for one play, then deleted. |
 | `degraded` | transient provider failure | Base music continues; use **Check again** when useful. |
@@ -168,8 +184,14 @@ POST /api/media-sources/jamendo/retry
 
 `PUT` accepts `enabled`, `noncommercial_acknowledged`, optional `client_id`, and
 optional `clear_client_id`. Omitting `client_id` retains it; a non-empty value
-replaces it; `clear_client_id=true` removes it. Replace and clear cannot be
-requested together. Durable intent is saved before the live provider changes.
+replaces it; `clear_client_id=true` removes the operator ID and returns the
+station to bundled access when one exists. Clear is credential-only: inside the
+serialized write it preserves the latest saved enablement and acknowledgement
+instead of trusting possibly stale request values. Without bundled access,
+clearing the last ID turns the source off. `jamendo_client_id_required` (409) is reachable only when no
+bundled ID exists and the operator has not supplied their own ID. Replace and
+clear cannot be requested together. Durable intent is saved before the live
+provider changes.
 
 `retry` returns `202` when enabled and coalesces concurrent attempts. When
 disabled it returns `409 jamendo_retry_disabled`.

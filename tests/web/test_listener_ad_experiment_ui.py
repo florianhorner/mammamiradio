@@ -55,27 +55,64 @@ def test_listener_status_poll_is_bounded_and_rejects_stale_responses() -> None:
     js = LISTENER_JS.read_text(encoding="utf-8")
     fetch = _function_block(js, "fetchStatus", "fetchRequests")
 
-    interval_match = re.search(r"const STATUS_POLL_INTERVAL_MS = (\d+);", js)
+    live_match = re.search(r"const STATUS_POLL_LIVE_MS = (\d+);", js)
+    hidden_match = re.search(r"const STATUS_POLL_HIDDEN_MS = (\d+);", js)
+    stopped_match = re.search(r"const STATUS_POLL_STOPPED_MS = (\d+);", js)
+    stopped_hidden_match = re.search(r"const STATUS_POLL_STOPPED_HIDDEN_MS = (\d+);", js)
     deadline_match = re.search(r"const STATUS_POLL_DEADLINE_MS = (\d+);", js)
-    assert interval_match and deadline_match
-    assert int(deadline_match.group(1)) < int(interval_match.group(1))
+    assert live_match and hidden_match and stopped_match and stopped_hidden_match and deadline_match
+    live_ms = int(live_match.group(1))
+    hidden_ms = int(hidden_match.group(1))
+    stopped_ms = int(stopped_match.group(1))
+    stopped_hidden_ms = int(stopped_hidden_match.group(1))
+    deadline_ms = int(deadline_match.group(1))
+    assert deadline_ms < live_ms
+    assert live_ms < stopped_ms <= 5000
+    assert deadline_ms + stopped_ms <= 6000
+    assert hidden_ms >= live_ms * 10
+    assert stopped_hidden_ms > hidden_ms
 
     for needle in (
         "const generation = ++_statusPollGeneration;",
         "const controller = new AbortController();",
         "setTimeout(() => controller.abort(), STATUS_POLL_DEADLINE_MS)",
-        "{ signal: controller.signal }",
+        "if (_statusEtag) headers['If-None-Match'] = _statusEtag;",
+        "{ signal: controller.signal, headers }",
+        "if (r.status === 304) {",
+        "_renderLocalStatusClocks();",
         "if (generation !== _statusPollGeneration) return;",
         "generation === _statusPollGeneration && e?.name !== 'AbortError'",
         "clearTimeout(deadline);",
+        "const revision = ++_statusScheduleRevision;",
+        "if (revision !== _statusScheduleRevision) return;",
+        "_armStatusPoll(revision, _statusPollDelayMs());",
+        "document.addEventListener('visibilitychange'",
+        "STATUS_POLL_HIDDEN_MS",
+        "STATUS_POLL_STOPPED_MS",
+        "const receivedAtMonoMs = performance.now();",
+        "state.statusClockAnchorMs = receivedAtMonoMs;",
+        "_localStatusMinutes(m.ago_min)",
+        "casa_moment_age_unknown",
+        "if (Array.isArray(status.starter_catalog)) {",
     ):
-        assert needle in fetch, f"listener status poll lost freshness/deadline guard: {needle}"
+        assert needle in fetch or needle in js, f"listener status poll lost guard: {needle}"
 
     parsed = fetch.index("const status = await r.json();")
-    freshness_guard = fetch.index("if (generation !== _statusPollGeneration) return;")
+    freshness_guard = fetch.index("if (generation !== _statusPollGeneration) return;", parsed)
+    etag_commit = fetch.index("_statusEtag = responseEtag || null;", freshness_guard)
     first_mutation = fetch.index("syncStationName(status);")
-    assert parsed < freshness_guard < first_mutation
-    assert "setInterval(fetchStatus, STATUS_POLL_INTERVAL_MS);" in js
+    not_modified = fetch.index("if (r.status === 304) {")
+    generic_failure = fetch.index("if (!r.ok) return;")
+    final_render = fetch.index("_stopProgressTicker();")
+    assert not_modified < generic_failure < parsed < freshness_guard < first_mutation < final_render < etag_commit
+    assert "setInterval(fetchStatus" not in js
+    assert "Date.now() / 1000 - started" not in js
+    assert "~1,200 header-only polls/h" in js
+
+    local_clocks = _function_block(js, "_renderLocalStatusClocks", "_ensureProgressTicker")
+    minute_guard = local_clocks.index("if (minuteOffset === state.statusClockRenderedMinuteOffset) return;")
+    casa_render = local_clocks.index("updateCasa(state.status.ha_moments);")
+    assert minute_guard < casa_render
 
 
 def test_carosello_copy_exists_in_both_listener_modes() -> None:

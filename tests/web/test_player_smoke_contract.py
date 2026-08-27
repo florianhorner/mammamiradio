@@ -190,6 +190,7 @@ def test_player_smoke_pins_casa_on_air_receipt_contract() -> None:
         "Casa whole-day boundary was not humanized",
         "Casa stale note did not appear after a day without an on-air receipt",
         "Casa on-air receipt did not render",
+        "Casa missing age made a false recent claim",
     ):
         assert needle in code, f"player smoke lost Casa on-air receipt guard: {needle}"
 
@@ -243,9 +244,28 @@ def test_player_smoke_executes_ad_receipt_contract() -> None:
         "runtime reset did not clear the ad receipt announcement",
         "stale status poll restored a cleared ad receipt",
         "stale status race never held poll N after JSON parsing",
-        "window.__playerSmokeOldStatusPoll = window.__playerSmokeFetchStatus()",
+        "held response poisoned the conditional validator",
+        "conditionalStatusResponses",
+        "statusResponses",
+        "route.request().headers()['if-none-match']",
+        "status: 304",
+        "semanticStatusEtag",
+        "window.__playerSmokeMonotonicOffsetMs",
+        "document.dispatchEvent(new Event('visibilitychange'))",
+        "server/browser wall-clock skew corrupted progress",
+        "bodyless 304 did not advance progress monotonically",
+        "bodyless 304 did not advance uptime and Home-moment ages",
+        "same-minute 304 rewrote the Casa live region",
+        "winning payload ETag was not committed after render",
+        "hidden live status polling did not back off to 30 seconds",
+        "visible stopped status polling did not use the 3.5-second probe",
+        "visible idle status polling did not use the slower probe",
+        "idle-to-live status polling did not restore the live cadence",
+        "visible stopped listener did not discover an external resume within 6 seconds",
     ):
         assert needle in code, f"player smoke missing ad-receipt browser guard: {needle}"
+
+    assert "__playerSmokeFetchStatus" not in code
 
 
 def test_default_listener_identity_fixture_is_canonical() -> None:

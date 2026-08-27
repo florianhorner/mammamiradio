@@ -101,6 +101,18 @@ def _make_state() -> StationState:
     )
 
 
+def _make_starter_state() -> StationState:
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+
+    tracks = load_starter_tracks()
+    return StationState(
+        playlist=tracks,
+        playlist_source=starter_source(len(tracks)),
+        listeners_active=1,
+        home_authorization=HomeAuthorization.legacy(),
+    )
+
+
 def _make_config():
     config = load_config(TOML_PATH)
     # Producer unit tests exercise Normal Mode unless a test opts into a
@@ -1257,6 +1269,7 @@ async def test_recovery_sweeper_segment_renders_tts_with_sting(tmp_path):
         "title": "Recovery sweeper",
         "error_recovery": True,
         "rescue": True,
+        "clip_audio_class": "unknown",
     }
     mock_synthesize.assert_awaited_once()
     assert mock_synthesize.call_args.args[:2] == ("Mamma Mi Radio resta in onda.", "marin")
@@ -3201,7 +3214,7 @@ async def test_banter_with_listener_request_commit_applies_on_queue():
     config = _make_config()
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
-    req = {"type": "song_request", "name": "Florian", "song_found": True}
+    req = {"type": "song_request", "name": "Alex", "song_found": True}
     state.pending_requests.append(req)
     commit = ListenerRequestCommit(request=req, consume=True)
 
@@ -5804,9 +5817,9 @@ async def test_listener_truth_guard_allows_one_fact_bound_named_resident_return(
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
         "ha:person.florian_horner",
-        "Florian è appena tornato a casa. Un caloroso bentornato.",
+        "Residente uno è appena tornato a casa. Un caloroso bentornato.",
     )
-    lines = [(config.hosts[0], "Bentornato Florian.")]
+    lines = [(config.hosts[0], "Bentornato Residente uno.")]
 
     with patch(
         f"{PRODUCER_MODULE}._sw.repair_banter_without_listener_context",
@@ -5835,7 +5848,7 @@ async def test_listener_truth_guard_rejects_return_line_that_names_another_resid
     state = _make_state()
     state.last_banter_return_authority = home_return_authority_for_directive(
         "ha:person.florian_horner",
-        "Florian è appena tornato a casa. Un caloroso bentornato.",
+        "Residente uno è appena tornato a casa. Un caloroso bentornato.",
     )
     safe_lines = [(config.hosts[0], "The studio keeps moving, amici.")]
 
@@ -5846,7 +5859,7 @@ async def test_listener_truth_guard_rejects_return_line_that_names_another_resid
         guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
             state,
             config,
-            [(config.hosts[0], "Florian is back with Sabrina.")],
+            [(config.hosts[0], "Residente uno is back with Residente due.")],
         )
 
     assert [(line.host, line.text) for line in guarded] == safe_lines
@@ -5869,7 +5882,7 @@ async def test_listener_truth_guard_rejects_unbound_named_return():
         guarded, _transition, changed, _transition_replaced = await _listener_truth_guard(
             state,
             config,
-            [(config.hosts[0], "Bentornato Florian.")],
+            [(config.hosts[0], "Bentornato Residente uno.")],
         )
 
     assert [(line.host, line.text) for line in guarded] == safe_lines
@@ -8944,7 +8957,7 @@ async def test_drain_bridge_queues_cache_music_runway_when_warm(tmp_path):
     """A warm cache means a mid-playback drain airs a real song, with no clip in front."""
     from mammamiradio.scheduling import producer
 
-    state = _make_state()
+    state = _make_starter_state()
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -9116,11 +9129,511 @@ async def test_drain_bridge_queues_only_canned_clip_when_cache_is_cold(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_drain_bridge_queues_starter_music_when_norm_cache_is_cold(tmp_path):
+    """A safety drain sees direct starter music even though it bypasses the norm cache."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    tracks = state.playlist
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    for index in range(3):
+        buffered = tmp_path / f"buffered-{index}.mp3"
+        buffered.write_bytes(b"buffered audio")
+        queue.put_nowait(
+            Segment(
+                type=SegmentType.MUSIC,
+                path=buffered,
+                duration_sec=180.0,
+                metadata={"title": f"Buffered {index}"},
+            )
+        )
+    skip_event = asyncio.Event()
+    empty_sfx = tmp_path / "empty-sfx"
+    empty_sfx.mkdir()
+
+    with patch(f"{PRODUCER_MODULE}._SFX_DIR", empty_sfx):
+        fired = await producer._fire_interrupt(
+            state,
+            InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
+            queue,
+            skip_event,
+            bridge_tmp_dir=tmp_path,
+        )
+
+    assert fired is True
+    assert queue.empty()
+    assert skip_event.is_set()
+    assert state.interrupt_slot is not None
+
+    async def _enqueue(segment: Segment, **kwargs) -> bool:
+        return await producer._enqueue_with_egress(queue, state, config, segment, **kwargs)
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_enqueue, state, config)
+
+    assert ok is True
+    assert queue.qsize() == 1
+    segment = queue.get_nowait()
+    assert segment.type is SegmentType.MUSIC
+    assert segment.path != canned_clip
+    assert segment.metadata.get("audio_source") == "starter"
+    assert segment.metadata.get("queue_drain_recovery") is True
+    assert segment.metadata.get("music_reservation_id") == segment.metadata.get("queue_id")
+    assert state.chaos_pending is ChaosSubtype.URGENT_INTERRUPT
+    assert state.interrupt_slot is not None
+    assert state.played_tracks[-1].cache_key == tracks[0].cache_key
+    assert state.music_admission_reservations[segment.metadata["queue_id"]].cache_key == tracks[0].cache_key
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "starter_catalog")]
+
+
+@pytest.mark.asyncio
+async def test_drain_bridge_falls_back_to_canned_when_starter_admission_is_rejected(tmp_path):
+    """A starter admission refusal keeps the existing canned safety rung intact."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"fake audio" * 256)
+    rejected: list[Segment] = []
+    queued: list[Segment] = []
+
+    async def _reject_starter(segment: Segment, **_kwargs) -> bool:
+        if segment.metadata.get("audio_source") == "starter":
+            rejected.append(segment)
+            return False
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=6.2),
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_reject_starter, state, config)
+
+    assert ok is True
+    assert len(rejected) == 1
+    assert rejected[0].type is SegmentType.MUSIC
+    assert [segment.path for segment in queued] == [canned_clip]
+    assert list(state.played_tracks) == []
+    assert state.music_admission_reservations == {}
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "canned")]
+
+
+@pytest.mark.asyncio
+async def test_starter_bridge_preserves_pin_and_uses_starter_from_mixed_pool(tmp_path):
+    """Recovery may use starter media without consuming a later operator pin."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    pinned = Track(
+        title="Pinned Local Song",
+        artist="Local Artist",
+        duration_ms=190_000,
+        source="local",
+    )
+    state.playlist.append(pinned)
+    state.playlist_revision += 1
+    state.set_pinned_track(pinned)
+    pinned_revision = state.pinned_track_revision
+    starter = state.playlist[0]
+    rendered_path = tmp_path / "starter.mp3"
+    rendered_path.write_bytes(b"verified starter")
+    rendered = producer.RenderedMusicTrack(
+        track=starter,
+        path=rendered_path,
+        cache_path=rendered_path,
+        cache_hit=True,
+    )
+    queued: list[Segment] = []
+
+    async def _accept(segment: Segment, *, stale_check=None, admission_callback=None, **_kwargs) -> bool:
+        assert stale_check is None or not stale_check()
+        if admission_callback is not None:
+            admission_callback(segment)
+        queued.append(segment)
+        return True
+
+    with patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered):
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            _accept,
+            state,
+            _make_config(),
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert ok is True
+    assert [segment.metadata.get("audio_source") for segment in queued] == ["starter"]
+    assert state.pinned_track is pinned
+    assert state.pinned_track_revision == pinned_revision
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection_case",
+    ["reservation_pending", "runtime_error", "none", "nonstarter"],
+)
+async def test_starter_bridge_selection_failures_leave_recovery_to_lower_rungs(tmp_path, selection_case):
+    """Every no-candidate selector outcome is a clean fallback, not a partial admission."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    if selection_case == "reservation_pending":
+        selector_kwargs = {"side_effect": producer.StarterCycleReservationPendingError("reserved")}
+    elif selection_case == "runtime_error":
+        selector_kwargs = {"side_effect": RuntimeError("no eligible track")}
+    elif selection_case == "none":
+        selector_kwargs = {"return_value": None}
+    else:
+        selector_kwargs = {
+            "return_value": Track(
+                title="Foreign",
+                artist="Source",
+                duration_ms=180_000,
+                source="local",
+            )
+        }
+
+    render = AsyncMock()
+    with (
+        patch(f"{PRODUCER_MODULE}._select_accepted_music_track", **selector_kwargs),
+        patch(f"{PRODUCER_MODULE}._render_music_track", render),
+    ):
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            AsyncMock(return_value=True),
+            state,
+            config,
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert ok is False
+    render.assert_not_awaited()
+    assert list(state.played_tracks) == []
+    assert state.music_admission_reservations == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("render_case", ["exception", "none"])
+async def test_starter_bridge_verification_failures_leave_recovery_to_lower_rungs(tmp_path, render_case):
+    """A starter that cannot be verified never becomes queued recovery audio."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    render_kwargs = (
+        {"side_effect": RuntimeError("manifest verification failed")}
+        if render_case == "exception"
+        else {"return_value": None}
+    )
+    enqueue = AsyncMock(return_value=True)
+
+    with (
+        patch(f"{PRODUCER_MODULE}._select_accepted_music_track", return_value=state.playlist[0]),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, **render_kwargs),
+    ):
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            enqueue,
+            state,
+            config,
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert ok is False
+    enqueue.assert_not_awaited()
+    assert list(state.played_tracks) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "expected_stale", "expected_queued"),
+    [
+        ("source", GenerationWasteReason.STALE_SOURCE, False),
+        ("playlist_removed", GenerationWasteReason.STALE_PLAYLIST, False),
+        ("playlist_retained", None, True),
+    ],
+)
+async def test_starter_bridge_rechecks_source_and_playlist_after_verification(
+    tmp_path,
+    mutation,
+    expected_stale,
+    expected_queued,
+):
+    """Slow verification cannot admit a starter song from a stale rotation."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    track = state.playlist[0]
+    rendered_path = tmp_path / "verified.mp3"
+    rendered_path.write_bytes(b"verified starter")
+    rendered = producer.RenderedMusicTrack(
+        track=track,
+        path=rendered_path,
+        cache_path=rendered_path,
+        cache_hit=True,
+    )
+    stale_results: list[bool | str | None] = []
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment, *, stale_check=None, admission_callback=None, **_kwargs) -> bool:
+        if mutation == "source":
+            state.source_revision += 1
+        elif mutation == "playlist_removed":
+            state.playlist = state.playlist[1:]
+            state.playlist_revision += 1
+        else:
+            state.playlist_revision += 1
+        verdict = stale_check() if stale_check is not None else None
+        stale_results.append(verdict)
+        if verdict:
+            return False
+        if admission_callback is not None:
+            admission_callback(segment)
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}._select_accepted_music_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered),
+    ):
+        ok = await producer._queue_starter_catalog_bridge_segment(
+            _capture,
+            state,
+            config,
+            bridge_type="drain",
+            bridge_flag="queue_drain_recovery",
+        )
+
+    assert stale_results == [expected_stale]
+    assert ok is expected_queued
+    assert bool(queued) is expected_queued
+    assert bool(state.played_tracks) is expected_queued
+
+
+@pytest.mark.asyncio
+async def test_drain_bridge_rearms_canned_fallback_after_starter_verification_turns_stale(tmp_path):
+    """A continuity cut during starter verification rejects only that rung."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    track = state.playlist[0]
+    rendered_path = tmp_path / "verified.mp3"
+    rendered_path.write_bytes(b"verified starter")
+    rendered = producer.RenderedMusicTrack(
+        track=track,
+        path=rendered_path,
+        cache_path=rendered_path,
+        cache_hit=True,
+    )
+    canned_clip = tmp_path / "canned.mp3"
+    canned_clip.write_bytes(b"canned")
+    stale_results: list[bool | str | None] = []
+    queued: list[Segment] = []
+
+    async def _capture(segment: Segment, *, stale_check=None, **_kwargs) -> bool:
+        if segment.metadata.get("audio_source") == "starter":
+            state.continuity_epoch += 1
+        verdict = stale_check() if stale_check is not None else None
+        stale_results.append(verdict)
+        if verdict:
+            return False
+        queued.append(segment)
+        return True
+
+    with (
+        patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._probe_segment_duration", return_value=4.4),
+        patch(f"{PRODUCER_MODULE}._select_accepted_music_track", return_value=track),
+        patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered),
+    ):
+        ok = await producer._queue_drain_recovery_bridge(_capture, state, config)
+
+    assert ok is True
+    assert stale_results == [GenerationWasteReason.STALE_CONTINUITY, None]
+    assert [segment.path for segment in queued] == [canned_clip]
+    assert [(event["bridge_type"], event["source"]) for event in state.bridge_events] == [("drain", "canned")]
+
+
+@pytest.mark.asyncio
+async def test_urgent_interrupt_seeds_starter_runway_before_first_producer_banter(tmp_path):
+    """A purged restart handoff gets starter runway before slow urgent generation."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    restored_path = tmp_path / "restart-handoff.mp3"
+    restored_path.write_bytes(b"restored music")
+    restored = Segment(
+        type=SegmentType.MUSIC,
+        path=restored_path,
+        duration_sec=180.0,
+        metadata={"title": "Restored music", "audio_source": "restart_handoff"},
+        ephemeral=False,
+    )
+    queue.put_nowait(restored)
+    state.queued_segments = [producer._queue_shadow_entry(restored)]
+    sfx_dir = tmp_path / "sfx"
+    sfx_dir.mkdir()
+    alert = sfx_dir / "alert.mp3"
+    alert.write_bytes(b"alert")
+    skip_event = asyncio.Event()
+
+    with patch(f"{PRODUCER_MODULE}._SFX_DIR", sfx_dir):
+        fired = await producer._fire_interrupt(
+            state,
+            InterruptSpec(directive="Safety moment. React now.", urgency="urgent", cooldown=60),
+            queue,
+            skip_event,
+            bridge_tmp_dir=tmp_path,
+        )
+
+    assert fired is True
+    assert queue.empty()
+    assert state.segments_produced == 0
+    assert state.urgent_interrupt_drained_audio is True
+    assert state.interrupt_slot == alert
+
+    track = state.playlist[0]
+    rendered_path = tmp_path / "starter-runway.mp3"
+    rendered_path.write_bytes(b"starter runway")
+    rendered = producer.RenderedMusicTrack(
+        track=track,
+        path=rendered_path,
+        cache_path=rendered_path,
+        cache_hit=True,
+    )
+    render_started = asyncio.Event()
+    render_release = asyncio.Event()
+
+    async def _slow_urgent_banter(*_args, **_kwargs):
+        render_started.set()
+        await render_release.wait()
+        return [(config.hosts[0], "Avviso urgente.")], BanterCommit()
+
+    producer_task = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.select_norm_cache_rescue", return_value=None),
+            patch(f"{PRODUCER_MODULE}._select_accepted_music_track", return_value=track),
+            patch(f"{PRODUCER_MODULE}._render_music_track", new_callable=AsyncMock, return_value=rendered),
+            patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+            patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_slow_urgent_banter),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            producer_task = asyncio.create_task(run_producer(queue, state, config, skip_event=skip_event))
+            await asyncio.wait_for(render_started.wait(), timeout=3.0)
+
+            queued = list(queue._queue)
+            assert len(queued) == 1
+            assert queued[0].metadata.get("audio_source") == "starter"
+            assert queued[0].metadata.get("queue_drain_recovery") is True
+            assert state.interrupt_slot == alert
+    finally:
+        if producer_task is not None:
+            producer_task.cancel()
+            render_release.set()
+            await asyncio.gather(producer_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_urgent_interrupt_does_not_reuse_an_older_purge_for_drain_recovery(tmp_path):
+    """An empty interrupt cannot turn cumulative discard history into a fresh drain."""
+    from mammamiradio.scheduling import producer
+
+    state = _make_starter_state()
+    config = _make_config()
+    config.cache_dir = tmp_path
+    config.tmp_dir = tmp_path
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    buffered_path = tmp_path / "buffered.mp3"
+    buffered_path.write_bytes(b"buffered music")
+    buffered = Segment(type=SegmentType.MUSIC, path=buffered_path, duration_sec=180.0)
+    queue.put_nowait(buffered)
+    state.queued_segments = [producer._queue_shadow_entry(buffered)]
+    sfx_dir = tmp_path / "sfx"
+    sfx_dir.mkdir()
+    (sfx_dir / "alert.mp3").write_bytes(b"alert")
+
+    with patch(f"{PRODUCER_MODULE}._SFX_DIR", sfx_dir):
+        assert await producer._fire_interrupt(
+            state,
+            InterruptSpec(directive="First safety moment.", urgency="urgent", cooldown=60),
+            queue,
+            None,
+        )
+        assert state.urgent_interrupt_drained_audio is True
+        assert await producer._fire_interrupt(
+            state,
+            InterruptSpec(directive="Second safety moment.", urgency="urgent", cooldown=60),
+            queue,
+            None,
+        )
+
+    assert state.discard_by_reason[GenerationWasteReason.INTERRUPT] == 1
+    assert state.urgent_interrupt_drained_audio is False
+
+    render_started = asyncio.Event()
+    render_release = asyncio.Event()
+
+    async def _slow_urgent_banter(*_args, **_kwargs):
+        render_started.set()
+        await render_release.wait()
+        return [(config.hosts[0], "Avviso urgente.")], BanterCommit()
+
+    bridge = AsyncMock(return_value=True)
+    producer_task = None
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}._queue_drain_recovery_bridge", bridge),
+            patch(f"{SCRIPTWRITER_MODULE}.has_script_llm", return_value=True),
+            patch(f"{SCRIPTWRITER_MODULE}.write_banter", new_callable=AsyncMock, side_effect=_slow_urgent_banter),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        ):
+            producer_task = asyncio.create_task(run_producer(queue, state, config))
+            await asyncio.wait_for(render_started.wait(), timeout=3.0)
+            bridge.assert_not_awaited()
+    finally:
+        if producer_task is not None:
+            producer_task.cancel()
+            render_release.set()
+            await asyncio.gather(producer_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_resume_bridge_music_runway_queues_only_canned_clip_when_cache_cold(tmp_path):
     """music_runway=True with a cold norm cache still queues just the canned clip."""
     from mammamiradio.scheduling import producer
 
-    state = _make_state()
+    state = _make_starter_state()
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -9158,7 +9671,7 @@ async def test_idle_bridge_music_runway_queues_only_canned_clip_when_cache_cold(
     """music_runway=True with a cold norm cache still queues just the canned clip."""
     from mammamiradio.scheduling import producer
 
-    state = _make_state()
+    state = _make_starter_state()
     config = _make_config()
     config.cache_dir = tmp_path
     config.tmp_dir = tmp_path
@@ -9821,6 +10334,7 @@ async def test_was_stopped_initialized_true_when_session_already_stopped(tmp_pat
     seg = queue.get_nowait()
     assert seg.metadata.get("resume_bridge") is True
     assert seg.path == norm_file
+    assert seg.metadata["clip_audio_class"] == "unknown"
 
 
 class TestBanterHosts:

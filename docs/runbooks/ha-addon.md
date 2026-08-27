@@ -38,8 +38,7 @@ To check whether the window is open right now, run `scripts/check-advertised-ver
 
 ## First-listen operator check
 
-After installing the HACS integration and restarting Home Assistant once, open
-the add-on Web UI. A fresh unfinished install opens **First Listen** with an
+Open the add-on Web UI. A fresh unfinished install opens **First Listen** with an
 authored 27-second mini-show on deck: an original music bed and a privacy-aware
 Marco/Giulia opening, then a source-aware handoff to the live stream. It needs
 no AI key or Home context. Source readiness is supporting detail under that
@@ -48,18 +47,25 @@ recovery cover are described honestly. The listening cue must distinguish a
 primary rotation, recovery cover, and music that still needs repair; bundled
 demo music must not be presented as a promised song library.
 
-Select **Find my speakers**, choose one physical `media_player`, then select
-**Start Mamma Mi Radio**. The dispatch contract is always
-`media-source://mammamiradio/live`. An accepted Home Assistant service call is
-not audible proof: record **Yes — that’s Mamma Mi Radio** only after the opening
-reaches the room, or use the [first-listen repair
-steps](../integrations/ha-integration.md#first-listen-repair).
+Required First Listen proof is hearing the station on this device in the add-on
+Web UI. Select **Start sound check**, then **Yes, I hear it** only after you hear
+the opening, or use the [this-device repair
+steps](../troubleshooting.md#first-listen-does-not-play-on-this-device).
+
+Home Assistant speakers remain optional and are no longer part of First Listen.
+The add-on has no speaker picker; the route is Home Assistant's own media
+browser after installing the HACS integration: **Media → Mamma Mi Radio → Mamma
+Mi Radio Live**, or **Developer tools → Actions → Play specified media** against
+the speaker with `media-source://mammamiradio/live` and content type `music`.
+An accepted Home Assistant service call is not audible proof; confirm the room
+yourself. See [Optional: play it on a Home Assistant
+speaker](../integrations/ha-integration.md#optional-play-it-on-a-home-assistant-speaker).
 
 First audio does not require an AI key. On a fresh add-on install,
 `ha_context_enabled` is omitted and effective Home context stays off. After
-audible verification, First Listen offers **Keep private and continue** without
-reading Home state, or a fresh filtered preview before **Let future hosts use
-this**. If only generic daylight is available, verify that it is disclosed as
+audible verification, First Listen offers **Keep Home private** without reading
+Home state, or a fresh filtered preview before **Let Marco and Giulia use these
+details**. If only generic daylight is available, verify that it is disclosed as
 ambient-only and not meaningful personalization, with the private path
 recommended. AI-host setup comes later.
 
@@ -143,7 +149,6 @@ they are ever counted as listeners.
      open a fresh `## [Unreleased]`
    - **ha-addon CHANGELOG**: move its `## Unreleased` content under a real
      `## X.Y.Z - <date>` heading
-
    Both are REQUIRED. `pre-release-check.sh` §2 compares `config.yaml` against the
    first *versioned* heading in each file, skipping `## Unreleased`. The extractor
    strips brackets, so `## [X.Y.Z]` and `## X.Y.Z` both parse; the root file uses
@@ -159,8 +164,7 @@ they are ever counted as listeners.
    git fetch origin main --tags
    CUT_SHA="$(git rev-parse origin/main)"
    ```
-   The cut must already contain the physical 20-run HA Green receipt set from
-   the exact clean edge source commit, recorded with the commands in
+   The cut must already contain the physical 20-run HA Green receipt set for its complete release content, recorded with the commands in
    [`docs/music-sources.md`](../music-sources.md). Pre-flight fails loud if the
    evidence is missing, stale, or over its two-second p95, or if the tag/version,
    release metadata, changelog head, or either per-arch `:sha` image disagrees.
@@ -169,8 +173,7 @@ they are ever counted as listeners.
    `pyproject.toml` and `ha-addon/**`, both in the build's path filter).
 
    The long judgment soak belongs *before* the cut, on the edge line. If you want a
-   short confirmation that the cut commit itself boots (it differs from its soaked
-   parent only by version strings and changelog text), pin edge to it:
+   short confirmation that the squash-landed cut commit itself boots, pin edge to it:
    ```bash
    make edge-release ARGS="--target-sha $CUT_SHA"
    ```
@@ -244,8 +247,7 @@ no `:sha` image and pre-flight will reject the tag.
   the `hotfix` label) rather than relying on it to stop you.
 - `docker.yml` publishes the standalone image on any `v*` tag even if the addon pre-flight fails.
 - The promoted image is built from the cut commit, so it differs from the soaked parent by
-  the version strings and changelog text. The bump reaches runtime (the Dockerfile
-  pip-installs `pyproject.toml`, so `_ASSET_VERSION` and `bridge_app_version` change).
+  finalized proof and release metadata; receipts bind tracked source, not the built image, and the bump reaches runtime because the Dockerfile installs `pyproject.toml`.
   Step 2's `--target-sha` soak is what makes "you ran what you tagged" literally true.
 
 ## Addon stage
@@ -474,10 +476,8 @@ The standalone Docker image (for non-HA users) is separate: `ghcr.io/florianhorn
 Stable add-on images are published by `addon-release.yml`, triggered by a `v*` tag push to the version-bump commit after it merges to `main`. GitHub Releases are curated standalone announcements; always write release notes rather than copying raw `CHANGELOG.md`. Tag the version-bump commit — not a later one — so the release image matches the commit CI already validated.
 
 `addon-release.yml` does not rebuild the add-on. It first validates at least 20
-physical Home Assistant Green cold-launch receipts bound to the tested source
-commit, requires nearest-rank first-byte p95 at or below two seconds, and proves
-that the tagged commit changed nothing after that source except the receipt JSON
-files. It then verifies that both per-arch `:${git_sha}` images exist, runs the
+physical HA Green cold-launch receipts with one release version and hardware-neutral content digest, requires p95 at or below two seconds, and proves the tagged tree matches after excluding only its `run-*.json` blobs. `source_commit` need not precede the squash-landed tag. Recording assumes a trusted single-writer checkout; pre/post snapshots do not attest against concurrent change-and-restore during a run.
+It then verifies that both per-arch `:${git_sha}` images exist, runs the
 launch and host-published-port proofs for each native architecture before stable
 publishing, and promotes those exact
 images to `:X.Y.Z` without changing the source manifest shape, updates `:latest`
@@ -647,23 +647,16 @@ gates" (single source of truth). The short version:
   hook (`scripts/hooks/require-preship-squad.sh`); `--disable-auto`
   (disarming) is allowed. The hook is a local guard, not a security boundary.
 - Branch protection on `main` has strict status checks (branch must be up to
-  date before merging) since 2026-06-12. Dependabot PRs that fall behind get
-  an automatic `@dependabot rebase` comment (`dependabot-nudge.yml`) because
-  Dependabot only self-rebases on conflicts. **Still unproven in the wild:**
-  until 2026-08-20 the nudge had never actually posted a comment — it read
-  GitHub's `mergeStateStatus` seconds after the push, got `UNKNOWN`, and
-  reported "nothing to do" every time (run 32342094107 did this while four
-  PRs were behind). The settle loop fixes the asking; whether Dependabot
-  honors a comment authored by `github-actions[bot]` is still unconfirmed.
-  If it ignores one, comment `@dependabot rebase` with your own gh auth
-  (`gh pr comment <PR#> --body "@dependabot rebase"`) and demote the workflow
-  to advisory.
-- The same workflow also names **human-authored** PRs that have auto-merge
-  armed and a behind branch, as a "PRs stuck behind main" warning and an
-  "Armed but behind" step summary. Those cannot be fixed from CI (a
-  `GITHUB_TOKEN` `update-branch` moves the head without retriggering CI), so
-  land them yourself with `scripts/land-pr.sh <PR#>`, which updates the branch
-  after verifying pre-ship evidence.
+  date before merging) since 2026-06-12. There is deliberately no workflow that
+  posts Dependabot rebase or recreate commands. The retired nudge used a
+  `GITHUB_TOKEN` actor that Dependabot rejected for lacking push access, and
+  batch-wide retries caused repeated comments and CI churn after each merge.
+  Dependabot auto-merge remains opportunistic: a behind PR parks until an
+  authenticated maintainer handles that specific PR. If Dependabot still owns
+  the branch, request its rebase as the maintainer; if the branch was edited,
+  use `@dependabot recreate` and re-review the new head. Human-authored PRs land
+  through `scripts/land-pr.sh <PR#>`, which updates the branch after verifying
+  pre-ship evidence.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
   `allow_auto_merge`, and the required contexts. Run it if landing behaves
@@ -792,7 +785,13 @@ log `Jamendo provider control failed` with only a `failure_code` set to
 
 `failure_code=api_failed provider_code=3` means Jamendo rejected the request
 format or one of its parameters, so the provider enters the blocked state.
-Invalid or suspended client IDs also block. Rate limits remain retryable.
+Invalid or suspended client IDs also block.
+
+`failure_code=rate_limited provider_code=6` means Jamendo asked the station to
+slow down. It stays retryable and keeps its backoff ladder. The same condition
+arrives as an ordinary HTTP 429 with no provider code, and reports the same way.
+Requests are counted by application or by requesting address, and the reply does
+not say which ceiling was reached, so no credential change is presented as a remedy.
 Starter and local music continue while Jamendo is degraded or blocked. Status
 and logs omit the client ID, private audio URL, raw response text, and raw
 provider exception. The provider removes its single-use artifact after

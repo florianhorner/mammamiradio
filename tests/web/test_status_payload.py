@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -275,6 +277,13 @@ def test_serialize_stream_log_entry_uses_metadata_duration_fallback():
     }
 
 
+@pytest.mark.parametrize("invalid_duration", [math.inf, -math.inf, math.nan, True, 10**1000])
+def test_duration_sec_from_payload_rejects_non_finite_or_boolean_values(invalid_duration):
+    metadata = dict.fromkeys(("duration_ms", "duration_s"), invalid_duration)
+    payload = {"duration_sec": invalid_duration, "metadata": metadata}
+    assert status_payload._duration_sec_from_payload(payload) is None
+
+
 def test_public_segment_metadata_redacts_private_ritual_internals():
     metadata = {
         "source": "banter",
@@ -395,7 +404,7 @@ def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeyp
         anthropic_api_key = ""
         openai_api_key = ""
         allow_ytdlp = True
-        playlist = SimpleNamespace(jamendo_client_id="")
+        playlist = SimpleNamespace(jamendo_client_id="", jamendo_enabled=False)
 
     monkeypatch.setattr(status_payload, "_golden_path_cache", None)
     monkeypatch.setattr(status_payload, "_golden_path_cache_ts", 0.0)
@@ -407,10 +416,11 @@ def test_golden_path_status_does_not_treat_legacy_env_as_available_music(monkeyp
     assert payload["source_readiness"]["sources"]["charts"]["status"] == "configured_unchecked"
 
 
-def _source_config(*, allow_ytdlp: bool = False, jamendo_client_id: str = ""):
+def _source_config(*, allow_ytdlp: bool = False, jamendo_client_id: str = "", jamendo_enabled: bool = False):
     return SimpleNamespace(
         allow_ytdlp=allow_ytdlp,
-        playlist=SimpleNamespace(jamendo_client_id=jamendo_client_id),
+        # Readiness follows enablement, not the bundled ID.
+        playlist=SimpleNamespace(jamendo_client_id=jamendo_client_id, jamendo_enabled=jamendo_enabled),
         anthropic_api_key="",
         openai_api_key="",
     )
@@ -531,7 +541,7 @@ def test_recovery_cover_only_without_on_air_still_reports_backup_audio_ready(mon
 
 def test_configured_source_not_reached_does_not_claim_it_was_checked():
     payload = status_payload._source_readiness_status(
-        _source_config(jamendo_client_id="configured"),
+        _source_config(jamendo_client_id="configured", jamendo_enabled=True),
         StationState(),
     )
 
@@ -539,6 +549,27 @@ def test_configured_source_not_reached_does_not_claim_it_was_checked():
     assert jamendo["status"] == "configured_unchecked"
     assert jamendo["attempted"] is False
     assert jamendo["detail"] == "Configured, but not checked because another source was selected."
+
+
+def test_disabled_jamendo_readiness_drops_stale_evidence_but_keeps_on_air() -> None:
+    evidence = SourceReadinessEvidence()
+    evidence.configure("jamendo", True)
+    evidence.mark_candidates("jamendo", 2)
+    evidence.mark_playable("jamendo")
+    state = StationState(source_readiness=evidence)
+    config = _source_config(jamendo_client_id="bundled", jamendo_enabled=False)
+    off = status_payload._source_readiness_status(config, state)["sources"]["jamendo"]
+    assert (off["configured"], off["status"], off["attempted"], off["candidates"], off["playable"]) == (
+        False,
+        "not_configured",
+        False,
+        0,
+        0,
+    )
+
+    state.source_readiness.mark_on_air("jamendo")
+    finishing = status_payload._source_readiness_status(config, state)["sources"]["jamendo"]
+    assert (finishing["status"], finishing["configured"], finishing["playable"]) == ("on_air", False, 0)
 
 
 def test_source_switch_resets_stale_playable_and_on_air_evidence():
@@ -621,3 +652,85 @@ def test_music_stream_start_maps_each_runtime_source_to_on_air(
         assert payload["advanced"]["status"] == "on_air"
     else:
         assert payload["sources"][projected_kind]["status"] == "on_air"
+
+
+def test_jamendo_readiness_follows_enablement_not_a_bundled_client_id():
+    """A bundled ID must not report an off source as configured."""
+    off = SimpleNamespace(
+        allow_ytdlp=False,
+        playlist=SimpleNamespace(jamendo_client_id="station-bundled-id", jamendo_enabled=False),
+        anthropic_api_key="",
+        openai_api_key="",
+    )
+    on = SimpleNamespace(
+        allow_ytdlp=False,
+        playlist=SimpleNamespace(jamendo_client_id="station-bundled-id", jamendo_enabled=True),
+        anthropic_api_key="",
+        openai_api_key="",
+    )
+
+    assert status_payload._source_readiness_status(off, StationState())["sources"]["jamendo"]["configured"] is False
+    assert status_payload._source_readiness_status(on, StationState())["sources"]["jamendo"]["configured"] is True
+
+
+def test_public_status_etag_is_deterministic_and_ignores_every_listener_advanced_clock():
+    payload = {
+        "now_streaming": {"type": "music", "label": "A — B"},
+        "current_progress_sec": 12.3,
+        "uptime_sec": 100,
+        "runtime_health": {"queue_empty_elapsed_s": 3.2, "queue_empty": True},
+        "ha_moments": {
+            "last_event_label": "Morning launch",
+            "last_event_ago_min": 1,
+            "recent": [{"label": "Morning launch", "ago_min": 1, "status": "aired"}],
+        },
+        "session_stopped": False,
+    }
+    original = copy.deepcopy(payload)
+    other = copy.deepcopy(payload)
+    other["current_progress_sec"] = 45.6
+    other["uptime_sec"] = 500
+    other["runtime_health"]["queue_empty_elapsed_s"] = 90.1
+    other["ha_moments"]["last_event_ago_min"] = 2
+    other["ha_moments"]["recent"][0]["ago_min"] = 2
+    assert status_payload.public_status_etag(payload) == status_payload.public_status_etag(other)
+    assert payload == original, "ETag normalization mutated the response payload"
+    semantic_change = copy.deepcopy(payload)
+    semantic_change["ha_moments"]["recent"][0]["status"] = "airing"
+    assert status_payload.public_status_etag(payload) != status_payload.public_status_etag(semantic_change)
+    etag = status_payload.public_status_etag({"station": "Radio Città"}, revision=("event", ("moment",)))
+    assert etag == 'W/"d03ca683a9ddee8a"'
+
+
+@pytest.mark.parametrize("recent", [None, "invalid", [None, "invalid", {"ago_min": 3}]])
+def test_public_status_etag_tolerates_nonstandard_recent_shapes(recent):
+    payload = {"ha_moments": {"recent": recent}}
+    original = copy.deepcopy(payload)
+    assert status_payload.public_status_etag(payload).startswith('W/"')
+    assert payload == original
+
+
+@pytest.mark.parametrize(
+    ("header", "etag", "expected"),
+    [
+        ('W/"abc123"', 'W/"abc123"', True),
+        ('"abc123"', 'W/"abc123"', True),
+        ('W/"stale", "abc123"', 'W/"abc123"', True),
+        ('W/"a,b"', 'W/"a,b"', True),
+        ('W/"\x80"', 'W/"\x80"', True),
+        ("*", 'W/"abc123"', True),
+        ('W/"other"', 'W/"abc123"', False),
+        ('W/"ABC123"', 'W/"abc123"', False),
+        ('W/"unterminated', 'W/"abc123"', False),
+        ('W/"€"', 'W/"€"', False),
+        ('*, W/"abc123"', 'W/"abc123"', False),
+        ("", 'W/"abc123"', False),
+    ],
+)
+def test_public_status_not_modified_honors_if_none_match(header, etag, expected):
+    assert status_payload.public_status_not_modified({"If-None-Match": header}, etag) is expected
+
+
+def test_public_status_not_modified_combines_repeated_header_lines():
+    headers = SimpleNamespace(get=lambda _name: None, getlist=lambda _name: ['W/"stale"', '"abc123"'])
+    assert status_payload.public_status_not_modified(headers, 'W/"abc123"')

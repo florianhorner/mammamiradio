@@ -1306,6 +1306,8 @@ class StationState:
     segments_since_time_check: int = 0
     guest_host_banter_cooldown_remaining: int = 0
     running_jokes: deque[str] = field(default_factory=lambda: deque(maxlen=5))
+    recent_shapes: deque[str] = field(default_factory=lambda: deque(maxlen=5))
+    recent_lore: deque[str] = field(default_factory=lambda: deque(maxlen=6))
     recent_transition_texts: deque[str] = field(default_factory=lambda: deque(maxlen=8))
     current_track: Track | None = None
     segments_produced: int = 0
@@ -1523,6 +1525,10 @@ class StationState:
     # admission or an explicit stronger control. A later same-valued operator
     # force must survive cleanup for the older interrupt.
     urgent_interrupt_force_next_revision: int | None = None
+    # Per-event ownership for drain recovery. Every successful interrupt
+    # overwrites this with whether that interrupt actually purged queued audio;
+    # cumulative discard telemetry is intentionally not a scheduling signal.
+    urgent_interrupt_drained_audio: bool = False
     chaos_cutover_epoch: int = 0
     chaos_script_fallbacks: int = 0
     chaos_audio_failures: int = 0

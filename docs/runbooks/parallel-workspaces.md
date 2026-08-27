@@ -259,7 +259,8 @@ order.
 ## Conflict ownership
 
 - Path A: the source workspace resolves conflicts with `main`, reruns its
-  checks, and refreshes its review evidence.
+  checks, and refreshes its review evidence — a conflicted resolution needs a
+  fresh squad run, not a reattestation.
 - Path B: the train owner stops the intake and returns semantic conflicts to
   the source workspace with the current train SHA. The worker resolves against
   that SHA, records it as the new base, reruns checks, and submits a new
@@ -271,10 +272,10 @@ Do not resolve either path from a third workspace.
 
 Dependabot is the automated exception to the human and feature landing path.
 Patch and minor Python PRs may use
-`.github/workflows/dependabot-automerge.yml`. Batch handling follows
-`docs/agents.md`, including nudge/recreate steps and manual major-Action
-landings through `scripts/land-pr.sh`. Do not attach Dependabot branches to
-Conductor feature slots.
+`.github/workflows/dependabot-automerge.yml`. Stale PR handling follows
+`docs/agents.md`: rejected or behind PRs park for an authenticated maintainer,
+including manual major-Action landings through `scripts/land-pr.sh`. Do not
+attach Dependabot branches to Conductor feature slots.
 
 ## Explicitly out of scope
 
