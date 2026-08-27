@@ -648,8 +648,21 @@ async (page) => {
     assert(await sourceReview.isVisible(), 'completed source row lost its music-readiness review action');
     await sourceReview.click();
     assert(await sourcePreview.isVisible(), 'inline source preview is missing when step 1 is reviewed');
+    assert(!(await sourcePreview.evaluate((element) => element.open)), 'healthy source preview expanded itself without being asked');
     const sourcePreviewSummaryBox = await sourcePreview.locator('> summary').boundingBox();
     assert(sourcePreviewSummaryBox?.height >= 43.5, `source preview summary fell below 44px: ${JSON.stringify(sourcePreviewSummaryBox)}`);
+    await sourcePreview.locator('> summary').click();
+    const sourcePreviewCopy = (await page.locator('#firstListenSourcePreview').innerText()).replace(/\s+/g, ' ');
+    assert(
+      sourcePreviewCopy.includes('Live charts') && sourcePreviewCopy.includes('Recovery cover')
+        && !sourcePreviewCopy.includes('Checking what can play'),
+      `source preview did not render the known sources: ${sourcePreviewCopy}`,
+    );
+    assert(
+      !/proves transport|Configured · not checked|Candidates only|Cover only|Not bundled/.test(sourcePreviewCopy),
+      `required journey leaked machine readiness vocabulary: ${sourcePreviewCopy}`,
+    );
+    await sourcePreview.locator('> summary').click();
     await sourceReview.click();
     assert(await sourcePreview.isHidden(), 'inline source preview stayed open after review closed');
     const speakerHelp = await page.locator('#firstListenSpeakerBody .use-copy').innerText();
@@ -749,12 +762,31 @@ async (page) => {
     assert((await page.locator('#firstListenSourceSummary').innerText()).includes('Backup audio'), 'degraded source did not explain what the listener gets');
     assert((await page.locator('#firstListenSourceRepair').innerText()).includes('continue'), 'degraded source blocked an otherwise usable First Listen');
     assert(await sourcePreview.evaluate((element) => element.open), 'degraded source preview did not open on the health transition');
+    const degradedPreviewCopy = (await page.locator('#firstListenSourcePreview').innerText()).replace(/\s+/g, ' ');
+    assert(
+      !/proves transport|Configured · not checked|Candidates only|Cover only|Not bundled|Transport cover only|No bundled library/.test(degradedPreviewCopy),
+      `degraded source preview leaked machine readiness vocabulary: ${degradedPreviewCopy}`,
+    );
+    assert(
+      degradedPreviewCopy.includes('Backup music only. It keeps the station on while real music is found.')
+        && degradedPreviewCopy.includes('Open music source tools to point it somewhere else.'),
+      `degraded source preview lost its plain-language way out: ${degradedPreviewCopy}`,
+    );
     await sourceReview.click();
     await sourcePreview.locator('> summary').click();
     assert(!(await sourcePreview.evaluate((element) => element.open)), 'operator could not close the degraded source preview');
     await page.evaluate(() => renderFirstListenProgress());
     assert(!(await sourcePreview.evaluate((element) => element.open)), 'routine refresh reopened the source preview after the operator closed it');
     await sourceReview.click();
+
+    await resetUi(setupProjection({ primary: 'unavailable', recovery: 'on_air' }));
+    assert((await page.locator('#firstListenSourceChip').innerText()) === 'BACKUP PLAYING', 'recovery audio was mistaken for a healthy primary source');
+    const recoveryPreviewCopy = (await page.locator('#firstListenSourcePreview').innerText()).replace(/\s+/g, ' ');
+    assert(
+      recoveryPreviewCopy.includes('Backup music is playing, so the station stays on.')
+        && !recoveryPreviewCopy.includes('proves transport'),
+      `recovery-on-air preview still speaks machine: ${recoveryPreviewCopy}`,
+    );
 
     const assertEarlyCompletionExit=async(beforeSave)=>{
       const ready=setupProjection({audio:true}),gate=responseGate();await resetUi(ready,audioReadyOverrides());
@@ -1166,6 +1198,13 @@ async (page) => {
     const existingNoSources = setupProjection({ fresh: false, onboardingRequired: true, sources: false });
     setupStatusProjection = existingNoSources;
     await resetUi(existingNoSources);
+    assert(await sourcePreview.evaluate((element) => element.hidden) === true, 'unknown sources exposed an empty source preview');
+    await sourceReview.click();
+    assert(
+      (await page.locator('#firstListenSourcePreview').innerText()).includes('Checking what can play'),
+      'unknown sources lost the honest what-plays-next placeholder',
+    );
+    await sourceReview.click();
     await assertUnfinished('firstListenPrivacyStep', 'firstListenKeepOffBtn');
     assert(await page.locator('#firstListenSpeakerStep').getAttribute('data-state') === 'complete', 'existing install was forced through speaker choice');
     assert(await page.locator('#firstListenVerifyStep').getAttribute('data-state') === 'complete', 'existing install was forced through audible proof');
