@@ -297,9 +297,8 @@ Supervisor client ID when possible, but keeps the source disabled until the
 operator reviews and acknowledges the current boundary. Additional candidate
 tuning can be set in `radio.toml` or container env without exposing Supervisor
 UI options: `JAMENDO_COUNTRY`, `JAMENDO_ORDER`, and `JAMENDO_LIMIT` (`1`-`200`).
-Add-on local MP3s live at `/data/music`; `run.sh` exports that path as
-`MAMMAMIRADIO_MUSIC_DIR` and moves it under the temporary fallback base only
-when `/data` is not writable.
+Add-on local music lives at `/data/music`; `run.sh` exports that path as
+`MAMMAMIRADIO_MUSIC_DIR`.
 
 **Admin option durability.** Supervisor's stored app options are the sole
 durable authority for Super Italian, Chaos, Festival, AI Quality, On-Air Sound,
@@ -553,11 +552,8 @@ the other retained files hold provider keys, station memory, and history.
 Generated downloads, normalization outputs, renders, and clips warm again after
 restore.
 
-`/data/music` is the add-on's operator-managed local music library: `run.sh`
-exports it as `MAMMAMIRADIO_MUSIC_DIR`, and the app resolves local MP3s from
-that path (moving under the temporary fallback base only when `/data` is not
-writable). Backing it up restores the local library along with the rest of the
-retained state.
+`/data/music` stays in the add-on backup. The scanner reads it in place and
+never moves or deletes operator files.
 
 This is a live, file-level copy, **not a copy taken from one single exact
 moment** of the retained state. SQLite may commit while Supervisor is

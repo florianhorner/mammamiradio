@@ -74,7 +74,7 @@ rematerializes an older Supervisor value.
 2. Validates the config and applies legacy migration like `station.bitrate -> audio.bitrate`.
 3. Purges suspect cache files (< 10 KB, likely failed downloads), scans the cache, trims the configured ceiling to what the disk can hold through `_disk_safe_cache_ceiling_mb`, and evicts old entries to the effective limit.
 4. Captures the install-scoped Home context boundary before SQLite initialization, then cross-checks its sidecar witness with a redundant DB-local witness after initialization. Missing, corrupt, or disagreeing R0 witnesses fail narrow; a cold install can therefore never become legacy merely because its database exists on a later boot.
-5. Restores an eligible persisted base selection. A retired `jamendo://` source is rewritten to the current base; add-on-external selections cannot restore extractor authority. Without an eligible selection, operator-owned local `music/` files win when present, otherwise the hash-pinned attributed starter catalog is the offline base.
+5. Restores an eligible persisted base selection without scanning local files; otherwise the hash-pinned attributed starter catalog is the offline base. A retired `jamendo://` source is rewritten, and add-on-external selections cannot restore extractor authority. Local discovery starts after audio and overlays future rotation.
 6. Initializes the clip ring buffer for WTF clip sharing.
 7. Restores `chaos_mode_active` from `MAMMAMIRADIO_CHAOS_MODE` or the HA add-on's Supervisor-generated, read-only `/data/options.json` startup projection without arming a first strike.
 8. Creates shared app state, then synchronously admits any safe, receipted,
@@ -919,9 +919,8 @@ durable base; Jamendo is deliberately outside this function:
    external selection may restore. A legacy `jamendo://` selection is retired and
    rewritten to the current base. Both add-ons reject any persisted selection that
    would require extractor authority.
-2. **Operator local files.** MP3s under `music/` become the base when present.
-   They receive no project license claim; the operator owns their provenance and
-   permitted use.
+2. **Operator local files.** Direct callers may use them as a base; production overlays after startup.
+   They receive no project license claim; the operator owns their provenance and permitted use.
 3. **Bundled starter catalog.** With no local base, runtime loads the twelve
    hash-pinned attribution-only derivatives from the canonical manifest
    (Incompetech under CC BY 4.0, Jamendo under CC BY 3.0).

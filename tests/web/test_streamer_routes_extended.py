@@ -21,6 +21,7 @@ from mammamiradio.core.config import load_config
 from mammamiradio.core.models import PlaylistSource, Segment, SegmentType, StationState, Track
 from mammamiradio.playlist.blocklist import load_blocklist
 from mammamiradio.playlist.downloader import YtdlpSearchOutcome
+from mammamiradio.playlist.local_library import initial_local_library_status
 from mammamiradio.playlist.playlist import ExplicitSourceError, normalized_track_key
 from mammamiradio.playlist.request_matching import SongRequestIntent, parse_song_request
 from mammamiradio.scheduling.producer import _reserve_music_segment
@@ -319,6 +320,31 @@ async def test_purge_with_segments(tmp_path):
     assert resp.status_code == 200
     assert resp.json()["purged"] == 1
     assert not fake_file.exists()  # File should be deleted
+
+
+@pytest.mark.asyncio
+async def test_local_scan_updates_rotation_without_switching_source_or_purging_queue(tmp_path):
+    app = _make_test_app()
+    config = app.state.config
+    config.music_dir = tmp_path / "music"
+    config.music_dir.mkdir()
+    (config.music_dir / "Local Artist - New Song.FLAC").write_bytes(b"audio")
+    app.state.local_library_scan_lock = asyncio.Lock()
+    app.state.local_library_status = initial_local_library_status(config)
+    assert app.state.local_library_status["in_progress"] is True
+    app.state.queue.put_nowait(Segment(type=SegmentType.MUSIC, path=tmp_path / "runway.mp3"))
+    state = app.state.station_state
+    source_revision = state.source_revision
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        added = await client.post("/api/media-sources/local/scan", json={})
+        unchanged = await client.post("/api/media-sources/local/scan", json={})
+
+    assert added.status_code == 200 and added.json()["added"] == added.json()["active"] == 1
+    assert unchanged.json()["added"] == unchanged.json()["removed"] == 0
+    assert unchanged.json()["playlist_revision"] == added.json()["playlist_revision"]
+    assert state.playlist[-1].title == "New Song" and state.source_revision == source_revision
+    assert state.playlist_source is None and state.continuity_epoch == 0 and app.state.queue.qsize() == 1
 
 
 @pytest.mark.asyncio
