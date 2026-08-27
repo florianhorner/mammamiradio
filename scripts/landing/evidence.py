@@ -8,11 +8,13 @@ import os
 import re
 import secrets
 import stat
+import sys
 from collections.abc import Iterator, Set
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,7 +24,9 @@ from .gitops import GitRepository, TreeEntry
 EXPECTED_REPOSITORY = "florianhorner/mammamiradio"
 SCHEMA_VERSION = "2.0.0"
 RECEIPT_KIND = "mammamiradio.preship-review"
-CONTENT_PROFILE = "git-ls-tree-rz-full-tree-minus-v2-receipts-v1"
+LEGACY_CONTENT_PROFILE = "git-ls-tree-rz-full-tree-minus-v2-receipts-v1"
+CONTENT_PROFILE = "git-ls-tree-rz-full-tree-minus-v2-and-ha-green-receipts-v2"
+SUPPORTED_CONTENT_PROFILES = frozenset({LEGACY_CONTENT_PROFILE, CONTENT_PROFILE})
 RECEIPT_ROOT = "proof/preship-reviews/v2"
 RECEIPT_NAMESPACE_BYTES = RECEIPT_ROOT.encode("ascii")
 RECEIPT_ROOT_BYTES = (RECEIPT_ROOT + "/").encode("ascii")
@@ -36,9 +40,17 @@ MAX_LEDGER_LINE_BYTES = 256 * 1024
 MAX_TREE_ENTRIES = 250_000
 MAX_TREE_BYTES = 256 * 1024 * 1024
 MAX_TREE_RECORD_BYTES = 64 * 1024
+HA_RECEIPT_ROOT = "proof/media/ha-green-release-evidence"
+HA_RECEIPT_ROOT_BYTES = (HA_RECEIPT_ROOT + "/").encode("ascii")
+MAX_HA_RECEIPT_BYTES = 64 * 1024
+MAX_HA_RECEIPTS = 1_000
 
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 _RECEIPT_PATH_RE = re.compile(rb"^proof/preship-reviews/v2/([0-9a-f]{64})/([0-9a-f]{64})\.json$")
+_HA_RECEIPT_PATH_RE = re.compile(
+    rb"^proof/media/ha-green-release-evidence/run-"
+    rb"([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$"
+)
 _TOP_LEVEL_KEYS = frozenset(
     {
         "content_profile",
@@ -159,6 +171,7 @@ class Receipt:
     reviewed_content_sha256: str
     receipt_sha256: str
     reviewed_commit: str
+    content_profile: str
 
 
 @dataclass(frozen=True)
@@ -168,6 +181,7 @@ class TreeSnapshot:
     # Callers choose the minimal receipt subset they need. Ordinary tree records
     # and validated historical receipts are never retained by production paths.
     receipts: dict[bytes, Receipt]
+    has_ha_green_receipts: bool
 
 
 @dataclass(frozen=True)
@@ -210,7 +224,6 @@ def _validate_receipt(
     expected_values = {
         "schema_version": SCHEMA_VERSION,
         "kind": RECEIPT_KIND,
-        "content_profile": CONTENT_PROFILE,
         "repository": repository,
     }
     for key, expected in expected_values.items():
@@ -218,6 +231,11 @@ def _validate_receipt(
             raise EvidenceError(
                 f"v2 receipt {_display_path(entry.path)} has {key}={payload.get(key)!r}; expected {expected!r}"
             )
+    content_profile = payload.get("content_profile")
+    if not isinstance(content_profile, str) or content_profile not in SUPPORTED_CONTENT_PROFILES:
+        raise EvidenceError(
+            f"v2 receipt {_display_path(entry.path)} has unsupported content_profile={content_profile!r}"
+        )
 
     skill = review.get("skill")
     if skill not in ALLOWED_SKILLS:
@@ -253,7 +271,26 @@ def _validate_receipt(
         reviewed_content_sha256=content_digest,
         receipt_sha256=actual_receipt_digest,
         reviewed_commit=reviewed_commit,
+        content_profile=content_profile,
     )
+
+
+@lru_cache(maxsize=1)
+def _ha_release_validator() -> Any:
+    name = "_mammamiradio_ha_green_release_validator_for_v2"
+    path = Path(__file__).resolve().parents[1] / "validate-ha-green-release-evidence.py"
+    module = ModuleType(name)
+    module.__file__ = str(path)
+    sys.modules[name] = module
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    return module
+
+
+def _validate_ha_release_receipt(*, entry: TreeEntry, raw: bytes) -> None:
+    try:
+        _ha_release_validator()._validate_receipt(Path(os.fsdecode(entry.path)), raw=raw)
+    except ValueError as exc:
+        raise EvidenceError(f"HA Green receipt {_display_path(entry.path)} is invalid: {exc}") from exc
 
 
 def snapshot_tree(
@@ -273,15 +310,20 @@ def snapshot_tree(
     expected_repository = repository or repository_identity(repo)
     retained: dict[bytes, Receipt] = {}
 
-    def validate_batch(batch: list[TreeEntry], *, keep_all: bool) -> None:
+    def validate_batch(batch: list[TreeEntry], *, keep_all: bool, ha_green: bool = False) -> None:
         if not batch:
             return
+        max_bytes = MAX_HA_RECEIPT_BYTES if ha_green else MAX_RECEIPT_BYTES
+        max_total_bytes = MAX_HA_RECEIPT_BYTES * RECEIPT_READ_BATCH_SIZE if ha_green else MAX_RECEIPT_BATCH_BYTES
         blobs = repo.read_blobs(
             (entry.oid for entry in batch),
-            max_bytes=MAX_RECEIPT_BYTES,
-            max_total_bytes=MAX_RECEIPT_BATCH_BYTES,
+            max_bytes=max_bytes,
+            max_total_bytes=max_total_bytes,
         )
         for entry in batch:
+            if ha_green:
+                _validate_ha_release_receipt(entry=entry, raw=blobs[entry.oid])
+                continue
             receipt = _validate_receipt(
                 repo=repo,
                 repository=expected_repository,
@@ -296,6 +338,8 @@ def snapshot_tree(
     ordinary_entries = 0
     ordinary_bytes = 0
     receipt_batch: list[TreeEntry] = []
+    ha_receipt_batch: list[TreeEntry] = []
+    ha_receipt_count = 0
     for entry in repo.tree_entries(resolved, max_record_bytes=MAX_TREE_RECORD_BYTES):
         if entry.path == previous_path:
             raise GitError(f"git ls-tree returned duplicate path {_display_path(entry.path)}")
@@ -314,6 +358,22 @@ def snapshot_tree(
                 validate_batch(receipt_batch, keep_all=retain_all_receipts)
                 receipt_batch = []
             continue
+        if _HA_RECEIPT_PATH_RE.fullmatch(entry.path) is not None:
+            if entry.mode != b"100644" or entry.kind != b"blob":
+                mode = entry.mode.decode("ascii", errors="replace")
+                kind = entry.kind.decode("ascii", errors="replace")
+                raise EvidenceError(
+                    f"HA Green receipt {_display_path(entry.path)} must be a non-executable regular blob, "
+                    f"got {mode} {kind}"
+                )
+            ha_receipt_count += 1
+            if ha_receipt_count > MAX_HA_RECEIPTS:
+                raise EvidenceError(f"tree contains more than {MAX_HA_RECEIPTS} HA Green receipts")
+            ha_receipt_batch.append(entry)
+            if len(ha_receipt_batch) == RECEIPT_READ_BATCH_SIZE:
+                validate_batch(ha_receipt_batch, keep_all=False, ha_green=True)
+                ha_receipt_batch = []
+            continue
 
         ordinary_entries += 1
         if ordinary_entries > MAX_TREE_ENTRIES:
@@ -323,6 +383,7 @@ def snapshot_tree(
             raise GitError(f"git ls-tree returned more than {MAX_TREE_BYTES} ordinary bytes")
         digest.update(entry.raw_with_nul)
     validate_batch(receipt_batch, keep_all=retain_all_receipts)
+    validate_batch(ha_receipt_batch, keep_all=False, ha_green=True)
 
     content_digest = digest.hexdigest()
     if retain_matching_receipts:
@@ -341,6 +402,7 @@ def snapshot_tree(
         commit=resolved,
         content_sha256=content_digest,
         receipts=retained,
+        has_ha_green_receipts=bool(ha_receipt_count),
     )
 
 
@@ -787,7 +849,10 @@ def emit_v2(
 
 def _matching_receipts(snapshot: TreeSnapshot) -> list[Receipt]:
     return [
-        receipt for receipt in snapshot.receipts.values() if receipt.reviewed_content_sha256 == snapshot.content_sha256
+        receipt
+        for receipt in snapshot.receipts.values()
+        if receipt.reviewed_content_sha256 == snapshot.content_sha256
+        and (receipt.content_profile == CONTENT_PROFILE or not snapshot.has_ha_green_receipts)
     ]
 
 
@@ -844,6 +909,10 @@ def verify_v2(
 
         digest_cache: dict[str, str] = {}
         for receipt in new_receipts:
+            if receipt.content_profile != CONTENT_PROFILE:
+                raise EvidenceError(
+                    f"new v2 receipt {_display_path(receipt.path)} must use content profile {CONTENT_PROFILE!r}"
+                )
             try:
                 reviewed_commit = repo.resolve_full_commit(receipt.reviewed_commit)
             except GitError as exc:

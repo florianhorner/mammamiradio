@@ -3,10 +3,10 @@
 
 The per-PR Pi smoke proves one cold launch. Stable publication additionally
 requires at least twenty receipts recorded on Home Assistant Green hardware.
-Receipts bind to the exact code commit that was measured. They may be added in
-one or more later commits only when the complete diff from the tested commit is
-limited to the receipt directory; this avoids the impossible requirement that
-a committed receipt name the commit which contains itself.
+Receipts bind to the complete tracked release content rather than commit
+ancestry. The canonical digest excludes only immutable HA Green run receipts,
+so an equivalent squash commit remains valid while every other path, mode, and
+blob-byte change fails closed.
 """
 
 from __future__ import annotations
@@ -14,24 +14,31 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
-import subprocess
 import sys
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RECEIPT_DIR = REPO_ROOT / "proof" / "media" / "ha-green-release-evidence"
 DEFAULT_EXAMPLE = REPO_ROOT / "proof" / "media" / "ha-green-release-receipt.example.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MINIMUM_RUNS = 20
 P95_LIMIT_MS = 2_000.0
 MAX_RECEIPT_BYTES = 64 * 1024
+MAX_RECEIPTS = 1_000
+_RECEIPT_ROOT_BYTES = b"proof/media/ha-green-release-evidence/"
 _SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+_VERSION_VALUE = re.compile(r"^(?:([0-9]+\.[0-9]+\.[0-9]+)|\"([0-9]+\.[0-9]+\.[0-9]+)\"|'([0-9]+\.[0-9]+\.[0-9]+)')$")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _RECEIPT_NAME = re.compile(r"^run-([0-9a-f-]{36})\.json$")
 _METRIC = "listener_connection_to_first_accepted_non_silent_manifest_starter_byte"
@@ -41,6 +48,8 @@ _ALLOWED_TOP_LEVEL = {
     "evidence_kind",
     "release_version",
     "source_commit",
+    "content_profile",
+    "content_sha256",
     "run_id",
     "recorded_at",
     "hardware",
@@ -55,6 +64,37 @@ _REQUIRED_ASSERTIONS = {
     "provider": "incompetech",
     "basis": "bundled_manifest",
 }
+_REQUIRED_ASSERTIONS_JSON = json.dumps(_REQUIRED_ASSERTIONS, sort_keys=True)
+
+
+def _is_excluded_receipt_path(path: bytes) -> bool:
+    if not path.startswith(_RECEIPT_ROOT_BYTES):
+        return False
+    leaf = path.removeprefix(_RECEIPT_ROOT_BYTES)
+    return b"/" not in leaf and leaf.startswith(b"run-") and leaf.endswith(b".json")
+
+
+def _exclude_release_entry(entry: tuple[bytes, bytes, bytes]) -> bool:
+    path, mode, _oid = entry
+    if not path.startswith(_RECEIPT_ROOT_BYTES):
+        return False
+    if not _is_excluded_receipt_path(path):
+        raise ValueError(f"unexpected entry in HA Green receipt directory: {os.fsdecode(path)!r}")
+    if mode != b"100644":
+        raise ValueError(f"HA Green receipt {os.fsdecode(path)!r} must be a non-executable regular blob")
+    return True
+
+
+_RELEASE_CONTENT_PATH = REPO_ROOT / "scripts" / "release_content.py"
+_RELEASE_CONTENT = ModuleType("_mammamiradio_release_content")
+_RELEASE_CONTENT.__file__ = str(_RELEASE_CONTENT_PATH)
+sys.modules[_RELEASE_CONTENT.__name__] = _RELEASE_CONTENT
+exec(compile(_RELEASE_CONTENT_PATH.read_bytes(), str(_RELEASE_CONTENT_PATH), "exec"), _RELEASE_CONTENT.__dict__)
+CONTENT_PROFILE = "mammamiradio-release-content-v1"
+_git = _RELEASE_CONTENT.git
+_tracked_entries = partial(_RELEASE_CONTENT.partitioned_entries, exclude_entry=_exclude_release_entry)
+_tracked_content_sha256 = partial(_RELEASE_CONTENT.tracked_content_sha256, exclude_entry=_exclude_release_entry)
+_worktree_content_sha256 = partial(_RELEASE_CONTENT.worktree_content_sha256, exclude_entry=_exclude_release_entry)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,26 +103,37 @@ class ValidatedReceipt:
     run_id: str
     release_version: str
     source_commit: str
+    content_sha256: str
     recorded_at: str
     first_byte_ms: float
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
 
 
 def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-def _read_json_object(path: Path) -> dict[str, Any]:
-    if path.is_symlink():
-        raise ValueError("symlinks are not accepted")
+def _read_json_object(path: Path, *, raw: bytes | None = None) -> dict[str, Any]:
+    if raw is None:
+        if path.is_symlink():
+            raise ValueError("symlinks are not accepted")
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"cannot read receipt: {exc}") from exc
+    if len(raw) > MAX_RECEIPT_BYTES:
+        raise ValueError(f"receipt is {len(raw)} bytes; maximum is {MAX_RECEIPT_BYTES}")
     try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise ValueError(f"cannot stat receipt: {exc}") from exc
-    if size > MAX_RECEIPT_BYTES:
-        raise ValueError(f"receipt is {size} bytes; maximum is {MAX_RECEIPT_BYTES}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ValueError(f"cannot read JSON object: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("top level must be a JSON object")
@@ -96,13 +147,13 @@ def _validate_timestamp(value: object) -> str:
         parsed = datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError as exc:
         raise ValueError("recorded_at must be an RFC 3339 UTC timestamp") from exc
-    if parsed.utcoffset() is None or parsed.utcoffset().total_seconds() != 0:
+    if (offset := parsed.utcoffset()) is None or offset.total_seconds() != 0:
         raise ValueError("recorded_at must be UTC")
     return value
 
 
-def _validate_receipt(path: Path, *, allow_example: bool = False) -> ValidatedReceipt:
-    payload = _read_json_object(path)
+def _validate_receipt(path: Path, *, raw: bytes | None = None, allow_example: bool = False) -> ValidatedReceipt:
+    payload = _read_json_object(path, raw=raw)
     unexpected = sorted(set(payload) - _ALLOWED_TOP_LEVEL)
     missing = sorted(_ALLOWED_TOP_LEVEL - {"$schema"} - set(payload))
     if unexpected:
@@ -111,6 +162,8 @@ def _validate_receipt(path: Path, *, allow_example: bool = False) -> ValidatedRe
         raise ValueError(f"missing fields: {', '.join(missing)}")
     if payload.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"schema_version must be {SCHEMA_VERSION}")
+    if "$schema" in payload and not isinstance(payload["$schema"], str):
+        raise ValueError("$schema must be a string when present")
 
     kind = payload.get("evidence_kind")
     if kind == "example" and allow_example:
@@ -124,6 +177,11 @@ def _validate_receipt(path: Path, *, allow_example: bool = False) -> ValidatedRe
     source_commit = payload.get("source_commit")
     if not isinstance(source_commit, str) or not _COMMIT.fullmatch(source_commit):
         raise ValueError("source_commit must be a lowercase 40-character git SHA")
+    if payload.get("content_profile") != CONTENT_PROFILE:
+        raise ValueError(f"content_profile must be {CONTENT_PROFILE}")
+    content_sha256 = payload.get("content_sha256")
+    if not isinstance(content_sha256, str) or not _DIGEST.fullmatch(content_sha256):
+        raise ValueError("content_sha256 must be a lowercase 64-character SHA-256")
     run_id = payload.get("run_id")
     if not isinstance(run_id, str) or not _UUID.fullmatch(run_id):
         raise ValueError("run_id must be a lowercase UUIDv4")
@@ -152,11 +210,11 @@ def _validate_receipt(path: Path, *, allow_example: bool = False) -> ValidatedRe
         raise ValueError(f"timing.metric must be {_METRIC}")
     for field, upper_bound in (("boot_to_tcp_ms", 60_000.0), ("connection_to_first_byte_ms", 10_000.0)):
         value = timing.get(field)
-        if not _is_number(value) or not math.isfinite(float(value)) or not 0 <= float(value) <= upper_bound:
+        if not isinstance(value, int | float) or not _is_number(value) or not 0 <= value <= upper_bound:
             raise ValueError(f"timing.{field} must be finite and between 0 and {upper_bound:g}")
 
     assertions = payload.get("assertions")
-    if not isinstance(assertions, dict) or assertions != _REQUIRED_ASSERTIONS:
+    if not isinstance(assertions, dict) or json.dumps(assertions, sort_keys=True) != _REQUIRED_ASSERTIONS_JSON:
         raise ValueError("assertions must exactly prove empty/offline/non-silent Incompetech starter playback")
 
     if kind == "ha_green_cold_launch":
@@ -169,50 +227,54 @@ def _validate_receipt(path: Path, *, allow_example: bool = False) -> ValidatedRe
         run_id=run_id,
         release_version=release_version,
         source_commit=source_commit,
+        content_sha256=content_sha256,
         recorded_at=recorded_at,
         first_byte_ms=float(timing["connection_to_first_byte_ms"]),
     )
 
 
-def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def _committed_receipt_inputs(repo_root: Path, commit: str) -> list[tuple[Path, bytes]]:
+    _resolved, _ordinary, entries = _tracked_entries(repo_root, commit)
+    if len(entries) > MAX_RECEIPTS:
+        raise ValueError(f"release commit contains more than {MAX_RECEIPTS} HA Green receipts")
+    inputs: list[tuple[Path, bytes]] = []
+    for path, _mode, oid in entries:
+        size = _git("cat-file", "-s", oid.decode("ascii"), cwd=repo_root)
+        if size.returncode != 0 or not size.stdout.strip().isdigit() or int(size.stdout) > MAX_RECEIPT_BYTES:
+            raise ValueError(f"HA Green receipt {os.fsdecode(path)!r} is unreadable or oversized")
+        blob = _git("cat-file", "blob", oid.decode("ascii"), cwd=repo_root)
+        if blob.returncode != 0:
+            raise ValueError(f"cannot read HA Green receipt {os.fsdecode(path)!r}")
+        inputs.append((repo_root / os.fsdecode(path), blob.stdout))
+    return inputs
 
 
-def _current_commit(repo_root: Path) -> str:
-    result = _git("rev-parse", "HEAD^{commit}", cwd=repo_root)
-    value = result.stdout.strip().casefold()
-    if result.returncode != 0 or not _COMMIT.fullmatch(value):
-        raise ValueError("cannot resolve the current git commit; run from a committed release checkout")
-    return value
-
-
-def _validate_git_binding(*, repo_root: Path, tested_commit: str, current_commit: str, receipt_dir: Path) -> list[str]:
-    errors: list[str] = []
-    ancestor = _git("merge-base", "--is-ancestor", tested_commit, current_commit, cwd=repo_root)
-    if ancestor.returncode != 0:
-        return [f"tested source commit {tested_commit} is not an ancestor of release commit {current_commit}"]
-
-    diff = _git("diff", "--name-only", f"{tested_commit}..{current_commit}", cwd=repo_root)
-    if diff.returncode != 0:
-        return [f"cannot compare tested source commit to release commit: {diff.stderr.strip() or 'git diff failed'}"]
+def _parse_release_version(raw: bytes, label: str) -> str:
     try:
-        allowed_prefix = receipt_dir.resolve().relative_to(repo_root.resolve()).as_posix().rstrip("/") + "/"
-    except ValueError:
-        return ["receipt directory must be inside the release repository for commit binding"]
-    changed = [line.strip() for line in diff.stdout.splitlines() if line.strip()]
-    disallowed = [path for path in changed if not path.startswith(allowed_prefix) or not path.endswith(".json")]
-    if disallowed:
-        errors.append(
-            "release commit changed files after the measured source commit outside the receipt set: "
-            + ", ".join(disallowed)
-        )
-    return errors
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeError as exc:
+        raise ValueError(f"cannot parse release version from {label}: {exc}") from exc
+    versions: list[str] = []
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#") or line[0].isspace():
+            continue
+        match = re.fullmatch(r"([a-z_][a-z0-9_]*):(?:[ \t]*(.*))?", line)
+        if match is None:
+            raise ValueError(f"cannot read exactly one strict release version from {label}")
+        if match.group(1) == "version":
+            versions.append(match.group(2) or "")
+    match = _VERSION_VALUE.fullmatch(versions[0]) if len(versions) == 1 else None
+    if match is None:
+        raise ValueError(f"cannot read exactly one strict release version from {label}")
+    return next(value for value in match.groups() if value is not None)
+
+
+def _release_version_from_commit(repo_root: Path, commit: str) -> str:
+    path = "ha-addon/mammamiradio/config.yaml"
+    result = _git("cat-file", "blob", f"{commit}:{path}", cwd=repo_root)
+    if result.returncode != 0:
+        raise ValueError(f"cannot read release version from {path} at {commit}")
+    return _parse_release_version(result.stdout, f"{path} at {commit}")
 
 
 def _nearest_rank_p95(values: list[float]) -> float:
@@ -230,36 +292,54 @@ def validate_release_evidence(
 ) -> dict[str, Any]:
     errors: list[str] = []
     receipts: list[ValidatedReceipt] = []
+    receipt_inputs: list[tuple[Path, bytes | None]] = []
+    resolved_current: str | None = None
+    release_content_sha256: str | None = None
+    committed_release_version: str | None = None
     if not _SEMVER.fullmatch(release_version):
         errors.append(f"release version {release_version!r} is not exact X.Y.Z semver")
-    if not receipt_dir.exists():
+    if verify_git_binding:
+        canonical_receipt_dir = repo_root.resolve() / "proof" / "media" / "ha-green-release-evidence"
+        if receipt_dir.resolve() != canonical_receipt_dir:
+            errors.append(f"receipt directory must be the canonical release path: {canonical_receipt_dir}")
+        try:
+            resolved_current, release_content_sha256 = _tracked_content_sha256(repo_root, current_commit or "HEAD")
+            committed_release_version = _release_version_from_commit(repo_root, resolved_current)
+            receipt_inputs.extend(_committed_receipt_inputs(repo_root, resolved_current))
+        except ValueError as exc:
+            errors.append(str(exc))
+    elif not receipt_dir.exists():
         errors.append(f"receipt directory is missing: {receipt_dir}")
     elif receipt_dir.is_symlink() or not receipt_dir.is_dir():
         errors.append(f"receipt path must be a real directory, not a symlink: {receipt_dir}")
     else:
         entries = sorted(receipt_dir.iterdir(), key=lambda item: item.name)
+        if len(entries) > MAX_RECEIPTS:
+            errors.append(f"receipt directory contains more than {MAX_RECEIPTS} entries")
+            entries = entries[:MAX_RECEIPTS]
         unexpected = [item.name for item in entries if not item.is_file() or item.suffix != ".json"]
         if unexpected:
             errors.append("receipt directory contains unexpected entries: " + ", ".join(unexpected))
-        for path in (item for item in entries if item.is_file() and item.suffix == ".json"):
-            try:
-                receipts.append(_validate_receipt(path))
-            except ValueError as exc:
-                errors.append(f"{path.name}: {exc}")
+        receipt_inputs = [(item, None) for item in entries if item.is_file() and item.suffix == ".json"]
+    for path, raw in receipt_inputs:
+        try:
+            receipts.append(_validate_receipt(path, raw=raw))
+        except ValueError as exc:
+            errors.append(f"{path.name}: {exc}")
 
     if len(receipts) < MINIMUM_RUNS:
         errors.append(f"found {len(receipts)} valid cold runs; at least {MINIMUM_RUNS} are required")
 
-    run_ids = [receipt.run_id for receipt in receipts]
-    duplicate_ids = sorted({run_id for run_id in run_ids if run_ids.count(run_id) > 1})
+    duplicate_ids = {run_id for run_id, count in Counter(receipt.run_id for receipt in receipts).items() if count > 1}
     if duplicate_ids:
-        errors.append("duplicate run_id values: " + ", ".join(duplicate_ids))
+        errors.append("duplicate run_id values: " + ", ".join(sorted(duplicate_ids)))
     versions = sorted({receipt.release_version for receipt in receipts})
     if versions and versions != [release_version]:
         errors.append(f"receipt release versions {versions} do not exactly match {release_version}")
     source_commits = sorted({receipt.source_commit for receipt in receipts})
-    if len(source_commits) > 1:
-        errors.append("all receipts must bind to one tested source commit: " + ", ".join(source_commits))
+    content_digests = sorted({receipt.content_sha256 for receipt in receipts})
+    if len(content_digests) > 1:
+        errors.append("receipts contain mixed content_sha256 values: " + ", ".join(content_digests))
 
     p95_ms: float | None = None
     if receipts:
@@ -267,33 +347,35 @@ def validate_release_evidence(
         if p95_ms > P95_LIMIT_MS:
             errors.append(f"first-byte p95 is {p95_ms:.3f}ms; release limit is {P95_LIMIT_MS:.3f}ms")
 
-    resolved_current: str | None = current_commit
     tested_commit = source_commits[0] if len(source_commits) == 1 else None
-    if verify_git_binding and tested_commit is not None:
-        try:
-            resolved_current = resolved_current or _current_commit(repo_root)
-        except ValueError as exc:
-            errors.append(str(exc))
-        else:
-            if not _COMMIT.fullmatch(resolved_current):
-                errors.append("current release commit must be a lowercase 40-character git SHA")
-            else:
-                errors.extend(
-                    _validate_git_binding(
-                        repo_root=repo_root,
-                        tested_commit=tested_commit,
-                        current_commit=resolved_current,
-                        receipt_dir=receipt_dir,
-                    )
-                )
+    receipt_content_sha256 = content_digests[0] if len(content_digests) == 1 else None
+    if verify_git_binding:
+        if committed_release_version is not None and committed_release_version != release_version:
+            errors.append(
+                f"committed release version {committed_release_version} does not exactly match {release_version}"
+            )
+        if (
+            receipt_content_sha256 is not None
+            and release_content_sha256 is not None
+            and receipt_content_sha256 != release_content_sha256
+        ):
+            errors.append(
+                f"receipt content digest {receipt_content_sha256} does not match "
+                f"release content digest {release_content_sha256}"
+            )
 
     return {
         "schema_version": SCHEMA_VERSION,
         "proof_kind": "ha_green_release_evidence",
         "ok": not errors,
         "release_version": release_version,
+        "committed_release_version": committed_release_version,
         "tested_source_commit": tested_commit,
+        "tested_source_commits": source_commits,
         "release_commit": resolved_current,
+        "content_profile": CONTENT_PROFILE,
+        "receipt_content_sha256": receipt_content_sha256,
+        "release_content_sha256": release_content_sha256,
         "receipt_count": len(receipts),
         "minimum_receipts": MINIMUM_RUNS,
         "p95_ms": p95_ms,
@@ -331,14 +413,10 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 def _release_version_from_repo(repo_root: Path) -> str:
     config = repo_root / "ha-addon" / "mammamiradio" / "config.yaml"
     try:
-        for line in config.read_text(encoding="utf-8").splitlines():
-            if line.startswith("version:"):
-                value = line.split(":", 1)[1].strip().strip('"')
-                if _SEMVER.fullmatch(value):
-                    return value
+        raw = config.read_bytes()
     except OSError as exc:
         raise ValueError(f"cannot read release version from {config}: {exc}") from exc
-    raise ValueError(f"cannot read exact X.Y.Z release version from {config}")
+    return _parse_release_version(raw, str(config))
 
 
 def _print_report(report: dict[str, Any]) -> None:
@@ -348,14 +426,16 @@ def _print_report(report: dict[str, Any]) -> None:
         f"[{status}] HA Green release evidence: {report['receipt_count']}/{report['minimum_receipts']} runs, "
         f"p95={p95} (limit {report['p95_limit_ms']:.3f}ms)"
     )
-    if report["tested_source_commit"]:
-        print(f"  tested source: {report['tested_source_commit']}")
+    if report["tested_source_commits"]:
+        print(f"  informational source commits: {', '.join(report['tested_source_commits'])}")
+    if report["release_content_sha256"]:
+        print(f"  release content: {report['release_content_sha256']}")
     for error in report["errors"]:
         print(f"  - {error}", file=sys.stderr)
     if not report["ok"]:
         print(
             "  Next: on the tested Home Assistant Green checkout, run\n"
-            "    python scripts/ha-green-launch-smoke.py --record-release-receipt "
+            "    python -P scripts/ha-green-launch-smoke.py --record-release-receipt "
             "proof/media/ha-green-release-evidence\n"
             "  until at least 20 receipts exist, then commit only those receipt JSON files.",
             file=sys.stderr,
