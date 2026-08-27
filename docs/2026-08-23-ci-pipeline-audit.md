@@ -4,7 +4,7 @@
 > GitHub, and Conductor session evidence. It does not prescribe remediation.
 > Remediation is outside this historical audit's scope.
 
-**Evidence cutoff:** `origin/main` at `6fc4a851` (2026-08-23).  
+**Evidence cutoff:** `origin/main` at `6fc4a851` (2026-08-23).<br>
 **Audit scope:** mammamiradio Conductor corpus (631 workspaces, 1,829 sessions,
 ~1.1M message rows, 2026-04-03 through 2026-08-23), GitHub API queries on merged
 PRs, and read-only inspection of landing scripts and workflows.
