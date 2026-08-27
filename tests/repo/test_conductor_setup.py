@@ -93,6 +93,7 @@ def test_cloud_bootstrap_selects_first_supported_interpreter(tmp_path: Path, she
     _fake_bootstrap(tmp_path)
     _fake_python(tmp_path / "bin", "python3.12")
     shell_env["PATH"] = _path_without_system_python(tmp_path)
+    shell_env.pop("PYTHON_BIN", None)
 
     result = _run(cloud, tmp_path, env=shell_env)
 
@@ -105,6 +106,7 @@ def test_cloud_bootstrap_rejects_pre_311_fallback_interpreter(tmp_path: Path, sh
     _fake_bootstrap(tmp_path)
     _fake_python(tmp_path / "bin", "python3", supported=False)
     shell_env["PATH"] = _path_without_system_python(tmp_path)
+    shell_env.pop("PYTHON_BIN", None)
 
     result = _run(cloud, tmp_path, env=shell_env)
 
