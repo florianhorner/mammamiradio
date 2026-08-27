@@ -323,7 +323,7 @@ def test_v2_and_ha_stay_valid_after_parentless_squash(repo: GitRepository, tmp_p
     report = validator.validate_release_evidence(
         receipt_dir=receipt_root, release_version="3.4.5", repo_root=repo.root, current_commit=squash
     )
-    assert report["ok"] is True
+    assert report["ok"] and verify_v2(repo, target="HEAD", base=f"{_v2_commit}^", mode="pr").matching_receipts
 
 
 def test_legacy_v2_profile_is_readable_but_cannot_be_emitted_for_new_content(repo: GitRepository) -> None:

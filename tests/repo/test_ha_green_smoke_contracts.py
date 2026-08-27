@@ -48,7 +48,7 @@ def test_launch_smoke_names_the_listener_timing_boundary_honestly(tmp_path: Path
         (package / name).write_text(body, encoding="utf-8")
     command = [smoke.sys.executable, "-c", smoke._OFFLINE_UVICORN, "1", str(ROOT)]
     env = {"PYTHONPATH": str(tmp_path), "PYTHONSAFEPATH": "1"}
-    assert smoke.subprocess.run(command, env=env).returncode != 0
+    assert b"AssertionError" in smoke.subprocess.run(command, env=env, capture_output=True).stderr
 
 
 def test_pi_smoke_keeps_required_check_name_when_arm_work_is_path_gated() -> None:
