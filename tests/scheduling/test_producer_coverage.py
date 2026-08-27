@@ -27,6 +27,7 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.core.segment_status import is_fallback_active
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
     AdFormat,
@@ -610,6 +611,7 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
+    config.anthropic_api_key = "test-key"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     # Create a fake canned clip so _pick_canned_clip returns something real
@@ -643,7 +645,7 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dia.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=tmp_path / "banter.mp3"),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._pick_packaged_banter_clip", return_value=canned_clip) as packaged_picker,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch.dict("os.environ", {}, clear=False),
     ):
@@ -657,6 +659,8 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     assert seg.type == SegmentType.BANTER
     # The segment should be the canned clip (fallback was used)
     assert seg.metadata.get("canned") is True
+    assert PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY not in seg.metadata
+    packaged_picker.assert_called_once_with(queue, state, config, contextual=False)
 
 
 @pytest.mark.asyncio
@@ -805,7 +809,7 @@ async def test_no_llm_banter_does_not_advance_home_fact_rotation(tmp_path):
 
     state = _make_run_state()
     state.force_next = SegmentType.BANTER
-    state.canned_clips_streamed = 2  # gold-closer branch -> canned pick
+    state.canned_clips_streamed = producer.SHAREWARE_CANNED_LIMIT  # shareware exhausted -> generated closer
     director = HomeContextDirector()
     director.observe(
         [DirectorObservation("weather.forecast_home", "weather", "sunny", score=9.0, temperature_c=22.0)],
@@ -899,7 +903,7 @@ async def test_banter_no_llm_impossible_tts_failure_falls_back_to_canned(tmp_pat
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     # Force the "gold closer" branch instead of immediate canned-pick branch.
-    state.canned_clips_streamed = 2
+    state.canned_clips_streamed = producer.SHAREWARE_CANNED_LIMIT
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     canned_clip = tmp_path / "canned_no_llm.mp3"
@@ -2323,6 +2327,72 @@ async def test_banter_metadata_includes_transition_track_ref(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("transition_track_ref") == "youtube|abc123"
+
+
+@pytest.mark.asyncio
+async def test_exact_packaged_banter_segment_carries_its_starter_dependency(tmp_path):
+    from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
+    from mammamiradio.core.spoken_assets import declared_spoken_asset_entries
+    from mammamiradio.media.starter import load_starter_tracks, starter_source
+    from mammamiradio.web.streamer import _packaged_banter_predecessor_is_current
+
+    starter_id = "USUAN1100173"
+    starter_track = next(track for track in load_starter_tracks() if track.provider_track_id == starter_id)
+    exact_entry = next(
+        entry
+        for entry in declared_spoken_asset_entries("banter")
+        if entry.required_previous_starter_id == starter_id and entry.mode == "normal"
+    )
+    exact_path = DEMO_ASSETS_DIR / exact_entry.relative_path
+    state = StationState(
+        playlist=[starter_track],
+        playlist_source=starter_source(1),
+        listeners_active=1,
+    )
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.pacing.lookahead_segments = 4
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+    first_segment = True
+
+    def _next_segment(*_args, **_kwargs):
+        nonlocal first_segment
+        if first_segment:
+            first_segment = False
+            return SegmentType.MUSIC
+        return SegmentType.BANTER
+
+    with (
+        patch.object(producer, "_canned_clip_cache", {"banter": [exact_entry]}),
+        patch(
+            f"{PRODUCER_MODULE}.next_segment_type",
+            side_effect=_next_segment,
+        ),
+        patch(
+            f"{PRODUCER_MODULE}._pick_packaged_banter_clip",
+            return_value=exact_path,
+        ) as packaged_picker,
+        patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+        patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+        patch(f"{PRODUCER_MODULE}.RUNWAY_FLOOR_SECONDS", 0),
+        patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+    ):
+        await _run_until_n_queued(queue, state, config, n=2)
+
+    music_segment, exact_segment = list(queue._queue)[:2]
+    assert music_segment.metadata["source_kind"] == "starter"
+    assert music_segment.metadata["provider_track_id"] == starter_id
+    assert exact_segment.path.name == "06-normal-long-time-coming.mp3"
+    assert exact_segment.metadata[PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY] == starter_id
+    packaged_picker.assert_called_with(queue, state, config, contextual=True)
+
+    # The listener-audible state snapshot preserves the producer's raw metadata,
+    # so the final pre-air check accepts this real catalog-to-segment identity.
+    state.on_stream_segment(music_segment)
+    assert _packaged_banter_predecessor_is_current(state, exact_segment) is True
 
 
 @pytest.mark.asyncio

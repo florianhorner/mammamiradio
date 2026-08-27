@@ -187,7 +187,7 @@ private durable system for strategy or relationship context.
   A release is blocked unless the exact starter files, at least 45 minutes,
   complete human audition evidence, and the 75 MiB package ceiling pass
   `make media-check` and `make media-proof`.
-- If no LLM key is configured (neither Anthropic nor OpenAI), banter falls back to stock copy. Pending listener requests use truthful request-aware stock copy and the same deferred queue-admission lifecycle as generated banter, so Demo Radio can acknowledge and settle them without inventing a catalogue failure. `mammamiradio/assets/demo/banter/` is currently empty — the bundled-clip inventory is a TODO; until it is populated, missing-LLM banter is text-to-speech over stock copy rather than pre-recorded clips.
+- If no LLM key is configured (neither Anthropic nor OpenAI), Demo Radio draws without repetition from the 21 reviewed clips in `mammamiradio/assets/demo/banter/` before its generated impossible-moment closer. Selection stays inside Normal or Super Italian Mode, admits the three track-bound clips only behind a matching starter track verified again at playback, and keeps the three fourth-wall clips rare and natural-only. Pending listener requests use truthful request-aware stock copy and the same deferred queue-admission lifecycle as generated banter, so Demo Radio can acknowledge and settle them without inventing a catalogue failure.
 - Music comes from the local-or-starter base, with at most one explicitly enabled transient Jamendo track inserted after every two base tracks. A miss immediately falls back to base music. Optional external extraction exists only for a standalone install with the `external-media` extra; both add-ons omit it. Queue starvation uses only media that passes the shared admission boundary; Jamendo can never become rescue audio.
 - Packaged recovery clips under `mammamiradio/assets/demo/` are non-ephemeral durable assets, and natural optional speech yields to music when real queued audio is below the producer runway floor while queue capacity remains.
 - If Anthropic fails mid-session, script generation falls back to the same role's
@@ -595,7 +595,7 @@ Every PR touching audio delivery (producer, streamer, normalizer, any bridge/fal
 
 **Scenario 1 — Normal:** feature works as designed.
 
-**Scenario 2 — Empty fallback:** canned clips absent, norm cache empty, no assets in container. The real container ships only README stubs in `mammamiradio/assets/demo/banter/`. Producer exception recovery must synthesize a bounded branded recovery sweeper before falling through to the emergency tone last resort. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
+**Scenario 2 — Empty fallback:** simulate canned clips absent or invalid, norm cache empty, and no usable packaged assets in the container. Producer exception recovery must synthesize a bounded branded recovery sweeper before falling through to the emergency tone last resort. Tests that mock `_pick_canned_clip` to return a real file are hiding this class of bug.
 
 **Scenario 3 — Post-restart:** flag files persisted from a prior run, `session_stopped` still set, HA watchdog has restarted. Test that a listener connecting AFTER a restart + stopped state still gets audio.
 
