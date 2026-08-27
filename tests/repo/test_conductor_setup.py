@@ -45,7 +45,9 @@ def _path_without_system_python(tmp_path: Path) -> str:
     """Provide the POSIX utilities used by the script without system Python."""
     bin_dir = tmp_path / "bin"
     for utility in ("chmod", "dirname", "ln", "mkdir", "pwd"):
-        (bin_dir / utility).symlink_to(Path("/usr/bin") / utility)
+        resolved = shutil.which(utility, path="/usr/bin:/bin")
+        assert resolved is not None
+        (bin_dir / utility).symlink_to(resolved)
     return str(bin_dir)
 
 
@@ -66,6 +68,8 @@ def shell_env(tmp_path: Path) -> dict[str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     env = dict(os.environ)
+    env.pop("CONDUCTOR_ROOT_PATH", None)
+    env.pop("PYTHON_BIN", None)
     env.update(
         {
             "HOME": str(tmp_path / "home"),
@@ -88,11 +92,34 @@ def test_setup_dispatches_cloud_workspaces_to_cloud_bootstrap(tmp_path: Path, sh
     assert (tmp_path / "cloud-dispatch").read_text() == "cloud"
 
 
+def test_setup_keeps_local_workspaces_on_shared_bootstrap(tmp_path: Path, shell_env: dict[str, str]) -> None:
+    setup = _install_script_fixture(tmp_path, SETUP)
+    _fake_bootstrap(tmp_path)
+    shell_env["CONDUCTOR_IS_LOCAL"] = "1"
+
+    result = _run(setup, tmp_path, env=shell_env)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "bootstrap-python").exists()
+
+
 def test_cloud_bootstrap_selects_first_supported_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:
     cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
     _fake_bootstrap(tmp_path)
     _fake_python(tmp_path / "bin", "python3.12")
     shell_env["PATH"] = _path_without_system_python(tmp_path)
+
+    result = _run(cloud, tmp_path, env=shell_env)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "bootstrap-python").read_text() == "python3.12"
+
+
+def test_cloud_bootstrap_skips_unsupported_earlier_candidate(tmp_path: Path, shell_env: dict[str, str]) -> None:
+    cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
+    _fake_bootstrap(tmp_path)
+    _fake_python(tmp_path / "bin", "python3.11", supported=False)
+    _fake_python(tmp_path / "bin", "python3.12")
 
     result = _run(cloud, tmp_path, env=shell_env)
 
@@ -123,6 +150,19 @@ def test_cloud_bootstrap_honors_explicit_interpreter(tmp_path: Path, shell_env: 
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "bootstrap-python").read_text() == "custom-python"
+
+
+def test_cloud_bootstrap_rejects_unsupported_explicit_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:
+    cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
+    _fake_bootstrap(tmp_path)
+    _fake_python(tmp_path / "bin", "custom-python", supported=False)
+    shell_env["PYTHON_BIN"] = "custom-python"
+
+    result = _run(cloud, tmp_path, env=shell_env)
+
+    assert result.returncode == 1
+    assert "Missing a Python 3.11+ interpreter" in result.stderr
+    assert not (tmp_path / "bootstrap-python").exists()
 
 
 def test_cloud_bootstrap_installs_development_requirements_after_activation(
