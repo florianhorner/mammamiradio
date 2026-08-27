@@ -142,10 +142,13 @@ Then, in **First Listen** (the automatic fresh-install landing):
 
 1. Confirm that the opening card leads with the authored 27-second mini-show:
    station music, the privacy-aware Marco/Giulia opening, then the live stream.
-   It must say that no AI key or Home context is used. Expand **What feeds the
-   station after the opening** only as supporting detail. Local music should be
-   ready; charts and Jamendo are intentionally unavailable; recovery/demo audio
-   must be described as a limitation rather than a music source.
+   It must say that no AI key or Home context is used. Expand **What plays after
+   the welcome** only as supporting detail. Local music should be ready; live
+   charts are unavailable in this lab; Jamendo is optional and off; bundled
+   demo and recovery audio must be described honestly as included music or a
+   fallback, never as proof that primary music is ready. If the music-repair
+   action is shown, it must wait for capability detection and then open **Music
+   sources**, not hidden chart controls.
 2. Mute the machine before confirming, select **Start sound check**, then **Not
    yet**, and check that the repair guidance names this device's volume and mute
    and offers to try again here.
