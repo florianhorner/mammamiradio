@@ -3970,6 +3970,7 @@ def _pick_canned_clip(
     # A changed packaged byte still fails closed without reading the entire
     # banter bank on the producer event loop.
     if not is_approved_spoken_asset(pick, assets_root=_DEMO_ASSETS_DIR):
+        logger.warning("Rejecting packaged %s clip after manifest/hash admission failed: %s", subdir, pick)
         _canned_clip_cache.pop(subdir, None)
         return None
     if subdir == "banter":
@@ -3980,6 +3981,9 @@ def _pick_canned_clip(
 def _queued_predecessor_starter_id(queue: asyncio.Queue[Segment]) -> str:
     """Return a proven adjacent starter id, or empty when adjacency is uncertain."""
 
+    # asyncio.Queue has no public snapshot API. This synchronous peek is safe in
+    # the producer's event-loop turn and fails closed to evergreen copy if a
+    # future implementation stops exposing its deque.
     internal = getattr(queue, "_queue", None)
     if not internal:
         return ""
