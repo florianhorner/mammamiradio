@@ -1,10 +1,16 @@
-# landing-gate test proof — 2026-08-26 — branch cursor/land-pr-gates-v2-0cf6
+# landing-gate test proof — 2026-08-27 — branch cursor/land-pr-gates-v2-0cf6
 
 ## bash tests/workflows/test_land_pr.sh
-All 20 land-pr cases passed.
+All 25 land-pr cases passed.
 
 ## bash tests/workflows/test_check_merge_gate.sh
-All 8 check-merge-gate cases passed.
+All 10 check-merge-gate cases passed.
 
 ## pytest tests/repo/test_pr_queue_status.py
-9 passed in 2.05s
+10 passed in 6.16s
+
+## pytest tests/repo/test_read_preship_ledger.py
+3 passed in 1.08s
+
+## make test-fast
+8569 passed, 4 skipped, 48 deselected in 596.64s

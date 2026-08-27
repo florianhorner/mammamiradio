@@ -114,6 +114,10 @@ local_base_summary() {
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 EVIDENCE_CHECKER="${MMR_QUEUE_EVIDENCE_CHECKER:-$SCRIPT_DIR/check-preship-evidence.sh}"
+REVIEW_THREADS_LIB="$SCRIPT_DIR/review-threads.sh"
+[ -r "$REVIEW_THREADS_LIB" ] || die "review-thread reader not found at $REVIEW_THREADS_LIB."
+# shellcheck source=scripts/review-threads.sh
+. "$REVIEW_THREADS_LIB"
 
 evidence_summary() {
   local head="$1" base="$2"
@@ -160,36 +164,6 @@ thread_debt_count() {
   ] | length'
 }
 
-# review_threads_json <owner> <repo> <pr> -> combined reviewThreads JSON document.
-# shellcheck disable=SC2016  # GraphQL queries must stay literal for gh api graphql.
-review_threads_json() {
-  local owner="$1" repo="$2" pr="$3"
-  local cursor="" response combined='[]' has_next
-  local query_initial query_paged
-  query_initial='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
-  # shellcheck disable=SC2016  # GraphQL query must stay literal for gh api graphql.
-  query_paged='query($owner:String!,$repo:String!,$number:Int!,$after:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
-  while true; do
-    if [ -z "$cursor" ]; then
-      response="$(gh api graphql \
-        -f query="$query_initial" \
-        -f owner="$owner" -f repo="$repo" -F number="$pr" 2>/dev/null)" || return 1
-    else
-      response="$(gh api graphql \
-        -f query="$query_paged" \
-        -f owner="$owner" -f repo="$repo" -F number="$pr" -f after="$cursor" 2>/dev/null)" || return 1
-    fi
-    combined="$(printf '%s' "$response" | jq --argjson acc "$combined" '
-      $acc + (.data.repository.pullRequest.reviewThreads.nodes // [])
-    ')"
-    has_next="$(printf '%s' "$response" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')"
-    cursor="$(printf '%s' "$response" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')"
-    [ "$has_next" = "true" ] && [ -n "$cursor" ] || break
-  done
-  jq -n --argjson nodes "$combined" \
-    '{data:{repository:{pullRequest:{reviewThreads:{nodes:$nodes}}}}}'
-}
-
 recommendation() {
   local is_draft="$1" merge_state="$2" worktree="$3" dirty_status="$4" evidence="$5" thread_debt="$6"
   if [ "$is_draft" = "true" ]; then
@@ -200,7 +174,9 @@ recommendation() {
     say "commit dirty work"
   elif [ -z "$worktree" ]; then
     say "inspect/no local worktree"
-  elif [ "$thread_debt" != "0" ] && [ "$thread_debt" != "skipped" ] && [ "$thread_debt" != "unknown" ]; then
+  elif [ "$thread_debt" = "unknown" ]; then
+    say "inspect/thread check unavailable"
+  elif [ "$thread_debt" != "0" ] && [ "$thread_debt" != "skipped" ]; then
     say "resolve bot threads"
   elif [ "$evidence" != "ok" ] && [ "$evidence" != "skipped" ]; then
     say "emit/review evidence"

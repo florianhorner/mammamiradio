@@ -55,6 +55,11 @@ EVIDENCE_CHECKER="${MMR_LAND_EVIDENCE_CHECKER:-$SCRIPT_DIR/check-preship-evidenc
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'land-pr: %s\n' "$*" >&2; exit 1; }
 
+REVIEW_THREADS_LIB="$SCRIPT_DIR/review-threads.sh"
+[ -r "$REVIEW_THREADS_LIB" ] || die "review-thread reader not found at $REVIEW_THREADS_LIB."
+# shellcheck source=scripts/review-threads.sh
+. "$REVIEW_THREADS_LIB"
+
 command -v gh >/dev/null 2>&1 || die "gh CLI not found. Install GitHub CLI, then re-run."
 command -v jq >/dev/null 2>&1 || die "jq not found. Install jq, then re-run."
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
@@ -141,36 +146,6 @@ evidence_check() {
   return 0
 }
 
-# review_threads_json <owner> <repo> <pr> -> combined reviewThreads JSON document.
-# shellcheck disable=SC2016  # GraphQL queries must stay literal for gh api graphql.
-review_threads_json() {
-  local owner="$1" repo="$2" pr="$3"
-  local cursor="" response combined='[]' has_next
-  local query_initial query_paged
-  query_initial='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
-  # shellcheck disable=SC2016  # GraphQL query must stay literal for gh api graphql.
-  query_paged='query($owner:String!,$repo:String!,$number:Int!,$after:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated url comments(first:50){nodes{author{login} body}}}}}}}}'
-  while true; do
-    if [ -z "$cursor" ]; then
-      response="$(gh api graphql \
-        -f query="$query_initial" \
-        -f owner="$owner" -f repo="$repo" -F number="$pr" 2>/dev/null)" || return 1
-    else
-      response="$(gh api graphql \
-        -f query="$query_paged" \
-        -f owner="$owner" -f repo="$repo" -F number="$pr" -f after="$cursor" 2>/dev/null)" || return 1
-    fi
-    combined="$(printf '%s' "$response" | jq --argjson acc "$combined" '
-      $acc + (.data.repository.pullRequest.reviewThreads.nodes // [])
-    ')"
-    has_next="$(printf '%s' "$response" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')"
-    cursor="$(printf '%s' "$response" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty')"
-    [ "$has_next" = "true" ] && [ -n "$cursor" ] || break
-  done
-  jq -n --argjson nodes "$combined" \
-    '{data:{repository:{pullRequest:{reviewThreads:{nodes:$nodes}}}}}'
-}
-
 thread_check() {
   local pr="$1" slug owner repo response blocked
   if [ "${MMR_LAND_SKIP_THREAD_CHECK:-0}" = "1" ]; then
@@ -202,15 +177,13 @@ thread_check() {
     printf '%s' "$response" | jq -r '
       .data.repository.pullRequest.reviewThreads.nodes[]
       | select(.isResolved == false and .isOutdated == false)
-      | select(
-          [.comments.nodes[]?
-            | select(.author.login == "coderabbitai"
-                or .author.login == "copilot-pull-request-reviewer"
-                or .author.login == "chatgpt-codex-connector")
-            | .body // ""
-          ] | any(test("(Major|Critical|P0|P1)"; "i"))
-        )
-      | .url
+      | ([.comments.nodes[]?
+          | select(.author.login == "coderabbitai"
+              or .author.login == "copilot-pull-request-reviewer"
+              or .author.login == "chatgpt-codex-connector")
+          | select((.body // "") | test("(Major|Critical|P0|P1)"; "i"))
+          | .url
+        ][0] // empty)
     '
   )
 
@@ -227,7 +200,9 @@ verify_head() {
   evidence_check "$head" "$base" || return 1
   if squad_check "$head" "$last_push_epoch" "$strict_squad"; then
     :
-  elif [ "$strict_squad" = "1" ] && [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
+  elif [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
+    say "land-pr: committed evidence was skipped and no qualifying local ledger entry covers ${head:0:12}."
+    say "         Re-run without MMR_LAND_SKIP_EVIDENCE_CHECK=1 or provide current ledger evidence."
     return 1
   elif [ "${MMR_LAND_REQUIRE_LEDGER_SQUAD:-0}" = "1" ]; then
     return 1

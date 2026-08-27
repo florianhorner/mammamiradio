@@ -16,8 +16,9 @@ cd "$REPO_ROOT"
 
 [[ -x "$LAND" ]] || chmod +x "$LAND"
 
+PASS_COUNT=0
 fail() { echo "FAIL: $1" >&2; exit 1; }
-pass() { echo "PASS: $1"; }
+pass() { PASS_COUNT=$((PASS_COUNT + 1)); echo "PASS: $1"; }
 
 TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
@@ -48,7 +49,8 @@ else
   VERY_OLD_ISO="$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-EMPTY_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+EMPTY_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+EMPTY_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}'
 
 # ---- mock gh ----------------------------------------------------------------
 # Behavior is driven by env vars:
@@ -59,6 +61,7 @@ EMPTY_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]
 #   GH_MOCK_HEAD_AFTER    headRefOid returned after `pr update-branch` ran
 #   GH_MOCK_COMMIT_DATE   committedDate of the newest PR commit (default NOW)
 #   GH_MOCK_GRAPHQL_JSON  GraphQL response for review-thread query
+#   GH_MOCK_COMMENT_JSON  GraphQL response for a thread's comments
 #   GH_MOCK_HELP_LINES    emit a large help stream for the capability probe
 #   GH_MOCK_UPDATE_FAIL   non-empty => `pr update-branch` exits 1
 # Every invocation is appended to $GH_MOCK_LOG for assertions.
@@ -104,12 +107,17 @@ case "$1 $2" in
     printf '{"nameWithOwner":"test-owner/test-repo"}\n'
     ;;
   "api graphql")
-    if [ -n "${GH_MOCK_GRAPHQL_PAGE2:-}" ] && [[ "$*" == *"after:"* || "$*" == *"after "* ]]; then
+    [[ "$*" != *"isOutdated url comments"* ]] || exit 1
+    if [[ "$*" == *"PullRequestReviewThread"* ]]; then
+      if [[ "$*" == *"after=comment-page2"* ]]; then
+        printf '%s\n' "${GH_MOCK_COMMENT_PAGE2:?}"
+      else
+        printf '%s\n' "${GH_MOCK_COMMENT_JSON:?}"
+      fi
+    elif [[ "$*" == *"after=thread-page2"* ]]; then
       printf '%s\n' "${GH_MOCK_GRAPHQL_PAGE2:?}"
-    elif [ -n "${GH_MOCK_GRAPHQL_PAGE2:-}" ]; then
-      printf '%s\n' "${GH_MOCK_GRAPHQL_JSON:?}"
     else
-      printf '%s\n' "${GH_MOCK_GRAPHQL_JSON:-{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[]}}}}}}"
+      printf '%s\n' "${GH_MOCK_GRAPHQL_JSON:?}"
     fi
     ;;
   *) : ;;
@@ -188,7 +196,7 @@ run_land() {
   RUN_OUT="$(env PATH="$MOCK_BIN:$PATH" \
       GH_MOCK_LOG="$GH_MOCK_LOG" GH_MOCK_STATE_DIR="$GH_MOCK_STATE_DIR" \
       GH_MOCK_HEAD="$HEAD_FULL" GH_MOCK_BASE="$ANC_FULL" GH_MOCK_COMMIT_DATE="$NOW_ISO" \
-      GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" \
+      GH_MOCK_GRAPHQL_JSON="$EMPTY_THREADS" GH_MOCK_COMMENT_JSON="$EMPTY_COMMENTS" \
       MMR_LAND_REVIEW_READER="$reader" MMR_LAND_UPDATE_TIMEOUT=6 \
       MMR_LAND_SKIP_EVIDENCE_CHECK="${MMR_LAND_SKIP_EVIDENCE_CHECK:-1}" \
       MMR_LAND_SKIP_THREAD_CHECK="${MMR_LAND_SKIP_THREAD_CHECK:-1}" \
@@ -355,24 +363,43 @@ never_merged || fail "non-numeric PR arg must never reach gh merge"
 pass "non-numeric PR argument rejected"
 
 # Case 17: unresolved Major/Critical bot thread => deny
-BLOCKING_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false,"url":"https://example.test/thread/1","comments":{"nodes":[{"author":{"login":"coderabbitai"},"body":"Major: fix the race"}]}}]}}}}}'
+BLOCKING_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"T1","isResolved":false,"isOutdated":false}]}}}}}'
+BLOCKING_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"author":{"login":"coderabbitai"},"body":"Major: fix the race","url":"https://example.test/comment/1"}]}}}}'
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
-  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$BLOCKING_THREADS"
+  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$BLOCKING_THREADS" GH_MOCK_COMMENT_JSON="$BLOCKING_COMMENTS"
 [ "$RUN_RC" -ne 0 ] || fail "blocking bot thread must deny (exit code)"
 never_merged || fail "blocking bot thread must never merge"
-printf '%s' "$RUN_OUT" | grep -q "bot thread" || fail "deny message should name bot threads"
+printf '%s' "$RUN_OUT" | grep -q "https://example.test/comment/1" || fail "deny message should link the blocking comment"
 pass "unresolved Major/Critical bot thread denies"
 
-# Case 18: blocking thread on page 2 of paginated reviewThreads => deny
-PAGE1='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"page2"},"nodes":[]}}}}}'
-PAGE2='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"isResolved":false,"isOutdated":false,"url":"https://example.test/thread/page2","comments":{"nodes":[{"author":{"login":"coderabbitai"},"body":"Major: second page debt"}]}}]}}}}}'
+# Case 17b: an unresolved lower-severity thread is not blocking
+NONBLOCKING_COMMENTS='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"author":{"login":"coderabbitai"},"body":"P2: follow-up","url":"https://example.test/comment/2"}]}}}}'
 run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
-  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$PAGE1" GH_MOCK_GRAPHQL_PAGE2="$PAGE2"
+  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$BLOCKING_THREADS" GH_MOCK_COMMENT_JSON="$NONBLOCKING_COMMENTS"
+[ "$RUN_RC" -eq 0 ] || fail "lower-severity bot thread should not deny (exit code)"
+merged_with "$HEAD_FULL" || fail "lower-severity bot thread should still arm"
+pass "unresolved lower-severity bot thread does not block"
+
+# Case 18: blocking thread on page 2 of paginated reviewThreads => deny
+PAGE1='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"thread-page2"},"nodes":[]}}}}}'
+PAGE2='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"T2","isResolved":false,"isOutdated":false}]}}}}}'
+run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
+  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$PAGE1" GH_MOCK_GRAPHQL_PAGE2="$PAGE2" \
+  GH_MOCK_COMMENT_JSON="$BLOCKING_COMMENTS"
 [ "$RUN_RC" -ne 0 ] || fail "page-2 blocking thread must deny (exit code)"
 never_merged || fail "page-2 blocking thread must never merge"
 pass "paginated reviewThreads scan finds blocking thread on page 2"
 
-# Case 19: no local ledger, committed v2 evidence covers head => arm
+# Case 19: blocking bot comment on page 2 of a thread => deny
+COMMENT_PAGE1='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":true,"endCursor":"comment-page2"},"nodes":[]}}}}'
+run_land "$(make_reader review "$HEAD_SHORT" "$NOW_ISO")" \
+  MMR_LAND_SKIP_THREAD_CHECK=0 GH_MOCK_GRAPHQL_JSON="$BLOCKING_THREADS" \
+  GH_MOCK_COMMENT_JSON="$COMMENT_PAGE1" GH_MOCK_COMMENT_PAGE2="$BLOCKING_COMMENTS"
+[ "$RUN_RC" -ne 0 ] || fail "page-2 blocking comment must deny (exit code)"
+never_merged || fail "page-2 blocking comment must never merge"
+pass "paginated comment scan finds blocking bot debt"
+
+# Case 20: no local ledger, committed v2 evidence covers head => arm
 run_land "$(empty_reader)" \
   MMR_LAND_SKIP_EVIDENCE_CHECK=0 \
   MMR_LAND_EVIDENCE_CHECKER="$(make_passing_evidence_checker)"
@@ -382,5 +409,13 @@ printf '%s' "$RUN_OUT" | grep -q "committed v2 evidence covers" \
   || fail "v2-only landing should note v2 evidence satisfied the review gate"
 pass "v2 evidence satisfies landing without a local ledger"
 
+# Case 21: skipping v2 evidence still requires a qualifying local ledger
+run_land "$(empty_reader)" MMR_LAND_SKIP_EVIDENCE_CHECK=1
+[ "$RUN_RC" -ne 0 ] || fail "skipped v2 evidence without ledger must deny (exit code)"
+never_merged || fail "skipped v2 evidence without ledger must never merge"
+printf '%s' "$RUN_OUT" | grep -q "committed evidence was skipped" \
+  || fail "deny message should explain that skipped evidence requires a ledger"
+pass "evidence skip without local ledger denies"
+
 echo
-echo "All 20 land-pr cases passed."
+echo "All $PASS_COUNT land-pr cases passed."

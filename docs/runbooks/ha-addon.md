@@ -639,11 +639,11 @@ gates" (single source of truth). The short version:
   review time) until Florian gives the merge signal.
 - On the signal, run `scripts/land-pr.sh <PR#>`. It verifies committed v2
   pre-ship evidence on the PR head (portable — works from cloud agents once
-  the receipt is on the branch), optionally accepts a local gstack ledger squad
-  entry when present (code-state freshness — a soak of days is fine, a push
-  after the review is not), blocks unresolved Major/Critical bot review threads,
-  updates the branch if it is behind (CI re-runs on the integrated state; the
-  post-update head needs fresh v2 evidence for the new content), and arms
+  the receipt is on the branch); a current local gstack ledger supplements that
+  proof and is required if the evidence check is explicitly skipped. It blocks
+  unresolved current Major/Critical/P0/P1 bot threads and fails closed when
+  thread data cannot be read, updates the branch if it is behind, rechecks the
+  exact post-update head, and arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified.
 - Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local

@@ -32,8 +32,24 @@ def _init_repo(path: Path) -> None:
     _run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=path)
 
 
-def _fake_gh(bin_dir: Path, prs: list[dict[str, object]]) -> None:
+def _fake_gh(bin_dir: Path, prs: list[dict[str, object]], *, fail_threads: bool = False) -> None:
     payload = json.dumps(prs)
+    empty_threads = json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [],
+                        }
+                    }
+                }
+            }
+        },
+        separators=(",", ":"),
+    )
+    thread_command = "  exit 1\n" if fail_threads else f"  printf '%s\\n' '{empty_threads}'\n"
     script = bin_dir / "gh"
     _write(
         script,
@@ -42,6 +58,14 @@ def _fake_gh(bin_dir: Path, prs: list[dict[str, object]]) -> None:
         "  cat <<'JSON'\n"
         f"{payload}\n"
         "JSON\n"
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then\n'
+        '  echo "test-owner/test-repo"\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then\n'
+        f"{thread_command}"
         "  exit 0\n"
         "fi\n"
         'echo "unexpected gh call: $*" >&2\n'
@@ -56,10 +80,11 @@ def _env_with_fake_gh(
     *,
     skip_evidence: bool = True,
     skip_threads: bool = True,
+    fail_threads: bool = False,
 ) -> dict[str, str]:
     bin_dir = tmp_path.parent / f"{tmp_path.name}-bin"
     bin_dir.mkdir()
-    _fake_gh(bin_dir, prs)
+    _fake_gh(bin_dir, prs, fail_threads=fail_threads)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     if skip_evidence:
@@ -380,4 +405,34 @@ def test_pr_queue_status_does_not_recommend_land_now_without_evidence(tmp_path: 
     assert result.returncode == 0
     assert "evidence: missing/invalid" in result.stdout
     assert "recommendation: emit/review evidence" in result.stdout
+    assert "recommendation: land now" not in result.stdout
+
+
+def test_pr_queue_status_fails_closed_when_thread_debt_is_unknown(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _run(["git", "checkout", "-qb", "feature-thread-unknown"], cwd=tmp_path)
+    env = _env_with_fake_gh(
+        tmp_path,
+        [
+            {
+                "number": 31,
+                "title": "clean but thread query failed",
+                "headRefName": "feature-thread-unknown",
+                "headRefOid": "aaaa111111110000000000000000000000000000",
+                "baseRefOid": "bbbb222222220000000000000000000000000000",
+                "mergeStateStatus": "CLEAN",
+                "isDraft": False,
+                "updatedAt": "2026-07-07T00:10:00Z",
+                "url": "https://example.test/pr/31",
+            }
+        ],
+        skip_threads=False,
+        fail_threads=True,
+    )
+
+    result = _run(["bash", str(PR_QUEUE_STATUS)], cwd=tmp_path, env=env)
+
+    assert result.returncode == 0
+    assert "bot-thread debt: unknown" in result.stdout
+    assert "recommendation: inspect/thread check unavailable" in result.stdout
     assert "recommendation: land now" not in result.stdout
