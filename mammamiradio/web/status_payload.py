@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
+from mammamiradio.core.config import jamendo_source_configured
 from mammamiradio.core.models import (
     LISTENER_REQUEST_INTERNAL_METADATA_KEYS,
     SEGMENT_PLAYLIST_SOURCE_KIND_KEY,
@@ -128,11 +129,13 @@ def _source_readiness_status(config, state: StationState) -> dict:
     # Configuration flags can be projected without touching the filesystem.
     # Load-time evidence remains the authority for local/bundled availability.
     entries["charts"].configured = entries["charts"].configured or bool(getattr(config, "allow_ytdlp", False))
-    playlist_config = getattr(config, "playlist", None)
-    jamendo_client_id = getattr(playlist_config, "jamendo_client_id", "")
-    entries["jamendo"].configured = entries["jamendo"].configured or bool(
-        jamendo_client_id.strip() if isinstance(jamendo_client_id, str) else ""
-    )
+    jamendo_enabled = jamendo_source_configured(config)
+    entries["jamendo"].configured = jamendo_enabled
+    if not jamendo_enabled:
+        # Keep only an actually finishing segment visible after live disable.
+        fields = (("attempted", False), ("candidates", 0), ("playable", 0), ("exhausted", False), ("failure", ""))
+        for field, value in fields:
+            setattr(entries["jamendo"], field, value)
 
     sources: dict[str, dict] = {}
     for kind in SOURCE_READINESS_KINDS:

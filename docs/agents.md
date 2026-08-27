@@ -20,19 +20,22 @@ This file supplements the global instructions for the `mammamiradio` repository.
   or attach its household/cloud/MQTT devices without explicit authorization in
   the current message. Keep lab state and credentials under gitignored
   `tmp/first-listen-ha-lab/`, never `.context/` or tracked files.
-- Before opening any PR (ANY runtime — Claude, Codex, Cursor), complete the
-  temporary dual-evidence sequence: commit and review the implementation; run
-  `scripts/emit-review-evidence.sh` and commit legacy
-  `proof/preship-review.json`; review that resulting commit; then run
-  `scripts/emit-review-evidence.sh --v2` and commit the immutable receipt under
-  `proof/preship-reviews/v2/`. V1 is part of the v2 content digest, so changing
-  v1 after v2 invalidates v2. CI checks both formats independently from trusted
-  base code and remains report-only during migration. On the bootstrap PR, v2
-  is explicitly not evaluated because the base does not contain its verifier.
-  V2 is process evidence for trusted repository writers, not a signed
-  attestation: CI cannot retrieve the local ledger behind its source hash. The
-  report-only `pull_request` workflow is also PR-controlled; move orchestration
-  to a base-owned exact-head control plane before making the result required.
+- Before opening any PR (ANY runtime — Claude, Codex, Cursor): commit and
+  review the implementation, run `scripts/emit-review-evidence.sh`, and commit
+  the immutable receipt it writes under `proof/preship-reviews/v2/`. After
+  integrating the base locally (`git merge origin/main`), run
+  `scripts/emit-review-evidence.sh --reattest` and commit what it changed (the
+  derived receipt plus the superseded branch receipts it removes) — it succeeds
+  only when HEAD is exactly the reviewed content cleanly merged with the base;
+  any other change needs a fresh review and a fresh receipt.
+  Receipts are content-addressed additions, so parallel PRs never conflict on
+  evidence (the legacy fixed-name `proof/preship-review.json` is retired). CI
+  checks the receipt from trusted base code and remains report-only during
+  migration. V2 is process evidence for trusted repository writers, not a
+  signed attestation: CI cannot retrieve the local ledger behind its source
+  hash. The report-only `pull_request` workflow is also PR-controlled; move
+  orchestration to a base-owned exact-head control plane before making the
+  result required.
 - If Conductor lifecycle hooks change, update the `scripts/conductor-*.sh` files (and your Conductor `.conductor/settings.toml`) in the same change
 - On version bumps, keep `CHANGELOG.md` and `ha-addon/mammamiradio/CHANGELOG.md` in sync
 - In engineering reviews, present real alternatives and their trade-offs, then

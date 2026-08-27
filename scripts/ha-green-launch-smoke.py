@@ -73,7 +73,9 @@ import time
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -81,10 +83,12 @@ from urllib.request import Request, urlopen
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PERF_SMOKE = _REPO_ROOT / "scripts" / "ha-green-perf-smoke.py"
 _RECEIPT_SCHEMA = _REPO_ROOT / "proof" / "media" / "ha-green-release-receipt.schema.json"
-_RECEIPT_SCHEMA_VERSION = 1
+_RECEIPT_SCHEMA_VERSION = 2
 _RECEIPT_OBSERVATION_S = 10.0
-_SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_UNTRACKED_RECEIPT_PATH = re.compile(
+    rb"^proof/media/ha-green-release-evidence/run-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$"
+)
 _METRIC = "listener_connection_to_first_accepted_non_silent_manifest_starter_byte"
 _STREAM_SAMPLE_BYTES = 32 * 1024
 _DEVICE_MODEL_PATHS = (
@@ -880,6 +884,7 @@ _OFFLINE_UVICORN = r"""
 import ipaddress
 import socket
 import sys
+from pathlib import Path
 
 _connect = socket.socket.connect
 _connect_ex = socket.socket.connect_ex
@@ -912,8 +917,10 @@ def _offline_connect_ex(sock, address):
 socket.socket.connect = _offline_connect
 socket.socket.connect_ex = _offline_connect_ex
 
+import mammamiradio.main
 import uvicorn
 
+assert Path(mammamiradio.main.__file__).resolve() == Path(sys.argv[2], "mammamiradio/main.py").resolve()
 uvicorn.run(
     "mammamiradio.main:app",
     host="127.0.0.1",
@@ -924,66 +931,58 @@ uvicorn.run(
 
 
 def _release_version() -> str:
-    config = _REPO_ROOT / "ha-addon" / "mammamiradio" / "config.yaml"
     try:
-        for line in config.read_text(encoding="utf-8").splitlines():
-            if line.startswith("version:"):
-                value = line.split(":", 1)[1].strip().strip('"')
-                if _SEMVER.fullmatch(value):
-                    return value
-    except OSError as exc:
-        raise RuntimeError(f"cannot read the release version from {config}: {exc}") from exc
-    raise RuntimeError(f"cannot read an exact X.Y.Z release version from {config}")
-
-
-def _source_commit(receipt_directory: Path, *, repo_root: Path = _REPO_ROOT) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD^{commit}"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    value = result.stdout.strip().casefold()
-    if result.returncode != 0 or not _COMMIT.fullmatch(value):
-        raise RuntimeError("cannot resolve the tested git commit; record receipts from a committed checkout")
-    try:
-        receipt_prefix = (
-            receipt_directory.expanduser().absolute().resolve().relative_to(repo_root.resolve()).as_posix().rstrip("/")
-            + "/"
-        )
+        return _validator_module()._release_version_from_repo(_REPO_ROOT)
     except ValueError as exc:
-        raise RuntimeError("release receipts must be recorded into this checkout's proof directory") from exc
-    status = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all", "--no-renames"],
+        raise RuntimeError(str(exc)) from exc
+
+
+@lru_cache(maxsize=1)
+def _validator_module() -> Any:
+    module_name = "_mammamiradio_ha_green_release_validator"
+    path = _REPO_ROOT / "scripts" / "validate-ha-green-release-evidence.py"
+    module = ModuleType(module_name)
+    module.__file__ = str(path)
+    sys.modules[module_name] = module
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    return module
+
+
+def _source_snapshot(receipt_directory: Path, *, repo_root: Path = _REPO_ROOT) -> tuple[str, str]:
+    expected_directory = repo_root.resolve() / "proof" / "media" / "ha-green-release-evidence"
+    if receipt_directory.expanduser().resolve() != expected_directory:
+        raise RuntimeError(f"release receipts must use the canonical proof directory: {expected_directory}")
+    validator = _validator_module()
+    try:
+        value, content_sha256 = validator._tracked_content_sha256(repo_root, "HEAD")
+        worktree_value, worktree_sha256 = validator._worktree_content_sha256(repo_root, "HEAD")
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if (worktree_value, worktree_sha256) != (value, content_sha256):
+        raise RuntimeError("release receipts require tracked bytes and modes to exactly match HEAD")
+    status = validator._git(
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--no-renames",
         cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
     )
     if status.returncode != 0:
-        raise RuntimeError(f"cannot inspect the tested checkout: {status.stderr.strip() or 'git status failed'}")
-    disallowed: list[str] = []
-    for line in status.stdout.splitlines():
-        if not line:
-            continue
-        path = line[3:]
-        allowed_untracked_receipt = (
-            line.startswith("?? ")
-            and path.startswith(receipt_prefix)
-            and re.fullmatch(r"run-[0-9a-f-]{36}\.json", path.removeprefix(receipt_prefix)) is not None
-        )
-        if not allowed_untracked_receipt:
-            disallowed.append(line)
+        detail = status.stderr.decode("utf-8", errors="replace").strip() or "git status failed"
+        raise RuntimeError(f"cannot inspect the tested checkout: {detail}")
+    disallowed = [
+        record
+        for record in status.stdout.split(b"\0")
+        if record and not (record.startswith(b"?? ") and _UNTRACKED_RECEIPT_PATH.fullmatch(record[3:]))
+    ]
+    disallowed += [os.fsencode(p) for p in repo_root.rglob("*.pyc") if {"__pycache__", ".venv"}.isdisjoint(p.parts)]
     if disallowed:
-        preview = ", ".join(disallowed[:5])
-        if len(disallowed) > 5:
-            preview += f", and {len(disallowed) - 5} more"
         raise RuntimeError(
             "release receipts require a clean tested checkout; only earlier untracked receipt JSON files "
-            f"in {receipt_prefix} are allowed (found {preview})"
+            f"are allowed (found {os.fsdecode(disallowed[0])!r})"
         )
-    return value
+    return value, content_sha256
 
 
 def _detect_ha_green() -> dict[str, str]:
@@ -1025,6 +1024,7 @@ def _write_release_receipt(
     hardware: dict[str, str],
     release_version: str,
     source_commit: str,
+    content_sha256: str,
     boot_to_tcp_s: float,
     connection_to_first_byte_s: float,
     run_id: uuid.UUID | None = None,
@@ -1042,12 +1042,16 @@ def _write_release_receipt(
     timestamp = recorded_at or datetime.now(UTC)
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
         raise RuntimeError("release receipt timestamp must be timezone-aware")
+    if not _DIGEST.fullmatch(content_sha256):
+        raise RuntimeError("release receipt content_sha256 must be a lowercase 64-character SHA-256")
     payload: dict[str, Any] = {
         "$schema": f"../{_RECEIPT_SCHEMA.name}",
         "schema_version": _RECEIPT_SCHEMA_VERSION,
         "evidence_kind": "ha_green_cold_launch",
         "release_version": release_version,
         "source_commit": source_commit,
+        "content_profile": _validator_module().CONTENT_PROFILE,
+        "content_sha256": content_sha256,
         "run_id": str(receipt_id),
         "recorded_at": timestamp.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
         "hardware": hardware,
@@ -1196,6 +1200,7 @@ def _run_receipt_mode(
     hardware: dict[str, str],
     release_version: str,
     source_commit: str,
+    content_sha256: str,
 ) -> int:
     """Dedicated cold starter receipt run (physical Home Assistant Green only).
 
@@ -1211,9 +1216,16 @@ def _run_receipt_mode(
         tempfile.TemporaryDirectory(prefix="mmr-launch-cache-") as cache_dir,
         tempfile.TemporaryDirectory(prefix="mmr-launch-tmp-") as tmp_dir,
     ):
-        env = os.environ.copy()
+        env = {"PATH": os.environ.get("PATH", os.defpath)}
         env.update(
             {
+                "HOME": tmp_dir,
+                "TMPDIR": tmp_dir,
+                "LANG": "C.UTF-8",
+                "PYTHONPYCACHEPREFIX": str(Path(tmp_dir) / "pycache"),
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONSAFEPATH": "1",
+                "PYTHON_DOTENV_DISABLED": "true",
                 "MAMMAMIRADIO_BIND_HOST": "127.0.0.1",
                 "MAMMAMIRADIO_PORT": str(port),
                 "MAMMAMIRADIO_CACHE_DIR": cache_dir,
@@ -1237,7 +1249,7 @@ def _run_receipt_mode(
         print(f"Launching offline cold station on {base_url} (empty cache={cache_dir})")
         process_started = time.monotonic()
         proc = subprocess.Popen(
-            [sys.executable, "-c", _OFFLINE_UVICORN, str(port)],
+            [sys.executable, "-c", _OFFLINE_UVICORN, str(port), str(_REPO_ROOT)],
             cwd=str(_REPO_ROOT),
             env=env,
             start_new_session=True,  # own process group so teardown kills children
@@ -1284,11 +1296,15 @@ def _run_receipt_mode(
                 print("[FAIL] cold-launch first-byte smoke failed", file=sys.stderr)
                 return result.returncode
             try:
+                current_commit, current_content_sha256 = _source_snapshot(receipt_directory)
+                if current_commit != source_commit or current_content_sha256 != content_sha256:
+                    raise RuntimeError("tested HEAD or tracked release content changed during the physical run")
                 receipt = _write_release_receipt(
                     directory=receipt_directory,
                     hardware=hardware,
                     release_version=release_version,
                     source_commit=source_commit,
+                    content_sha256=content_sha256,
                     boot_to_tcp_s=boot_to_tcp_s,
                     connection_to_first_byte_s=first_byte_elapsed,
                 )
@@ -1336,6 +1352,9 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(() if argv is None else argv)
     if args.record_release_receipt is not None:
+        if not sys.flags.safe_path:
+            print("[FAIL] release receipts require Python safe-path mode; rerun with python -P", file=sys.stderr)
+            return 2
         if args.image:
             print(
                 "[FAIL] --record-release-receipt runs the dedicated local cold scenario; drop --image",
@@ -1345,7 +1364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             hardware = _detect_ha_green()
             release_version = _release_version()
-            source_commit = _source_commit(args.record_release_receipt)
+            source_commit, content_sha256 = _source_snapshot(args.record_release_receipt)
         except RuntimeError as exc:
             print(f"[FAIL] {exc}", file=sys.stderr)
             return 2
@@ -1354,6 +1373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             hardware=hardware,
             release_version=release_version,
             source_commit=source_commit,
+            content_sha256=content_sha256,
         )
     failures: list[str] = []
     for label, seed_warm_cache, expected_sources in _LAUNCH_SCENARIOS:
