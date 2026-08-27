@@ -2460,7 +2460,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 </div>
                 <div class="first-listen-body" id="firstListenSourceBody" role="region" aria-labelledby="firstListenSourceHeading" aria-hidden="false">
                   <h4 class="benefit-heading">Music after the welcome.</h4>
-                  <p class="use-copy">Marco and Giulia open the show in the preview above. This step checks that real music can follow.</p>
+                  <p class="use-copy">Marco and Giulia open the show in the 16-second welcome. This step checks that real music can follow.</p>
                   <details class="first-listen-source-preview" id="firstListenSourcePreviewDetails" hidden>
                     <summary>What plays after the welcome</summary>
                     <div class="first-listen-source-list" id="firstListenSourcePreview"><div class="empty">Checking what can play…</div></div>
@@ -5336,6 +5336,28 @@ function firstListenSourceStatus(kind,status){
   };
   return values[value]||{state:'idle',label:value.replaceAll('_',' ')};
 }
+const FIRST_LISTEN_PLAIN_SOURCE_DETAIL={
+  on_air:'Playing right now.',
+  playable:'Ready to play.',
+  candidates_only:'Songs found. Still listening to check they play cleanly.',
+  configured_unchecked:'Set up and standing by. The station is using another source right now.',
+  unavailable:'Nothing playable came from here. Open music source tools to point it somewhere else.',
+  not_configured:'Not set up yet. Add it in music source tools if you want it.',
+  not_bundled:'No songs come with this build. Add your own, or use live charts.',
+  cover_only:'Backup music only. It keeps the station on while real music is found.',
+  checking:'Checking…',
+};
+const FIRST_LISTEN_PLAIN_SOURCE_LABEL={
+  candidates_only:'Almost ready',
+  configured_unchecked:'Standing by',
+  not_bundled:'Not included',
+  cover_only:'Backup only',
+};
+function firstListenPlainSourceDetail(kind,status){
+  const value=String(status||'checking').toLowerCase();
+  if(kind==='recovery'&&value==='on_air')return'Backup music is playing, so the station stays on. Real music still needs a source — open music source tools.';
+  return FIRST_LISTEN_PLAIN_SOURCE_DETAIL[value]||'Checking…';
+}
 function firstListenSourceRows(source){
   const supplied=Array.isArray(source?.rows)?source.rows:[];
   return FIRST_LISTEN_SOURCE_ROWS.map(required=>{
@@ -5344,7 +5366,7 @@ function firstListenSourceRows(source){
   });
 }
 function firstListenSourceHealthy(source,normalized=firstListenSourceRows(source)){
-  return source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
+  return source?.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
 }
 function firstListenSourceState(projection){
   const source=projection?.guided?.source_readiness||{};
@@ -5356,36 +5378,39 @@ function firstListenSourceState(projection){
   const recoveryAvailable=recoveryOnAir||source.recovery_cover_available===true||['playable','cover_only'].includes(recoveryStatus);
   return{source,normalized,healthy,recoveryOnAir,recoveryAvailable,continuityAvailable:source.continuity_available===true||healthy||recoveryAvailable};
 }
-function firstListenSourcesHtml(source){
+function firstListenSourcesHtml(source,plain=false){
   const rows=firstListenSourceRows(source);
   const requiredHtml=rows.map(item=>{
     const rawStatus=item.row.status||item.row.state||'checking';
     const view=firstListenSourceStatus(item.kind,rawStatus);
-    const detail=item.row.detail||item.row.headline||'';
-    return `<div class="first-listen-source-row" data-source-kind="${esc(item.kind)}"><div><div class="first-listen-source-name">${esc(item.label)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${statusChip(view.state,view.label)}</div>`;
+    const detail=plain?firstListenPlainSourceDetail(item.kind,rawStatus):(item.row.detail||item.row.headline||'');
+    const label=plain?(FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]||view.label):view.label;
+    return `<div class="first-listen-source-row" data-source-kind="${esc(item.kind)}"><div><div class="first-listen-source-name">${esc(item.label)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${statusChip(view.state,label)}</div>`;
   }).join('');
   const advancedRows=Array.isArray(source?.advanced)?source.advanced:Array.isArray(source?.advanced?.rows)?source.advanced.rows:source?.advanced&&typeof source.advanced==='object'?[source.advanced]:[];
   const advancedHtml=advancedRows.length?`<div class="setup-subhead">Current or custom rotation</div>${advancedRows.slice(0,8).map(row=>{
-    const view=firstListenSourceStatus(String(row.kind||''),row.status||row.state);
-    return `<div class="first-listen-source-row"><div><div class="first-listen-source-name">${esc(row.label||row.kind||'Custom source')}</div><div class="first-listen-source-detail">${esc(row.detail||row.headline||'Shown separately from live charts.')}</div></div>${statusChip(view.state,view.label)}</div>`;
+    const rawStatus=row.status||row.state;
+    const view=firstListenSourceStatus(String(row.kind||''),rawStatus);
+    const detail=plain?firstListenPlainSourceDetail(String(row.kind||''),rawStatus):(row.detail||row.headline||'Shown separately from live charts.');
+    const label=plain?(FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]||view.label):view.label;
+    return `<div class="first-listen-source-row"><div><div class="first-listen-source-name">${esc(row.label||row.kind||'Custom source')}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${statusChip(view.state,label)}</div>`;
   }).join('')}`:'';
   return requiredHtml+advancedHtml;
 }
 function renderFirstListenSources(source){
   const sourceKnown=Array.isArray(source?.rows)&&source.rows.length>0;
   const sourceHealth=sourceKnown?(firstListenSourceHealthy(source)?'healthy':'degraded'):'unknown';
-  const html=sourceKnown?firstListenSourcesHtml(source):'<div class="empty">Checking what can play…</div>';
   const preview=document.getElementById('firstListenSourcePreview');
   const previewDetails=document.getElementById('firstListenSourcePreviewDetails');
   const technical=document.getElementById('firstListenSources');
-  if(preview)preview.innerHTML=html;
+  if(preview)preview.innerHTML=sourceKnown?firstListenSourcesHtml(source,true):'<div class="empty">Checking what can play…</div>';
   if(previewDetails){
     const previousHealth=previewDetails.dataset.sourceHealth||'unknown';
     previewDetails.hidden=!sourceKnown;
     if(sourceHealth==='degraded'&&previousHealth!=='degraded')previewDetails.open=true;
     previewDetails.dataset.sourceHealth=sourceHealth;
   }
-  if(technical)technical.innerHTML=html;
+  if(technical)technical.innerHTML=firstListenSourcesHtml(source,false);
 }
 function firstListenPlayerLabel(player){
   const name=String(player?.friendly_name||player?.name||player?.label||'Saved speaker');

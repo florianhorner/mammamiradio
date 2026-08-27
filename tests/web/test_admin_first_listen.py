@@ -950,13 +950,28 @@ def test_source_repair_and_sound_lanes_keep_the_existing_first_listen_path_actio
     assert "openSetupPanel('source')" in strip
 
     source_health = _function("firstListenSourceHealthy", "firstListenSourceState")
-    assert "source.healthy===true" in source_health
+    assert "source?.healthy===true" in source_health
     assert "item.kind!=='recovery'" in source_health
+
+    # The required journey speaks plain English. The raw readiness vocabulary stays
+    # in the Technical details drawer, which is where machine words belong.
+    plain = _function("firstListenPlainSourceDetail", "firstListenSourceRows")
+    assert "kind==='recovery'&&value==='on_air'" in plain
+    assert "Backup music is playing, so the station stays on." in html
+    assert "proves transport" not in html
+    assert "FIRST_LISTEN_PLAIN_SOURCE_DETAIL={" in html
+    assert "FIRST_LISTEN_PLAIN_SOURCE_LABEL={" in html
+    sources_html = _function("firstListenSourcesHtml", "renderFirstListenSources")
+    assert "function firstListenSourcesHtml(source,plain=false)" in sources_html
+    assert "plain?firstListenPlainSourceDetail(item.kind,rawStatus)" in sources_html
+    assert "FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]" in sources_html
     source_state = _function("firstListenSourceState", "firstListenSourcesHtml")
     assert "firstListenSourceHealthy(source,normalized)" in source_state
     assert "continuity_available===true" in source_state
     sources = _function("renderFirstListenSources", "firstListenPlayerLabel")
-    assert "firstListenSourcePreview" in sources
+    assert "getElementById('firstListenSourcePreview')" in sources
+    assert "preview.innerHTML=sourceKnown?firstListenSourcesHtml(source,true)" in sources
+    assert "technical.innerHTML=firstListenSourcesHtml(source,false)" in sources
     assert "firstListenSourcePreviewDetails" in sources
     assert "firstListenSourceHealthy(source)" in sources
     assert "previousHealth!=='degraded'" in sources
