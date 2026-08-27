@@ -28,6 +28,7 @@ LEGACY_CONTENT_PROFILE = "git-ls-tree-rz-full-tree-minus-v2-receipts-v1"
 CONTENT_PROFILE = "git-ls-tree-rz-full-tree-minus-v2-and-ha-green-receipts-v2"
 SUPPORTED_CONTENT_PROFILES = frozenset({LEGACY_CONTENT_PROFILE, CONTENT_PROFILE})
 RECEIPT_ROOT = "proof/preship-reviews/v2"
+DEFAULT_LANDED_REF = "origin/main"
 RECEIPT_NAMESPACE_BYTES = RECEIPT_ROOT.encode("ascii")
 RECEIPT_ROOT_BYTES = (RECEIPT_ROOT + "/").encode("ascii")
 ALLOWED_SKILLS = frozenset({"review", "adversarial-review"})
@@ -845,6 +846,295 @@ def emit_v2(
 
     created = _write_exclusive(repo.root, relative_path, raw)
     return relative_path, created
+
+
+def _tree_content_digest(repo: GitRepository, tree_oid: str) -> str:
+    """Content digest of a raw tree object under the same profile as snapshot_tree.
+
+    Used only as an equality witness during reattestation. v2 and HA Green
+    receipt entries are excluded from the digest entirely — exactly as
+    snapshot_tree excludes them — so their blob contents cannot affect the
+    equality claim and are not validated here; the surviving path-shape and mode
+    checks can only cause a refusal, never a false accept. The head tree that
+    actually carries the receipts is separately validated by snapshot_tree.
+    """
+
+    digest = hashlib.sha256()
+    previous_path: bytes | None = None
+    ordinary_entries = 0
+    ordinary_bytes = 0
+    ha_receipt_count = 0
+    for entry in repo.tree_entries_for_tree(tree_oid, max_record_bytes=MAX_TREE_RECORD_BYTES):
+        if entry.path == previous_path:
+            raise GitError(f"git ls-tree returned duplicate path {_display_path(entry.path)}")
+        previous_path = entry.path
+        if entry.path == RECEIPT_NAMESPACE_BYTES or entry.path.startswith(RECEIPT_ROOT_BYTES):
+            if _RECEIPT_PATH_RE.fullmatch(entry.path) is None:
+                raise EvidenceError(f"unknown entry in reserved v2 namespace: {_display_path(entry.path)}")
+            if entry.mode != b"100644" or entry.kind != b"blob":
+                mode = entry.mode.decode("ascii", errors="replace")
+                kind = entry.kind.decode("ascii", errors="replace")
+                raise EvidenceError(
+                    f"v2 receipt {_display_path(entry.path)} must be a non-executable regular blob, got {mode} {kind}"
+                )
+            continue
+        if _HA_RECEIPT_PATH_RE.fullmatch(entry.path) is not None:
+            if entry.mode != b"100644" or entry.kind != b"blob":
+                mode = entry.mode.decode("ascii", errors="replace")
+                kind = entry.kind.decode("ascii", errors="replace")
+                raise EvidenceError(
+                    f"HA Green receipt {_display_path(entry.path)} must be a non-executable regular blob, "
+                    f"got {mode} {kind}"
+                )
+            ha_receipt_count += 1
+            if ha_receipt_count > MAX_HA_RECEIPTS:
+                raise EvidenceError(f"tree contains more than {MAX_HA_RECEIPTS} HA Green receipts")
+            continue
+        ordinary_entries += 1
+        if ordinary_entries > MAX_TREE_ENTRIES:
+            raise GitError(f"git ls-tree returned more than {MAX_TREE_ENTRIES} ordinary entries")
+        ordinary_bytes += len(entry.raw_with_nul)
+        if ordinary_bytes > MAX_TREE_BYTES:
+            raise GitError(f"git ls-tree returned more than {MAX_TREE_BYTES} ordinary bytes")
+        digest.update(entry.raw_with_nul)
+    return digest.hexdigest()
+
+
+def _retire_superseded_receipts(
+    repo: GitRepository,
+    *,
+    head_snapshot: TreeSnapshot,
+    landed_commit: str,
+) -> tuple[Path, ...]:
+    """Remove branch receipts that no longer bind HEAD's content.
+
+    Retirement is anchored to ``landed_commit`` (a resolved ``origin/main``), NOT
+    to any ``--base`` a caller supplied: a receipt is removed only when it (a)
+    does not bind the head content and (b) is absent from the landed commit's
+    tree. So a receipt already landed on main is never removed, whatever base was
+    passed, and a stale or wrong base cannot delete landed evidence. A receipt
+    that binds the head content is always kept. Returns the removed paths.
+    """
+
+    head_digest = head_snapshot.content_sha256
+    removed: list[Path] = []
+    for path, receipt in sorted(head_snapshot.receipts.items()):
+        if receipt.reviewed_content_sha256 == head_digest:
+            continue
+        if repo.path_in_commit(landed_commit, path):
+            continue
+        relative = Path(os.fsdecode(path))
+        absolute = repo.root / relative
+        try:
+            absolute.unlink(missing_ok=True)
+        except OSError as exc:
+            raise EvidenceError(f"superseded receipt {relative.as_posix()} could not be removed: {exc}") from exc
+        removed.append(relative)
+        try:
+            absolute.parent.rmdir()
+        except OSError:
+            pass
+    return tuple(removed)
+
+
+def retire_superseded_receipts(
+    repo: GitRepository,
+    *,
+    landed_ref: str = DEFAULT_LANDED_REF,
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Snapshot HEAD and retire its now-stale branch receipts.
+
+    Returns ``(removed_paths, blocked_paths)``. ``blocked_paths`` is non-empty
+    only when the landed ref does not resolve (an unfetched clone, a detached CI
+    checkout) yet stale receipts exist: nothing is removed, and the caller must
+    fail loud so the operator fetches and retires by hand rather than shipping a
+    branch that CI will reject — never silently deleting a receipt that may be on
+    main.
+    """
+
+    repository = repository_identity(repo)
+    head_snapshot = snapshot_tree(repo, repo.head(), repository=repository, retain_all_receipts=True)
+    head_digest = head_snapshot.content_sha256
+    stale = [path for path, receipt in head_snapshot.receipts.items() if receipt.reviewed_content_sha256 != head_digest]
+    if not stale:
+        return (), ()
+    try:
+        landed_commit = repo.resolve_commit(landed_ref)
+    except GitError:
+        return (), tuple(sorted(Path(os.fsdecode(path)) for path in stale))
+    return _retire_superseded_receipts(repo, head_snapshot=head_snapshot, landed_commit=landed_commit), ()
+
+
+def reattest_v2(
+    repo: GitRepository,
+    *,
+    base: str,
+    target: str = "HEAD",
+    landed_ref: str = DEFAULT_LANDED_REF,
+) -> tuple[Path, bool, tuple[Path, ...]]:
+    """Derive a receipt for reviewed content cleanly merged with the base.
+
+    A base integration (``git merge origin/main``) changes the tree, so the
+    existing receipt no longer names HEAD's content even though no unreviewed
+    line of this branch changed. This re-issues the receipt without a fresh
+    review — but only when git itself proves that HEAD is exactly the reviewed
+    content three-way-merged with the base and nothing else: a conflicted merge,
+    a hand-edited merge commit, or any commit that touches ordinary content
+    after the review all fail closed into a fresh squad run.
+
+    The base must be landed, trusted content — contained in the landed ref
+    (``origin/main`` by default). Only then is the three-way merge sound: every
+    line of the merge result comes from the reviewed side or the trusted base, so
+    an untrusted base (``--base HEAD``, ``--base <an-unmerged-feature-branch>``)
+    that could smuggle in unreviewed content is refused before the witness runs.
+
+    After writing the derived receipt, this retires the branch's now-stale
+    receipts (see ``_retire_superseded_receipts``) so the caller can commit the
+    swap together — the automated form of the manual "retire stale preship
+    receipt" step. Retirement is anchored to the landed ref, never to ``base``,
+    so no landed receipt is ever removed. The derivation stays reconstructible
+    from history: the source receipt remains reachable in prior commits.
+
+    Returns ``(receipt_path, created, superseded_paths)``.
+    """
+
+    repository = repository_identity(repo)
+    initial_head = repo.head()
+    target_commit = repo.resolve_commit(target)
+    if target_commit != initial_head:
+        raise EvidenceError(
+            f"reattest target {target_commit} is not the checked-out HEAD {initial_head}; "
+            "check out the integrated commit first"
+        )
+    base_commit = repo.resolve_commit(base)
+    if not repo.is_ancestor(base_commit, initial_head):
+        raise EvidenceError(
+            f"base {base_commit} is not an ancestor of HEAD; integrate the base first (git merge <base>), then reattest"
+        )
+    # The witness base must be landed/trusted content. Without this a divergent
+    # but untrusted base (a feature branch merged into HEAD, then named as the
+    # base) would let the sound-looking three-way merge sign unreviewed content.
+    try:
+        landed_commit = repo.resolve_commit(landed_ref)
+    except GitError as exc:
+        raise EvidenceError(
+            f"cannot verify the reattest base: {landed_ref!r} does not resolve — fetch it and retry"
+        ) from exc
+    if not repo.is_ancestor(base_commit, landed_commit):
+        raise EvidenceError(
+            f"reattest base {base_commit} is not landed content in {landed_ref!r}; integrate the landed base "
+            "(git merge origin/main) and reattest against it, never against an unmerged branch"
+        )
+    initial_status = repo.status_bytes()
+
+    head_snapshot = snapshot_tree(repo, initial_head, repository=repository, retain_all_receipts=True)
+    already_matching = _matching_receipts(head_snapshot)
+    if already_matching:
+        # A receipt already binds head content; nothing to derive. Hold the same
+        # clean-tree bar as the create path so a re-run cannot silently succeed on
+        # a dirty tree, then retire any stale receipt left tracked by a partial
+        # commit — the short-circuit must not skip retirement.
+        if initial_status != b"":
+            raise EvidenceError(
+                "working tree, index, or untracked-file state is dirty; commit or remove every change first"
+            )
+        chosen = min(already_matching, key=lambda receipt: receipt.path)
+        superseded = _retire_superseded_receipts(repo, head_snapshot=head_snapshot, landed_commit=landed_commit)
+        return Path(os.fsdecode(chosen.path)), False, superseded
+    if not head_snapshot.receipts:
+        raise EvidenceError(
+            "no v2 receipt exists on this branch to derive from; run the review squad and emit a fresh receipt instead"
+        )
+
+    reasons: list[str] = []
+    source: Receipt | None = None
+    # Deterministic candidate order; every qualifying candidate derives the same
+    # content digest, so path order only decides which review metadata is carried.
+    for receipt in sorted(head_snapshot.receipts.values(), key=lambda entry: entry.path):
+        label = _display_path(receipt.path)
+        try:
+            reviewed_commit = repo.resolve_full_commit(receipt.reviewed_commit)
+        except GitError:
+            reasons.append(f"{label} pins an unavailable reviewed commit")
+            continue
+        if not repo.is_ancestor(reviewed_commit, initial_head):
+            reasons.append(f"{label} pins a reviewed commit outside this branch's history")
+            continue
+        if (
+            snapshot_tree(repo, reviewed_commit, repository=repository).content_sha256
+            != receipt.reviewed_content_sha256
+        ):
+            reasons.append(f"{label} does not match its reviewed commit's content")
+            continue
+        merged_tree = repo.merge_tree_commits(reviewed_commit, base_commit)
+        if merged_tree is None:
+            reasons.append(f"{label}: merging its reviewed commit with the base conflicts")
+            continue
+        if _tree_content_digest(repo, merged_tree) != head_snapshot.content_sha256:
+            reasons.append(f"{label}: HEAD is not exactly its reviewed content merged with the base")
+            continue
+        source = receipt
+        break
+    if source is None:
+        raise EvidenceError(
+            "no existing receipt derives this content ("
+            + "; ".join(reasons)
+            + "); changed content needs a fresh review squad run and a fresh receipt"
+        )
+
+    source_payload = _decode_json_object(
+        repo.run(("cat-file", "blob", f"{initial_head}:{os.fsdecode(source.path)}")),
+        label=f"source receipt {_display_path(source.path)}",
+    )
+    source_review = source_payload["review"]
+    payload = {
+        "content_profile": CONTENT_PROFILE,
+        "kind": RECEIPT_KIND,
+        "repository": repository,
+        "review": {
+            "skill": source_review["skill"],
+            "status": "clean",
+            "timestamp": source_review["timestamp"],
+        },
+        "reviewed_commit": initial_head,
+        "reviewed_content_sha256": head_snapshot.content_sha256,
+        "schema_version": SCHEMA_VERSION,
+        "source_record_sha256": source_payload["source_record_sha256"],
+    }
+    raw = canonical_json_bytes(payload)
+    receipt_digest = hashlib.sha256(raw).hexdigest()
+    relative_path = Path(RECEIPT_ROOT) / head_snapshot.content_sha256 / f"{receipt_digest}.json"
+    allowed_existing_status = b"? " + os.fsencode(relative_path.as_posix()) + b"\0"
+    if initial_status not in {b"", allowed_existing_status}:
+        raise EvidenceError(
+            "working tree, index, or untracked-file state is dirty; commit or remove every change first"
+        )
+
+    synthetic_entry = TreeEntry(
+        raw=b"",
+        mode=b"100644",
+        kind=b"blob",
+        oid="0" * repo.oid_length,
+        path=os.fsencode(relative_path.as_posix()),
+    )
+    _validate_receipt(repo=repo, repository=repository, entry=synthetic_entry, raw=raw)
+
+    if repo.head() != initial_head:
+        raise EvidenceError("HEAD changed while evidence was being computed; review the new head and retry")
+    if repo.status_bytes() not in {b"", allowed_existing_status}:
+        raise EvidenceError("working tree changed while evidence was being computed; review the new content and retry")
+
+    created = _write_exclusive(repo.root, relative_path, raw)
+
+    # Retire the branch's now-stale receipts strictly after the derived receipt is
+    # durably written, so an interrupted run never leaves the branch with less
+    # evidence than it had. The new receipt is not in head_snapshot (it is still
+    # untracked), and it binds the head content, so retirement never touches it.
+    # landed_commit was resolved up front for the base-trust check, so retirement
+    # here never needs to handle an unresolvable landed ref.
+    superseded = _retire_superseded_receipts(repo, head_snapshot=head_snapshot, landed_commit=landed_commit)
+
+    return relative_path, created, superseded
 
 
 def _matching_receipts(snapshot: TreeSnapshot) -> list[Receipt]:
