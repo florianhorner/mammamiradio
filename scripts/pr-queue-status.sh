@@ -181,7 +181,7 @@ recommendation() {
   elif [ "$evidence" != "ok" ] && [ "$evidence" != "skipped" ]; then
     say "emit/review evidence"
   elif [ "$merge_state" = "BEHIND" ]; then
-    say "update + test"
+    say "integrate + reattest"
   elif [ "$merge_state" = "CLEAN" ]; then
     say "land now"
   elif [ "$merge_state" = "BLOCKED" ] || [ "$merge_state" = "UNSTABLE" ]; then

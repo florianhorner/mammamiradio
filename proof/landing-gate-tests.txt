@@ -1,16 +1,13 @@
-# landing-gate test proof — 2026-08-27 — branch cursor/land-pr-gates-v2-0cf6
+# landing-gate test proof — 2026-08-28 — branch cursor/land-pr-gates-v2-0cf6
 
 ## bash tests/workflows/test_land_pr.sh
-All 25 land-pr cases passed.
+All 22 land-pr cases passed.
 
 ## bash tests/workflows/test_check_merge_gate.sh
 All 10 check-merge-gate cases passed.
 
-## pytest tests/repo/test_pr_queue_status.py
-10 passed in 6.16s
-
-## pytest tests/repo/test_read_preship_ledger.py
-3 passed in 1.08s
+## pytest tests/repo/test_pr_queue_status.py tests/repo/test_read_preship_ledger.py
+13 passed in 5.87s
 
 ## make test-fast
-8579 passed, 4 skipped, 48 deselected in 730.38s
+1 failed, 8602 passed, 4 skipped, 49 deselected in 644.94s — local baseline scheduling regression; relevant paths match origin/main: test_ban_last_track_mid_render_cannot_restore_playable_readiness

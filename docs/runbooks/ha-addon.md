@@ -638,8 +638,10 @@ gates" (single source of truth). The short version:
   the receipt is on the branch); a current local gstack ledger supplements that
   proof and is required if the evidence check is explicitly skipped. It blocks
   unresolved current Major/Critical/P0/P1 bot threads and fails closed when
-  thread data cannot be read, updates the branch if it is behind, rechecks the
-  exact post-update head, and arms
+  thread data cannot be read. A behind branch is not changed from the landing
+  seat: return to its feature workspace, merge `origin/main`, run
+  `scripts/emit-review-evidence.sh --reattest --base origin/main`, commit and
+  push the receipt swap, then retry after CI. For an up-to-date head it arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified.
 - Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local
@@ -654,8 +656,8 @@ gates" (single source of truth). The short version:
   authenticated maintainer handles that specific PR. If Dependabot still owns
   the branch, request its rebase as the maintainer; if the branch was edited,
   use `@dependabot recreate` and re-review the new head. Human-authored PRs land
-  through `scripts/land-pr.sh <PR#>`, which updates the branch after verifying
-  pre-ship evidence.
+  through `scripts/land-pr.sh <PR#>`; a behind branch returns to its feature
+  workspace for integration and reattestation.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
   `allow_auto_merge`, required contexts, and that the main-branch ruleset
