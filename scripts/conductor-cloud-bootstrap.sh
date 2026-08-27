@@ -6,12 +6,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [ -L .env ] || [ ! -e .env ]; then
-  if [ -n "${CONDUCTOR_ROOT_PATH:-}" ] && [ -f "$CONDUCTOR_ROOT_PATH/.env" ]; then
-    ln -sfn "$CONDUCTOR_ROOT_PATH/.env" .env
-  fi
-fi
-
 if [ -z "${PYTHON_BIN:-}" ]; then
   for candidate in python3.11 python3.12 python3.13 python3; do
     if command -v "$candidate" >/dev/null 2>&1 \

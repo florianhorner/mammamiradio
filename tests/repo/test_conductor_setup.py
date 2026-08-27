@@ -181,23 +181,37 @@ def test_cloud_bootstrap_installs_development_requirements_after_activation(
     assert (tmp_path / ".venv/pip-call").read_text() == "-m pip install -r requirements-dev.txt"
 
 
-def test_cloud_bootstrap_links_workspace_env_when_root_env_is_available(
-    tmp_path: Path, shell_env: dict[str, str]
-) -> None:
+def test_cloud_bootstrap_preserves_same_root_env_file(tmp_path: Path, shell_env: dict[str, str]) -> None:
     cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
     _fake_bootstrap(tmp_path)
     _fake_python(tmp_path / "bin", "python3.12")
-    source_root = tmp_path / "source"
-    source_root.mkdir()
-    source_env = source_root / ".env"
-    source_env.write_text("MAMMAMIRADIO_TEST=1\n")
-    shell_env["CONDUCTOR_ROOT_PATH"] = str(source_root)
+    workspace_env = tmp_path / ".env"
+    workspace_env.write_text("MAMMAMIRADIO_TEST=1\n")
+    shell_env["CONDUCTOR_ROOT_PATH"] = str(tmp_path)
 
     result = _run(cloud, tmp_path, env=shell_env)
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / ".env").is_symlink()
-    assert (tmp_path / ".env").read_text() == source_env.read_text()
+    assert not workspace_env.is_symlink()
+    assert workspace_env.read_text() == "MAMMAMIRADIO_TEST=1\n"
+
+
+def test_cloud_bootstrap_preserves_same_root_env_symlink(tmp_path: Path, shell_env: dict[str, str]) -> None:
+    cloud = _install_script_fixture(tmp_path, CLOUD_BOOTSTRAP)
+    _fake_bootstrap(tmp_path)
+    _fake_python(tmp_path / "bin", "python3.12")
+    shared_env = tmp_path / "shared.env"
+    shared_env.write_text("MAMMAMIRADIO_TEST=1\n")
+    workspace_env = tmp_path / ".env"
+    workspace_env.symlink_to(shared_env.name)
+    shell_env["CONDUCTOR_ROOT_PATH"] = str(tmp_path)
+
+    result = _run(cloud, tmp_path, env=shell_env)
+
+    assert result.returncode == 0, result.stderr
+    assert workspace_env.is_symlink()
+    assert workspace_env.readlink() == Path("shared.env")
+    assert workspace_env.read_text() == "MAMMAMIRADIO_TEST=1\n"
 
 
 def test_cloud_bootstrap_rejects_missing_explicit_interpreter(tmp_path: Path, shell_env: dict[str, str]) -> None:
