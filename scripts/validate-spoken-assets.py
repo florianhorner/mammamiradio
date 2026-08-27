@@ -99,6 +99,10 @@ DEMO_BANTER_CHANNEL_LAYOUT = "stereo"
 DEMO_BANTER_BITRATE_BPS = 192_000
 DEMO_BANTER_MIN_DURATION_SECONDS = 20.0
 DEMO_BANTER_MAX_DURATION_SECONDS = 120.0
+DEMO_BANTER_MIN_LUFS = -19.5
+DEMO_BANTER_MAX_LUFS = -14.0
+DEMO_BANTER_MAX_TRUE_PEAK_DBTP = -1.0
+DEMO_BANTER_MAX_BYTES = 40 * 1024 * 1024
 
 
 def _parse_args() -> argparse.Namespace:
@@ -365,6 +369,9 @@ def validate_demo_spoken_assets(
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         errors.append("ffprobe is required to validate packaged demo banter")
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        errors.append("ffmpeg is required to validate packaged demo banter loudness")
 
     if package_assets_root is None:
         try:
@@ -372,10 +379,15 @@ def validate_demo_spoken_assets(
         except (ModuleNotFoundError, TypeError) as exc:
             errors.append(f"cannot resolve packaged demo assets: {exc}")
 
+    total_bytes = 0
     for entry in banter_entries:
         relative_path = str(entry["path"])
         asset_path = root / relative_path
         declared_sha256 = entry.get("sha256")
+        try:
+            total_bytes += asset_path.stat().st_size
+        except OSError:
+            pass
 
         if package_assets_root is not None:
             package_asset = package_assets_root
@@ -422,6 +434,25 @@ def validate_demo_spoken_assets(
                 f"{relative_path} duration {duration:.3f}s is outside "
                 f"{DEMO_BANTER_MIN_DURATION_SECONDS:.1f}-{DEMO_BANTER_MAX_DURATION_SECONDS:.1f}s"
             )
+        if ffmpeg is not None:
+            loudness, loudness_error = _measure_loudness(asset_path, ffmpeg=ffmpeg)
+            if loudness_error is not None:
+                errors.append(f"{relative_path} {loudness_error}")
+            else:
+                assert loudness is not None
+                integrated_lufs, true_peak_dbtp = loudness
+                if not DEMO_BANTER_MIN_LUFS <= integrated_lufs <= DEMO_BANTER_MAX_LUFS:
+                    errors.append(
+                        f"{relative_path} integrated loudness {integrated_lufs:.1f} LUFS is outside "
+                        f"{DEMO_BANTER_MIN_LUFS:.1f} to {DEMO_BANTER_MAX_LUFS:.1f} LUFS"
+                    )
+                if true_peak_dbtp > DEMO_BANTER_MAX_TRUE_PEAK_DBTP:
+                    errors.append(
+                        f"{relative_path} true peak {true_peak_dbtp:.1f} dBTP exceeds "
+                        f"{DEMO_BANTER_MAX_TRUE_PEAK_DBTP:.1f} dBTP"
+                    )
+    if total_bytes > DEMO_BANTER_MAX_BYTES:
+        errors.append(f"demo banter bundle is {total_bytes} bytes; maximum is {DEMO_BANTER_MAX_BYTES} bytes (40 MiB)")
     return errors
 
 
@@ -795,10 +826,19 @@ def validate_browser_narration_pack(
     return errors
 
 
+def _is_demo_assets_root(assets_root: Path) -> bool:
+    try:
+        return assets_root.resolve() == DEMO_ASSETS_ROOT.resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
 def validate_requested_assets(assets_root: Path | None) -> list[str]:
     """Validate one custom root or every repository-owned spoken-audio inventory."""
 
     if assets_root is not None:
+        if _is_demo_assets_root(assets_root):
+            return validate_demo_spoken_assets(assets_root=assets_root)
         return validate_spoken_asset_manifest(assets_root=assets_root)
 
     errors: list[str] = []
@@ -837,8 +877,13 @@ def main() -> int:
         )
     elif args.assets_root is None:
         print(
-            "spoken-assets: manifests, hashes, transcripts, demo package reachability/media format, "
-            "and browser canonical receipt/loudness/routes/bundle size are valid"
+            "spoken-assets: manifests, hashes, transcripts, demo package reachability/media format/loudness/bundle "
+            "size, and browser canonical receipt/loudness/routes/bundle size are valid"
+        )
+    elif _is_demo_assets_root(args.assets_root):
+        print(
+            "spoken-assets: demo manifest, hashes, transcripts, package reachability, media format, loudness, "
+            "and bundle size are valid"
         )
     else:
         print("spoken-assets: manifest, hashes, and transcripts are valid")

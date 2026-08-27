@@ -7,6 +7,8 @@ Covers: _select_ad_creative, _cast_voices, _pick_brand, _latest_music_file,
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import random
 import time
 from pathlib import Path
@@ -27,6 +29,7 @@ from mammamiradio.core.models import (
     Track,
 )
 from mammamiradio.core.segment_status import is_fallback_active
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.hosts.ad_creative import (
     AdBrand,
     AdFormat,
@@ -610,6 +613,7 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     state = _make_run_state()
     config = _make_run_config()
     config.tmp_dir = tmp_path
+    config.anthropic_api_key = "test-key"
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     # Create a fake canned clip so _pick_canned_clip returns something real
@@ -643,7 +647,7 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
         patch(f"{PRODUCER_MODULE}.synthesize_dialogue", new_callable=AsyncMock, return_value=tmp_path / "dia.mp3"),
         patch(f"{PRODUCER_MODULE}.concat_files", return_value=tmp_path / "banter.mp3"),
         patch(f"{PRODUCER_MODULE}.validate_segment_audio", side_effect=_validate_side_effect),
-        patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=canned_clip),
+        patch(f"{PRODUCER_MODULE}._pick_packaged_banter_clip", return_value=canned_clip) as packaged_picker,
         patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
         patch.dict("os.environ", {}, clear=False),
     ):
@@ -657,6 +661,8 @@ async def test_banter_quality_reject_falls_back_to_canned_clip(tmp_path):
     assert seg.type == SegmentType.BANTER
     # The segment should be the canned clip (fallback was used)
     assert seg.metadata.get("canned") is True
+    assert PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY not in seg.metadata
+    packaged_picker.assert_called_once_with(queue, state, config, contextual=False)
 
 
 @pytest.mark.asyncio
@@ -2323,6 +2329,75 @@ async def test_banter_metadata_includes_transition_track_ref(tmp_path):
     seg = queue.get_nowait()
     assert seg.type == SegmentType.BANTER
     assert seg.metadata.get("transition_track_ref") == "youtube|abc123"
+
+
+@pytest.mark.asyncio
+async def test_exact_packaged_banter_segment_carries_its_starter_dependency(tmp_path):
+    state = _make_run_state()
+    config = _make_run_config()
+    config.tmp_dir = tmp_path
+    config.cache_dir = tmp_path
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+    config.pacing.lookahead_segments = 4
+    queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
+
+    starter_path = tmp_path / "starter.mp3"
+    starter_path.write_bytes(b"starter audio")
+    starter = Segment(
+        type=SegmentType.MUSIC,
+        path=starter_path,
+        metadata={"source_kind": "starter", "provider_track_id": "TRACK-ID", "queue_id": "starter"},
+    )
+    queue.put_nowait(starter)
+    state.queued_segments = [{"id": "starter", "type": "music"}]
+
+    banter_dir = tmp_path / "banter"
+    banter_dir.mkdir()
+    payload = b"exact reviewed banter" * 200
+    exact_path = banter_dir / "exact.mp3"
+    exact_path.write_bytes(payload)
+    (tmp_path / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "banter/exact.mp3",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "kind": "speech",
+                        "language": "en",
+                        "transcript": "Marco: That was the named starter track.",
+                        "mode": "normal",
+                        "required_previous_starter_id": "TRACK-ID",
+                        "special": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    original_root = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
+    try:
+        with (
+            patch(f"{PRODUCER_MODULE}.next_segment_type", return_value=SegmentType.BANTER),
+            patch(f"{PRODUCER_MODULE}.fetch_home_context", new_callable=AsyncMock),
+            patch(f"{PRODUCER_MODULE}.probe_duration_sec", return_value=30.0),
+            patch.dict("os.environ", {"MAMMAMIRADIO_SKIP_QUALITY_GATE": "1"}, clear=False),
+        ):
+            await _run_until_n_queued(queue, state, config, n=2)
+    finally:
+        producer._DEMO_ASSETS_DIR = original_root
+        producer._canned_clip_cache.clear()
+        producer._recently_played_clips.clear()
+
+    exact_segment = list(queue._queue)[1]
+    assert exact_segment.path == exact_path
+    assert exact_segment.metadata[PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY] == "TRACK-ID"
 
 
 @pytest.mark.asyncio

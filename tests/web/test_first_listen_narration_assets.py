@@ -106,7 +106,9 @@ def test_shipped_demo_banter_is_package_reachable_and_playable() -> None:
     assert VALIDATOR.validate_demo_spoken_assets() == []
 
 
-def test_demo_banter_validator_rejects_wrong_audio_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_demo_banter_validator_enforces_media_loudness_and_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     banter = tmp_path / "banter"
     banter.mkdir()
     payload = b"reviewed demo audio" * 200
@@ -151,10 +153,15 @@ def test_demo_banter_validator_rejects_wrong_audio_format(tmp_path: Path, monkey
             None,
         ),
     )
+    monkeypatch.setattr(VALIDATOR, "_measure_loudness", lambda path, *, ffmpeg: ((-20.0, -0.5), None))
+    monkeypatch.setattr(VALIDATOR, "DEMO_BANTER_MAX_BYTES", 1)
 
     errors = VALIDATOR.validate_demo_spoken_assets(assets_root=tmp_path, package_assets_root=tmp_path)
 
     assert any("sample_rate must be 48000" in error for error in errors)
+    assert any("integrated loudness -20.0 LUFS is outside" in error for error in errors)
+    assert any("true peak -0.5 dBTP exceeds -1.0 dBTP" in error for error in errors)
+    assert any("demo banter bundle is" in error and "maximum is 1 bytes" in error for error in errors)
 
 
 def test_shipped_canonical_receipt_matches_generator_and_current_radio_config() -> None:
@@ -512,6 +519,16 @@ def test_default_validates_both_inventories_and_custom_root_stays_single(
     custom_root = tmp_path / "custom-assets"
     assert VALIDATOR.validate_requested_assets(custom_root) == []
     assert calls == [("manifest", custom_root)]
+
+    calls.clear()
+
+    def fake_demo_validation(*, assets_root: Path) -> list[str]:
+        calls.append(("demo", assets_root))
+        return []
+
+    monkeypatch.setattr(VALIDATOR, "validate_demo_spoken_assets", fake_demo_validation)
+    assert VALIDATOR.validate_requested_assets(VALIDATOR.DEMO_ASSETS_ROOT) == []
+    assert calls == [("demo", VALIDATOR.DEMO_ASSETS_ROOT)]
 
 
 def test_browser_narration_inventory_requires_all_eight_named_clips(

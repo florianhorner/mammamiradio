@@ -50,6 +50,13 @@ def test_shipped_manifest_is_valid_and_declares_reviewed_spoken_assets():
         "JAMENDO-1215805",
         "USUAN1100173",
     }
+    starter_catalog = json.loads(
+        (Path(__file__).resolve().parents[2] / "mammamiradio" / "assets" / "starter" / "catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    starter_ids = {str(entry["isrc"]) for entry in starter_catalog["tracks"]}
+    assert {entry.required_previous_starter_id for entry in banter if entry.required_previous_starter_id} <= starter_ids
     assert sum(entry.special for entry in banter) == 3
     assert is_approved_spoken_asset(recovery[0]) is True
     assert is_approved_spoken_asset(first_listen[0]) is True
@@ -93,7 +100,36 @@ def test_listener_arrival_transcript_is_rejected(tmp_path):
     )
 
     assert approved_spoken_assets("recovery", assets_root=tmp_path) == []
+    assert is_approved_spoken_asset(clip, assets_root=tmp_path) is False
     assert any("listener arrival/return" in error for error in validate_spoken_asset_manifest(assets_root=tmp_path))
+
+
+def test_runtime_admission_hashes_only_the_selected_asset(tmp_path, monkeypatch):
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    selected = recovery / "selected.mp3"
+    unrelated = recovery / "unrelated.mp3"
+    selected_payload = b"selected" * 400
+    unrelated_payload = b"unrelated" * 400
+    selected.write_bytes(selected_payload)
+    unrelated.write_bytes(unrelated_payload)
+    _write_manifest(
+        tmp_path,
+        [
+            _entry("recovery/selected.mp3", selected_payload),
+            _entry("recovery/unrelated.mp3", unrelated_payload),
+        ],
+    )
+    hashed_paths: list[Path] = []
+
+    def _record_hash(path: Path) -> str:
+        hashed_paths.append(Path(path))
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    monkeypatch.setattr(spoken_assets, "_sha256", _record_hash)
+
+    assert is_approved_spoken_asset(selected, assets_root=tmp_path) is True
+    assert hashed_paths == [selected]
 
 
 def test_banter_metadata_is_mode_safe_and_specials_are_evergreen(tmp_path):

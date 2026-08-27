@@ -12,6 +12,7 @@ from mammamiradio.core.packaged_assets import DEMO_ASSETS_DIR
 
 MANIFEST_FILENAME = "spoken_assets.json"
 DISCOVERABLE_AUDIO_SUBDIRS = ("recovery", "banter", "first_listen")
+PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY = "_packaged_banter_predecessor_starter_id"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,35 +65,7 @@ def validate_spoken_asset_manifest(*, assets_root: Path = DEMO_ASSETS_DIR) -> li
         else:
             if actual_sha256 != entry.sha256:
                 errors.append(f"{entry.relative_path} sha256 does not match")
-        if entry.kind == "speech":
-            if entry.language not in {"en", "it"}:
-                errors.append(f"{entry.relative_path} speech language must be en or it")
-            if not entry.transcript.strip():
-                errors.append(f"{entry.relative_path} speech transcript is empty")
-            elif contains_unsafe_listener_claims(entry.transcript):
-                errors.append(f"{entry.relative_path} transcript contains listener arrival/return copy")
-        elif entry.kind == "tone":
-            if entry.language != "none" or entry.transcript:
-                errors.append(f"{entry.relative_path} tone must use language=none and an empty transcript")
-        else:
-            errors.append(f"{entry.relative_path} kind must be speech or tone")
-
-        subdir = Path(entry.relative_path).parent.as_posix()
-        if subdir == "banter":
-            if entry.mode not in {"normal", "super_italian"}:
-                errors.append(f"{entry.relative_path} banter mode must be normal or super_italian")
-            expected_language = {"normal": "en", "super_italian": "it"}.get(entry.mode)
-            if expected_language is not None and entry.language != expected_language:
-                errors.append(f"{entry.relative_path} banter language does not match its mode")
-            starter_id = entry.required_previous_starter_id
-            if starter_id and (
-                len(starter_id) > 80 or any(not (char.isalnum() or char in "._-") for char in starter_id)
-            ):
-                errors.append(f"{entry.relative_path} required starter id is invalid")
-            if entry.special and (entry.mode != "normal" or starter_id):
-                errors.append(f"{entry.relative_path} special banter must be evergreen Normal Mode copy")
-        elif entry.mode or entry.required_previous_starter_id or entry.special:
-            errors.append(f"{entry.relative_path} non-banter asset has banter metadata")
+        errors.extend(_entry_policy_errors(entry))
 
     discoverable = {
         path.relative_to(root).as_posix()
@@ -119,13 +92,31 @@ def approved_spoken_asset_entries(
 ) -> list[SpokenAssetEntry]:
     """Return validated declarations while preserving runtime selection metadata."""
 
+    root = Path(assets_root)
+    return [
+        entry
+        for entry in declared_spoken_asset_entries(subdir, assets_root=root)
+        if _approved_manifest_entry(root / entry.relative_path, assets_root=root) == entry
+    ]
+
+
+def declared_spoken_asset_entries(
+    subdir: str,
+    *,
+    assets_root: Path = DEMO_ASSETS_DIR,
+) -> list[SpokenAssetEntry]:
+    """Return policy-valid declarations without reading every packaged audio file.
+
+    Runtime selectors cache these small manifest records, then hash only the
+    selected file at admission. Whole-inventory hash and discovery checks stay
+    in the release validator, away from first-byte and recovery paths.
+    """
+
     if subdir not in DISCOVERABLE_AUDIO_SUBDIRS:
         return []
     root = Path(assets_root)
-    if validate_spoken_asset_manifest(assets_root=root):
-        return []
     data, _errors = _read_manifest(root)
-    if data is None:
+    if data is None or data.get("schema_version") != 1:
         return []
     raw_assets = data.get("assets")
     if not isinstance(raw_assets, list):
@@ -133,16 +124,11 @@ def approved_spoken_asset_entries(
     approved: list[SpokenAssetEntry] = []
     for index, raw in enumerate(raw_assets):
         entry, entry_errors = _parse_entry(raw, root=root, prefix=f"assets[{index}]")
-        if entry is None or entry_errors or entry.kind != "speech":
+        if entry is None or entry_errors or _entry_policy_errors(entry) or entry.kind != "speech":
             continue
         if Path(entry.relative_path).parent.as_posix() != subdir:
             continue
-        path = root / entry.relative_path
-        try:
-            if path.is_file() and _sha256(path) == entry.sha256:
-                approved.append(entry)
-        except OSError:
-            continue
+        approved.append(entry)
     return approved
 
 
@@ -160,7 +146,7 @@ def is_approved_packaged_audio_asset(path: Path, *, assets_root: Path = DEMO_ASS
 
 
 def _approved_manifest_entry(path: Path, *, assets_root: Path) -> SpokenAssetEntry | None:
-    """Resolve one content-addressed entry after validating the whole inventory."""
+    """Validate only the selected manifest entry and its content-addressed file."""
 
     candidate = Path(path)
     root = Path(assets_root)
@@ -168,22 +154,63 @@ def _approved_manifest_entry(path: Path, *, assets_root: Path) -> SpokenAssetEnt
         relative = candidate.resolve().relative_to(root.resolve())
     except (OSError, RuntimeError, ValueError):
         return None
-    if validate_spoken_asset_manifest(assets_root=root):
-        return None
     data, _errors = _read_manifest(root)
+    if data is None or data.get("schema_version") != 1:
+        return None
     raw_assets = data.get("assets") if data is not None else None
     if not isinstance(raw_assets, list):
         return None
-    for index, raw in enumerate(raw_assets):
-        entry, entry_errors = _parse_entry(raw, root=root, prefix=f"assets[{index}]")
-        if entry is None or entry_errors or entry.relative_path != relative.as_posix():
-            continue
-        try:
-            if candidate.is_file() and _sha256(candidate) == entry.sha256:
-                return entry
-        except OSError:
-            return None
+    matching = [
+        (index, raw)
+        for index, raw in enumerate(raw_assets)
+        if isinstance(raw, dict) and raw.get("path") == relative.as_posix()
+    ]
+    if len(matching) != 1:
+        return None
+    index, raw = matching[0]
+    entry, entry_errors = _parse_entry(raw, root=root, prefix=f"assets[{index}]")
+    if entry is None or entry_errors or _entry_policy_errors(entry):
+        return None
+    try:
+        if candidate.is_file() and _sha256(candidate) == entry.sha256:
+            return entry
+    except OSError:
+        return None
     return None
+
+
+def _entry_policy_errors(entry: SpokenAssetEntry) -> list[str]:
+    """Return listener-truth and lane-policy errors for one parsed entry."""
+
+    errors: list[str] = []
+    if entry.kind == "speech":
+        if entry.language not in {"en", "it"}:
+            errors.append(f"{entry.relative_path} speech language must be en or it")
+        if not entry.transcript.strip():
+            errors.append(f"{entry.relative_path} speech transcript is empty")
+        elif contains_unsafe_listener_claims(entry.transcript):
+            errors.append(f"{entry.relative_path} transcript contains listener arrival/return copy")
+    elif entry.kind == "tone":
+        if entry.language != "none" or entry.transcript:
+            errors.append(f"{entry.relative_path} tone must use language=none and an empty transcript")
+    else:
+        errors.append(f"{entry.relative_path} kind must be speech or tone")
+
+    subdir = Path(entry.relative_path).parent.as_posix()
+    if subdir == "banter":
+        if entry.mode not in {"normal", "super_italian"}:
+            errors.append(f"{entry.relative_path} banter mode must be normal or super_italian")
+        expected_language = {"normal": "en", "super_italian": "it"}.get(entry.mode)
+        if expected_language is not None and entry.language != expected_language:
+            errors.append(f"{entry.relative_path} banter language does not match its mode")
+        starter_id = entry.required_previous_starter_id
+        if starter_id and (len(starter_id) > 80 or any(not (char.isalnum() or char in "._-") for char in starter_id)):
+            errors.append(f"{entry.relative_path} required starter id is invalid")
+        if entry.special and (entry.mode != "normal" or starter_id):
+            errors.append(f"{entry.relative_path} special banter must be evergreen Normal Mode copy")
+    elif entry.mode or entry.required_previous_starter_id or entry.special:
+        errors.append(f"{entry.relative_path} non-banter asset has banter metadata")
+    return errors
 
 
 def _read_manifest(root: Path) -> tuple[dict[str, object] | None, list[str]]:

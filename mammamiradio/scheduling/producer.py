@@ -82,8 +82,9 @@ from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import (
+    PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
     SpokenAssetEntry,
-    approved_spoken_asset_entries,
+    declared_spoken_asset_entries,
     is_approved_packaged_audio_asset,
     is_approved_spoken_asset,
 )
@@ -3919,7 +3920,7 @@ def _pick_canned_clip(
     if subdir == "banter" and state is not None and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
         return None
     if subdir not in _canned_clip_cache:
-        _canned_clip_cache[subdir] = approved_spoken_asset_entries(subdir, assets_root=_DEMO_ASSETS_DIR)
+        _canned_clip_cache[subdir] = declared_spoken_asset_entries(subdir, assets_root=_DEMO_ASSETS_DIR)
     entries = _canned_clip_cache[subdir]
     if not entries:
         return None
@@ -3929,7 +3930,9 @@ def _pick_canned_clip(
         exact = [
             entry
             for entry in entries
-            if entry.required_previous_starter_id and entry.required_previous_starter_id == previous_starter_id
+            if entry.required_previous_starter_id
+            and entry.required_previous_starter_id == previous_starter_id
+            and not entry.special
         ]
         evergreen = [entry for entry in entries if not entry.required_previous_starter_id and not entry.special]
         specials = [entry for entry in entries if not entry.required_previous_starter_id and entry.special]
@@ -3943,7 +3946,7 @@ def _pick_canned_clip(
         return [
             entry
             for entry in candidates
-            if Path(entry.relative_path).name not in _recently_played_clips
+            if (subdir != "banter" or Path(entry.relative_path).name not in _recently_played_clips)
             and _clip_is_serviceable(_DEMO_ASSETS_DIR / entry.relative_path)
         ]
 
@@ -3960,18 +3963,17 @@ def _pick_canned_clip(
 
     eligible = _eligible_pool()
     if not eligible:
-        _recently_played_clips.clear()
-        eligible = _eligible_pool()
-    if not eligible:
         return None
     entry = random.choice(eligible)
     pick = _DEMO_ASSETS_DIR / entry.relative_path
-    # Revalidate the full fail-closed inventory after consulting the cache. A
-    # changed or deleted packaged byte must never air from an old declaration.
+    # Hash only the selected declaration after consulting the metadata cache.
+    # A changed packaged byte still fails closed without reading the entire
+    # banter bank on the producer event loop.
     if not is_approved_spoken_asset(pick, assets_root=_DEMO_ASSETS_DIR):
         _canned_clip_cache.pop(subdir, None)
         return None
-    _recently_played_clips.append(pick.name)
+    if subdir == "banter":
+        _recently_played_clips.append(pick.name)
     return pick
 
 
@@ -4013,6 +4015,21 @@ def _pick_packaged_banter_clip(
         previous_starter_id=previous_starter_id,
         allow_special=contextual,
     )
+
+
+def _canned_clip_required_previous_starter_id(path: Path | None) -> str:
+    """Return the exact-track dependency carried by a selected packaged clip."""
+
+    if path is None:
+        return ""
+    try:
+        relative_path = Path(path).resolve().relative_to(_DEMO_ASSETS_DIR.resolve()).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    for entry in _canned_clip_cache.get("banter", ()):
+        if entry.relative_path == relative_path:
+            return entry.required_previous_starter_id
+    return ""
 
 
 def _resolve_sweeper_voice(config: StationConfig) -> tuple[str, str, str, HostPersonality | None]:
@@ -6897,7 +6914,7 @@ async def _run_producer_inner(
                     and not impossible_tts
                     and not state.pending_requests
                 ):
-                    # Draw the first 21 canned breaks from the reviewed bank.
+                    # Draw unique mode-safe breaks from the 21-clip reviewed bank.
                     if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT:
                         canned = _pick_packaged_banter_clip(
                             queue,
@@ -7387,7 +7404,7 @@ async def _run_producer_inner(
                             queue,
                             state,
                             config,
-                            contextual=packaged_banter_contextual,
+                            contextual=False,
                         )
                         if fallback_canned:
                             try:
@@ -7567,6 +7584,7 @@ async def _run_producer_inner(
                 home_return_metadata: dict[str, str] = (
                     {"home_return_fact_id": home_return_authority.fact_id} if home_return_authority is not None else {}
                 )
+                required_previous_starter_id = _canned_clip_required_previous_starter_id(canned)
                 segment = Segment(
                     type=SegmentType.BANTER,
                     path=audio_path,
@@ -7598,6 +7616,11 @@ async def _run_producer_inner(
                         "has_music_tail": False,
                         "clip_audio_class": banter_audio_class,
                         "transition_track_ref": trans_track_ref,
+                        **(
+                            {PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY: required_previous_starter_id}
+                            if required_previous_starter_id
+                            else {}
+                        ),
                         "ledger_segment_id": _banter_ledger_segment_id(
                             _banter_attempt_id,
                             canned=canned,

@@ -2552,17 +2552,19 @@ def test_pick_canned_banter_obeys_mode_context_and_special_frequency(tmp_path):
             )
             == paths["exact"]
         )
+        assert producer._canned_clip_required_previous_starter_id(paths["exact"]) == "TRACK-ID"
+        assert producer._canned_clip_required_previous_starter_id(paths["normal"]) == ""
         producer._recently_played_clips.clear()
         with patch(f"{PRODUCER_MODULE}.random.random", return_value=0.0):
             assert _pick_canned_clip("banter", state=state, mode="normal") == paths["special"]
         producer._recently_played_clips.clear()
         producer._recently_played_clips.append(paths["normal"].name)
         with patch(f"{PRODUCER_MODULE}.random.random", return_value=1.0):
-            assert _pick_canned_clip("banter", state=state, mode="normal") == paths["normal"]
+            assert _pick_canned_clip("banter", state=state, mode="normal") is None
         producer._recently_played_clips.clear()
         producer._recently_played_clips.append(paths["normal"].name)
         with patch(f"{PRODUCER_MODULE}.random.random", side_effect=[1.0, 0.0]) as rarity_roll:
-            assert _pick_canned_clip("banter", state=state, mode="normal") == paths["normal"]
+            assert _pick_canned_clip("banter", state=state, mode="normal") is None
         rarity_roll.assert_called_once()
     finally:
         producer._DEMO_ASSETS_DIR = original_root
@@ -5228,7 +5230,7 @@ def test_pick_canned_clip_returns_manifested_recovery_file(tmp_path):
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
         result = _pick_canned_clip("recovery")
     assert result == clip1
-    assert list(_recently_played_clips) == ["clip1.mp3"]
+    assert list(_recently_played_clips) == []
 
 
 def test_pick_canned_clip_rejects_deleted_cached_path(tmp_path):
@@ -5258,8 +5260,8 @@ def test_pick_canned_clip_rejects_tiny_cached_path(tmp_path):
     assert list(_recently_played_clips) == []
 
 
-def test_pick_canned_clip_clears_recently_played_when_exhausted(tmp_path):
-    """When all clips are recently played, the cache resets and re-picks."""
+def test_recovery_pick_does_not_clear_banter_recency(tmp_path):
+    """Repeatable recovery audio never erases the banter no-repeat bank."""
     from mammamiradio.scheduling.producer import _canned_clip_cache, _pick_canned_clip, _recently_played_clips
 
     clip1 = _manifest_recovery_clip(tmp_path, "clip1.mp3", b"reviewed" * 300)
@@ -5269,8 +5271,7 @@ def test_pick_canned_clip_clears_recently_played_when_exhausted(tmp_path):
     with patch(f"{PRODUCER_MODULE}._DEMO_ASSETS_DIR", tmp_path):
         result = _pick_canned_clip("recovery")
     assert result == clip1
-    # recently_played should have been cleared and then clip1 re-added
-    assert "clip1.mp3" in _recently_played_clips
+    assert list(_recently_played_clips) == ["clip1.mp3"]
 
 
 def test_pick_canned_clip_nonexistent_dir(tmp_path):
