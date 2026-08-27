@@ -907,7 +907,7 @@ same structured shape under `active_setup_csrf_stale`.
 docker compose up
 ```
 
-The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`.
+The `Dockerfile` builds a standalone image with Python 3.11 and FFmpeg. The container runs as a non-root `radio` user. `docker-compose.yml` maps `.env` variables and mounts a persistent volume at `/data` for cache, temporary work, and operator-supplied music in `/data/music`. Source checkouts default to `./music`; set `MAMMAMIRADIO_MUSIC_DIR` to override either layout. The local-library scanner runs every 60 seconds and **Rotazione → Local music → Scan now** triggers an immediate rescan without restart.
 
 The container binds to `0.0.0.0`. Set `ADMIN_TOKEN` in `.env` to pin a known
 value. If it is unset, the entrypoint generates one and writes it to
@@ -941,6 +941,8 @@ and trusts its own LAN for admin access (see **Admin access model**); set
 `admin_token` in the add-on options to require a credential.
 
 The dashboard is accessible via HA ingress (sidebar). First Listen shows source readiness, plays the station on the current browser device, asks the operator to confirm audible sound, and only then exposes the filtered Home context preview and choice. Home Assistant speakers and AI-host keys are optional later enhancements.
+
+Operator local music remains under `/data/music`. Populate it through the deployment's supported storage tooling; Mamma Mi Radio scans recursively every 60 seconds and exposes **Rotazione → Local music → Scan now** for an immediate refresh.
 
 First Listen progress is owner-only setup metadata under `/data/cache/state` in
 add-on mode. Its receipt records factual milestones, not the live Home-context
