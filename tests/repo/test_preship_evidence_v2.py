@@ -2390,7 +2390,9 @@ def test_pr_returns_multiple_matching_receipts_in_sorted_order(repo: GitReposito
     assert result.matching_receipts == tuple(sorted((first.as_posix(), second.as_posix())))
 
 
-def test_legacy_v1_file_is_part_of_v2_content_identity(repo: GitRepository) -> None:
+def test_ordinary_proof_files_are_part_of_v2_content_identity(repo: GitRepository) -> None:
+    # The retired fixed-name v1 artifact doubles as the example: any ordinary
+    # proof/ file is reviewed content, only the v2 receipt namespace is excluded.
     before = snapshot_tree(repo, "HEAD").content_sha256
     legacy = repo.root / "proof/preship-review.json"
     legacy.parent.mkdir(parents=True)
@@ -2542,6 +2544,7 @@ def test_cli_emit_reports_create_state(
     fake_repo = Mock()
     monkeypatch.setattr(landing_cli.GitRepository, "discover", Mock(return_value=fake_repo))
     monkeypatch.setattr(landing_cli, "emit_v2", Mock(return_value=(Path("proof/receipt.json"), created)))
+    monkeypatch.setattr(landing_cli, "retire_superseded_receipts", Mock(return_value=((), ())))
 
     assert landing_cli.main(["evidence", "emit", "--target", "HEAD"]) == 0
     assert f"landing-evidence: {verb} proof/receipt.json" in capsys.readouterr().out
@@ -2581,25 +2584,813 @@ def test_cli_converts_landing_errors_to_exit_one(
     assert "landing-evidence: FAIL — synthetic failure" in capsys.readouterr().err
 
 
-def test_workflow_runs_v1_and_v2_separately_from_trusted_base() -> None:
+def test_workflow_verifies_v2_only_from_trusted_base() -> None:
     text = WORKFLOW.read_text()
     assert "name: pre-ship evidence (report-only)" in text
     assert "ref: ${{ github.event.pull_request.base.sha }}" in text
     assert text.count('git fetch --no-tags origin "$HEAD_SHA"') == 1
     assert 'actual_base="$(git rev-parse HEAD)"' in text
     assert 'if [ "$actual_base" != "$BASE_SHA" ]' in text
-    assert "name: Check v1 pre-ship review evidence" in text
     assert "name: Check v2 pre-ship review evidence" in text
     assert "python3 -S -P -m scripts.landing evidence verify" in text
     assert '--target "$HEAD_SHA" --base "$BASE_SHA" --mode pr' in text
-    assert "trusted base has no v2 verifier" in text
+    assert "base predates the v2 verifier" in text
     assert "workflow definition itself is still PR-controlled" in text
     assert "base-owned control plane" in text
     assert "reopened" in text
     assert "github.event.pull_request.user.login != 'dependabot[bot]'" in text
     assert "git checkout" not in text
     assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
+    # The fixed-name v1 artifact is retired; the workflow neither reads nor
+    # mentions a v1 checking step anymore, and says why the file is gone.
+    assert "Check v1 pre-ship review evidence" not in text
+    assert "proof/preship-review.json" not in text
+    assert "legacy fixed-name v1 file is retired" in text
+    # Report-only, not blocking: the v2 check annotates and never fails the job.
+    # These guard the report-only -> blocking flip, which is a separate approval.
+    assert "(report-only)" in text
+    assert "::warning::" in text
+    v2_step = text[text.index("name: Check v2 pre-ship review evidence") :]
+    assert "::error::" not in v2_step
+    assert "exit 1" not in v2_step
 
     quality = QUALITY_WORKFLOW.read_text()
     assert "Landing policy full branch coverage" in quality
     assert "--cov=scripts.landing --cov-branch --cov-fail-under=100" in quality
+
+
+def _set_origin_main(repo: GitRepository, commit: str) -> None:
+    """Point the local remote-tracking main at ``commit`` (the landed truth)."""
+
+    _git(repo.root, "update-ref", "refs/remotes/origin/main", commit)
+
+
+def _integrated_branch(repo: GitRepository, tmp_path: Path) -> tuple[str, str, Path, dict[str, Any]]:
+    """Reviewed feature branch, receipt committed, base advanced, base cleanly merged.
+
+    Sets ``origin/main`` to the merged base, since retirement anchors to it.
+    Returns (base_commit, merge_commit, old_receipt_path, old_receipt_payload).
+    """
+
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _, old_path = _emit_and_commit(repo, tmp_path)
+    old_payload = json.loads((repo.root / old_path).read_bytes())
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    base = _commit(repo.root, "base advances")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, base)
+    return base, repo.head(), old_path, old_payload
+
+
+def test_reattest_derives_receipt_after_clean_base_integration(repo: GitRepository, tmp_path: Path) -> None:
+    base, merge_commit, old_path, old_payload = _integrated_branch(repo, tmp_path)
+
+    path, created, superseded = evidence_module.reattest_v2(repo, base=base)
+    assert created
+    assert superseded == (old_path,)
+    assert not (repo.root / old_path).exists()
+
+    payload = json.loads((repo.root / path).read_bytes())
+    assert payload["reviewed_commit"] == merge_commit
+    assert payload["reviewed_content_sha256"] == snapshot_tree(repo, merge_commit).content_sha256
+    assert payload["review"] == old_payload["review"]
+    assert payload["source_record_sha256"] == old_payload["source_record_sha256"]
+
+    target = _commit(repo.root, "reattest receipt swap")
+    result = verify_v2(repo, target=target, base=base, mode="pr")
+    assert result.matching_receipts == (path.as_posix(),)
+
+
+def test_reattest_is_idempotent_after_the_receipt_swap_lands(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+    first_path, created, superseded = evidence_module.reattest_v2(repo, base=base)
+    assert created and superseded
+    _commit(repo.root, "reattest receipt swap")
+
+    again_path, created_again, superseded_again = evidence_module.reattest_v2(repo, base=base)
+    assert again_path == first_path
+    assert not created_again
+    assert superseded_again == ()
+
+
+def test_reattest_chains_across_two_base_integrations(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, _, old_payload = _integrated_branch(repo, tmp_path)
+    first_path, _, _ = evidence_module.reattest_v2(repo, base=base)
+    _commit(repo.root, "first reattestation")
+
+    _git(repo.root, "checkout", "-q", "base-branch")
+    (repo.root / "base-second.txt").write_text("more base\n")
+    second_base = _commit(repo.root, "base advances again")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", second_base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, second_base)
+
+    second_path, created, superseded = evidence_module.reattest_v2(repo, base=second_base)
+    assert created
+    assert superseded == (first_path,)
+    payload = json.loads((repo.root / second_path).read_bytes())
+    assert payload["review"] == old_payload["review"]
+
+    target = _commit(repo.root, "second reattestation")
+    result = verify_v2(repo, target=target, base=second_base, mode="pr")
+    assert result.matching_receipts == (second_path.as_posix(),)
+
+
+def test_reattest_refuses_post_review_content_change(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+    (repo.root / "sneak.txt").write_text("unreviewed\n")
+    _commit(repo.root, "unreviewed change after the merge")
+
+    with pytest.raises(EvidenceError, match="no existing receipt derives this content"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_reattest_refuses_hand_resolved_conflicted_integration(repo: GitRepository, tmp_path: Path) -> None:
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _emit_and_commit(repo, tmp_path)
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "feature.txt").write_text("conflicting\n")
+    base = _commit(repo.root, "base edits the same file")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode != 0
+    (repo.root / "feature.txt").write_text("hand resolution\n")
+    _git(repo.root, "add", "feature.txt")
+    _git(repo.root, "commit", "-q", "--no-edit")
+    _set_origin_main(repo, base)
+
+    with pytest.raises(EvidenceError, match="conflicts"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_reattest_requires_an_integrated_base_and_a_source_receipt(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    fork_point = repo.head()
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    unmerged_base = _commit(repo.root, "unintegrated base")
+    _git(repo.root, "checkout", "-q", "main")
+    _set_origin_main(repo, fork_point)
+
+    with pytest.raises(EvidenceError, match="integrate the base first"):
+        evidence_module.reattest_v2(repo, base=unmerged_base)
+
+    with pytest.raises(EvidenceError, match="no v2 receipt exists on this branch to derive from"):
+        evidence_module.reattest_v2(repo, base=fork_point)
+
+
+def test_reattest_refuses_dirty_state_and_non_head_target(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+    (repo.root / "scratch.txt").write_text("dirty\n")
+    with pytest.raises(EvidenceError, match="dirty"):
+        evidence_module.reattest_v2(repo, base=base)
+    (repo.root / "scratch.txt").unlink()
+
+    with pytest.raises(EvidenceError, match="not the checked-out HEAD"):
+        evidence_module.reattest_v2(repo, base=base, target=base)
+
+
+def test_reattest_never_touches_base_receipts(repo: GitRepository, tmp_path: Path) -> None:
+    fork_point = repo.head()
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    base_reviewed = _commit(repo.root, "base advances")
+    base_receipt_path, _ = _add_receipt(repo, reviewed_commit=base_reviewed)
+    base = repo.head()
+    _git(repo.root, "checkout", "-q", "main")
+
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _, old_path = _emit_and_commit(repo, tmp_path)
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, base)
+
+    path, created, superseded = evidence_module.reattest_v2(repo, base=base)
+    assert created
+    assert superseded == (old_path,)
+    # The base's own receipt is present on origin/main, so retirement leaves it —
+    # only the branch's pre-integration receipt is retired.
+    assert (repo.root / base_receipt_path).is_file()
+
+    target = _commit(repo.root, "reattest receipt swap")
+    result = verify_v2(repo, target=target, base=base, mode="pr")
+    assert result.matching_receipts == (path.as_posix(),)
+
+
+def test_reattest_refuses_an_untrusted_base_not_landed_on_origin_main(repo: GitRepository, tmp_path: Path) -> None:
+    # The witness base must be landed content. An unmerged/untrusted base could
+    # smuggle unreviewed content through the sound-looking three-way merge; both
+    # the original --base HEAD exploit and a divergent feature-branch base are
+    # refused because neither is contained in origin/main.
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    reviewed = _commit(repo.root, "reviewed feature")
+    _emit_and_commit(repo, tmp_path)
+    _git(repo.root, "checkout", "-q", "-b", "evil", fork_point)
+    (repo.root / "backdoor.txt").write_text("backdoor\n")
+    evil = _commit(repo.root, "unreviewed backdoor")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", evil, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, fork_point)  # honest main: no backdoor, evil not on it
+
+    for bad_base in (repo.head(), reviewed, evil):
+        with pytest.raises(EvidenceError, match="is not landed content in 'origin/main'"):
+            evidence_module.reattest_v2(repo, base=bad_base)
+
+
+def test_reattest_refuses_when_origin_main_is_unresolvable_up_front(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+    _git(repo.root, "update-ref", "-d", "refs/remotes/origin/main")
+    with pytest.raises(EvidenceError, match="'origin/main' does not resolve"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_reattest_deletion_is_anchored_to_origin_main_not_the_base_arg(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    # A stale/wrong --base must never delete a receipt that has landed on main.
+    # main advances B0 -> B1 where B0..B1 only touches the receipt namespace, so a
+    # witness against the stale B0 still passes; retirement must still spare B1's
+    # landed receipt because it is anchored to origin/main, not to --base.
+    fork_point = repo.head()
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    b0 = _commit(repo.root, "base B0")
+    landed_receipt, _ = _add_receipt(repo, reviewed_commit=b0)  # lands on B1
+    b1 = repo.head()
+    _git(repo.root, "checkout", "-q", "main")
+
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _, old_path = _emit_and_commit(repo, tmp_path)
+    merge = _git(repo.root, "merge", "--no-edit", b1, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, b1)
+
+    # Reattest against the stale B0 (as if origin/main had not been fetched to B1).
+    _path, created, superseded = evidence_module.reattest_v2(repo, base=b0)
+    assert created
+    assert superseded == (old_path,)
+    assert (repo.root / landed_receipt).is_file(), "a landed receipt was wrongly retired via a stale --base"
+
+
+def test_reattest_cli_reports_receipt_and_superseded_paths(
+    repo: GitRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base, _, old_path, _ = _integrated_branch(repo, tmp_path)
+    monkeypatch.chdir(repo.root)
+
+    assert landing_cli.main(["evidence", "reattest", "--base", base]) == 0
+    output = capsys.readouterr().out
+    assert "landing-evidence: wrote proof/preship-reviews/v2/" in output
+    assert f"superseded {old_path.as_posix()}" in output
+    assert "commit the proof/preship-reviews/v2/ changes" in output
+
+
+def test_tree_content_digest_matches_snapshot_profile(repo: GitRepository) -> None:
+    (repo.root / "nested").mkdir()
+    (repo.root / "nested" / "päth münz.txt").write_text("odd\n")
+    _commit(repo.root, "odd paths")
+    _add_receipt(repo)
+    # HA Green receipts are excluded from the content profile; the witness digest
+    # must ignore them exactly like snapshot_tree, or every real-repo reattest
+    # would fail the moment an HA receipt lands in the tree.
+    _add_valid_ha_receipt(repo, run_index=2)
+
+    tree_oid = _git(repo.root, "rev-parse", "HEAD^{tree}").stdout.decode().strip()
+    snapshot = snapshot_tree(repo, "HEAD")
+    assert snapshot.has_ha_green_receipts
+    assert evidence_module._tree_content_digest(repo, tree_oid) == snapshot.content_sha256
+
+
+def _add_valid_ha_receipt(repo: GitRepository, *, run_index: int) -> None:
+    """Write a validator-clean HA Green receipt for the current tree state."""
+
+    config = repo.root / "ha-addon/mammamiradio/config.yaml"
+    if not config.exists():
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("version: 3.4.5\n")
+        _commit(repo.root, "release config")
+    validator = evidence_module._ha_release_validator()
+    _, ha_digest = validator._tracked_content_sha256(repo.root, "HEAD")
+    receipt_root = repo.root / HA_RECEIPT_ROOT
+    receipt_root.mkdir(parents=True, exist_ok=True)
+    run_id = f"{run_index:08x}-0000-4000-8000-{run_index:012x}"
+    (receipt_root / f"run-{run_id}.json").write_bytes(_ha_receipt_bytes(run_id=run_id, content_digest=ha_digest))
+    _commit(repo.root, "HA Green receipt")
+
+
+def test_reattest_survives_ha_green_receipts_arriving_with_the_base(
+    repo: GitRepository,
+    tmp_path: Path,
+) -> None:
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _, old_path = _emit_and_commit(repo, tmp_path)
+
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    _add_valid_ha_receipt(repo, run_index=1)
+    base = repo.head()
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, base)
+
+    path, created, superseded = evidence_module.reattest_v2(repo, base=base)
+    assert created
+    assert superseded == (old_path,)
+
+    target = _commit(repo.root, "reattest with HA receipts from base")
+    result = verify_v2(repo, target=target, base=base, mode="pr")
+    assert result.matching_receipts == (path.as_posix(),)
+
+
+def test_merge_tree_commits_returns_tree_or_none(repo: GitRepository) -> None:
+    fork_point = repo.head()
+    (repo.root / "a.txt").write_text("a\n")
+    ours = _commit(repo.root, "ours")
+    _git(repo.root, "checkout", "-q", "-b", "theirs-branch", fork_point)
+    (repo.root / "b.txt").write_text("b\n")
+    theirs = _commit(repo.root, "theirs")
+
+    clean = repo.merge_tree_commits(ours, theirs)
+    assert clean is not None and len(clean) == repo.oid_length
+    merged_paths = {entry.path for entry in repo.tree_entries_for_tree(clean, max_record_bytes=MAX_TREE_RECORD_BYTES)}
+    assert b"a.txt" in merged_paths and b"b.txt" in merged_paths
+
+    _git(repo.root, "checkout", "-q", "-b", "conflict-branch", fork_point)
+    (repo.root / "a.txt").write_text("different\n")
+    conflicting = _commit(repo.root, "conflicting")
+    assert repo.merge_tree_commits(ours, conflicting) is None
+
+
+def test_resolve_tree_and_tree_entries_for_tree_reject_malformed_input(repo: GitRepository) -> None:
+    resolved = repo.resolve_tree("HEAD")
+    assert len(resolved) == repo.oid_length
+
+    with pytest.raises(GitError, match="does not resolve"):
+        repo.resolve_tree("no-such-ref")
+    with pytest.raises(GitError, match="empty tree reference"):
+        repo.resolve_tree("")
+    with pytest.raises(GitError, match="malformed tree object ID"):
+        list(repo.tree_entries_for_tree("zz", max_record_bytes=MAX_TREE_RECORD_BYTES))
+
+
+def test_reattest_reports_each_disqualified_candidate(repo: GitRepository) -> None:
+    fork_point = repo.head()
+    stale_digest = snapshot_tree(repo, fork_point).content_sha256
+    # A divergent base so the content-mismatch candidate reaches the content check
+    # instead of being pre-empted by the ancestral-base (vacuous-witness) guard.
+    _git(repo.root, "checkout", "-q", "-b", "side-branch", fork_point)
+    (repo.root / "side.txt").write_text("side\n")
+    side_commit = _commit(repo.root, "side work")
+    _git(repo.root, "checkout", "-q", "-b", "diverged-base", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    diverged_base = _commit(repo.root, "diverged base")
+    _git(repo.root, "checkout", "-q", "main")
+    (repo.root / "feature.txt").write_text("feature\n")
+    feature_head = _commit(repo.root, "feature work")
+    merge = _git(repo.root, "merge", "--no-edit", diverged_base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, diverged_base)
+
+    _add_receipt(
+        repo,
+        reviewed_commit="f" * 40,
+        content_digest=stale_digest,
+        source_digest=hashlib.sha256(b"unavailable").hexdigest(),
+        commit=False,
+    )
+    _add_receipt(
+        repo,
+        reviewed_commit=side_commit,
+        content_digest=stale_digest,
+        source_digest=hashlib.sha256(b"foreign").hexdigest(),
+        commit=False,
+    )
+    _add_receipt(
+        repo,
+        reviewed_commit=feature_head,
+        content_digest=stale_digest,
+        source_digest=hashlib.sha256(b"mismatch").hexdigest(),
+    )
+
+    with pytest.raises(EvidenceError) as failure:
+        evidence_module.reattest_v2(repo, base=diverged_base)
+    message = str(failure.value)
+    assert "pins an unavailable reviewed commit" in message
+    assert "pins a reviewed commit outside this branch's history" in message
+    assert "does not match its reviewed commit's content" in message
+
+
+def test_reattest_retires_multiple_superseded_receipts_sharing_a_directory(
+    repo: GitRepository,
+) -> None:
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    feature_head = _commit(repo.root, "feature work")
+    reviewed_digest = snapshot_tree(repo, feature_head).content_sha256
+    first_old, _ = _add_receipt(
+        repo,
+        reviewed_commit=feature_head,
+        content_digest=reviewed_digest,
+        source_digest=hashlib.sha256(b"first").hexdigest(),
+        commit=False,
+    )
+    second_old, _ = _add_receipt(
+        repo,
+        reviewed_commit=feature_head,
+        content_digest=reviewed_digest,
+        source_digest=hashlib.sha256(b"second").hexdigest(),
+    )
+
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    base = _commit(repo.root, "base advances")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+    _set_origin_main(repo, base)
+
+    path, created, superseded = evidence_module.reattest_v2(repo, base=base)
+    assert created
+    assert set(superseded) == {first_old, second_old}
+    assert not (repo.root / first_old).exists()
+    assert not (repo.root / first_old).parent.exists()
+    assert (repo.root / path).is_file()
+
+
+def test_reattest_raises_when_superseded_removal_fails(
+    repo: GitRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+
+    def refuse_unlink(self: Path, missing_ok: bool = False) -> None:
+        raise OSError("synthetic unlink failure")
+
+    monkeypatch.setattr(Path, "unlink", refuse_unlink)
+    with pytest.raises(EvidenceError, match="could not be removed"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_reattest_reuses_a_pre_created_identical_receipt(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, old_path, _ = _integrated_branch(repo, tmp_path)
+    first_path, created, first_superseded = evidence_module.reattest_v2(repo, base=base)
+    assert created and first_superseded == (old_path,)
+    # Restore the retired receipt but keep the derived one untracked: the rerun
+    # must accept its own byte-identical output and retire the stale copy again.
+    _git(repo.root, "checkout", "--", old_path.as_posix())
+
+    again_path, created_again, again_superseded = evidence_module.reattest_v2(repo, base=base)
+    assert again_path == first_path
+    assert not created_again
+    assert again_superseded == (old_path,)
+
+
+def test_reattest_detects_head_and_worktree_races(
+    repo: GitRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+
+    real_head = repo.head
+    head_calls = {"count": 0}
+
+    def racing_head() -> str:
+        head_calls["count"] += 1
+        if head_calls["count"] > 1:
+            return "0" * repo.oid_length
+        return real_head()
+
+    monkeypatch.setattr(repo, "head", racing_head)
+    with pytest.raises(EvidenceError, match="HEAD changed while evidence was being computed"):
+        evidence_module.reattest_v2(repo, base=base)
+    monkeypatch.undo()
+
+    real_status = repo.status_bytes
+    status_calls = {"count": 0}
+
+    def racing_status() -> bytes:
+        status_calls["count"] += 1
+        if status_calls["count"] > 1:
+            return b"1 .M N... 100644 100644 100644 0 0 raced.txt\0"
+        return real_status()
+
+    monkeypatch.setattr(repo, "status_bytes", racing_status)
+    with pytest.raises(EvidenceError, match="working tree changed while evidence was being computed"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_reattest_cli_is_quiet_when_already_matching(
+    repo: GitRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+    evidence_module.reattest_v2(repo, base=base)
+    _commit(repo.root, "reattest receipt swap")
+    monkeypatch.chdir(repo.root)
+
+    assert landing_cli.main(["evidence", "reattest", "--base", base]) == 0
+    output = capsys.readouterr().out
+    assert "already matches" in output
+    assert "commit the proof/preship-reviews/v2/ changes" not in output
+
+
+def test_reattest_already_matching_retires_leftover_stale_receipt(repo: GitRepository, tmp_path: Path) -> None:
+    # A partial commit can land the derived receipt while leaving the stale one
+    # tracked; a re-run's already-matching short-circuit must still retire it.
+    base, _, old_path, _ = _integrated_branch(repo, tmp_path)
+    derived_path, created, _ = evidence_module.reattest_v2(repo, base=base)
+    assert created
+    # Commit ONLY the new receipt by name, leaving old_path tracked (git add <file>).
+    _git(repo.root, "add", derived_path.as_posix())
+    _git(repo.root, "checkout", "--", old_path.as_posix())
+    _git(repo.root, "commit", "-q", "-m", "partial receipt commit")
+    assert (repo.root / old_path).is_file()
+
+    chosen, created_again, superseded = evidence_module.reattest_v2(repo, base=base)
+    assert not created_again
+    assert chosen == derived_path
+    assert superseded == (old_path,)
+    assert not (repo.root / old_path).exists()
+
+
+def test_reattest_already_matching_refuses_a_dirty_tree(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, _, _ = _integrated_branch(repo, tmp_path)
+    evidence_module.reattest_v2(repo, base=base)
+    _commit(repo.root, "reattest receipt swap")
+    (repo.root / "scratch.txt").write_text("dirty\n")
+    with pytest.raises(EvidenceError, match="dirty"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_reattest_fails_loud_when_origin_main_is_unresolvable(repo: GitRepository, tmp_path: Path) -> None:
+    # Same integration, but no origin/main ref: retirement cannot prove the stale
+    # source receipt is unlanded, so reattest refuses rather than silently leaving
+    # a branch CI will reject.
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    _commit(repo.root, "feature work")
+    _emit_and_commit(repo, tmp_path)
+    _git(repo.root, "checkout", "-q", "-b", "base-branch", fork_point)
+    (repo.root / "base-only.txt").write_text("base\n")
+    base = _commit(repo.root, "base advances")
+    _git(repo.root, "checkout", "-q", "main")
+    merge = _git(repo.root, "merge", "--no-edit", base, check=False)
+    assert merge.returncode == 0, merge.stderr.decode()
+
+    with pytest.raises(EvidenceError, match="'origin/main' does not resolve"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_reattest_already_matching_fails_loud_without_origin_main(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, old_path, _ = _integrated_branch(repo, tmp_path)
+    derived_path, _, _ = evidence_module.reattest_v2(repo, base=base)
+    _git(repo.root, "add", derived_path.as_posix())
+    _git(repo.root, "checkout", "--", old_path.as_posix())
+    _git(repo.root, "commit", "-q", "-m", "partial receipt commit")
+    _git(repo.root, "update-ref", "-d", "refs/remotes/origin/main")
+
+    with pytest.raises(EvidenceError, match="does not resolve"):
+        evidence_module.reattest_v2(repo, base=base)
+
+
+def test_retire_public_wrapper_snapshots_head_and_retires(repo: GitRepository, tmp_path: Path) -> None:
+    base, _, old_path, _ = _integrated_branch(repo, tmp_path)
+    derived_path, _, _ = evidence_module.reattest_v2(repo, base=base)
+    _git(repo.root, "add", derived_path.as_posix())
+    _git(repo.root, "checkout", "--", old_path.as_posix())
+    _git(repo.root, "commit", "-q", "-m", "partial receipt commit")
+
+    removed, blocked = evidence_module.retire_superseded_receipts(repo)
+    assert removed == (old_path,)
+    assert blocked == ()
+    assert not (repo.root / old_path).exists()
+
+    # Nothing stale left: a second call is a clean no-op.
+    _git(repo.root, "commit", "-aqm", "record retirement")
+    assert evidence_module.retire_superseded_receipts(repo) == ((), ())
+
+
+def test_emit_cli_retires_stale_receipt_after_a_re_review(
+    repo: GitRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The reattest-refusal recovery path: content changed, so a fresh review +
+    # emit is required; the emit CLI must retire the pre-change receipt so the
+    # branch verifies, instead of leaving it for a manual retire commit.
+    fork_point = repo.head()
+    (repo.root / "feature.txt").write_text("feature\n")
+    reviewed = _commit(repo.root, "feature work")
+    ledger = _write_ledger(tmp_path, _review_line(reviewed))
+    old_path, _ = emit_v2(repo, ledger_root=ledger)
+    _commit(repo.root, "first receipt")
+    _set_origin_main(repo, fork_point)
+
+    # Content changes; re-review the new head and emit again through the CLI.
+    (repo.root / "feature.txt").write_text("revised feature\n")
+    revised = _commit(repo.root, "revised feature")
+    ledger.joinpath("projects/florianhorner-mammamiradio/branch-reviews.jsonl").write_bytes(_review_line(revised))
+    monkeypatch.chdir(repo.root)
+    monkeypatch.setenv("GSTACK_HOME", str(ledger))
+
+    assert landing_cli.main(["evidence", "emit"]) == 0
+    output = capsys.readouterr().out
+    assert f"superseded {old_path.as_posix()}" in output
+    assert not (repo.root / old_path).exists()
+
+
+def test_emit_cli_warns_when_origin_main_is_unresolvable(
+    repo: GitRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # No origin/main ref is set here, so retirement cannot confirm the stale
+    # receipt is unlanded and the emit CLI warns (without failing the emit).
+    (repo.root / "feature.txt").write_text("feature\n")
+    reviewed = _commit(repo.root, "feature work")
+    ledger = _write_ledger(tmp_path, _review_line(reviewed))
+    emit_v2(repo, ledger_root=ledger)
+    _commit(repo.root, "first receipt")
+    (repo.root / "feature.txt").write_text("revised feature\n")
+    revised = _commit(repo.root, "revised feature")
+    ledger.joinpath("projects/florianhorner-mammamiradio/branch-reviews.jsonl").write_bytes(_review_line(revised))
+    monkeypatch.chdir(repo.root)
+    monkeypatch.setenv("GSTACK_HOME", str(ledger))
+
+    # Emit writes the receipt but cannot retire the stale one without origin/main;
+    # the ceremony is incomplete, so the CLI must fail loud (non-zero) rather than
+    # report success and let automation ship a CI-failing branch.
+    assert landing_cli.main(["evidence", "emit"]) == 1
+    captured = capsys.readouterr()
+    assert "FAIL" in captured.err
+    assert "could not resolve origin/main" in captured.err
+
+
+def test_path_in_commit_detects_presence_absence_and_non_ascii(repo: GitRepository) -> None:
+    path, _ = _add_receipt(repo)
+    head = repo.head()
+    assert repo.path_in_commit(head, os.fsencode(path.as_posix())) is True
+    absent = f"{RECEIPT_ROOT}/{'a' * 64}/{'b' * 64}.json".encode()
+    assert repo.path_in_commit(head, absent) is False
+    # A non-ASCII path can never be a validated receipt path; reported absent.
+    assert repo.path_in_commit(head, b"proof/preship-reviews/v2/\xff\xfe.json") is False
+
+
+def _witness_entry(path: bytes, *, mode: bytes = b"100644", kind: bytes = b"blob", raw: bytes = b"") -> TreeEntry:
+    record = raw or b"%s %s %s\t%s" % (mode, kind, b"0" * 40, path)
+    return TreeEntry(raw=record, mode=mode, kind=kind, oid="0" * 40, path=path)
+
+
+_HA_WITNESS_PATH = b"proof/media/ha-green-release-evidence/run-00000000-0000-4000-8000-000000000000.json"
+_V2_WITNESS_PATH = b"proof/preship-reviews/v2/" + b"1" * 64 + b"/" + b"2" * 64 + b".json"
+
+
+@pytest.mark.parametrize(
+    "case, expected",
+    [
+        ("duplicate", "duplicate path"),
+        ("bad-namespace", "unknown entry in reserved v2 namespace"),
+        ("v2-mode", "must be a non-executable regular blob"),
+        ("ha-mode", "HA Green receipt .* must be a non-executable regular blob"),
+        ("ha-flood", "more than 0 HA Green receipts"),
+        ("entry-flood", "more than 0 ordinary entries"),
+        ("byte-flood", "more than 1 ordinary bytes"),
+    ],
+)
+def test_tree_content_digest_rejects_malformed_witness_trees(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    expected: str,
+) -> None:
+    ordinary = _witness_entry(b"seed.txt")
+    if case == "duplicate":
+        entries = [ordinary, _witness_entry(b"seed.txt")]
+    elif case == "bad-namespace":
+        entries = [_witness_entry(b"proof/preship-reviews/v2/evil")]
+    elif case == "v2-mode":
+        entries = [_witness_entry(_V2_WITNESS_PATH, mode=b"100755")]
+    elif case == "ha-mode":
+        entries = [_witness_entry(_HA_WITNESS_PATH, mode=b"120000", kind=b"blob")]
+    elif case == "ha-flood":
+        monkeypatch.setattr(evidence_module, "MAX_HA_RECEIPTS", 0)
+        entries = [_witness_entry(_HA_WITNESS_PATH)]
+    elif case == "entry-flood":
+        monkeypatch.setattr(evidence_module, "MAX_TREE_ENTRIES", 0)
+        entries = [ordinary]
+    else:
+        monkeypatch.setattr(evidence_module, "MAX_TREE_BYTES", 1)
+        entries = [ordinary]
+
+    tree_oid = repo.resolve_tree("HEAD")
+    monkeypatch.setattr(
+        repo,
+        "tree_entries_for_tree",
+        lambda oid, *, max_record_bytes: iter(entries),
+    )
+    with pytest.raises((EvidenceError, GitError), match=expected):
+        evidence_module._tree_content_digest(repo, tree_oid)
+
+
+@pytest.mark.parametrize(
+    "stdout, expected",
+    [
+        (b"aaa\nbbb\n", "did not resolve to exactly one object ID"),
+        (b"\xff" * 40 + b"\n", "non-ASCII object ID"),
+        (b"abc\n", "malformed object ID"),
+    ],
+)
+def test_resolve_tree_rejects_bad_plumbing(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: bytes,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(repo, "run_result", lambda args, **kwargs: _completed(stdout=stdout))
+    with pytest.raises(GitError, match=expected):
+        repo.resolve_tree("HEAD")
+
+
+@pytest.mark.parametrize(
+    "returncode, stdout, expected",
+    [
+        (2, b"", "requires git >= 2.38"),
+        (0, b"", "returned no tree object ID"),
+        (0, b"\xff" * 40 + b"\n", "non-ASCII object ID"),
+        (0, b"abc\n", "malformed object ID"),
+    ],
+)
+def test_merge_tree_commits_rejects_bad_plumbing(
+    repo: GitRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: bytes,
+    expected: str,
+) -> None:
+    head = repo.head()
+    real_run_result = repo.run_result
+    seen_argv: list[tuple[str, ...]] = []
+
+    def dispatch(args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        args_tuple = tuple(args)
+        if args_tuple and args_tuple[0] == "merge-tree":
+            seen_argv.append(args_tuple)
+            return _completed(returncode=returncode, stdout=stdout, stderr=b"boom")
+        return real_run_result(args_tuple, **kwargs)
+
+    monkeypatch.setattr(repo, "run_result", dispatch)
+    with pytest.raises(GitError, match=expected):
+        repo.merge_tree_commits(head, head)
+    # Pin the exact invocation: the flags are load-bearing (--write-tree makes a
+    # pre-2.38 git parse it as a tree-ish, --no-messages suppresses conflict text).
+    assert seen_argv == [("merge-tree", "--write-tree", "--no-messages", head, head)]
+
+
+def test_merge_tree_commits_selection_is_deterministic_across_equal_candidates(repo: GitRepository) -> None:
+    # Two receipts bind the same head content; _matching_receipts / the reattest
+    # short-circuit must pick the lexicographically smallest path, deterministically.
+    base = repo.head()
+    content = snapshot_tree(repo, "HEAD").content_sha256
+    first, _ = _add_receipt(
+        repo,
+        reviewed_commit=base,
+        content_digest=content,
+        source_digest=hashlib.sha256(b"alpha").hexdigest(),
+        commit=False,
+    )
+    second, _ = _add_receipt(
+        repo,
+        reviewed_commit=base,
+        content_digest=content,
+        source_digest=hashlib.sha256(b"omega").hexdigest(),
+    )
+    _set_origin_main(repo, base)
+    chosen, created, _ = evidence_module.reattest_v2(repo, base=base)
+    assert not created
+    assert chosen == min(first, second, key=lambda p: os.fsencode(p.as_posix()))
