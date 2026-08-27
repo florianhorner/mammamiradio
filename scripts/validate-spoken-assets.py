@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -11,7 +12,9 @@ import shutil
 import subprocess
 import sys
 from html.parser import HTMLParser
+from importlib import resources
 from pathlib import Path
+from typing import Any
 
 try:
     import tomllib
@@ -89,6 +92,13 @@ BROWSER_GUIDE_PATHS = (
     "first_listen/success.mp3",
 )
 BROWSER_GUIDE_HOSTS = ("Marco", "Giulia")
+DEMO_BANTER_CODEC = "mp3"
+DEMO_BANTER_SAMPLE_RATE_HZ = 48_000
+DEMO_BANTER_CHANNELS = 2
+DEMO_BANTER_CHANNEL_LAYOUT = "stereo"
+DEMO_BANTER_BITRATE_BPS = 192_000
+DEMO_BANTER_MIN_DURATION_SECONDS = 20.0
+DEMO_BANTER_MAX_DURATION_SECONDS = 120.0
 
 
 def _parse_args() -> argparse.Namespace:
@@ -318,6 +328,101 @@ def _number(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _resource_sha256(resource: Any) -> str:
+    digest = hashlib.sha256()
+    with resource.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(128 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_demo_spoken_assets(
+    *,
+    assets_root: Path = DEMO_ASSETS_ROOT,
+    package_assets_root: Any = None,
+) -> list[str]:
+    """Validate every reviewed banter byte as shipped, decodable package audio."""
+
+    root = Path(assets_root)
+    errors = validate_spoken_asset_manifest(assets_root=root)
+    manifest = _read_manifest(root)
+    if manifest is None:
+        return errors
+    raw_assets = manifest.get("assets")
+    if not isinstance(raw_assets, list):
+        return errors
+    banter_entries = [
+        entry
+        for entry in raw_assets
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and str(entry["path"]).startswith("banter/")
+    ]
+    if not banter_entries:
+        errors.append("demo banter inventory is empty")
+        return errors
+
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        errors.append("ffprobe is required to validate packaged demo banter")
+
+    if package_assets_root is None:
+        try:
+            package_assets_root = resources.files("mammamiradio").joinpath("assets").joinpath("demo")
+        except (ModuleNotFoundError, TypeError) as exc:
+            errors.append(f"cannot resolve packaged demo assets: {exc}")
+
+    for entry in banter_entries:
+        relative_path = str(entry["path"])
+        asset_path = root / relative_path
+        declared_sha256 = entry.get("sha256")
+
+        if package_assets_root is not None:
+            package_asset = package_assets_root
+            for part in Path(relative_path).parts:
+                package_asset = package_asset.joinpath(part)
+            try:
+                if not package_asset.is_file():
+                    errors.append(f"{relative_path} is not reachable as a mammamiradio package resource")
+                elif isinstance(declared_sha256, str) and _resource_sha256(package_asset) != declared_sha256:
+                    errors.append(f"{relative_path} packaged resource sha256 does not match")
+            except OSError as exc:
+                errors.append(f"{relative_path} packaged resource is unreadable: {exc}")
+
+        if ffprobe is None or not asset_path.is_file():
+            continue
+        media, probe_error = _probe_audio(asset_path, ffprobe=ffprobe)
+        if probe_error is not None:
+            joiner = " is " if probe_error.startswith("not ") else " "
+            errors.append(f"{relative_path}{joiner}{probe_error}")
+            continue
+        assert media is not None
+        stream = media["stream"]
+        format_data = media["format"]
+        assert isinstance(stream, dict)
+        assert isinstance(format_data, dict)
+        expected_stream = {
+            "codec_type": "audio",
+            "codec_name": DEMO_BANTER_CODEC,
+            "sample_rate": DEMO_BANTER_SAMPLE_RATE_HZ,
+            "channels": DEMO_BANTER_CHANNELS,
+            "channel_layout": DEMO_BANTER_CHANNEL_LAYOUT,
+            "bit_rate": DEMO_BANTER_BITRATE_BPS,
+        }
+        for field, expected in expected_stream.items():
+            actual = stream.get(field)
+            normalized = _number(actual) if isinstance(expected, int) else actual
+            if normalized != expected:
+                errors.append(f"{relative_path} {field} must be {expected!r}; got {actual!r}")
+        duration = _number(format_data.get("duration"))
+        if duration is None:
+            errors.append(f"{relative_path} ffprobe duration is missing or invalid")
+        elif not DEMO_BANTER_MIN_DURATION_SECONDS <= duration <= DEMO_BANTER_MAX_DURATION_SECONDS:
+            errors.append(
+                f"{relative_path} duration {duration:.3f}s is outside "
+                f"{DEMO_BANTER_MIN_DURATION_SECONDS:.1f}-{DEMO_BANTER_MAX_DURATION_SECONDS:.1f}s"
+            )
+    return errors
 
 
 def _browser_route_error(path: Path, *, relative_path: str, static_root: Path) -> str | None:
@@ -698,7 +803,7 @@ def validate_requested_assets(assets_root: Path | None) -> list[str]:
 
     errors: list[str] = []
     inventories = (
-        (DEMO_ASSETS_ROOT, validate_spoken_asset_manifest(assets_root=DEMO_ASSETS_ROOT)),
+        (DEMO_ASSETS_ROOT, validate_demo_spoken_assets()),
         (BROWSER_AUDIO_ROOT, validate_browser_narration_pack()),
     )
     for root, root_errors in inventories:
@@ -732,8 +837,8 @@ def main() -> int:
         )
     elif args.assets_root is None:
         print(
-            "spoken-assets: manifests, canonical receipt, hashes, transcripts, media format, "
-            "loudness, routes, and bundle size are valid"
+            "spoken-assets: manifests, hashes, transcripts, demo package reachability/media format, "
+            "and browser canonical receipt/loudness/routes/bundle size are valid"
         )
     else:
         print("spoken-assets: manifest, hashes, and transcripts are valid")

@@ -2470,6 +2470,9 @@ def test_pick_canned_clip_allows_only_manifested_truth_safe_banter(tmp_path):
                         "kind": "speech",
                         "language": "en",
                         "transcript": "The music keeps the room warm.",
+                        "mode": "normal",
+                        "required_previous_starter_id": "",
+                        "special": False,
                     }
                 ],
             }
@@ -2491,6 +2494,143 @@ def test_pick_canned_clip_allows_only_manifested_truth_safe_banter(tmp_path):
         producer._DEMO_ASSETS_DIR = original_root
         producer._canned_clip_cache.clear()
         producer._recently_played_clips.clear()
+
+
+def test_pick_canned_banter_obeys_mode_context_and_special_frequency(tmp_path):
+    """Normal, Italian, exact-track, and rare-special pools never cross."""
+    from mammamiradio.scheduling import producer
+
+    banter_dir = tmp_path / "banter"
+    banter_dir.mkdir()
+    declarations = []
+    paths = {}
+    cases = (
+        ("normal", "normal", "", False),
+        ("italian", "super_italian", "", False),
+        ("exact", "normal", "TRACK-ID", False),
+        ("special", "normal", "", True),
+    )
+    for name, mode, starter_id, special in cases:
+        payload = (name.encode() + b" reviewed ") * 200
+        path = banter_dir / f"{name}.mp3"
+        path.write_bytes(payload)
+        paths[name] = path
+        declarations.append(
+            {
+                "path": f"banter/{name}.mp3",
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "kind": "speech",
+                "language": "it" if mode == "super_italian" else "en",
+                "transcript": "Studio B keeps its own careful records.",
+                "mode": mode,
+                "required_previous_starter_id": starter_id,
+                "special": special,
+            }
+        )
+    (tmp_path / "spoken_assets.json").write_text(
+        json.dumps({"schema_version": 1, "assets": declarations}),
+        encoding="utf-8",
+    )
+
+    original_root = producer._DEMO_ASSETS_DIR
+    producer._DEMO_ASSETS_DIR = tmp_path
+    producer._canned_clip_cache.clear()
+    producer._recently_played_clips.clear()
+    try:
+        state = StationState()
+        assert _pick_canned_clip("banter", state=state, mode="normal", allow_special=False) == paths["normal"]
+        producer._recently_played_clips.clear()
+        assert _pick_canned_clip("banter", state=state, mode="super_italian", allow_special=False) == paths["italian"]
+        producer._recently_played_clips.clear()
+        assert (
+            _pick_canned_clip(
+                "banter",
+                state=state,
+                mode="normal",
+                previous_starter_id="TRACK-ID",
+                allow_special=False,
+            )
+            == paths["exact"]
+        )
+        producer._recently_played_clips.clear()
+        with patch(f"{PRODUCER_MODULE}.random.random", return_value=0.0):
+            assert _pick_canned_clip("banter", state=state, mode="normal") == paths["special"]
+        producer._recently_played_clips.clear()
+        producer._recently_played_clips.append(paths["normal"].name)
+        with patch(f"{PRODUCER_MODULE}.random.random", return_value=1.0):
+            assert _pick_canned_clip("banter", state=state, mode="normal") == paths["normal"]
+        producer._recently_played_clips.clear()
+        producer._recently_played_clips.append(paths["normal"].name)
+        with patch(f"{PRODUCER_MODULE}.random.random", side_effect=[1.0, 0.0]) as rarity_roll:
+            assert _pick_canned_clip("banter", state=state, mode="normal") == paths["normal"]
+        rarity_roll.assert_called_once()
+    finally:
+        producer._DEMO_ASSETS_DIR = original_root
+        producer._canned_clip_cache.clear()
+        producer._recently_played_clips.clear()
+
+
+def test_exact_banter_requires_a_proven_queue_tail_starter():
+    from mammamiradio.scheduling.producer import _queued_predecessor_starter_id
+
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/starter.mp3"),
+            metadata={"source_kind": "starter", "provider_track_id": "TRACK-ID"},
+        )
+    )
+    assert _queued_predecessor_starter_id(queue) == "TRACK-ID"
+
+    queue.put_nowait(Segment(type=SegmentType.BANTER, path=Path("/tmp/banter.mp3")))
+    assert _queued_predecessor_starter_id(queue) == ""
+
+    external_queue: asyncio.Queue[Segment] = asyncio.Queue()
+    external_queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/external.mp3"),
+            metadata={"source_kind": "jamendo", "provider_track_id": "TRACK-ID"},
+        )
+    )
+    assert _queued_predecessor_starter_id(external_queue) == ""
+
+
+def test_packaged_banter_wrapper_disables_context_for_forced_paths():
+    from mammamiradio.scheduling.producer import _pick_packaged_banter_clip
+
+    queue: asyncio.Queue[Segment] = asyncio.Queue()
+    queue.put_nowait(
+        Segment(
+            type=SegmentType.MUSIC,
+            path=Path("/tmp/starter.mp3"),
+            metadata={"source_kind": "starter", "provider_track_id": "TRACK-ID"},
+        )
+    )
+    state = StationState()
+    config = _make_config()
+
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None) as picker:
+        _pick_packaged_banter_clip(queue, state, config, contextual=False)
+    picker.assert_called_once_with(
+        "banter",
+        state=state,
+        mode="normal",
+        previous_starter_id="",
+        allow_special=False,
+    )
+
+    config.super_italian_mode = True
+    with patch(f"{PRODUCER_MODULE}._pick_canned_clip", return_value=None) as picker:
+        _pick_packaged_banter_clip(queue, state, config, contextual=True)
+    picker.assert_called_once_with(
+        "banter",
+        state=state,
+        mode="super_italian",
+        previous_starter_id="TRACK-ID",
+        allow_special=True,
+    )
 
 
 def test_pick_canned_clip_returns_none_when_dir_missing(tmp_path):

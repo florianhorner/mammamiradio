@@ -805,7 +805,7 @@ async def test_no_llm_banter_does_not_advance_home_fact_rotation(tmp_path):
 
     state = _make_run_state()
     state.force_next = SegmentType.BANTER
-    state.canned_clips_streamed = 2  # gold-closer branch -> canned pick
+    state.canned_clips_streamed = producer.SHAREWARE_CANNED_LIMIT  # gold-closer branch -> canned fallback
     director = HomeContextDirector()
     director.observe(
         [DirectorObservation("weather.forecast_home", "weather", "sunny", score=9.0, temperature_c=22.0)],
@@ -899,7 +899,7 @@ async def test_banter_no_llm_impossible_tts_failure_falls_back_to_canned(tmp_pat
     config.anthropic_api_key = ""
     config.openai_api_key = ""
     # Force the "gold closer" branch instead of immediate canned-pick branch.
-    state.canned_clips_streamed = 2
+    state.canned_clips_streamed = producer.SHAREWARE_CANNED_LIMIT
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=8)
 
     canned_clip = tmp_path / "canned_no_llm.mp3"

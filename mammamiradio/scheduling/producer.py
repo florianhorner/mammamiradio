@@ -82,7 +82,8 @@ from mammamiradio.core.packaged_assets import is_packaged_asset
 from mammamiradio.core.segment_status import is_fallback_active
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
 from mammamiradio.core.spoken_assets import (
-    approved_spoken_assets,
+    SpokenAssetEntry,
+    approved_spoken_asset_entries,
     is_approved_packaged_audio_asset,
     is_approved_spoken_asset,
 )
@@ -3845,10 +3846,11 @@ async def _synthesize_impossible_moment(
 
 _recently_played_clips: deque[str] = deque(maxlen=50)
 
-# Cache directory listings for demo asset clips (avoid repeated glob on every call).
-_canned_clip_cache: dict[str, list[Path]] = {}
+# Cache validated manifest entries for demo clips (avoid repeated inventory work).
+_canned_clip_cache: dict[str, list[SpokenAssetEntry]] = {}
 
-SHAREWARE_CANNED_LIMIT = 3
+SHAREWARE_CANNED_LIMIT = 21
+PACKAGED_BANTER_SPECIAL_CHANCE = 0.1
 
 
 def _clip_is_serviceable(path: Path) -> bool:
@@ -3899,7 +3901,14 @@ def _should_defer_for_runway(queue: asyncio.Queue[Segment], lookahead_segments: 
     return True, buffered
 
 
-def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path | None:
+def _pick_canned_clip(
+    subdir: str,
+    *,
+    state: StationState | None = None,
+    mode: Literal["normal", "super_italian"] = "normal",
+    previous_starter_id: str = "",
+    allow_special: bool = True,
+) -> Path | None:
     """Pick reviewed, content-addressed recovery or neutral banter speech."""
 
     # Welcome globs were connection-edge speech sources and remain disabled.
@@ -3910,25 +3919,100 @@ def _pick_canned_clip(subdir: str, *, state: StationState | None = None) -> Path
     if subdir == "banter" and state is not None and state.canned_clips_streamed >= SHAREWARE_CANNED_LIMIT:
         return None
     if subdir not in _canned_clip_cache:
-        _canned_clip_cache[subdir] = approved_spoken_assets(subdir, assets_root=_DEMO_ASSETS_DIR)
-    clips = _canned_clip_cache[subdir]
-    if not clips:
+        _canned_clip_cache[subdir] = approved_spoken_asset_entries(subdir, assets_root=_DEMO_ASSETS_DIR)
+    entries = _canned_clip_cache[subdir]
+    if not entries:
         return None
-    # Avoid recently played clips
-    eligible = [c for c in clips if c.name not in _recently_played_clips]
-    eligible = [
-        c for c in eligible if _clip_is_serviceable(c) and is_approved_spoken_asset(c, assets_root=_DEMO_ASSETS_DIR)
-    ]
+
+    if subdir == "banter":
+        entries = [entry for entry in entries if entry.mode == mode]
+        exact = [
+            entry
+            for entry in entries
+            if entry.required_previous_starter_id and entry.required_previous_starter_id == previous_starter_id
+        ]
+        evergreen = [entry for entry in entries if not entry.required_previous_starter_id and not entry.special]
+        specials = [entry for entry in entries if not entry.required_previous_starter_id and entry.special]
+    else:
+        exact = []
+        evergreen = entries
+        specials = []
+    select_special = allow_special and bool(specials) and random.random() < PACKAGED_BANTER_SPECIAL_CHANCE
+
+    def _fresh(candidates: list[SpokenAssetEntry]) -> list[SpokenAssetEntry]:
+        return [
+            entry
+            for entry in candidates
+            if Path(entry.relative_path).name not in _recently_played_clips
+            and _clip_is_serviceable(_DEMO_ASSETS_DIR / entry.relative_path)
+        ]
+
+    def _eligible_pool() -> list[SpokenAssetEntry]:
+        exact_fresh = _fresh(exact)
+        if exact_fresh:
+            # A verified exact predecessor is a one-shot adjacency opportunity.
+            return exact_fresh
+        evergreen_fresh = _fresh(evergreen)
+        special_fresh = _fresh(specials) if allow_special else []
+        if special_fresh and select_special:
+            return special_fresh
+        return evergreen_fresh
+
+    eligible = _eligible_pool()
     if not eligible:
         _recently_played_clips.clear()
-        eligible = [
-            c for c in clips if _clip_is_serviceable(c) and is_approved_spoken_asset(c, assets_root=_DEMO_ASSETS_DIR)
-        ]
+        eligible = _eligible_pool()
     if not eligible:
         return None
-    pick = random.choice(eligible)
+    entry = random.choice(eligible)
+    pick = _DEMO_ASSETS_DIR / entry.relative_path
+    # Revalidate the full fail-closed inventory after consulting the cache. A
+    # changed or deleted packaged byte must never air from an old declaration.
+    if not is_approved_spoken_asset(pick, assets_root=_DEMO_ASSETS_DIR):
+        _canned_clip_cache.pop(subdir, None)
+        return None
     _recently_played_clips.append(pick.name)
     return pick
+
+
+def _queued_predecessor_starter_id(queue: asyncio.Queue[Segment]) -> str:
+    """Return a proven adjacent starter id, or empty when adjacency is uncertain."""
+
+    internal = getattr(queue, "_queue", None)
+    if not internal:
+        return ""
+    predecessor = list(internal)[-1]
+    if predecessor.type != SegmentType.MUSIC:
+        return ""
+    source_kind = str(
+        predecessor.metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY)
+        or predecessor.metadata.get("source_kind")
+        or predecessor.metadata.get("audio_source")
+        or ""
+    )
+    if source_kind != "starter":
+        return ""
+    return str(predecessor.metadata.get("provider_track_id") or "")
+
+
+def _pick_packaged_banter_clip(
+    queue: asyncio.Queue[Segment],
+    state: StationState,
+    config: StationConfig,
+    *,
+    contextual: bool,
+) -> Path | None:
+    """Pick mode-safe banter; admit track-bound or special copy only naturally."""
+
+    mode: Literal["normal", "super_italian"] = "super_italian" if config.super_italian_mode else "normal"
+    previous_starter_id = _queued_predecessor_starter_id(queue) if contextual else ""
+    return _pick_canned_clip(
+        "banter",
+        state=state,
+        mode=mode,
+        previous_starter_id=previous_starter_id,
+        allow_special=contextual,
+    )
 
 
 def _resolve_sweeper_voice(config: StationConfig) -> tuple[str, str, str, HostPersonality | None]:
@@ -6765,6 +6849,15 @@ async def _run_producer_inner(
                 banter_audio_class: ClipAudioClass = _CLIP_AUDIO_CLASS_UNKNOWN
                 trans_track_ref: str | None = None
                 loop = asyncio.get_running_loop()
+                packaged_banter_contextual = (
+                    natural_banter_candidate
+                    and chaos_subtype is None
+                    and not is_operator_forced
+                    and not urgent_interrupt_cycle
+                    and not state.pending_requests
+                    and not state.ha_pending_directive
+                    and config.party_mode is None
+                )
                 first_home_context_moment_pending = state.ha_pending_directive == FIRST_HOME_CONTEXT_MOMENT_DIRECTIVE
                 home_context_director = state.home_context_director
                 # A pending reactive/first-moment directive carries its own home
@@ -6804,9 +6897,14 @@ async def _run_producer_inner(
                     and not impossible_tts
                     and not state.pending_requests
                 ):
-                    # Use canned clips for first 2, then impossible TTS as the gold closer
-                    if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT - 1:
-                        canned = _pick_canned_clip("banter", state=state)
+                    # Draw the first 21 canned breaks from the reviewed bank.
+                    if state.canned_clips_streamed < SHAREWARE_CANNED_LIMIT:
+                        canned = _pick_packaged_banter_clip(
+                            queue,
+                            state,
+                            config,
+                            contextual=packaged_banter_contextual,
+                        )
                     if not canned:
                         line = generate_impossible_line(
                             segments_produced=state.segments_produced,
@@ -6854,12 +6952,12 @@ async def _run_producer_inner(
                             impossible_tts = True
                         except TTSUnavailableError as exc:
                             logger.warning("Impossible TTS unavailable; trying canned fallback: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
                             if canned is None:
                                 raise
                         except Exception as exc:
                             logger.warning("Impossible TTS failed, falling back to canned: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
 
                 banter_expected_min_duration_sec: float | None = None
                 banter_expected_line_count: int | None = None
@@ -7163,7 +7261,7 @@ async def _run_producer_inner(
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
                             logger.warning("Chaos speech unavailable; trying canned fallback: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
                             if canned is None:
                                 if state.chaos_audio_failures >= CHAOS_AUDIO_FAILURE_LIMIT:
                                     state.chaos_pending = None
@@ -7199,7 +7297,7 @@ async def _run_producer_inner(
                             state.chaos_audio_failures += 1
                             state.chaos_last_degraded_reason = "audio_failure"
                             logger.warning("Chaos audio generation failed; trying canned fallback: %s", exc)
-                            canned = _pick_canned_clip("banter", state=state)
+                            canned = _pick_packaged_banter_clip(queue, state, config, contextual=False)
                             if canned:
                                 banter_expected_min_duration_sec = None
                                 banter_expected_line_count = None
@@ -7285,7 +7383,12 @@ async def _run_producer_inner(
                                 duration_sec=await loop.run_in_executor(None, _probe_segment_duration, audio_path),
                             )
                             audio_path.unlink(missing_ok=True)
-                        fallback_canned = _pick_canned_clip("banter", state=state)
+                        fallback_canned = _pick_packaged_banter_clip(
+                            queue,
+                            state,
+                            config,
+                            contextual=packaged_banter_contextual,
+                        )
                         if fallback_canned:
                             try:
                                 with _timed_render_stage(state, "quality"):

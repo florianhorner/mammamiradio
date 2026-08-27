@@ -23,6 +23,9 @@ class SpokenAssetEntry:
     kind: str
     language: str
     transcript: str
+    mode: str = ""
+    required_previous_starter_id: str = ""
+    special: bool = False
 
 
 def validate_spoken_asset_manifest(*, assets_root: Path = DEMO_ASSETS_DIR) -> list[str]:
@@ -74,6 +77,23 @@ def validate_spoken_asset_manifest(*, assets_root: Path = DEMO_ASSETS_DIR) -> li
         else:
             errors.append(f"{entry.relative_path} kind must be speech or tone")
 
+        subdir = Path(entry.relative_path).parent.as_posix()
+        if subdir == "banter":
+            if entry.mode not in {"normal", "super_italian"}:
+                errors.append(f"{entry.relative_path} banter mode must be normal or super_italian")
+            expected_language = {"normal": "en", "super_italian": "it"}.get(entry.mode)
+            if expected_language is not None and entry.language != expected_language:
+                errors.append(f"{entry.relative_path} banter language does not match its mode")
+            starter_id = entry.required_previous_starter_id
+            if starter_id and (
+                len(starter_id) > 80 or any(not (char.isalnum() or char in "._-") for char in starter_id)
+            ):
+                errors.append(f"{entry.relative_path} required starter id is invalid")
+            if entry.special and (entry.mode != "normal" or starter_id):
+                errors.append(f"{entry.relative_path} special banter must be evergreen Normal Mode copy")
+        elif entry.mode or entry.required_previous_starter_id or entry.special:
+            errors.append(f"{entry.relative_path} non-banter asset has banter metadata")
+
     discoverable = {
         path.relative_to(root).as_posix()
         for subdir in DISCOVERABLE_AUDIO_SUBDIRS
@@ -88,6 +108,17 @@ def validate_spoken_asset_manifest(*, assets_root: Path = DEMO_ASSETS_DIR) -> li
 def approved_spoken_assets(subdir: str, *, assets_root: Path = DEMO_ASSETS_DIR) -> list[Path]:
     """Return hash-valid, truth-safe speech entries in one runtime subdirectory."""
 
+    root = Path(assets_root)
+    return [root / entry.relative_path for entry in approved_spoken_asset_entries(subdir, assets_root=root)]
+
+
+def approved_spoken_asset_entries(
+    subdir: str,
+    *,
+    assets_root: Path = DEMO_ASSETS_DIR,
+) -> list[SpokenAssetEntry]:
+    """Return validated declarations while preserving runtime selection metadata."""
+
     if subdir not in DISCOVERABLE_AUDIO_SUBDIRS:
         return []
     root = Path(assets_root)
@@ -99,17 +130,17 @@ def approved_spoken_assets(subdir: str, *, assets_root: Path = DEMO_ASSETS_DIR) 
     raw_assets = data.get("assets")
     if not isinstance(raw_assets, list):
         return []
-    approved: list[Path] = []
+    approved: list[SpokenAssetEntry] = []
     for index, raw in enumerate(raw_assets):
         entry, entry_errors = _parse_entry(raw, root=root, prefix=f"assets[{index}]")
         if entry is None or entry_errors or entry.kind != "speech":
             continue
-        path = root / entry.relative_path
         if Path(entry.relative_path).parent.as_posix() != subdir:
             continue
+        path = root / entry.relative_path
         try:
             if path.is_file() and _sha256(path) == entry.sha256:
-                approved.append(path)
+                approved.append(entry)
         except OSError:
             continue
     return approved
@@ -174,6 +205,11 @@ def _parse_entry(raw: object, *, root: Path, prefix: str) -> tuple[SpokenAssetEn
     values = {key: raw.get(key) for key in ("path", "sha256", "kind", "language", "transcript")}
     if not all(isinstance(value, str) for value in values.values()):
         return None, [f"{prefix} fields must all be strings"]
+    mode = raw.get("mode", "")
+    required_previous_starter_id = raw.get("required_previous_starter_id", "")
+    special = raw.get("special", False)
+    if not isinstance(mode, str) or not isinstance(required_previous_starter_id, str) or not isinstance(special, bool):
+        return None, [f"{prefix} banter metadata has invalid types"]
     relative_path = str(values["path"])
     relative = Path(relative_path)
     if relative.is_absolute() or ".." in relative.parts or relative.suffix.lower() != ".mp3":
@@ -194,6 +230,9 @@ def _parse_entry(raw: object, *, root: Path, prefix: str) -> tuple[SpokenAssetEn
             kind=str(values["kind"]),
             language=str(values["language"]),
             transcript=str(values["transcript"]),
+            mode=mode,
+            required_previous_starter_id=required_previous_starter_id,
+            special=special,
         ),
         [],
     )

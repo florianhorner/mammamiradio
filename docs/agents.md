@@ -45,6 +45,28 @@ This file supplements the global instructions for the `mammamiradio` repository.
   implementation. Do not meet the limit by removing regression tests, required
   documentation, or review evidence.
 
+## Host Banter Creative Baseline
+
+The human-approved 2026-08-27 prerendered pack is the quality reference for
+Marco and Giulia. Future host-writing changes must preserve these traits:
+
+- Build each exchange around one concrete piece of Studio B lore or one
+  ordinary object treated with absurd seriousness. Avoid interchangeable radio
+  jokes or premise lists.
+- Keep Marco and Giulia character-specific: affectionate disagreement,
+  escalation, callbacks, and a clean turn at the end matter more than joke
+  density. The English Cattaneo scorecard, Archive receipt, and jealous
+  microphone cuts are the strongest references for character fidelity,
+  conversation quality, and chemistry respectively.
+- Giulia's restrained `Mah, guarda... and what did he say?` delivery in the
+  third-chair cut is the tonal benchmark: precise and conversational, never
+  generic announcer theatre.
+- Fourth-wall cuts are rare surprises. They may address one listener, but must
+  never pretend the station can see, hear, locate, monitor, or know private
+  facts about them.
+- Automated prompt and audio checks do not establish creative acceptance.
+  Human audition of the final rendered voices and mix remains required.
+
 ## Parallel workspaces
 
 Admission, Path A vs Path B, write-sets, and the "do this now" triage live in

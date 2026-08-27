@@ -101,6 +101,62 @@ def test_shipped_browser_narration_pack_is_complete_playable_and_bounded() -> No
     assert VALIDATOR.validate_browser_narration_pack() == []
 
 
+@pytest.mark.requires_ffmpeg
+def test_shipped_demo_banter_is_package_reachable_and_playable() -> None:
+    assert VALIDATOR.validate_demo_spoken_assets() == []
+
+
+def test_demo_banter_validator_rejects_wrong_audio_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    banter = tmp_path / "banter"
+    banter.mkdir()
+    payload = b"reviewed demo audio" * 200
+    clip = banter / "clip.mp3"
+    clip.write_bytes(payload)
+    (tmp_path / "spoken_assets.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "path": "banter/clip.mp3",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "kind": "speech",
+                        "language": "en",
+                        "transcript": "Marco: Studio B keeps its own records.",
+                        "mode": "normal",
+                        "required_previous_starter_id": "",
+                        "special": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(VALIDATOR.shutil, "which", lambda command: f"/test-bin/{command}")
+    monkeypatch.setattr(
+        VALIDATOR,
+        "_probe_audio",
+        lambda path, *, ffprobe: (
+            {
+                "stream": {
+                    "codec_type": "audio",
+                    "codec_name": "mp3",
+                    "sample_rate": "44100",
+                    "channels": 2,
+                    "channel_layout": "stereo",
+                    "bit_rate": "192000",
+                },
+                "format": {"duration": "60.0"},
+            },
+            None,
+        ),
+    )
+
+    errors = VALIDATOR.validate_demo_spoken_assets(assets_root=tmp_path, package_assets_root=tmp_path)
+
+    assert any("sample_rate must be 48000" in error for error in errors)
+
+
 def test_shipped_canonical_receipt_matches_generator_and_current_radio_config() -> None:
     manifest = json.loads((SHIPPED_AUDIO_ROOT / "spoken_assets.json").read_text(encoding="utf-8"))
     config = GENERATOR._load_station_config(ROOT / "radio.toml")
