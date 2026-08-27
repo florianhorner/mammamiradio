@@ -174,6 +174,7 @@ from mammamiradio.playlist.direction import (
     resolve_direction_search_results,
 )
 from mammamiradio.playlist.downloader import external_media_enabled
+from mammamiradio.playlist.local_library import scan_and_reconcile_local_library
 from mammamiradio.playlist.music_admission import (
     YOUTUBE_ADMISSION_SEARCH_DEPTH,
     classify_youtube_candidate,
@@ -9135,6 +9136,13 @@ async def purge_pool(request: Request, _: None = Depends(require_admin_access)):
     return {"ok": True, "purged": purged, "persisted": persisted}
 
 
+@router.post("/api/media-sources/local/scan")
+async def scan_local_music(request: Request, _: None = Depends(require_admin_access)):
+    """Refresh operator-owned files without replacing the active base source."""
+    result = await scan_and_reconcile_local_library(request.app.state)
+    return {"ok": not bool(result.get("error")), **result}
+
+
 @router.post("/api/playlist/remove")
 async def remove_track(request: Request, _: None = Depends(require_admin_access)):
     """Remove a captured track from the rotation pool — a DURABLE ban.
@@ -11758,6 +11766,11 @@ async def status(
                 "recent": [{"kind": r["kind"], "label": r["label"], "ok": r["ok"]} for r in list(state.gen_recent)],
             },
             "playlist_source": _serialize_source(state.playlist_source),
+            # Local paths and scan diagnostics are operator-only. The public
+            # payload intentionally carries only source-readiness summaries.
+            "local_library": dict(
+                getattr(request.app.state, "local_library_status", {"in_progress": False, "roots": []})
+            ),
             "jamendo": safe_jamendo_status(config, getattr(request.app.state, "jamendo_provider", None)),
             "external_extractors": _external_extractors_status(config),
             "produced_log": [{"type": e.type, "label": e.label, "timestamp": e.timestamp} for e in state.segment_log],

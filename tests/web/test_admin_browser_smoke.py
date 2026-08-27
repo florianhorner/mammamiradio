@@ -108,6 +108,13 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "showAdminTab('scaletta'",
         "setup status chips lost semantic mapping",
         "forced colors hid setup status glyphs",
+        "local library row did not report active tracks",
+        "local library row did not show the configured music folder",
+        "local library row hid scan counts",
+        "local library row lost its explicit scan action",
+        "local library row rebuilt upload/delete controls",
+        "incomplete scan lost its recovery",
+        "incomplete scan toast lost its recovery",
     ):
         assert needle in code, f"admin browser smoke lost behavior guard: {needle}"
     assert "waitForTimeout(" not in code, "admin browser smoke must use state-based waits, not timing sleeps."
