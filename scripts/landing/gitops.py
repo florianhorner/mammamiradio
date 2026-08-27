@@ -272,7 +272,6 @@ class GitRepository:
         *,
         max_record_bytes: int,
     ) -> Iterator[TreeEntry]:
-        """Stream tree entries from git ls-tree using bounded reads."""
         if max_record_bytes < 1:
             raise GitError("tree record limit must be non-zero")
         args = ("ls-tree", "-r", "-z", "--full-tree", resolved)
@@ -388,10 +387,7 @@ class GitRepository:
         max_paths: int,
         max_path_bytes: int,
     ) -> int:
-        """Count added paths up to max_paths + 1 without buffering the diff.
-
-        Returns the count of paths added between base and target that match pathspec.
-        """
+        """Count added paths up to ``max_paths + 1`` without buffering the diff."""
 
         return len(
             self.diff_paths(
@@ -411,10 +407,6 @@ class GitRepository:
         max_bytes: int,
         max_total_bytes: int,
     ) -> dict[str, bytes]:
-        """Read multiple blob objects via git cat-file batch mode.
-
-        Returns a dict mapping object IDs to their raw blob content.
-        """
         unique_ids = tuple(dict.fromkeys(object_ids))
         if not unique_ids:
             return {}
@@ -511,7 +503,6 @@ class GitRepository:
         return bool(output.strip(b"\0"))
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
-        """Check if ancestor is reachable from descendant in the commit graph."""
         ancestor_oid = self.resolve_commit(ancestor)
         descendant_oid = self.resolve_commit(descendant)
         result = self.run_result(("merge-base", "--is-ancestor", ancestor_oid, descendant_oid))
@@ -524,7 +515,6 @@ class GitRepository:
         raise GitError(f"git merge-base --is-ancestor failed with exit {result.returncode}{suffix}")
 
     def origin_url(self) -> str:
-        """Return the URL of the origin remote as a UTF-8 string."""
         output = self.run(("remote", "get-url", "origin")).rstrip(b"\r\n")
         if not output:
             raise GitError("origin remote has no URL")

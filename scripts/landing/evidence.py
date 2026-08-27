@@ -79,7 +79,6 @@ class _DuplicateKeyError(ValueError):
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Build a dict from key-value pairs, raising on duplicate keys."""
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -89,7 +88,6 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _decode_json_object(raw: bytes, *, label: str) -> dict[str, Any]:
-    """Decode raw bytes as a UTF-8 JSON object, rejecting duplicate keys."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -104,7 +102,6 @@ def _decode_json_object(raw: bytes, *, label: str) -> dict[str, Any]:
 
 
 def canonical_json_bytes(value: dict[str, Any]) -> bytes:
-    """Serialize a dict to canonical one-line JSON with a trailing newline."""
     try:
         encoded = json.dumps(
             value,
@@ -119,7 +116,6 @@ def canonical_json_bytes(value: dict[str, Any]) -> bytes:
 
 
 def _parse_aware_timestamp(value: object) -> datetime:
-    """Parse an ISO-8601 timestamp with timezone into a UTC datetime."""
     if not isinstance(value, str) or not value:
         raise EvidenceError("review timestamp must be a non-empty string")
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
@@ -140,7 +136,6 @@ def _parse_aware_timestamp(value: object) -> datetime:
 
 
 def _display_path(path: bytes) -> str:
-    """Convert a filesystem path in bytes to a safe quoted string for display."""
     return repr(os.fsdecode(path))
 
 
@@ -205,7 +200,6 @@ def _validate_receipt(
     entry: TreeEntry,
     raw: bytes,
 ) -> Receipt:
-    """Validate a v2 review receipt's structure, metadata, and path integrity."""
     path_match = _RECEIPT_PATH_RE.fullmatch(entry.path)
     if path_match is None:
         raise EvidenceError(f"unknown entry in reserved v2 namespace: {_display_path(entry.path)}")
@@ -294,7 +288,6 @@ def _ha_release_validator() -> Any:
 
 
 def _validate_ha_release_receipt(*, entry: TreeEntry, raw: bytes) -> None:
-    """Validate a HA Green release receipt using the dedicated validator module."""
     try:
         _ha_release_validator()._validate_receipt(Path(os.fsdecode(entry.path)), raw=raw)
     except ValueError as exc:
@@ -426,7 +419,6 @@ class LedgerRecord:
 
 
 def _ledger_record(raw_line: bytes) -> LedgerRecord | None:
-    """Parse a review ledger JSONL record, tolerating malformed entries."""
     raw_sha256 = hashlib.sha256(raw_line).hexdigest()
     strict_error: str | None = None
     try:
@@ -508,7 +500,6 @@ def _ledger_record(raw_line: bytes) -> LedgerRecord | None:
 
 
 def _ledger_files(project_dir: Path) -> Iterator[Path]:
-    """Yield all review ledger JSONL files under a project directory."""
     def fail_walk(error: OSError) -> None:
         raise EvidenceError(f"cannot scan review ledger directory {project_dir}: {error}")
 
@@ -524,7 +515,6 @@ def _ledger_files(project_dir: Path) -> Iterator[Path]:
 
 
 def _iter_ledger_records(project_dir: Path) -> Iterator[LedgerRecord]:
-    """Parse review ledger records from all JSONL files in a project directory."""
     for path in _ledger_files(project_dir):
         try:
             with path.open("rb") as handle:
@@ -541,7 +531,6 @@ def _iter_ledger_records(project_dir: Path) -> Iterator[LedgerRecord]:
 
 
 def _read_ledger(project_dir: Path) -> list[LedgerRecord]:
-    """Load all review ledger records from a project directory into a list."""
     return list(_iter_ledger_records(project_dir))
 
 
@@ -552,10 +541,6 @@ def select_review_record(
     repository: str,
     ledger_root: Path | None = None,
 ) -> tuple[LedgerRecord, str]:
-    """Select the newest clean review record matching target content.
-
-    Returns a tuple of the selected LedgerRecord and the resolved commit SHA.
-    """
     root = ledger_root or Path(os.environ.get("GSTACK_HOME", os.path.expanduser("~/.gstack")))
     project_dir = root / "projects" / EXPECTED_REPOSITORY.replace("/", "-")
     if project_dir.is_symlink() or not project_dir.is_dir():
@@ -671,7 +656,6 @@ def _receipt_payload(
     record: LedgerRecord,
     reviewed_commit: str,
 ) -> dict[str, Any]:
-    """Build a v2 receipt payload from a ledger record and reviewed commit."""
     return {
         "content_profile": CONTENT_PROFILE,
         "kind": RECEIPT_KIND,
@@ -689,7 +673,6 @@ def _receipt_payload(
 
 
 def _read_existing_at(parent_fd: int, filename: str, *, expected_length: int) -> bytes:
-    """Read a file within a directory opened as a descriptor, checking size."""
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
     descriptor = os.open(filename, flags, dir_fd=parent_fd)
     try:
@@ -712,7 +695,6 @@ def _read_existing_at(parent_fd: int, filename: str, *, expected_length: int) ->
 
 
 def _write_all(descriptor: int, raw: bytes) -> None:
-    """Write all bytes to a file descriptor, retrying partial writes."""
     position = 0
     while position < len(raw):
         written = os.write(descriptor, raw[position:])
@@ -816,10 +798,6 @@ def emit_v2(
     target: str = "HEAD",
     ledger_root: Path | None = None,
 ) -> tuple[Path, bool]:
-    """Emit a v2 review receipt for the target commit.
-
-    Returns a tuple of the receipt path and a bool indicating if it was newly created.
-    """
     repository = repository_identity(repo)
     initial_head = repo.head()
     target_commit = repo.resolve_commit(target)
@@ -1160,7 +1138,6 @@ def reattest_v2(
 
 
 def _matching_receipts(snapshot: TreeSnapshot) -> list[Receipt]:
-    """Return receipts that bind the snapshot's content under the current profile."""
     return [
         receipt
         for receipt in snapshot.receipts.values()
