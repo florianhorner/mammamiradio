@@ -2462,14 +2462,18 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
               <section class="first-listen-step" id="firstListenSourceStep" data-state="current" aria-labelledby="firstListenSourceHeading">
                 <div class="first-listen-head">
                   <span class="first-listen-number" aria-hidden="true">1</span>
-                  <h3 class="first-listen-heading" id="firstListenSourceHeading" tabindex="-1">Meet Marco and Giulia</h3>
+                  <h3 class="first-listen-heading" id="firstListenSourceHeading" tabindex="-1">Check music can continue</h3>
                   <span class="status-chip working" id="firstListenSourceChip" aria-label="Source status: checking">Checking</span>
                   <div class="first-listen-summary" id="firstListenSourceSummary">The welcome is ready. We’re checking that music can continue afterward.</div>
-                  <button type="button" class="first-listen-review" data-review-step="source" aria-expanded="false" aria-controls="firstListenSourceBody" onclick="toggleFirstListenReview('source',this)" hidden>Review opening</button>
+                  <button type="button" class="first-listen-review" data-review-step="source" aria-expanded="false" aria-controls="firstListenSourceBody" onclick="toggleFirstListenReview('source',this)" hidden>Review music readiness</button>
                 </div>
                 <div class="first-listen-body" id="firstListenSourceBody" role="region" aria-labelledby="firstListenSourceHeading" aria-hidden="false">
-                  <h4 class="benefit-heading">Hear the full Mamma Mi Radio opening.</h4>
-                  <p class="use-copy">You’ll hear Marco and Giulia, then the music starts.</p>
+                  <h4 class="benefit-heading">Music after the welcome.</h4>
+                  <p class="use-copy">Marco and Giulia open the show in the 16-second welcome. This step checks that a song or backup music can follow.</p>
+                  <details class="first-listen-source-preview" id="firstListenSourcePreviewDetails" hidden>
+                    <summary>What plays after the welcome</summary>
+                    <div class="first-listen-source-list" id="firstListenSourcePreview"><div class="empty">Checking what can play…</div></div>
+                  </details>
                   <div class="first-listen-status" id="firstListenSourceRepair"></div>
                   <div class="first-listen-actions" id="firstListenSourceActions" hidden>
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenRepairMusicBtn" data-stopped-exempt onclick="openMusicSourceTools()">Open music source tools</button>
@@ -2488,7 +2492,13 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                 <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
                   <div class="first-listen-current-meta"><strong>Step 2 of 4</strong><span>Next: check the sound</span></div>
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
-                  <p class="use-copy">The station plays on this device. You choose headphones, Bluetooth, or the speaker.</p>
+                  <p class="use-copy">The station plays on this device. Choose headphones, Bluetooth, or this device’s speaker. Hearing it here is enough to finish setup.</p>
+                  <details class="guide-transcript" id="firstListenHomeAssistantGuide">
+                    <summary>Optional: play on a Home Assistant speaker later</summary>
+                    <p>Use the Home Assistant Community Store (HACS) to add the optional Mamma Mi Radio connection. In HACS, open the three-dot menu → Custom repositories, enter https://github.com/florianhorner/mammamiradio, choose Integration as the category, and install Mamma Mi Radio.</p>
+                    <p>Restart Home Assistant, then choose Settings → Devices &amp; Services → Add Integration → Mamma Mi Radio. After setup, open Media → Mamma Mi Radio → Mamma Mi Radio Live and choose a speaker.</p>
+                    <p><a href="https://github.com/florianhorner/mammamiradio/blob/main/docs/integrations/ha-integration.md#install-the-hacs-integration-for-ha-native-playback" target="_blank" rel="noopener noreferrer">Open the full Home Assistant speaker guide</a></p>
+                  </details>
                   <div class="first-listen-actions" style="margin-top:0">
                     <button type="button" class="btn btn-trigger first-listen-action" id="firstListenPlayBtn" data-stopped-exempt onclick="startFirstListen(this)">Start sound check</button>
                   </div>
@@ -3119,8 +3129,9 @@ function formatRequestAge(ageS){
   if(ageS<60)return ageS+'s ago';
   return Math.floor(ageS/60)+'m ago';
 }
-function _statusSpan(cls,state,label,title=''){
+function _statusSpan(cls,state,label,title='',ariaLabel=''){
   const safeState=statusState(state);
+  if(ariaLabel)return `<span class="${cls} ${safeState}" aria-label="${esc(ariaLabel)}" title="${esc(statusTitle(safeState,label,title))}">${esc(label)}</span>`;
   return `<span class="${cls} ${safeState}" aria-label="${esc(label)}: status ${esc(safeState)}" title="${esc(statusTitle(safeState,label,title))}">${esc(label)}</span>`;
 }
 function formatHomeSnapshotAge(ageS){
@@ -3167,6 +3178,7 @@ function homeRefreshResultLine(refresh){
   return parts.join(' · ');
 }
 function statusChip(state,label,title=''){return _statusSpan('status-chip',state,label,title)}
+function statusChipNamed(state,label,title,ariaLabel){return _statusSpan('status-chip',state,label,title,ariaLabel)}
 function statusInline(state,label,title=''){return _statusSpan('status-inline',state,label,title)}
 function segmentInline(type){
   const typeKey=segmentTypeKey(type);
@@ -5033,7 +5045,18 @@ function openSetupPanel(focus=''){
     else summary?.focus({preventScroll:true});
   },50);
 }
+function firstListenMusicSourceAction(){
+  if(_capsState==='checking')return{target:'checking',button:'Checking music sources…'};
+  const chartsAvailable=_capsState==='ready'&&sourceControlVisibility(_caps).charts_reload;
+  return chartsAvailable
+    ?{target:'tools',button:'Open music source tools'}
+    :{target:'setup',button:'Open music source setup'};
+}
 function openMusicSourceTools(){
+  if(firstListenMusicSourceAction().target!=='tools'){
+    openSetupPanel('music-sources');
+    return;
+  }
   showAdminTab('rotazione',{render:true,persist:true});
   setTimeout(()=>{
     const tools=document.getElementById('libraryTools');
@@ -5161,7 +5184,7 @@ const FIRST_LISTEN_STEP_KEYS={
   firstListenAiStep:'ai',
 };
 const FIRST_LISTEN_REVIEW_LABELS={
-  source:'Review opening',
+  source:'Review music readiness',
   speaker:'Review playback',
   verify:'Review sound check',
   privacy:'Review privacy choice',
@@ -5386,6 +5409,68 @@ function firstListenSourceStatus(kind,status){
   };
   return values[value]||{state:'idle',label:value.replaceAll('_',' ')};
 }
+const FIRST_LISTEN_PLAIN_SOURCE_DETAIL={
+  on_air:'Playing right now.',
+  playable:'Ready to play.',
+  candidates_only:'Songs found. Still listening to check they play cleanly.',
+  configured_unchecked:'Set up and standing by. The station is using another source right now.',
+  unavailable:'Nothing playable came from here.',
+  not_configured:'Not set up in this run.',
+  not_bundled:'Not included in this installation.',
+  cover_only:'Backup music only. It keeps the station on while real music is found.',
+  checking:'Checking…',
+};
+const FIRST_LISTEN_PLAIN_SOURCE_DETAIL_BY_KIND={
+  live_charts:{
+    not_configured:'Live charts are available but not configured. Open music source tools to check them.',
+    unavailable:'Live charts did not provide playable music. Open music source tools to check them.',
+  },
+  jamendo:{
+    not_configured:'Optional. Open music source setup to turn it on.',
+  },
+  local_music:{
+    not_configured:'No local songs were found. Add MP3 files to the station’s music folder.',
+  },
+  bundled_demo:{
+    not_bundled:'No demo songs are included here. Use Jamendo or add local music instead.',
+  },
+  recovery:{
+    not_bundled:'No backup music is included here. Use Jamendo or add local music instead.',
+  },
+};
+const FIRST_LISTEN_PLAIN_SOURCE_LABEL={
+  candidates_only:'Almost ready',
+  configured_unchecked:'Standing by',
+  not_bundled:'Not included',
+  cover_only:'Backup only',
+};
+function firstListenPlainSourceDetail(kind,status){
+  kind=firstListenSourceKind(kind);
+  const value=String(status||'checking').toLowerCase();
+  if(kind==='recovery'&&value==='on_air'){
+    const sourceAction=firstListenMusicSourceAction();
+    if(sourceAction.target==='checking')return'Backup music is playing, so the station stays on. We’re checking which primary-music repair is available.';
+    return `Backup music is playing, so the station stays on. Real music still needs a source — ${sourceAction.button.toLowerCase()}.`;
+  }
+  if(kind==='live_charts'&&['not_configured','unavailable'].includes(value)){
+    if(_capsState==='checking')return'Checking whether live charts are available…';
+    if(_capsState==='error')return'Live charts could not be checked. Use Jamendo or add local music instead.';
+    if(!sourceControlVisibility(_caps).charts_reload)return'Live charts are not available in this setup. Use Jamendo or add local music instead.';
+    return FIRST_LISTEN_PLAIN_SOURCE_DETAIL_BY_KIND.live_charts[value];
+  }
+  if(value==='unavailable'){
+    const sourceAction=firstListenMusicSourceAction();
+    if(sourceAction.target==='checking')return'Nothing playable came from here. We’re checking which music-source repair is available.';
+    return `Nothing playable came from here. ${sourceAction.button} to point it somewhere else.`;
+  }
+  const sourceDetail=FIRST_LISTEN_PLAIN_SOURCE_DETAIL_BY_KIND[kind]?.[value];
+  if(sourceDetail)return sourceDetail;
+  return FIRST_LISTEN_PLAIN_SOURCE_DETAIL[value]||'Checking…';
+}
+function firstListenSourceKind(kind){
+  const value=String(kind||'').toLowerCase();
+  return FIRST_LISTEN_SOURCE_ROWS.find(item=>item.kind===value||item.aliases.includes(value))?.kind||value;
+}
 function firstListenSourceRows(source){
   const supplied=Array.isArray(source?.rows)?source.rows:[];
   return FIRST_LISTEN_SOURCE_ROWS.map(required=>{
@@ -5393,32 +5478,55 @@ function firstListenSourceRows(source){
     return{...required,row:found||{status:'checking',detail:'Waiting for source evidence.'}};
   });
 }
+function firstListenSourceHealthy(source,normalized=firstListenSourceRows(source)){
+  return source?.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
+}
 function firstListenSourceState(projection){
   const source=projection?.guided?.source_readiness||{};
   const normalized=firstListenSourceRows(source);
-  const healthy=source.healthy===true||normalized.some(item=>item.kind!=='recovery'&&['on_air','playable'].includes(String(item.row.status||item.row.state||'')));
+  const healthy=firstListenSourceHealthy(source,normalized);
   const recoveryRow=normalized.find(item=>item.kind==='recovery')?.row||{};
   const recoveryStatus=String(recoveryRow.status||recoveryRow.state||'');
   const recoveryOnAir=source.recovery_on_air===true||recoveryStatus==='on_air';
   const recoveryAvailable=recoveryOnAir||source.recovery_cover_available===true||['playable','cover_only'].includes(recoveryStatus);
   return{source,normalized,healthy,recoveryOnAir,recoveryAvailable,continuityAvailable:source.continuity_available===true||healthy||recoveryAvailable};
 }
-function renderFirstListenSources(source){
-  const box=document.getElementById('firstListenSources');
-  if(!box)return;
+function firstListenSourcesHtml(source,plain=false){
   const rows=firstListenSourceRows(source);
   const requiredHtml=rows.map(item=>{
     const rawStatus=item.row.status||item.row.state||'checking';
     const view=firstListenSourceStatus(item.kind,rawStatus);
-    const detail=item.row.detail||item.row.headline||'';
-    return `<div class="first-listen-source-row" data-source-kind="${esc(item.kind)}"><div><div class="first-listen-source-name">${esc(item.label)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${statusChip(view.state,view.label)}</div>`;
+    const detail=plain?firstListenPlainSourceDetail(item.kind,rawStatus):(item.row.detail||item.row.headline||'');
+    const label=plain?(FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]||view.label):view.label;
+    const chip=plain?statusChipNamed(view.state,label,label,`${item.label}: ${label}`):statusChip(view.state,label);
+    return `<div class="first-listen-source-row" data-source-kind="${esc(item.kind)}"><div><div class="first-listen-source-name">${esc(item.label)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${chip}</div>`;
   }).join('');
   const advancedRows=Array.isArray(source?.advanced)?source.advanced:Array.isArray(source?.advanced?.rows)?source.advanced.rows:source?.advanced&&typeof source.advanced==='object'?[source.advanced]:[];
   const advancedHtml=advancedRows.length?`<div class="setup-subhead">Current or custom rotation</div>${advancedRows.slice(0,8).map(row=>{
-    const view=firstListenSourceStatus(String(row.kind||''),row.status||row.state);
-    return `<div class="first-listen-source-row"><div><div class="first-listen-source-name">${esc(row.label||row.kind||'Custom source')}</div><div class="first-listen-source-detail">${esc(row.detail||row.headline||'Shown separately from live charts.')}</div></div>${statusChip(view.state,view.label)}</div>`;
+    const rawStatus=row.status||row.state;
+    const view=firstListenSourceStatus(String(row.kind||''),rawStatus);
+    const detail=plain?firstListenPlainSourceDetail(String(row.kind||''),rawStatus):(row.detail||row.headline||'Shown separately from live charts.');
+    const label=plain?(FIRST_LISTEN_PLAIN_SOURCE_LABEL[String(rawStatus).toLowerCase()]||view.label):view.label;
+    const sourceLabel=String(row.label||row.kind||'Custom source');
+    const chip=plain?statusChipNamed(view.state,label,label,`${sourceLabel}: ${label}`):statusChip(view.state,label);
+    return `<div class="first-listen-source-row"><div><div class="first-listen-source-name">${esc(sourceLabel)}</div><div class="first-listen-source-detail">${esc(detail)}</div></div>${chip}</div>`;
   }).join('')}`:'';
-  box.innerHTML=requiredHtml+advancedHtml;
+  return requiredHtml+advancedHtml;
+}
+function renderFirstListenSources(source){
+  const sourceKnown=Array.isArray(source?.rows)&&source.rows.length>0;
+  const sourceHealth=sourceKnown?(firstListenSourceHealthy(source)?'healthy':'degraded'):'unknown';
+  const preview=document.getElementById('firstListenSourcePreview');
+  const previewDetails=document.getElementById('firstListenSourcePreviewDetails');
+  const technical=document.getElementById('firstListenSources');
+  if(preview)preview.innerHTML=sourceKnown?firstListenSourcesHtml(source,true):'<div class="empty">Checking what can play…</div>';
+  if(previewDetails){
+    const previousHealth=previewDetails.dataset.sourceHealth||'unknown';
+    previewDetails.hidden=!sourceKnown;
+    if(sourceHealth==='degraded'&&previousHealth!=='degraded')previewDetails.open=true;
+    previewDetails.dataset.sourceHealth=sourceHealth;
+  }
+  if(technical)technical.innerHTML=firstListenSourcesHtml(source,false);
 }
 function firstListenPlayerLabel(player){
   const name=String(player?.friendly_name||player?.name||player?.label||'Saved speaker');
@@ -5500,6 +5608,7 @@ function renderFirstListenProgress(){
 
   const sourceSummary=document.getElementById('firstListenSourceSummary');
   const sourceRepair=document.getElementById('firstListenSourceRepair');
+  const sourceAction=firstListenMusicSourceAction();
   if(!sourceKnown){
     firstListenSetChip('firstListenSourceChip','working','Checking');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready. We’re checking that music can continue afterward.';
@@ -5515,14 +5624,23 @@ function renderFirstListenProgress(){
   }else if(recoveryAvailable){
     firstListenSetChip('firstListenSourceChip','degraded','Backup audio available');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready. Backup audio can keep the station playing while primary music is repaired.';
-    if(sourceRepair)sourceRepair.textContent='You can continue and finish First Listen with backup audio. Backup music is ready after the welcome. Primary music still needs attention; open music source tools when you are ready.';
+    if(sourceRepair)sourceRepair.textContent=sourceAction.target==='checking'
+      ?'You can continue and finish First Listen with backup audio. Backup music is ready after the welcome. We’re checking which primary-music repair is available.'
+      :`You can continue and finish First Listen with backup audio. Backup music is ready after the welcome. Primary music still needs attention; ${sourceAction.button.toLowerCase()} when you are ready.`;
   }else{
     firstListenSetChip('firstListenSourceChip','degraded','Music still needed');
     if(sourceSummary)sourceSummary.textContent='The welcome is ready, but music cannot continue afterward yet.';
-    if(sourceRepair)sourceRepair.textContent='The welcome can still play, but there is no audio ready afterward. Open music source tools to continue.';
+    if(sourceRepair)sourceRepair.textContent=sourceAction.target==='checking'
+      ?'The welcome can still play, but there is no audio ready afterward. We’re checking which music-source repair is available.'
+      :`The welcome can still play, but there is no audio ready afterward. ${sourceAction.button} to continue.`;
   }
   const sourceActions=document.getElementById('firstListenSourceActions');
   if(sourceActions)sourceActions.hidden=!sourceKnown||healthy;
+  const sourceActionButton=document.getElementById('firstListenRepairMusicBtn');
+  if(sourceActionButton){
+    sourceActionButton.disabled=sourceAction.target==='checking';
+    sourceActionButton.textContent=sourceAction.button;
+  }
 
   const playBtn=document.getElementById('firstListenPlayBtn');
   const retryBtn=document.getElementById('firstListenRetryBtn');
@@ -8224,12 +8342,14 @@ async function refreshSlow(){
       _capsState='ready';
       updateSystems(_caps,_st);
       updateSourceControls(_st,_caps);
+      if(_firstListenUi.projection)renderFirstListenProgress();
     })
     .catch(e=>{
       if(generation!==_slowPollGeneration)return;
       if(_caps===null){
         _capsState='error';
         updateSourceControls(_st,_caps);
+        if(_firstListenUi.projection)renderFirstListenProgress();
       }
       console.error('refreshSlow capabilities',e);
     });
