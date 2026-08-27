@@ -482,7 +482,13 @@ Lives in `static/base.css`. Replaces the ad-hoc Engine Room green-button-vs-blue
 ```
 
 **Accessibility:**
-- Every status element MUST carry `aria-label="status: <state>"` for screen readers — color+shape is for sighted users, aria-label is for the rest.
+- Every status element MUST carry an accessible name that identifies both the
+  subject and its human-readable condition; color+shape is for sighted users,
+  while the accessible name carries the same meaning for screen readers.
+  Technical admin statuses use `<label>: status <state>`. First Listen source
+  previews are the deliberate plain-language exception: they use
+  `<source>: <visible label>` and a matching tooltip, never the internal
+  `idle`/`degraded` readiness vocabulary.
 - `.status-chip.working` animation respects `prefers-reduced-motion`; pulse disables, color+shape communicates the state.
 
 **Migration map — what gets replaced when we implement:**
