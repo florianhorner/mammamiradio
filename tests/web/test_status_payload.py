@@ -27,6 +27,7 @@ from mammamiradio.core.models import (
     StationState,
     Track,
 )
+from mammamiradio.core.spoken_assets import PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY
 from mammamiradio.web import status_payload, streamer
 
 _MOVED_HELPERS = (
@@ -307,6 +308,7 @@ def test_public_segment_metadata_redacts_transition_track_ref():
     metadata = {
         "source": "banter",
         "transition_track_ref": "youtube|abc123",
+        PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY: "starter-test-id",
     }
 
     payload = status_payload._public_segment_metadata(metadata)

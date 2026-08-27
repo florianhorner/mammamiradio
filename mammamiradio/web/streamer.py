@@ -124,7 +124,11 @@ from mammamiradio.core.setup_status import (
     first_listen_continuity_available,
 )
 from mammamiradio.core.song_identity import song_identity_key_is_blocklisted
-from mammamiradio.core.spoken_assets import is_approved_packaged_audio_asset, is_approved_spoken_asset
+from mammamiradio.core.spoken_assets import (
+    PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY,
+    is_approved_packaged_audio_asset,
+    is_approved_spoken_asset,
+)
 from mammamiradio.home.authorization import HomeAuthorization
 from mammamiradio.home.catalog import (
     drain_invalidated_label_generation,
@@ -1259,6 +1263,31 @@ def _segment_is_listener_reserved(state: StationState, segment: Segment) -> bool
     if segment.path is not None and segment.path.name.startswith("norm_"):
         return _is_listener_reserved_cache_file(segment.path, reservations)
     return False
+
+
+def _packaged_banter_predecessor_is_current(state: StationState, segment: Segment) -> bool:
+    """Fail closed unless exact-track banter still follows its named starter."""
+
+    metadata = segment.metadata if isinstance(segment.metadata, dict) else {}
+    required_starter_id = str(metadata.get(PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY) or "")
+    if not required_starter_id:
+        return True
+    # ``now_streaming`` is selected/readable truth and can be published before
+    # any listener accepts a byte. The last-audible snapshot advances only at
+    # the accepted-listener commit, so it is the actual predecessor boundary.
+    previous = state._last_audible_stream if isinstance(state._last_audible_stream, dict) else {}
+    if previous.get("type") != SegmentType.MUSIC.value:
+        return False
+    previous_metadata = previous.get("metadata")
+    if not isinstance(previous_metadata, dict):
+        return False
+    source_kind = str(
+        previous_metadata.get(SEGMENT_PLAYLIST_SOURCE_KIND_KEY)
+        or previous_metadata.get("source_kind")
+        or previous_metadata.get("audio_source")
+        or ""
+    )
+    return source_kind == "starter" and str(previous_metadata.get("provider_track_id") or "") == required_starter_id
 
 
 def _companionship_segment_epoch(segment: Segment) -> tuple[bool, int | None]:
@@ -5536,6 +5565,26 @@ async def run_playback_loop(app) -> None:
                 segment_queue.task_done()
             state.queue_empty_since = None
             gap_clips_served = 0
+            continue
+
+        if not _packaged_banter_predecessor_is_current(state, segment):
+            # The clip was selected while its named starter was at queue-tail,
+            # but a later queue/source mutation removed or rejected that song.
+            # Drop at the last unstarted boundary rather than naming whichever
+            # unrelated track actually aired before it.
+            state.record_discard(
+                segment,
+                reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF,
+                already_counted_in_produced=pulled_from_queue,
+            )
+            _drop_segment_moment_receipts(state, segment, GenerationWasteReason.STALE_PLAYED_TRACK_REF)
+            _settle_discarded_selection_handoff(
+                segment_queue, state, segment, reason=GenerationWasteReason.STALE_PLAYED_TRACK_REF
+            )
+            _unlink_ephemeral_best_effort(segment)
+            if pulled_from_queue:
+                segment_queue.task_done()
+            logger.info("Discarding exact-track packaged banter after its predecessor changed")
             continue
 
         if not segment.mark_playback_started():

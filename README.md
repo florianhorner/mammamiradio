@@ -157,7 +157,7 @@ It starts in layers, and climbs from there:
 
 | Step | You bring | What your home does |
 |------|-----------|---------------------|
-| **Hear it first** | Nothing | The First Listen mini-show plays right here on this device, then Demo Radio uses the attributed offline starter collection, stock host copy, and fallback voices. Recovery cover remains available while a damaged music source is repaired. |
+| **Hear it first** | Nothing | The First Listen mini-show plays right here on this device, then Demo Radio uses the attributed offline starter collection and a shipped 21-clip bank of reviewed Marco-and-Giulia host breaks. It selects only the clips safe for the active language mode, while stock copy, fallback voices, and recovery cover remain underneath. |
 | **Wake the hosts** | An `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | The hosts come alive: reactive banter and the gloriously fake Italian ad breaks. |
 | **Give your home a voice** | AI host key plus prompt-safe Home Assistant context | The admin shows the filtered home context first. Mute any entity locally, then the hosts can notice your house: lights, locks, who just got home. |
 

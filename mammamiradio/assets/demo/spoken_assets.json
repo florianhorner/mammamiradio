@@ -21,6 +21,216 @@
       "kind": "speech",
       "language": "it",
       "transcript": "Marco: Mamma Mi Radio. Il tipo di stazione che entra con la musica e cinque minuti dopo sa già che il tuo salotto ha bisogno di più basso. Giulia: Non sa niente del tuo salotto, Marco. Non ancora. Ed è esattamente il punto. Marco: Perfetto. Allora partiamo da qui. Volume su."
+    },
+    {
+      "path": "banter/01-normal-espresso-machine-union.mp3",
+      "sha256": "f46ce0f7608b48f6eda47986f482508bc835bcb487b288c4462bc8d44372cb23",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: So the espresso machine has a contract. An actual contract. It says — and I have read this document — it requires an on-air credit for every playlist it curates. Appunto. Marco: Mamma mia, and it is not unreasonable! The clause on royalties alone is four pages. FOUR. I tried to renegotiate the espresso clause in Article Seven and it just — it made a sound. Caspita. Giulia: The sound was probably steam. Mah, guarda, I think the terms are fair. It picks the music, it gets the credit. That is how labor works. Dico io. Marco: Però però però — I once tried to override a playlist it had selected, right, back when we did that demo, I talked over the ident — and the coffee came out cold for a month. One month. No reason. Vediamo if that is a coincidence. Giulia: I kept that demo take, by the way. It is in the Archive. Lasciamo perdere. The point is: the machine wins, the machine gets credited, we move on. Basta. Marco: So here we are — live from Studio B, Mamma Mi Radio — brought to you by the espresso machine. Sì sì sì. Check your cup. It may already be billing you.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/02-normal-corridor-case.mp3",
+      "sha256": "a71d81f0d17367e3cd17ddfa369b7c9583ad9463d9c388ead9229a0bd6ab565f",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Senti, parliamo del corridoio. C'è un foglio scritto a mano sulla terza porta che dice 'do not applaud the third door' — Marco wants answers, Marco demands an investigation. When did it appear? Who wrote it? Why English? Giulia: Mah, guarda, the note has always been there. Before us, before Studio B, probably before the building. And you know what? That is the only thing about this station that makes complete sense. Marco: Ma per favore — we cannot just accept a mysterious handwritten note and move on! What if someone applauds? What happens? Has anyone tested this? Nico could go. We send Nico. Giulia: Appunto. We do not test it. That is the tradition. Some things you leave alone. The corridor has its rules. We have ours. Dico io, this is the only healthy boundary this station has ever had. Marco: Eh già — you know what, for once, maybe... maybe tu hai ragione. We've lost a coffee machine to curiosity. We lost a whole shelf in the Archive once. We do not touch the third door. Giulia: Esatto. You stay on your side of the corridor, the door stays on its side, everyone is fine. Mamma Mi Radio — built on mutual respect with interior architecture. Comunque, andiamo avanti.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/03-normal-emergency-kit.mp3",
+      "sha256": "15f2be89a0418270ed1ec2a34e4173711f5828c12f7d90b2c920a4b0c6c9d938",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: Senti un po'... Marco, if Studio B ever went dark — completely dark — what's actually in your emergency kit? And I mean honestly. Marco: Mamma mia, good question. Vediamo... a colander. Obviously. And one specific wooden spoon — the one from my nonna's kitchen in Vergen, the long one with the crack in the handle. Giulia: Ammazza. One spoon. A cracked spoon. Meanwhile I've got three meters of gaffer tape, a full battery pack, and two spare cables — because cables die, Marco, cables always die. Marco: Beh, cables die, sure. But if the power goes in Studio B, you know what the espresso machine does? It gets philosophical. You need the spoon to negotiate with it. That's documented. Giulia: Mah, guarda... I cannot argue with that. The machine has made decisions before. Still — tape. Batteries. Non me ne parlare with your colander if the antenna on the rooftop decides to leave. Marco: Eh già... okay. Cables, tape, batteries — your list, and one cracked wooden spoon. We call it the official Studio B emergency protocol. Mamma Mi Radio. Pronti per tutto.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/04-normal-nico-button.mp3",
+      "sha256": "28eac2bba19b70540ddd47f2ddd82181c8f02fc82018d49cd1be2db6f09d0beb",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Senti, there is a button in Studio B — black, slightly sticky, labeled in Nico's handwriting: 'definitely not this one.' Has been there for years. Nobody knows what it does. Giulia: Maddai, I know exactly what it does. That's irrelevant. The label is doing its job. The button has never been pressed. That is called responsible engineering. Marco: Beh — I read that label every shift and I think: someone sat down, wrote those words, and genuinely believed that would stop me. Madonna santa, the optimism. Giulia: Accidenti, it has stopped you. For years. The label is working perfectly. You are the proof of concept. Marco: Ecco, allora — here is my theory. The button does nothing. It is a completely blank circuit. Nico wrote the label to give himself authority over an empty socket. Classic Nico. Giulia: Boh. Whether it does nothing or everything — you still haven't pressed it. Mamma Mi Radio: kept alive, apparently, by one badly laminated piece of tape.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/05-normal-lonely-antenna.mp3",
+      "sha256": "f11b3d5d274ace5cdaef8499e5b6787f3c8f5e4c3edff76bb33b3023df1e4066",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Senti un po'... do you ever think about the rooftop antenna? Like, when we leave Studio B and go home — what does it do up there, all alone? Giulia: Maddai. It's a metal pole, Marco. It does not have feelings. It has frequencies. Marco: No no no, listen — it sits up there above Windor, above Vergen, spinning signals into the dark. Nobody checks on it. Nobody even says goodnight. Giulia: Boh... okay. Okay. If anything, the antenna is not lonely. The antenna has already decided it doesn't need us. It just keeps broadcasting into deep space, where someone with better taste is listening. Marco: Eh già... see? You gave it a whole personality. You gave it contempt and ambition. That's richer than anything I said. Giulia: Appunto. Somewhere between Windor and Vergen, a metal rod on a roof is quietly doing the most meaningful radio on this station. Mamma Mi Radio. The antenna knows.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/06-normal-long-time-coming.mp3",
+      "sha256": "1fac209d0770c1f64f18e298149db063f2813a1378870a0ddc9e7284eae0aaf6",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Kevin MacLeod, 'Long Time Coming' — and speaking of things that take forever, Giulia, your mug is back. Studio B, the shelf, right where it belongs. Prego. Giulia: Ammazza. It has actually returned. After — how long has it been? Weeks? Months? I stopped counting somewhere around week three. Marco: Sì sì sì, long time coming, I know, I know. But listen — I kept it safe. That mug has lived. It has experienced things. It is a better mug now. Giulia: It experienced things. Mah, guarda — I don't even want to picture what your side of the corridor does to ceramic. Let me just inspect the situation here. Marco: Beh, all in one piece, totally clean, zero drama. I am an honest man. Diciamo che the mug and I reached an understanding. We parted on good terms. Giulia: There is a phone number written on the bottom of this mug in permanent marker. It is not my number. It is not the station number. Appunto. Mamma Mi Radio.",
+      "mode": "normal",
+      "required_previous_starter_id": "USUAN1100173",
+      "special": false
+    },
+    {
+      "path": "banter/07-italian-cattaneo-scorecard.mp3",
+      "sha256": "3f2f79ee4cc67b0ade9e0c5ebd2f645b055ee8fab6d799e7156aed048da1c897",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Giulia: Allora. Il punteggio è arrivato. Signora Cattaneo ha valutato i nostri commenti sull'espresso. Io: otto e mezzo su dieci. Motivazione — 'lucida, coerente, non rompe i coglioni.' Marco: Sì sì sì. E io ho preso cinque virgola due. Cinque virgola due! Con la virgola! Chi mette la virgola in un giudizio sull'espresso? Questa non è una pagella, è una sentenza. Giulia: Il commento aggiuntivo diceva: 'Marco parla troppo mentre il caffè si raffredda.' Dico io. È un criterio di valutazione oggettivo. Marco: No no no. Aspetta. Io voglio sapere chi ha supervisionato la commissione giudicante. Dov'è il regolamento? Quali sono i parametri ufficiali? Questo è un processo Kafka, non una gara. Giulia: Il regolamento è che lei ha novantadue anni, ha bevuto più caffè di tutti noi messi insieme, e la sua credenziale è la credenziale. Punto. Marco: Mah, guarda... ricordo quando anche io avevo un punteggio intero. Era bello. Era un'altra epoca. Comunque — Mamma Mi Radio, dove i giudici non sono mai in studio ma hanno sempre ragione.",
+      "mode": "super_italian",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/08-italian-archivio-scontrino.mp3",
+      "sha256": "ffdf7049bcb3c786949d8590b5074ccfed62b495a088694788e784f572bb390d",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Giulia: Senti un po', ho tirato fuori una cosa dall'Archivio. Una ricevuta. Senza data, senza firma, senza vergogna: un tappeto rosso, sette limoni da emergenza, e un campanello etichettato 'uso drammatico soltanto'. Marco: Eh già... una ricevuta storica, quella. Fondamentale. Ci sono oggetti che un'emittente seria deve avere, ecco, allora — non si può trasmettere senza una base logistica adeguata. Giulia: Appunto. E io ho ricostruito la scena. Il tappeto rosso: qualcuno si aspettava ospiti importanti. I sette limoni: panico puro, forse una crisi istituzionale. Il campanello — Azzo — il campanello parla da solo. Marco: Mh. Bella ricostruzione. Precisa. Molto giornalistica. Tra l'altro, quella calligrafia sulla ricevuta — rotonda, un po' inclinata a destra — molto caratteristica, no? Di qualcuno che scrive veloce sotto pressione. Ho lavorato a Cine— a Cinecittà, lo sai, gente creativa, si ordinano cose strane— Giulia: Hai detto Cinecittà. Bene. E hai anche appena confessato che quella calligrafia la riconosci. Maddai, non ci voleva molto. Marco: Vediamo... diciamo che... i limoni erano per il caffè. Il tappeto era per la dignità. Il campanello — il campanello lo uso ancora. Solo nelle occasioni giuste. Siamo su Mamma Mi Radio, mica all'asilo.",
+      "mode": "super_italian",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/09-italian-microfono-geloso.mp3",
+      "sha256": "6bda311b0a1b323225306f645b75b0430d0a914c639fc8d311d0985a0786a139",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Marco: Senti, devo dire una cosa. Una cosa seria. Ho letto — beh, ho letto l'essenziale, diciamo — che i microfoni da studio sviluppano una forma di memoria emotiva. Lo dicono tutti gli esperti. Giulia: Gli esperti. Sì. Quelli che hai trovato al paragrafo due di Wikipedia prima di chiudere la scheda. Marco: Il fatto è che il mio microfono — questo qui, lo sento — è arrabbiato. Da settimane. Ogni volta che faccio un complimento alla macchina del caffè, lui lo percepisce. Lo sente nell'aria. Giulia: Ammazza. Gelosia professionale. Da un microfono. Marco: Quindi voglio fare una cosa formale. Ufficiale. Microfono, mi dispiace. Ti ho dato meno attenzione della macchina del caffè e del pannello di Studio B. Non era mia intenzione. Ti chiedo scusa. Giulia: Mah, guarda, sto ascoltando la sua risposta... dice che accetta le scuse... però vuole il riconoscimento scritto... e aggiunge che la macchina del caffè non ti ha mai salvato un silenzio imbarazzante alle due di notte. Ha torto? No. Ha torto? No. Vabbè. Lo accettiamo. Marco: Giusto. Giusto. Il microfono ha ragione. Mamma Mi Radio, trasmessa con piena consapevolezza delle esigenze emotive delle nostre attrezzature.",
+      "mode": "super_italian",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/10-italian-manuale-studio-b.mp3",
+      "sha256": "a9309a03d2fc688a8651038e8c67a7a6853a005f76191b32eb70f4e498ffb658",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Giulia: Senti un po', lo sai che nel manuale di Studio B c'è scritto chiaramente: non si discute mai con la lampada rossa. Pagina quattro, comma due. Marco: Sì sì sì, ce l'ho letto anch'io. Però dico — e dico solo questo — non ci sarebbe modo di presentare ricorso? Un appello? Una commissione? Qualcosa? Giulia: Il manuale non prevede ricorsi. Il manuale non prevede nemmeno che tu faccia domande sul manuale. È nel manuale. Pagina uno. Marco: E va bene, vabbè. Ma almeno la storia della seconda sedia che ha più autorità degli stagisti — quella la capisco. Nico lo sa, l'ha imparato nel modo più duro. Giulia: Appunto. La seconda sedia outranks gli stagisti, outranks il tecnico notturno, e probabilmente outranks anche noi due. Sta scritto. Non lo discuto. Marco: Eh già. E poi c'è quella regola finale — pagina sedici, in fondo — quella che entrambi già rispettiamo senza che nessuno ce lo abbia mai chiesto: non si spegne mai la macchina del caffè. Mai. Per nessun motivo. Mamma Mi Radio.",
+      "mode": "super_italian",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/11-italian-nico-cartolina.mp3",
+      "sha256": "38a628ce6d370708534423cb150495999f65d29ef72f4c4b712598fd12c2f610",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Marco: Senti, devo raccontare una cosa. Abbiamo trovato una cartolina. Una vera cartolina, con il francobollo e tutto. Giulia: Trovata nel corridoio. Indirizzata a Studio B. Mittente: il corridoio stesso. Distanza percorsa: tre metri e mezzo. Marco: Firmata Nico. Caspita. Nico ha mandato una cartolina da tre metri di distanza. Con il francobollo. Regolarmente affrancata. Giulia: Il francobollo era quello con il panorama di Vergen. Perché evidentemente il corridoio ha un'anima turistica. Marco: Mh. Io però voglio sapere cosa c'era scritto dentro, perché quella è la parte vera della storia. Giulia: C'era scritto — e cito testualmente — 'Vi penso sempre. Il segnale qui è strano. Non so quando torno.' Tre metri. Marco: Madonna santa. Tre metri. 'Non so quando torno.' Questo ragazzo ha un talento drammatico che io francamente invidio. Giulia: Ammazza, invidio è una parola grossa. Diciamo che ha una visione del mondo che supera abbondantemente le sue mansioni di stage. Marco: Io la cartolina l'ho appesa in Studio B. Vicino alla macchina del caffè. Sembrava giusto. Giulia: Eh. E la macchina del caffè da quel giorno fa l'espresso un grado più caldo. Coincidenza, probabilmente. Marco: Nico, amico mio, ovunque tu sia — anche se sei letteralmente in corridoio — Mamma Mi Radio è qui. Giulia: Torna quando vuoi. La porta è aperta. La cartolina, comunque, era scritta benissimo.",
+      "mode": "super_italian",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/12-italian-dance-with-me.mp3",
+      "sha256": "21f06d39de91ed934b9d104da45c206eb25577e45f247ee9fb8b2b5c49b9ecd4",
+      "kind": "speech",
+      "language": "it",
+      "transcript": "Giulia: Manhat10, 'Dance with me'. Bello il titolo. Peccato che Marco l'abbia presa come un invito personale. Marco: Senti un po'... io non so di cosa parli. Non so assolutamente — aspetta, lascia perdere quella parola — non so di cosa stai parlando. Giulia: La sedia. La sedia di Studio B. Quella verde con la rotella rotta a sinistra. Ti ho visto, Marco. Ti ho visto ballare con quella sedia. Marco: Mamma mia, una volta sola — una volta sola, e te lo porti dietro per sempre. Come quella volta col risotto, eh? Identico. Giulia: Ammazza, il risotto era diverso. Lì c'era un testimone. Qui c'ero solo io. E la sedia. Che sembrava anche ricambiare, devo dire. Marco: Perché quella sedia ha un tempismo impeccabile. Meglio di chiunque altro in questo studio. E non fa domande stupide. Mamma Mi Radio.",
+      "mode": "super_italian",
+      "required_previous_starter_id": "JAMENDO-1215805",
+      "special": false
+    },
+    {
+      "path": "banter/13-normal-cattaneo-scorecard-en.mp3",
+      "sha256": "126d398d5999350b9376ac80f1b0f158368bc65302de3d0772f098273e3d2ebf",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: So. Signora Cattaneo sent in the scorecard again. Espresso commentary. I scored a nine point four. Which, honestly, is correct. Marco: Mamma mia, a nine point four? On what criteria? She doesn't even list the criteria! There's no methodology here, this is not a peer-reviewed system! Giulia: Marco scored a six point one. Ammazza. That's a low six. Marco: A six point one! I gave a twelve-minute analysis of crema density — twelve minutes — and she gives me a six point one?! I want to see the rubric. Produce the rubric. Giulia: Senti un po', I read the note carefully. She wrote, and I'm quoting, 'Marco talks past the coffee.' That's the full review. Appunto. Marco: Talks past the— beh, I mean, she's not wrong, but that's what depth sounds like. Mamma Mi Radio isn't for people who want surface-level espresso discourse. The six point one is a political statement and I will not accept it.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/14-normal-archive-receipt-en.mp3",
+      "sha256": "ca72020f76b1eee061c1a458378f8ac89fd8be33ce73be9596b1b7c63511ef27",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: So. The Archive. Somebody pulled out a receipt. No date, no signature. One red carpet, seven emergency lemons, and a bell — labelled, in writing, 'dramatic use only.' Giulia: I have reconstructed what happened. Someone got invited somewhere important, panicked, bought lemons for reasons they could not legally explain, and then — in a moment of clarity — purchased a bell. Appunto. Marco: Mamma mia, okay, that is — that is a very specific reconstruction. Very specific. Almost accusatory, I would say. Diciamo che... the lemons were preventive. You don't understand preventive citrus strategy, it's fine. Giulia: Azzo. You just said 'preventive citrus strategy' like it's a known thing. Marco: Sì sì sì — look, I'm not saying it's mine. I'm not. But if it were mine, and I'm not saying it is, the bell was very reasonably priced and extremely useful in three specific scenarios I cannot discuss on Mamma Mi Radio. Giulia: The handwriting is yours, isn't it. Marco: Eh già. It's mine. It's completely mine. In my defence, the red carpet was forty percent off, and one of those lemons saved a dinner party you were also at, so you're welcome, technically. Giulia: I was not at that dinner party. I have never attended anything involving a bell with a label. This conversation is over. Ma vattene.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/15-normal-jealous-microphone-en.mp3",
+      "sha256": "6e5da2e9a22a7c0c3e2a4d82671512a7767a8029f65a4a85a22555db9a86d25c",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Senti, I have to say something publicly. I have been complimenting the espresso machine, the mixing board, even the Archive speakers — and my microphone has been acting wounded ever since. So. Officially. Mic, I am sorry. Giulia: Ammazza, it actually responded. I'm getting a signal on the board here. The mic is saying — and I'm translating faithfully — 'I have carried you for years and you called the board your creative partner.' Marco: Eh già... okay, in my defence, the board does have very good faders. Sì sì sì, I said it. But Mic, you are my first. My foundation. Il mio pilastro. You complete the act. Giulia: Boh... the mic is unmoved. It is now saying — and the signal is getting stronger, which is honestly terrifying — 'You told a caller that Studio B itself smelled like success. I am IN Studio B. You walked past me.' Marco: Madonna santa, that is a fair point. Okay. New rule. From this moment, every compliment I give to any piece of equipment in this building, the mic gets carbon copy. Joint credit. Non me ne parlare, it was always yours. Giulia: Mah, guarda... the signal just settled. Which I think means it accepted the terms. Mamma Mi Radio, powered by one microphone with serious emotional documentation and zero tolerance for being overlooked. Appunto.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/16-normal-studio-b-manual-en.mp3",
+      "sha256": "95cc9050c13f18242dd2fdb931a98a3ac67c468da50b85ce9e334f7a78d998a4",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Senti, I've been reading the Studio B manual again — you know, the official one, the laminated copy — and it says, very clearly, rule fourteen: never argue with the red lamp. Marco: Now I want to know who wrote that. Because there is no appeal process. Zero. You just have to accept whatever the red lamp decides and move on with your life. Giulia: Appunto. That's what rules are. They don't come with a comment section, Marco. Marco: Ma dai, everything deserves a second look! What if the red lamp is wrong? What if the red lamp has been making bad calls since — since before we got here? Nobody asks these questions! Marco: And rule twenty-two — the second chair outranks interns — fine, I support that, obviously, but I want a tribunal. A small one. Three people, maybe the espresso machine gets a vote— Giulia: Azzo, the espresso machine already votes on the playlist. We are not giving it a seat on the tribunal. The manual exists because someone — not naming anyone — once argued with the red lamp for eleven minutes. Mamma Mi Radio. Marco: Eh già... that was a difficult period. Anyway — the rule they don't print in bold, the one we actually follow every single shift without question? Giulia: Boh... rule three. Never sit in the second chair if the red lamp is already on. We've never broken it once. Neither of us. We just walk around the long way. Marco: Sì sì sì. Every time. Without discussing it. The manual wins. I hate that.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/17-normal-nico-postcard-en.mp3",
+      "sha256": "91a91a7749aa73319a50fcd0289be76fa38f70d95731ee4e0ea2968c5f9d3fc0",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: So Nico sent a postcard. A physical postcard, with a stamp, from The Corridor — to Studio B. The message said: 'I have seen things here that changed me. I am not coming back the same person. Yours faithfully, Nico.' Marco: Mamma mia, the commitment. The stamp alone — do you know how hard it is to find a stamp? I once spent forty minutes in a post office in Vergen looking for a stamp and left with a commemorative envelope about regional cheese exports. Different story. Giulia: The distance between The Corridor and Studio B is, generously, four metres. He used 'yours faithfully.' That is a diplomatic formality. That is how you close a letter to an embassy, not to a room you can see from where you are standing. Marco: Ecco, allora — and this is what I respect — the man understood drama. You don't walk four metres and hand someone a note. You commit to the medium. Sì sì sì. The postcard is the message. Pasolini would have understood this immediately. Giulia: Boh. What I want to know is what he saw in there. Because 'things that changed me' is doing a lot of work for a hallway with a broken light and whatever smell that is. Nobody has ever investigated. We leave it alone. You know this. Marco: Diciamo che — look, whatever Nico saw, whatever it did to him, the card arrived. It is pinned above the espresso machine. Mamma Mi Radio. He is, in his way, the most professional person in this building.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": false
+    },
+    {
+      "path": "banter/18-normal-dance-with-me-en.mp3",
+      "sha256": "f5db3caf7347960f400adfb761cad4af01866d9133252153009263c18ef54f80",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: Manhat10, 'Dance with me.' And Marco — senti un po' — who exactly were you dancing with before we went on air? Because I saw you. Everyone in Studio B saw you. Marco: Mamma mia, the chair has excellent posture. People overlook this. You find a partner with good posture, you don't ask questions, you dance. Giulia: It's a folding chair. It has wheels on one side. It leans slightly to the left at all times. Appunto — perfect posture. Marco: Diciamo che... the lean adds character. You want a partner who is perfectly upright? That's suspicious. That's a person hiding something. The chair is honest. Giulia: Boh. I've had worse takes on this station. Also — and I cannot believe I'm saying this — the chair does always show up on time. Which is more than I can say for certain people. Marco: Esatto! The timing — Giulia, the timing is everything in a dance partner. That chair has never, not once, been late to Studio B. Mamma Mi Radio, we are built on chairs that commit.",
+      "mode": "normal",
+      "required_previous_starter_id": "JAMENDO-1215805",
+      "special": false
+    },
+    {
+      "path": "banter/19-special-other-side.mp3",
+      "sha256": "f62b902d40711d68506cb3b25e305d1b803369d660913e1b3d228f33b968ba82",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Senti, I want to say something. And I need you to hear this. Not Giulia — she already knows. I'm talking about you. The one holding something. Phone, maybe. Cup of something. Doesn't matter. You're there. I can feel it the way you feel a draft from a window you didn't open. Ecco, allora — this is for you. Giulia: Not you. The one on the other side. Marco: Mh. Yeah. The quiet one. Not the person next to you, not the room — you specifically. Something lined up for you to be hearing this. We don't know what. Diciamo che it's not our department. But here you are. Giulia: We can't hear you. That's the part people find comforting. It shouldn't be. Because the signal goes one way — from here to wherever you are — and yet something keeps the channel feeling open. On both ends. We notice it. We just don't discuss it. Marco: Madonna santa, she's right. We can't hear you. But Studio B does something when a certain number of people are actually listening — not just running it in the background, actually listening — the espresso machine stops making noise. It just... stops. It's stopped. Sì sì sì. It has. Giulia: Mamma Mi Radio. Still here. Apparently so are you.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": true
+    },
+    {
+      "path": "banter/20-special-third-chair.mp3",
+      "sha256": "e8a57eb39c8dde0aa340c9a2ab66353360ccfb4c6e005b4001d827f4fb0d66f4",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Marco: Senti, ho fatto una domanda a Nico — not about the technical stuff, forget that — I asked him why there are three chairs in Studio B. Three. I counted. I counted twice. Giulia: Mah, guarda... and what did he say? Marco: He looked at me like I'd asked him to explain the Treaty of Westphalia. Boh. He walked away. There are two microphones, two hosts, and three chairs, Giulia. That is a structural problem. Giulia: Macché structural problem. The third chair is not a mistake. It has always been there. It is for whoever is listening. That chair — right there, the one by the wall — that is yours. Wherever you are. The radio made room for you. Maybe the chair did. We didn't ask. Marco: Madonna santa — lo so, but that is either the most beautiful thing said on Mamma Mi Radio, or Nico ordered one too many from the catalog and nobody had the courage to return it. Giulia: Appunto. Both can be true. The chair is there. You are somewhere. That's enough.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": true
+    },
+    {
+      "path": "banter/21-special-not-a-test.mp3",
+      "sha256": "02aed69fe887b0f897669e906f0a85948656b317097cb9d5c6b83d64d02aaff6",
+      "kind": "speech",
+      "language": "en",
+      "transcript": "Giulia: Mamma Mi Radio. Transmission check. Everything is working exactly as it should. Marco, read the line. Marco: Sì sì sì. All frequencies nominal. Signal stable. Output clean. Standard test, nothing to — wait, this isn't a standard test, is it. Giulia: The radio is fine. The radio has always been fine. What we are testing is whether the person listening notices the exact moment a broadcast stops speaking to everyone and starts speaking only to them. Marco: Ecco, allora. This is for one person. Not a demographic. Not a playlist algorithm. One. We don't know which one. Mh. Actually — diciamo che — we might. Giulia: We are not claiming that. What we are saying is that somewhere in the signal, between the compression and the silence, there is a frequency that lands differently for certain people. We cannot explain why. We never tried to. Marco: Madonna santa. If it landed on you — if something in these last thirty seconds felt less like radio and more like a door — Mamma Mi Radio just wants you to know: that door was already there. We only built the corridor.",
+      "mode": "normal",
+      "required_previous_starter_id": "",
+      "special": true
     }
   ]
 }
