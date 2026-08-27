@@ -74,8 +74,14 @@ def test_receipt_schema_and_example_are_canonical_but_example_is_not_evidence() 
     schema = json.loads(_read("proof/media/ha-green-release-receipt.schema.json"))
     example = json.loads(_read("proof/media/ha-green-release-receipt.example.json"))
 
-    assert schema["properties"]["schema_version"]["const"] == 1
+    assert schema["properties"]["schema_version"]["const"] == 2
+    assert {"content_profile", "content_sha256", "source_commit"} <= set(schema["required"])
+    assert schema["properties"]["content_profile"]["const"] == "mammamiradio-release-content-v1"
+    assert schema["properties"]["content_sha256"]["pattern"] == "^[0-9a-f]{64}$"
     assert schema["properties"]["assertions"]["additionalProperties"] is False
     assert example["evidence_kind"] == "example"
+    assert example["content_profile"] == "mammamiradio-release-content-v1"
+    assert re.fullmatch(r"[0-9a-f]{64}", example["content_sha256"])
+    assert re.fullmatch(r"[0-9a-f]{40}", example["source_commit"])
     assert example["hardware"]["model"].endswith("(example only; not release evidence)")
     assert "ha-green-release-evidence/" not in "proof/media/ha-green-release-receipt.example.json"
