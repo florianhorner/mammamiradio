@@ -49,11 +49,17 @@ def main(argv: list[str] | None = None) -> int:
             for stale in superseded:
                 print(f"landing-evidence: superseded {stale.as_posix()} (removed; commit the removal too)")
             if blocked:
+                # The receipt was written, but a stale receipt could not be retired
+                # because origin/main is unresolvable. The branch would fail PR
+                # verification (the stale receipt no longer binds the target
+                # content), so exit non-zero rather than reporting the incomplete
+                # ceremony as success — automated callers must not proceed.
                 print(
-                    "landing-evidence: could not resolve origin/main to retire "
+                    "landing-evidence: FAIL — receipt written, but could not resolve origin/main to retire "
                     f"{blocked[0].as_posix()}; fetch origin/main and re-run, or retire the stale receipt by hand",
                     file=sys.stderr,
                 )
+                return 1
             return 0
 
         if args.evidence_action == "reattest":

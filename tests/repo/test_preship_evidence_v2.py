@@ -3243,8 +3243,12 @@ def test_emit_cli_warns_when_origin_main_is_unresolvable(
     monkeypatch.chdir(repo.root)
     monkeypatch.setenv("GSTACK_HOME", str(ledger))
 
-    assert landing_cli.main(["evidence", "emit"]) == 0
+    # Emit writes the receipt but cannot retire the stale one without origin/main;
+    # the ceremony is incomplete, so the CLI must fail loud (non-zero) rather than
+    # report success and let automation ship a CI-failing branch.
+    assert landing_cli.main(["evidence", "emit"]) == 1
     captured = capsys.readouterr()
+    assert "FAIL" in captured.err
     assert "could not resolve origin/main" in captured.err
 
 
