@@ -19,6 +19,8 @@ from scripts.landing.errors import EvidenceError, GitError
 from scripts.landing.evidence import (
     CONTENT_PROFILE,
     EXPECTED_REPOSITORY,
+    HA_RECEIPT_ROOT,
+    LEGACY_CONTENT_PROFILE,
     MAX_LEDGER_LINE_BYTES,
     MAX_NEW_RECEIPTS,
     MAX_RECEIPT_BATCH_BYTES,
@@ -240,6 +242,14 @@ def _store_receipt_raw(
     return path
 
 
+def _ha_receipt_bytes(*, run_id: str, content_digest: str) -> bytes:
+    payload = json.loads((ROOT / "proof/media/ha-green-release-receipt.example.json").read_text())
+    payload.update(evidence_kind="ha_green_cold_launch", release_version="3.4.5", source_commit="a" * 40)
+    payload.update(content_sha256=content_digest, run_id=run_id)
+    payload["hardware"]["model"] = "Home Assistant Green"
+    return (json.dumps(payload, sort_keys=True) + "\n").encode()
+
+
 def _add_receipt(
     repo: GitRepository,
     *,
@@ -289,6 +299,72 @@ def test_raw_recursive_tree_digest_survives_receipt_commit_and_squash(repo: GitR
     tree = _git(repo.root, "rev-parse", "HEAD^{tree}").stdout.strip()
     squash = _git(repo.root, "commit-tree", tree.decode(), input_bytes=b"squash\n").stdout.decode().strip()
     assert snapshot_tree(repo, squash).content_sha256 == before.content_sha256
+
+
+def test_v2_and_ha_stay_valid_after_parentless_squash(repo: GitRepository, tmp_path: Path, monkeypatch) -> None:
+    code = "from scripts.landing.evidence import _ha_release_validator as load;load()"
+    subprocess.run([sys.executable, "-S", "-P", "-c", code], cwd=ROOT, env={"PYTHONPATH": str(ROOT)}, check=True)
+    config = repo.root / "ha-addon/mammamiradio/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("version: 3.4.5\n")
+    _commit(repo.root, "add release config")
+    _v2_commit, v2_path = _emit_and_commit(repo, tmp_path)
+    validator = evidence_module._ha_release_validator()
+    _, ha_digest = validator._tracked_content_sha256(repo.root, "HEAD")
+    receipt_root = repo.root / HA_RECEIPT_ROOT
+    receipt_root.mkdir(parents=True)
+    for run_id in (f"{index:08x}-0000-4000-8000-{index:012x}" for index in range(20)):
+        (receipt_root / f"run-{run_id}.json").write_bytes(_ha_receipt_bytes(run_id=run_id, content_digest=ha_digest))
+    _commit(repo.root, "add HA Green receipts")
+    monkeypatch.setattr(evidence_module, "RECEIPT_READ_BATCH_SIZE", 20)
+    tree = _git(repo.root, "rev-parse", "HEAD^{tree}").stdout.decode().strip()
+    squash = _git(repo.root, "commit-tree", tree, input_bytes=b"squash\n").stdout.decode().strip()
+    assert verify_v2(repo, target=squash, base=None, mode="main").matching_receipts == (v2_path.as_posix(),)
+    report = validator.validate_release_evidence(
+        receipt_dir=receipt_root, release_version="3.4.5", repo_root=repo.root, current_commit=squash
+    )
+    assert report["ok"] and verify_v2(repo, target="HEAD", base=f"{_v2_commit}^", mode="pr").matching_receipts
+
+
+def test_legacy_v2_profile_is_readable_but_cannot_be_emitted_for_new_content(repo: GitRepository) -> None:
+    content_digest = snapshot_tree(repo, "HEAD").content_sha256
+    _, raw = _receipt_bytes(
+        repo,
+        content_digest=content_digest,
+        reviewed_commit=repo.head(),
+        overrides={"content_profile": LEGACY_CONTENT_PROFILE},
+    )
+    path = _store_receipt_raw(repo, raw, content_directory=content_digest)
+    snapshot = snapshot_tree(repo, "HEAD", retain_all_receipts=True)
+    assert snapshot.receipts[os.fsencode(path.as_posix())].content_profile == LEGACY_CONTENT_PROFILE
+    with pytest.raises(EvidenceError, match="must use content profile"):
+        verify_v2(repo, target="HEAD", base="HEAD^", mode="pr")
+
+
+@pytest.mark.parametrize("mutation", ["mode", "json", "run-id", "count", "overflow"])
+def test_malformed_ha_receipts_cannot_hide_from_v2_review(repo, monkeypatch, mutation):
+    run_id = "12345678-1234-4234-8234-123456789abc"
+    path = repo.root / HA_RECEIPT_ROOT / f"run-{run_id}.json"
+    path.parent.mkdir(parents=True)
+    raw = _ha_receipt_bytes(run_id=run_id, content_digest="1" * 64)
+    if mutation == "json":
+        raw = b"{not-json\n"
+    elif mutation == "run-id":
+        payload = json.loads(raw)
+        payload["run_id"] = "22345678-1234-4234-8234-123456789abc"
+        raw = (json.dumps(payload) + "\n").encode()
+    elif mutation == "overflow":
+        payload = json.loads(raw)
+        payload["timing"]["boot_to_tcp_ms"] = 10**400
+        raw = (json.dumps(payload) + "\n").encode()
+    path.write_bytes(raw)
+    if mutation == "mode":
+        path.chmod(0o755)
+    _commit(repo.root, f"malformed HA receipt {mutation}")
+    if mutation == "count":
+        monkeypatch.setattr(evidence_module, "MAX_HA_RECEIPTS", 0)
+    with pytest.raises((EvidenceError, GitError)):
+        snapshot_tree(repo, "HEAD")
 
 
 def test_modes_symlinks_and_gitlinks_affect_content_identity(repo: GitRepository) -> None:
