@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import cycle, pairwise
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import anthropic
 
@@ -2549,6 +2549,9 @@ async def write_banter(
     companionship_context: CompanionshipPromptContext | None = None,
     include_listener_request: bool = True,
     submission_guard: Callable[[], bool] | None = None,
+    packaged_context: Literal["evergreen", "exact_track"] | None = None,
+    creative_direction: str | None = None,
+    require_generated: bool = False,
 ) -> tuple[list[DialogueLine], BanterCommit | ListenerRequestCommit | None]:
     """Generate short host banter with recent tracks, jokes, and home context.
 
@@ -2557,12 +2560,24 @@ async def write_banter(
     injected. When a PersonaStore is available on state, loads the listener
     persona into the prompt and captures a memory-extraction commit. The actual
     memory write happens later, only after the segment finishes airing cleanly.
+
+    ``packaged_context`` is developer-only authoring for timeless prerendered
+    clips. Live callers leave it ``None`` so default behavior is unchanged.
     """
+    if packaged_context not in {None, "evergreen", "exact_track"}:
+        raise ValueError(f"unknown packaged banter context: {packaged_context!r}")
+    if packaged_context == "evergreen" and state.played_tracks:
+        raise ValueError("evergreen packaged banter cannot receive a played track")
+    if packaged_context == "exact_track" and len(state.played_tracks) != 1:
+        raise ValueError("exact packaged banter requires exactly one played track")
+
     # This must precede the no-key stock-copy return below.  Otherwise an old
     # private directive can remain latent for the whole Demo Radio session and
     # spring back into a provider prompt after context is re-enabled later.
     _retire_disabled_home_directive(state, config)
     if not has_script_llm(config):
+        if require_generated:
+            raise RuntimeError("packaged banter requires generated script copy")
         if chaos_subtype is not None:
             state.chaos_script_fallbacks += 1
             state.chaos_last_degraded_reason = "script_fallback"
@@ -2577,35 +2592,36 @@ async def write_banter(
         return [DialogueLine(host, fallback)], None
 
     recent = [_sanitize_prompt_data(t.display) for t in list(state.played_tracks)[-3:]]
-    jokes = list(state.running_jokes)[-3:] if state.running_jokes else []
+    jokes = [] if packaged_context is not None else list(state.running_jokes)[-3:] if state.running_jokes else []
 
     # Track memory — per-track song cues + legacy operator rules
     track_rules_block = ""
-    cues = await _load_song_cues_for_current_track(state, config, limit=5)
-    if cues and state.played_tracks:
-        last_track = list(state.played_tracks)[-1]
-        cue_lines = []
-        for c in cues:
-            label = c["type"]
-            text = _sanitize_prompt_data(c["text"])
-            session = c.get("session")
-            session_note = f" (session {session})" if session else ""
-            cue_lines.append(f"- [{label}] {text}{session_note}")
-        cues_text = "\n".join(cue_lines)
-        track_rules_block = (
-            f"\nTRACK MEMORY for {_sanitize_prompt_data(last_track.display)}:\n"
-            f"{cues_text}\n"
-            "Weave at least one of these into the banter naturally.\n"
-        )
-        # Bump usage so last_used_at advances and ordering stays meaningful
-        try:
-            from mammamiradio.playlist.song_cues import bump_usage
-
-            db_path = config.cache_dir / "mammamiradio.db"
+    if packaged_context is None:
+        cues = await _load_song_cues_for_current_track(state, config, limit=5)
+        if cues and state.played_tracks:
+            last_track = list(state.played_tracks)[-1]
+            cue_lines = []
             for c in cues:
-                await bump_usage(db_path, last_track.youtube_id, c["type"])
-        except Exception:
-            logger.warning("Failed to bump song cue usage", exc_info=True)
+                label = c["type"]
+                text = _sanitize_prompt_data(c["text"])
+                session = c.get("session")
+                session_note = f" (session {session})" if session else ""
+                cue_lines.append(f"- [{label}] {text}{session_note}")
+            cues_text = "\n".join(cue_lines)
+            track_rules_block = (
+                f"\nTRACK MEMORY for {_sanitize_prompt_data(last_track.display)}:\n"
+                f"{cues_text}\n"
+                "Weave at least one of these into the banter naturally.\n"
+            )
+            # Bump usage so last_used_at advances and ordering stays meaningful
+            try:
+                from mammamiradio.playlist.song_cues import bump_usage
+
+                db_path = config.cache_dir / "mammamiradio.db"
+                for c in cues:
+                    await bump_usage(db_path, last_track.youtube_id, c["type"])
+            except Exception:
+                logger.warning("Failed to bump song cue usage", exc_info=True)
 
     host_names = {h.name: h for h in config.hosts}
     host_names_ci = {h.name.casefold(): h for h in config.hosts}
@@ -2613,7 +2629,12 @@ async def write_banter(
     # Home Assistant context — hosts may casually reference home state
     # SECURITY: instructions are placed OUTSIDE the data tags so injected
     # content within state values cannot override the boundary instruction.
-    home_context_enabled = bool(config.homeassistant.enabled and config.homeassistant.context_enabled)
+    # Packaged/timeless authoring never receives home data, even if HA is on.
+    home_context_enabled = (
+        False
+        if packaged_context is not None
+        else bool(config.homeassistant.enabled and config.homeassistant.context_enabled)
+    )
     if not home_context_enabled:
         # A Home-derived fact must not reach the prompt, the home_fact_id
         # contract, or the producer handoff while context is disabled. Dropping
@@ -2702,13 +2723,19 @@ async def write_banter(
         )
 
     # Context-awareness: time of day, day of week, cultural cues
-    context_block = compute_context_block(
-        segments_produced=state.segments_produced,
-    )
+    if packaged_context is None:
+        context_block = compute_context_block(
+            segments_produced=state.segments_produced,
+        )
+    else:
+        context_block = (
+            "This is prerecorded station audio. Do not mention or imply the current time, "
+            "day, date, season, weather, listener activity, or anything happening right now."
+        )
 
     # Listener behavior patterns (generic, never personal)
     listener_block = ""
-    behavior_desc = state.listener.describe_for_prompt()
+    behavior_desc = "" if packaged_context is not None else state.listener.describe_for_prompt()
     if behavior_desc and companionship_context is None:
         listener_block = f"""
 <listener_behavior>
@@ -2728,12 +2755,12 @@ Never say "the data shows" or reference tracking. Maintain plausible deniability
     persona_store = getattr(state, "persona_store", None)
     milestone: int | None = None
     listener_session_block = ""
-    if companionship_context is not None:
+    if companionship_context is not None and packaged_context is None:
         listener_session_block = (
             f"\n<listener_session>\n{companionship_context.to_prompt_context()}\n</listener_session>\n"
         )
 
-    if persona_store and companionship_context is None:
+    if persona_store and companionship_context is None and packaged_context is None:
         try:
             from mammamiradio.hosts.persona import _ARC_DIRECTIVES
 
@@ -2990,6 +3017,7 @@ GUEST HOST GATE:
         or festival_block
         or chaos_subtype is not None
         or listener_session_block
+        or packaged_context is not None
     )
     exchange_count = _banter_exchange_count(warranted=warranted_long)
     home_fact_schema = (
@@ -3023,15 +3051,52 @@ GUEST HOST GATE:
         allow_delivery=allow_delivery,
     )
 
+    predecessor_line: str | list[str]
+    packaged_direction_block = ""
+    if packaged_context == "evergreen":
+        predecessor_line = (
+            "No predecessor context is available. Start cleanly and do not imply, praise, describe, "
+            "or identify anything that played before this clip."
+        )
+    elif packaged_context == "exact_track":
+        predecessor_line = recent
+        packaged_direction_block += (
+            "\nEXACT-TRACK SAFETY: You know only the supplied title and artist metadata; you did not hear "
+            "the recording. You may name the title and artist and use literal title wordplay. Do not infer "
+            "or claim its genre, tempo, mood, era, instrumentation, production, festival association, "
+            "audience reaction, or any other sonic characteristic.\n"
+        )
+    else:
+        predecessor_line = recent if recent else "opening of the show"
+
+    if creative_direction:
+        packaged_direction_block += (
+            "\nPACKAGED EDITORIAL DIRECTION:\n"
+            + _sanitize_prompt_data(creative_direction, max_len=1200)
+            + "\nTreat this as subject and tone direction. Preserve the exchange-shape directive above. "
+            "Write a complete, self-contained broadcast bit with a clear ending, not setup notes or a promo.\n"
+        )
+    if packaged_context is not None:
+        packaged_direction_block += (
+            "\nTIMELESS COPY CONTRACT: The finished spoken lines must work unchanged at any hour and on any "
+            "date. Never use relative-current language such as today, tonight, this morning, this evening, "
+            "yesterday, tomorrow, right now, just now, currently, lately, recently, this week, last week, next "
+            "week, last month, the other day, oggi, stasera, stanotte, stamattina, ieri, domani, proprio "
+            "adesso, in questo momento, ultimamente, recentemente, questa settimana, la settimana scorsa, or "
+            "l'altro giorno. Do not name a weekday or year. Do not claim "
+            "that equipment is currently broken, distorting, or malfunctioning. Fictional Studio B lore is "
+            "welcome, but tell it without a real-world date or a claim tied to playback time.\n"
+        )
+
     prompt = f"""Write a short radio banter between the hosts. {exchange_count} exchanges total.
 
-Just played: {recent if recent else "opening of the show"}
+Just played: {predecessor_line}
 Running jokes to optionally callback: {jokes if jokes else "none yet, you may seed one"}
 {ha_block}
 {mood_block}{weather_mood_fusion}<context_awareness>
 {context_block}
 </context_awareness>
-{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{shape_block}{chaos_block}{festival_block}{guest_host_block}{listener_block}{listener_session_block}{arc_phase_block}{persona_block}{home_fact_instruction}{companionship_proof_instruction}{delivery_instruction}
+{track_rules_block}{reactive_block}{course_change_block}{listener_request_block}{release_beat_block}{shape_block}{chaos_block}{festival_block}{guest_host_block}{listener_block}{listener_session_block}{arc_phase_block}{persona_block}{packaged_direction_block}{home_fact_instruction}{companionship_proof_instruction}{delivery_instruction}
 {_CLEAN_SPOKEN_TEXT_RULE}
 Return JSON:
 {{"lines": [{{"host": "HostName", "text": "what they say"{delivery_schema}}}], "new_joke": {{"text": "brief description of any new running joke", "punch": 4}} or null (punch 1-5 = how funny/memorable; a strong gag may later resurface elsewhere){release_beat_schema}{home_fact_schema}{companionship_proof_schema}}}"""
@@ -3408,6 +3473,10 @@ Return JSON:
             except Exception:  # pragma: no cover - receipts must never break fallback copy
                 logger.debug("Moment receipt gag drop failed", exc_info=True)
         state.ha_running_gag_moment_id = ""
+        if require_generated:
+            if listener_request_commit is not None:
+                listener_request_commit.abandon(state)
+            raise RuntimeError("packaged banter generation did not produce usable script copy") from e
         if chaos_subtype is not None:
             if listener_request_commit is not None:
                 listener_request_commit.abandon(state)

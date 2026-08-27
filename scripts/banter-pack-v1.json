@@ -1,0 +1,196 @@
+{
+  "schema_version": "1",
+  "name": "banter-pack-v1",
+  "description": "Accepted first-pack creative directions (21). Golden host-writing baseline — character fidelity, Studio B lore, affectionate disagreement, natural escalation, clean endings, restrained Giulia delivery, rare fourth-wall use, and zero surveillance or private-listener implication. Not mechanical defaults for every future pack.",
+  "clips": [
+    {
+      "id": "01-normal-espresso-machine-union",
+      "title": "Espresso Machine Union",
+      "mode": "normal",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "A warm, explicitly imaginary Studio B bit: personify the espresso machine as a union representative whose standing contract requires an on-air credit. Giulia treats the contract as reasonable; Marco takes the fictional negotiation absurdly seriously. Begin inside the timeless premise without saying how or when it started. Keep the affection between them visible and land on a crisp shared punchline rather than a segue."
+    },
+    {
+      "id": "02-normal-corridor-case",
+      "title": "The Corridor Case",
+      "mode": "normal",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Treat The Corridor's permanent handwritten note, 'do not applaud the third door,' as timeless station folklore. Marco wants an investigation; Giulia argues that not knowing is the station's only sensible tradition. Begin directly with their disagreement, never narrate when the note appeared, and make it conversational rather than supernatural exposition."
+    },
+    {
+      "id": "03-normal-emergency-kit",
+      "title": "Studio B Emergency Kit",
+      "mode": "normal",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "A good-natured, timeless comparison of what belongs in the official Studio B emergency kit. Giulia's list is cables, batteries, and tape; Marco's is a colander and one extremely specific wooden spoon. Let both hosts score points and finish in amused agreement. Do not describe checking or packing the kit on any particular day."
+    },
+    {
+      "id": "04-normal-nico-button",
+      "title": "Nico's Button",
+      "mode": "normal",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Nico's permanent label on a studio button reads 'definitely not this one.' Giulia calls the label responsible engineering; Marco calls it a personal challenge. Begin directly with the label, do not date its creation or imply any current malfunction, and give Giulia the final dry line."
+    },
+    {
+      "id": "05-normal-lonely-antenna",
+      "title": "The Lonely Antenna",
+      "mode": "normal",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "A pure hypothetical with no current setting: Marco asks whether the rooftop antenna gets lonely when the hosts leave it alone. Giulia mocks the premise, then accidentally gives the antenna a richer emotional life than Marco did. Keep it tender beneath the joke and end with a memorable timeless image, not a music handoff."
+    },
+    {
+      "id": "06-normal-long-time-coming",
+      "title": "Long Time Coming",
+      "mode": "normal",
+      "variant": "original",
+      "context": "exact_track",
+      "track_id": "USUAN1100173",
+      "direction": "This airs immediately after Kevin MacLeod's 'Long Time Coming.' Name the artist and title once, then use only the literal phrase 'long time coming' to reveal that Marco has finally returned Giulia's missing Studio B coffee mug. Do not describe or imply anything about the recording's sound. End on Giulia inspecting the mug and finding one new reason not to trust him."
+    },
+    {
+      "id": "07-italian-cattaneo-scorecard",
+      "title": "La pagella di Signora Cattaneo",
+      "mode": "super_italian",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "In Italian, treat Signora Cattaneo's imaginary scorecard for the hosts' espresso complaints as permanent station lore. Giulia enjoys her high mark; Marco disputes the judging criteria like a disgraced sports official. Begin directly with the scores, never say when the scorecard arrived, keep Signora Cattaneo off-mic, and finish with a clean punchline."
+    },
+    {
+      "id": "08-italian-archivio-scontrino",
+      "title": "Lo scontrino dell'Archivio",
+      "mode": "super_italian",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "In Italian, discuss The Archive's undated receipt listing three impossible studio purchases: one red carpet, seven emergency lemons, and a bell labelled 'dramatic use only.' Giulia reconstructs the decision; Marco slowly admits the handwriting is his. Begin with the receipt as established lore and never say when it was found or purchased."
+    },
+    {
+      "id": "09-italian-microfono-geloso",
+      "title": "Il microfono geloso",
+      "mode": "super_italian",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "In Italian, personify Marco's microphone as permanently jealous of the compliments he gives other studio equipment. Marco makes a formal imaginary apology; Giulia translates its response with increasing severity. Do not claim current distortion or technical trouble. Keep the rhythm natural and finish with both hosts accepting the microphone's ridiculous condition."
+    },
+    {
+      "id": "10-italian-manuale-studio-b",
+      "title": "Il manuale di Studio B",
+      "mode": "super_italian",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "In Italian, debate the timeless rules in a fictional Studio B manual, including 'never argue with the red lamp' and 'the second chair outranks interns.' Giulia respects the manual; Marco wants an appeal process. Begin with a rule, never say when anyone read the manual, and end by revealing one rule they both already obey."
+    },
+    {
+      "id": "11-italian-nico-cartolina",
+      "title": "La cartolina di Nico",
+      "mode": "super_italian",
+      "variant": "original",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "In Italian, tell the established station legend of Nico's postcard sent from The Corridor to Studio B, only a few metres away. Marco admires the commitment; Giulia analyzes the postcard's suspiciously dramatic message. Begin with the postcard itself, use no relative date or elapsed time, and close on a surprisingly affectionate line about Nico."
+    },
+    {
+      "id": "12-italian-dance-with-me",
+      "title": "Dance with me",
+      "mode": "super_italian",
+      "variant": "original",
+      "context": "exact_track",
+      "track_id": "JAMENDO-1215805",
+      "direction": "This airs immediately after Manhat10's 'Dance with me.' In Italian, name artist and title once, then use only the literal invitation in the title: Giulia challenges Marco to explain why the spare Studio B chair is apparently his preferred dance partner. Do not describe or imply anything about the recording's sound. End with Marco defending the chair's impeccable timing as a fictional joke, not a claim about the track."
+    },
+    {
+      "id": "13-normal-cattaneo-scorecard-en",
+      "title": "Signora Cattaneo's Scorecard — English",
+      "mode": "normal",
+      "variant": "english_alternate",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a fresh Normal Mode take, mostly English with natural Italian colour, on Signora Cattaneo's permanent imaginary scorecard for the hosts' espresso commentary. Giulia enjoys her high mark; Marco disputes the judging criteria like a disgraced sports official. Begin directly with the scores, never date the scorecard, keep Signora Cattaneo off-mic, and finish with a clean punchline. Do not translate or reference an earlier version of this bit."
+    },
+    {
+      "id": "14-normal-archive-receipt-en",
+      "title": "The Archive Receipt — English",
+      "mode": "normal",
+      "variant": "english_alternate",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a fresh Normal Mode take, mostly English with natural Italian colour, about The Archive's undated receipt listing one red carpet, seven emergency lemons, and a bell labelled 'dramatic use only.' Giulia reconstructs the decision; Marco slowly admits the handwriting is his. Begin with the receipt as established station lore, never say when it was found or purchased, and do not translate or reference an earlier version of this bit."
+    },
+    {
+      "id": "15-normal-jealous-microphone-en",
+      "title": "The Jealous Microphone — English",
+      "mode": "normal",
+      "variant": "english_alternate",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a fresh Normal Mode take, mostly English with natural Italian colour, personifying Marco's microphone as permanently jealous of the compliments he gives other Studio B equipment. Marco makes a formal imaginary apology; Giulia translates the microphone's response with increasing severity. Use exactly six alternating host lines and keep the bit compact. Do not mention lately, recently, a weekday, elapsed weeks or months, any demo, or current technical trouble. Finish with both hosts accepting its ridiculous condition, and do not translate or reference an earlier version."
+    },
+    {
+      "id": "16-normal-studio-b-manual-en",
+      "title": "The Studio B Manual — English",
+      "mode": "normal",
+      "variant": "english_alternate",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a fresh Normal Mode take, mostly English with natural Italian colour, debating timeless rules in the fictional Studio B manual: never argue with the red lamp, and the second chair outranks interns. Giulia respects the manual; Marco wants an appeal process. Begin with a rule, never say when anyone read the manual, and end by revealing one rule they already obey. Do not translate or reference an earlier version."
+    },
+    {
+      "id": "17-normal-nico-postcard-en",
+      "title": "Nico's Postcard — English",
+      "mode": "normal",
+      "variant": "english_alternate",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a fresh Normal Mode take, mostly English with natural Italian colour, on the established station legend of Nico's postcard sent from The Corridor to Studio B only a few metres away. Marco admires the commitment; Giulia analyses its suspiciously dramatic message. Use exactly six alternating host lines and keep the bit compact. Begin with the postcard itself; use no relative date, elapsed time, or claims about current equipment behaviour. Close on a surprisingly affectionate line about Nico, and do not translate or reference an earlier version."
+    },
+    {
+      "id": "18-normal-dance-with-me-en",
+      "title": "Dance with me — English",
+      "mode": "normal",
+      "variant": "english_alternate",
+      "context": "exact_track",
+      "track_id": "JAMENDO-1215805",
+      "direction": "This airs immediately after Manhat10's 'Dance with me.' Write a fresh Normal Mode take, mostly English with natural Italian colour. Name artist and title once, then use only the literal invitation in the title: Giulia challenges Marco to explain why the spare Studio B chair is apparently his preferred dance partner. Do not describe or imply anything about the recording's sound. End with Marco defending the chair's fictional timing, and do not translate or reference an earlier version."
+    },
+    {
+      "id": "19-special-other-side",
+      "title": "The Other Side",
+      "mode": "normal",
+      "variant": "fourth_wall_special",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a rare English fourth-wall-breaking Mamma Mi Radio scene titled in spirit 'The Other Side.' It must begin as natural Marco-and-Giulia studio banter, then Giulia quietly interrupts Marco with: 'Not you. The one on the other side.' From there they address the single listener through the radio as if the boundary has unexpectedly thinned. Give the listener a chill without claiming the hosts can see, hear, locate, monitor, or know anything private about them. One host should explicitly admit 'We can't hear you' and make that admission more unsettling, not reassuring. Mostly English with only light natural Italian colour. Use exactly six alternating host lines and understated delivery rather than horror narration. Use no temporal adverb, relative-time phrase, clock time, date, month, season, weekday, or wording that says or implies the listener arrived, joined, or tuned in. In particular, never write 'right now,' 'at this moment,' 'today,' 'tonight,' 'recently,' or 'Monday.' Use no song context and present no supernatural fact as real. Finish with a calm Mamma Mi Radio identification that does not fully restore the boundary. Do not explain the trick or call it a bit, sketch, recording, or fiction."
+    },
+    {
+      "id": "20-special-third-chair",
+      "title": "The Third Chair",
+      "mode": "normal",
+      "variant": "fourth_wall_special",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a rare English fourth-wall-breaking Mamma Mi Radio scene built around Studio B having two hosts, two microphones, but three chairs. Marco treats the extra chair as an inventory mistake; Giulia slowly reveals that the third place is for the person listening. Address one listener directly, with the intimate shock of a television host unexpectedly speaking to a character through the screen. Do not claim the station can see, hear, track, locate, or know private facts about the listener. Keep the ambiguity inside the established fictional Studio B world: perhaps the radio has made room for them, perhaps the chair has. Mostly English with light natural Italian colour. Use exactly six alternating host lines. Use no temporal adverb, relative-time phrase, clock time, date, month, season, weekday, or wording that says or implies the listener arrived, joined, tuned in, pressed play, used any particular device, or is sitting, standing, moving, alone, or with somebody. Do not refer to an overnight technician, a demo tape, or a past take. In particular, never write 'right now,' 'at this moment,' 'today,' 'tonight,' 'recently,' or 'Monday.' Use no song context, gore, or threats. Do not undercut the premise with 'not literally' or a similar disclaimer. End on a small physical-studio detail that leaves the listener feeling the empty chair is somehow theirs. Do not explain the trick or call it a bit, sketch, recording, or fiction."
+    },
+    {
+      "id": "21-special-not-a-test",
+      "title": "This Is Not the Test",
+      "mode": "normal",
+      "variant": "fourth_wall_special",
+      "context": "evergreen",
+      "track_id": null,
+      "direction": "Write a rare English fourth-wall-breaking Mamma Mi Radio scene that opens like a routine station transmission test. Marco reads an ordinary technical line; Giulia corrects him: the radio is fine, the test is whether the person listening notices when a broadcast stops speaking to everyone and speaks only to them. Address one listener directly. Create restrained psychological chills through pauses, precision, and the hosts' sudden seriousness, never through shouting, threats, gore, or generic horror language. Explicitly avoid claiming the hosts can see, hear, monitor, identify, locate, or know private facts about the listener. Mostly English with light natural Italian colour. Use exactly six alternating host lines. Use no temporal adverb, relative-time phrase, clock time, date, month, season, weekday, or wording that says or implies the listener arrived, joined, tuned in, stopped, pressed anything, made a choice, or used any particular device. Never claim that the broadcast found a moment which fits the listener, and never describe their surroundings or behaviour. In particular, never write 'right now,' 'at this moment,' 'today,' 'tonight,' 'recently,' or 'Monday.' Use no song context. Finish by returning to the routine test cadence while leaving one impossible-sounding personal invitation hanging. Do not explain the trick or call it a bit, sketch, recording, or fiction."
+    }
+  ]
+}

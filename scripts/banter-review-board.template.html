@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Mamma Mi Radio — Banter Listening Room</title>
+  <meta name="description" content="Private listening and feedback board for __CANDIDATE_COUNT__ Mamma Mi Radio banter candidates.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;1,700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #14110f;
+      --bg-elevated: #1c1714;
+      --surface: #251e19;
+      --surface-hover: #2e2520;
+      --surface-strong: #362b25;
+      --cream: #f5edd8;
+      --cream-dk: #eaddc4;
+      --text-secondary: #cbb9a6;
+      --muted: #9b8574;
+      --sun: #f4d048;
+      --sun2: #eccc30;
+      --amber: #e8a030;
+      --blue: #2563eb;
+      --blue-text: #60a5fa;
+      --red: #c44a4a;
+      --line: rgba(245, 237, 216, 0.1);
+      --line-strong: rgba(245, 237, 216, 0.18);
+      --shadow: #0e0c0a;
+      --font-display: "Playfair Display", Georgia, serif;
+      --font-body: "Outfit", system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--cream);
+      background:
+        radial-gradient(520px 420px at 88% 4%, rgba(244, 208, 72, 0.09), transparent 72%),
+        linear-gradient(180deg, #1e1610 0%, var(--bg) 15%, var(--bg) 100%);
+      font-family: var(--font-body);
+      line-height: 1.5;
+    }
+
+    button, input, textarea, select { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible,
+    audio:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(244, 208, 72, 0.72);
+      outline-offset: 3px;
+    }
+
+    .shell { width: min(100% - 32px, 980px); margin-inline: auto; }
+    .hero { padding: 56px 0 30px; }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--sun2);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 720px;
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: clamp(40px, 7vw, 68px);
+      font-style: italic;
+      line-height: 0.98;
+      letter-spacing: -0.035em;
+    }
+    .hero-copy {
+      max-width: 700px;
+      margin: 20px 0 0;
+      color: var(--text-secondary);
+      font-size: 16px;
+    }
+
+    .review-contract {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      margin-top: 30px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: var(--line-strong);
+    }
+    .contract-step { padding: 16px; background: rgba(37, 30, 25, 0.92); }
+    .contract-step strong { display: block; margin-bottom: 4px; color: var(--cream); font-size: 13px; }
+    .contract-step span { color: var(--muted); font-size: 12px; }
+    .step-n { margin-right: 6px; color: var(--sun); font-family: var(--font-mono); }
+
+    .control-room {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      padding: 12px 0;
+      border-block: 1px solid var(--line);
+      background: rgba(20, 17, 15, 0.91);
+      backdrop-filter: blur(18px);
+    }
+    .control-grid {
+      display: grid;
+      grid-template-columns: minmax(200px, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+    }
+    .progress-row { display: flex; align-items: center; gap: 12px; }
+    .progress-copy { min-width: 88px; }
+    .progress-copy strong { display: block; font-family: var(--font-mono); font-size: 13px; }
+    .progress-copy span { color: var(--muted); font-size: 11px; }
+    .progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: var(--surface-strong); flex: 1; }
+    .progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--sun2); transition: width 180ms ease; }
+    .counts { display: flex; gap: 10px; margin-top: 8px; color: var(--muted); font-size: 11px; }
+    .counts b { color: var(--cream-dk); font-family: var(--font-mono); }
+
+    .toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .btn, .select {
+      min-height: 42px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--cream);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 13px; cursor: pointer; }
+    .btn:hover { border-color: rgba(244, 208, 72, 0.48); background: var(--surface-hover); }
+    .btn.primary { border-color: var(--sun2); background: var(--sun2); color: #1f1610; }
+    .btn.primary:hover { background: var(--sun); }
+    .select { padding: 8px 30px 8px 11px; }
+
+    .board { padding: 32px 0 70px; }
+    .empty-state { display: none; padding: 48px 24px; text-align: center; color: var(--muted); }
+    .clip-list { display: grid; gap: 18px; }
+    .clip-card {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background: rgba(37, 30, 25, 0.92);
+      box-shadow: 0 16px 46px rgba(14, 12, 10, 0.22);
+      transition: border-color 180ms ease, transform 180ms ease, background 180ms ease;
+    }
+    .clip-card:hover { background: rgba(46, 37, 32, 0.94); }
+    .clip-card.is-playing { border-color: rgba(244, 208, 72, 0.75); }
+    .clip-card[data-decision="keep"] { border-left: 4px solid var(--blue); }
+    .clip-card[data-decision="maybe"] { border-left: 4px solid var(--amber); }
+    .clip-card[data-decision="redo"] { border-left: 4px solid var(--red); }
+    .clip-card[hidden] { display: none; }
+
+    .card-main { padding: 22px 22px 18px; }
+    .card-head { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: start; }
+    .clip-number {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      color: var(--sun);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .clip-title { margin: 0; font-family: var(--font-display); font-size: clamp(23px, 4vw, 29px); line-height: 1.08; }
+    .meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 4px 8px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      color: var(--text-secondary);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .pill.banter { border-color: rgba(244, 208, 72, 0.32); color: var(--sun); }
+    .pill.exact { border-color: rgba(96, 165, 250, 0.38); color: var(--blue-text); }
+    .decision-status { color: var(--muted); font-size: 11px; text-align: right; }
+    .decision-status strong { display: block; color: var(--cream-dk); font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; }
+
+    .exact-note {
+      margin: 18px 0 0;
+      padding: 12px 14px;
+      border: 1px solid rgba(96, 165, 250, 0.25);
+      border-radius: 8px;
+      background: rgba(37, 99, 235, 0.08);
+      color: var(--cream-dk);
+      font-size: 12px;
+    }
+    .exact-note strong { color: var(--blue-text); }
+    .player-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; margin-top: 18px; }
+    audio { width: 100%; min-width: 0; height: 42px; color-scheme: dark; }
+    .context-btn { min-width: 184px; }
+
+    .feedback-panel { padding: 18px 22px 22px; border-top: 1px solid var(--line); background: rgba(28, 23, 20, 0.78); }
+    .feedback-grid { display: grid; grid-template-columns: minmax(250px, 1.15fr) minmax(250px, 0.85fr); gap: 22px; }
+    .field-label {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+    .decision-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .decision-btn {
+      min-height: 44px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--cream-dk);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .decision-btn:hover { background: var(--surface-hover); }
+    .decision-btn[data-value="keep"][aria-pressed="true"] { border-color: var(--blue); background: rgba(37, 99, 235, 0.2); color: #dbeafe; }
+    .decision-btn[data-value="maybe"][aria-pressed="true"] { border-color: var(--amber); background: rgba(232, 160, 48, 0.16); color: #ffe4b2; }
+    .decision-btn[data-value="redo"][aria-pressed="true"] { border-color: var(--red); background: rgba(196, 74, 74, 0.18); color: #fecaca; }
+
+    .rating-row { display: grid; grid-template-columns: 78px repeat(5, 34px); gap: 5px; align-items: center; margin-top: 12px; }
+    .rating-row > span { color: var(--text-secondary); font-size: 12px; }
+    .rating-btn {
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .rating-btn[aria-pressed="true"] { border-color: var(--sun2); background: rgba(236, 204, 48, 0.13); color: var(--sun); }
+
+    .issue-list { display: flex; flex-wrap: wrap; gap: 7px; }
+    .issue-chip { position: relative; }
+    .issue-chip input { position: absolute; opacity: 0; pointer-events: none; }
+    .issue-chip span {
+      display: inline-flex;
+      min-height: 34px;
+      align-items: center;
+      padding: 7px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      color: var(--text-secondary);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .issue-chip input:checked + span { border-color: var(--sun2); color: var(--cream); background: rgba(236, 204, 48, 0.11); }
+    .issue-chip input:focus-visible + span { outline: 3px solid rgba(244, 208, 72, 0.72); outline-offset: 2px; }
+
+    .notes { margin-top: 16px; }
+    textarea {
+      width: 100%;
+      min-height: 82px;
+      resize: vertical;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: var(--surface);
+      color: var(--cream);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    textarea::placeholder { color: var(--muted); }
+
+    details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 13px; }
+    summary { width: fit-content; color: var(--text-secondary); cursor: pointer; font-size: 12px; font-weight: 600; }
+    .transcript { display: grid; gap: 10px; margin-top: 14px; }
+    .line { display: grid; grid-template-columns: 64px 1fr; gap: 12px; font-size: 13px; }
+    .line b { color: var(--sun); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .line p { margin: 0; color: var(--cream-dk); }
+    .direction { margin: 14px 0 0; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+
+    .footer-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; padding: 0 0 64px; }
+    .footer-actions p { margin: 0; max-width: 560px; color: var(--muted); font-size: 12px; }
+    .danger-link { border: 0; background: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 11px; }
+    .toast {
+      position: fixed;
+      z-index: 50;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(380px, calc(100vw - 36px));
+      padding: 12px 15px;
+      border: 1px solid rgba(244, 208, 72, 0.4);
+      border-radius: 8px;
+      background: var(--surface-strong);
+      color: var(--cream);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease;
+      font-size: 13px;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+    @media (max-width: 760px) {
+      .hero { padding-top: 38px; }
+      .review-contract { grid-template-columns: 1fr; }
+      .control-room { position: static; }
+      .control-grid { grid-template-columns: 1fr; }
+      .toolbar { justify-content: stretch; }
+      .toolbar > * { flex: 1 1 140px; }
+      .card-head { grid-template-columns: auto 1fr; }
+      .decision-status { display: none; }
+      .player-row { grid-template-columns: 1fr; }
+      .context-btn { width: 100%; }
+      .feedback-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 480px) {
+      .shell { width: min(100% - 20px, 980px); }
+      .card-main, .feedback-panel { padding-inline: 15px; }
+      .clip-number { width: 32px; height: 32px; }
+      .rating-row { grid-template-columns: 65px repeat(5, 1fr); }
+      .rating-btn { width: 100%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero shell">
+    <p class="eyebrow">__HERO_EYEBROW__</p>
+    <h1>Twenty-one cuts.<br>One verdict each.</h1>
+    <p class="hero-copy">Listen as if this were the first minute you ever heard Mamma Mi Radio. Keep only what protects the illusion. Your feedback stays in this browser until you export or copy it.</p>
+    <div class="review-contract" aria-label="Review steps">
+      <div class="contract-step"><strong><span class="step-n">01</span>Listen clean</strong><span>Headphones or the speaker you actually use.</span></div>
+      <div class="contract-step"><strong><span class="step-n">02</span>Test the fiction</strong><span>Does it protect the illusion in its intended slot?</span></div>
+      <div class="contract-step"><strong><span class="step-n">03</span>Leave a verdict</strong><span>Keep, maybe, or redo — plus the reason.</span></div>
+    </div>
+  </header>
+
+  <section class="control-room" aria-label="Review controls">
+    <div class="shell control-grid">
+      <div>
+        <div class="progress-row">
+          <div class="progress-copy"><strong id="progressLabel">0 / 21</strong><span>reviewed</span></div>
+          <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+        </div>
+        <div class="counts" id="decisionCounts"><span><b>0</b> keep</span><span><b>0</b> maybe</span><span><b>0</b> redo</span></div>
+      </div>
+      <div class="toolbar">
+        <label><span class="visually-hidden">Filter by decision</span><select class="select" id="decisionFilter"><option value="all">All decisions</option><option value="unreviewed">Unreviewed</option><option value="keep">Keep</option><option value="maybe">Maybe</option><option value="redo">Redo</option></select></label>
+        <label><span class="visually-hidden">Filter by mode</span><select class="select" id="modeFilter"><option value="all">Both modes</option><option value="normal">Normal Mode</option><option value="super_italian">Super Italian</option></select></label>
+        <label><span class="visually-hidden">Filter by collection</span><select class="select" id="variantFilter"><option value="all">All collections</option><option value="original">Original 12</option><option value="english_alternate">English sisters</option><option value="fourth_wall_special">Signal breaches</option></select></label>
+        <button class="btn" id="nextBtn" type="button">Next unreviewed</button>
+        <button class="btn" id="copyBtn" type="button">Copy for chat</button>
+        <button class="btn primary" id="exportBtn" type="button">Download feedback</button>
+        <button class="btn" id="importBtn" type="button">Import</button>
+        <input class="visually-hidden" id="importInput" type="file" accept="application/json,.json">
+      </div>
+    </div>
+  </section>
+
+  <main class="board shell">
+    <div class="clip-list" id="clipList"></div>
+    <div class="empty-state" id="emptyState">No clips match these filters.</div>
+  </main>
+
+  <footer class="shell footer-actions">
+    <p>No feedback is sent anywhere automatically. Download the JSON or use “Copy for chat,” then attach or paste it into this conversation.</p>
+    <button class="danger-link" id="resetBtn" type="button">Clear all saved feedback</button>
+  </footer>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const REVIEW_REPORT = __REVIEW_REPORT__;
+    const TITLES = __TITLES__;
+    const CONTEXT_AUDIO = __CONTEXT_AUDIO__;
+    const ISSUES = ["Writing", "Context break", "Pronunciation", "Voice", "Mix / bed", "Pacing", "Too long", "Too short", "Repeat risk"];
+    const BASE_CLIP_COUNT = __BASE_CLIP_COUNT__;
+    const BASE_SET_ID = REVIEW_REPORT.clips.slice(0, BASE_CLIP_COUNT).map((clip) => clip.sha256.slice(0, 8)).join("-");
+    const SET_ID = REVIEW_REPORT.clips.map((clip) => clip.sha256.slice(0, 8)).join("-");
+    const STORAGE_KEY = `mmr-banter-feedback-${BASE_SET_ID}`;
+    const clipIds = new Set(REVIEW_REPORT.clips.map((clip) => clip.id));
+    const APPROVED_FEEDBACK = __APPROVED_FEEDBACK__;
+    let state = loadState();
+    let contextAudio = null;
+    let contextButton = null;
+    let toastTimer = null;
+
+    function blankFeedback() {
+      return { schema_version: "1", candidate_set: SET_ID, base_candidate_set: BASE_SET_ID, clips: {} };
+    }
+
+    function approvedFeedback() {
+      return { ...blankFeedback(), clips: structuredClone(APPROVED_FEEDBACK) };
+    }
+
+    function loadState() {
+      try {
+        const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        const compatible = stored && (
+          stored.candidate_set === SET_ID ||
+          stored.candidate_set === BASE_SET_ID ||
+          stored.base_candidate_set === BASE_SET_ID
+        );
+        return compatible
+          ? {
+              ...stored,
+              candidate_set: SET_ID,
+              base_candidate_set: BASE_SET_ID,
+              clips: { ...structuredClone(APPROVED_FEEDBACK), ...(stored.clips || {}) }
+            }
+          : approvedFeedback();
+      } catch (_) {
+        return approvedFeedback();
+      }
+    }
+
+    function feedbackFor(id) {
+      return state.clips[id] || { decision: "", writing_score: null, audio_score: null, issues: [], notes: "", updated_at: null };
+    }
+
+    function updateFeedback(id, patch) {
+      state.clips[id] = { ...feedbackFor(id), ...patch, updated_at: new Date().toISOString() };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      syncCard(id);
+      syncSummary();
+      applyFilters();
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+    }
+
+    function formatDuration(seconds) {
+      const total = Math.round(seconds);
+      return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+    }
+
+    function formatBytes(bytes) {
+      return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    function renderBoard() {
+      const list = document.getElementById("clipList");
+      list.innerHTML = REVIEW_REPORT.clips.map((clip, index) => {
+        const exact = clip.context === "exact_track";
+        const variant = clip.variant || "original";
+        const collectionLabel = variant === "english_alternate" ? "English sister" : variant === "fourth_wall_special" ? "Signal breach" : "Original set";
+        const transcript = clip.transcript.map((line) => `<div class="line"><b>${escapeHtml(line.host)}</b><p>${escapeHtml(line.text)}</p></div>`).join("");
+        const issueChips = ISSUES.map((issue) => `<label class="issue-chip"><input type="checkbox" value="${escapeHtml(issue)}" data-issue><span>${escapeHtml(issue)}</span></label>`).join("");
+        const ratings = (key, label) => `<div class="rating-row"><span>${label}</span>${[1,2,3,4,5].map((n) => `<button class="rating-btn" type="button" data-rating="${key}" data-value="${n}" aria-pressed="false" aria-label="${label} ${n} out of 5">${n}</button>`).join("")}</div>`;
+        return `<article class="clip-card" id="clip-${clip.id}" data-id="${clip.id}" data-mode="${clip.mode}" data-variant="${variant}" data-decision="">
+          <div class="card-main">
+            <div class="card-head">
+              <div class="clip-number">${String(index + 1).padStart(2, "0")}</div>
+              <div>
+                <h2 class="clip-title">${escapeHtml(TITLES[clip.id] || clip.id)}</h2>
+                <div class="meta"><span class="pill banter">${clip.mode === "normal" ? "Normal Mode" : "Super Italian"}</span><span class="pill">${collectionLabel}</span><span class="pill ${exact ? "exact" : ""}">${exact ? "Exact track" : "Evergreen"}</span><span class="pill">${formatDuration(clip.duration_seconds)}</span><span class="pill">${formatBytes(clip.bytes)}</span></div>
+              </div>
+              <div class="decision-status"><strong data-status>Unreviewed</strong><span>candidate ${index + 1} of ${REVIEW_REPORT.clips.length}</span></div>
+            </div>
+            ${exact ? `<div class="exact-note"><strong>Context-bound:</strong> may follow only ${escapeHtml(clip.required_previous_track)} · ${escapeHtml(clip.required_previous_starter_id)}</div>` : ""}
+            <div class="player-row">
+              <audio controls preload="metadata" src="${escapeHtml(clip.file)}" aria-label="Play ${escapeHtml(TITLES[clip.id])}"></audio>
+              ${exact ? `<button class="btn context-btn" type="button" data-context-src="${CONTEXT_AUDIO[clip.id]}">Play context → clip</button>` : ""}
+            </div>
+            <details><summary>Transcript and creative direction</summary><div class="transcript">${transcript}</div><p class="direction"><strong>Direction:</strong> ${escapeHtml(clip.creative_direction)}</p></details>
+          </div>
+          <div class="feedback-panel">
+            <div class="feedback-grid">
+              <div>
+                <span class="field-label">Verdict</span>
+                <div class="decision-group" role="group" aria-label="Verdict for ${escapeHtml(TITLES[clip.id])}">
+                  <button class="decision-btn" type="button" data-decision="keep" data-value="keep" aria-pressed="false">Keep</button>
+                  <button class="decision-btn" type="button" data-decision="maybe" data-value="maybe" aria-pressed="false">Maybe</button>
+                  <button class="decision-btn" type="button" data-decision="redo" data-value="redo" aria-pressed="false">Redo</button>
+                </div>
+                ${ratings("writing_score", "Writing")}
+                ${ratings("audio_score", "Audio")}
+              </div>
+              <div><span class="field-label">What needs attention?</span><div class="issue-list">${issueChips}</div></div>
+            </div>
+            <label class="notes"><span class="field-label">Notes</span><textarea data-notes placeholder="What worked, what broke the illusion, or the exact line to revisit…"></textarea></label>
+          </div>
+        </article>`;
+      }).join("");
+
+      list.querySelectorAll(".clip-card").forEach((card) => {
+        const id = card.dataset.id;
+        card.querySelectorAll("[data-decision]").forEach((button) => button.addEventListener("click", () => {
+          const current = feedbackFor(id).decision;
+          updateFeedback(id, { decision: current === button.dataset.value ? "" : button.dataset.value });
+        }));
+        card.querySelectorAll("[data-rating]").forEach((button) => button.addEventListener("click", () => {
+          const key = button.dataset.rating;
+          const value = Number(button.dataset.value);
+          updateFeedback(id, { [key]: feedbackFor(id)[key] === value ? null : value });
+        }));
+        card.querySelectorAll("[data-issue]").forEach((input) => input.addEventListener("change", () => {
+          const issues = [...card.querySelectorAll("[data-issue]:checked")].map((item) => item.value);
+          updateFeedback(id, { issues });
+        }));
+        let noteTimer;
+        card.querySelector("[data-notes]").addEventListener("input", (event) => {
+          clearTimeout(noteTimer);
+          noteTimer = setTimeout(() => updateFeedback(id, { notes: event.target.value }), 180);
+        });
+        const audio = card.querySelector("audio");
+        audio.addEventListener("play", () => {
+          stopContextTest();
+          document.querySelectorAll("audio").forEach((other) => { if (other !== audio) other.pause(); });
+          document.querySelectorAll(".clip-card").forEach((other) => other.classList.toggle("is-playing", other === card));
+        });
+        audio.addEventListener("pause", () => card.classList.remove("is-playing"));
+        const contextBtn = card.querySelector("[data-context-src]");
+        if (contextBtn) contextBtn.addEventListener("click", () => playContext(contextBtn, audio));
+        syncCard(id);
+      });
+      syncSummary();
+      applyFilters();
+    }
+
+    function syncCard(id) {
+      const card = document.getElementById(`clip-${id}`);
+      if (!card) return;
+      const feedback = feedbackFor(id);
+      card.dataset.decision = feedback.decision || "";
+      card.querySelector("[data-status]").textContent = feedback.decision || "Unreviewed";
+      card.querySelectorAll("[data-decision]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.value === feedback.decision)));
+      card.querySelectorAll("[data-rating]").forEach((button) => button.setAttribute("aria-pressed", String(Number(button.dataset.value) === feedback[button.dataset.rating])));
+      card.querySelectorAll("[data-issue]").forEach((input) => { input.checked = feedback.issues.includes(input.value); });
+      const notes = card.querySelector("[data-notes]");
+      if (document.activeElement !== notes) notes.value = feedback.notes || "";
+    }
+
+    function syncSummary() {
+      const values = REVIEW_REPORT.clips.map((clip) => feedbackFor(clip.id));
+      const reviewed = values.filter((item) => item.decision).length;
+      const counts = { keep: 0, maybe: 0, redo: 0 };
+      values.forEach((item) => { if (item.decision) counts[item.decision] += 1; });
+      document.getElementById("progressLabel").textContent = `${reviewed} / ${REVIEW_REPORT.clips.length}`;
+      document.getElementById("progressFill").style.width = `${reviewed / REVIEW_REPORT.clips.length * 100}%`;
+      document.getElementById("decisionCounts").innerHTML = `<span><b>${counts.keep}</b> keep</span><span><b>${counts.maybe}</b> maybe</span><span><b>${counts.redo}</b> redo</span>`;
+    }
+
+    function applyFilters() {
+      const decision = document.getElementById("decisionFilter").value;
+      const mode = document.getElementById("modeFilter").value;
+      const variant = document.getElementById("variantFilter").value;
+      let visible = 0;
+      document.querySelectorAll(".clip-card").forEach((card) => {
+        const feedback = feedbackFor(card.dataset.id);
+        const decisionMatch = decision === "all" || (decision === "unreviewed" ? !feedback.decision : feedback.decision === decision);
+        const modeMatch = mode === "all" || card.dataset.mode === mode;
+        const variantMatch = variant === "all" || card.dataset.variant === variant;
+        card.hidden = !(decisionMatch && modeMatch && variantMatch);
+        if (!card.hidden) visible += 1;
+      });
+      document.getElementById("emptyState").style.display = visible ? "none" : "block";
+    }
+
+    function stopContextTest() {
+      if (contextAudio) {
+        contextAudio.pause();
+        contextAudio.src = "";
+        contextAudio = null;
+      }
+      if (contextButton) {
+        contextButton.textContent = "Play context → clip";
+        contextButton = null;
+      }
+    }
+
+    function playContext(button, clipAudio) {
+      if (contextButton === button) { stopContextTest(); return; }
+      stopContextTest();
+      document.querySelectorAll("audio").forEach((audio) => audio.pause());
+      contextButton = button;
+      button.textContent = "Loading predecessor…";
+      contextAudio = new Audio(button.dataset.contextSrc);
+      contextAudio.preload = "metadata";
+      contextAudio.addEventListener("loadedmetadata", async () => {
+        contextAudio.currentTime = Math.max(0, contextAudio.duration - 25);
+        button.textContent = "Playing last 25s… Stop";
+        try { await contextAudio.play(); } catch (_) { showToast("The browser blocked playback. Tap the button once more."); stopContextTest(); }
+      }, { once: true });
+      contextAudio.addEventListener("ended", async () => {
+        stopContextTest();
+        try { clipAudio.currentTime = 0; await clipAudio.play(); } catch (_) { showToast("Context finished. Press play on the banter clip."); }
+      }, { once: true });
+      contextAudio.addEventListener("error", () => { showToast("Could not load the required starter track."); stopContextTest(); }, { once: true });
+      contextAudio.load();
+    }
+
+    function exportPayload() {
+      const clips = REVIEW_REPORT.clips.map((clip) => ({
+        id: clip.id,
+        title: TITLES[clip.id],
+        mode: clip.mode,
+        variant: clip.variant || "original",
+        context: clip.context,
+        sha256: clip.sha256,
+        ...feedbackFor(clip.id)
+      }));
+      return { schema_version: "1", candidate_set: SET_ID, exported_at: new Date().toISOString(), clips };
+    }
+
+    function downloadFeedback() {
+      const blob = new Blob([JSON.stringify(exportPayload(), null, 2) + "\n"], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "mammamiradio-banter-feedback.json";
+      link.click();
+      URL.revokeObjectURL(url);
+      showToast("Feedback JSON downloaded.");
+    }
+
+    function markdownSummary() {
+      const payload = exportPayload();
+      const reviewed = payload.clips.filter((clip) => clip.decision).length;
+      const lines = [`# Mamma Mi Radio banter feedback`, "", `Reviewed: ${reviewed}/${payload.clips.length}`, ""];
+      ["redo", "maybe", "keep", ""].forEach((decision) => {
+        const clips = payload.clips.filter((clip) => clip.decision === decision);
+        if (!clips.length) return;
+        lines.push(`## ${decision ? decision[0].toUpperCase() + decision.slice(1) : "Unreviewed"}`, "");
+        clips.forEach((clip) => {
+          const scores = [clip.writing_score ? `writing ${clip.writing_score}/5` : "", clip.audio_score ? `audio ${clip.audio_score}/5` : ""].filter(Boolean).join(", ");
+          lines.push(`- ${clip.id} — ${clip.title}${scores ? ` (${scores})` : ""}`);
+          if (clip.issues.length) lines.push(`  - Issues: ${clip.issues.join(", ")}`);
+          if (clip.notes.trim()) lines.push(`  - Note: ${clip.notes.trim().replace(/\n+/g, " ")}`);
+        });
+        lines.push("");
+      });
+      return lines.join("\n");
+    }
+
+    async function copySummary() {
+      const summary = markdownSummary();
+      try {
+        await navigator.clipboard.writeText(summary);
+      } catch (_) {
+        const area = document.createElement("textarea");
+        area.value = summary;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+      }
+      showToast("Feedback summary copied. Paste it into chat.");
+    }
+
+    function importFeedback(file) {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => {
+        try {
+          const imported = JSON.parse(reader.result);
+          if (!Array.isArray(imported.clips)) throw new Error("missing clips");
+          imported.clips.forEach((clip) => {
+            if (!clipIds.has(clip.id)) return;
+            state.clips[clip.id] = {
+              decision: ["keep", "maybe", "redo"].includes(clip.decision) ? clip.decision : "",
+              writing_score: [1,2,3,4,5].includes(clip.writing_score) ? clip.writing_score : null,
+              audio_score: [1,2,3,4,5].includes(clip.audio_score) ? clip.audio_score : null,
+              issues: Array.isArray(clip.issues) ? clip.issues.filter((issue) => ISSUES.includes(issue)) : [],
+              notes: typeof clip.notes === "string" ? clip.notes : "",
+              updated_at: clip.updated_at || new Date().toISOString()
+            };
+          });
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          REVIEW_REPORT.clips.forEach((clip) => syncCard(clip.id));
+          syncSummary();
+          applyFilters();
+          showToast("Feedback imported.");
+        } catch (_) {
+          showToast("That file is not valid feedback for this board.");
+        }
+      });
+      reader.readAsText(file);
+    }
+
+    function nextUnreviewed() {
+      const card = REVIEW_REPORT.clips.map((clip) => document.getElementById(`clip-${clip.id}`)).find((candidate) => !feedbackFor(candidate.dataset.id).decision);
+      if (!card) { showToast(`All ${REVIEW_REPORT.clips.length} clips have a verdict.`); return; }
+      document.getElementById("decisionFilter").value = "all";
+      document.getElementById("modeFilter").value = "all";
+      document.getElementById("variantFilter").value = "all";
+      applyFilters();
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(() => card.querySelector("audio").focus(), 350);
+    }
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 2600);
+    }
+
+    document.getElementById("decisionFilter").addEventListener("change", applyFilters);
+    document.getElementById("modeFilter").addEventListener("change", applyFilters);
+    document.getElementById("variantFilter").addEventListener("change", applyFilters);
+    document.getElementById("nextBtn").addEventListener("click", nextUnreviewed);
+    document.getElementById("copyBtn").addEventListener("click", copySummary);
+    document.getElementById("exportBtn").addEventListener("click", downloadFeedback);
+    document.getElementById("importBtn").addEventListener("click", () => document.getElementById("importInput").click());
+    document.getElementById("importInput").addEventListener("change", (event) => { if (event.target.files[0]) importFeedback(event.target.files[0]); event.target.value = ""; });
+    document.getElementById("resetBtn").addEventListener("click", () => {
+      if (!confirm("Clear all saved decisions, ratings, tags, and notes for this candidate set?")) return;
+      state = blankFeedback();
+      localStorage.removeItem(STORAGE_KEY);
+      REVIEW_REPORT.clips.forEach((clip) => syncCard(clip.id));
+      syncSummary();
+      applyFilters();
+      showToast("Saved feedback cleared.");
+    });
+
+    renderBoard();
+  </script>
+</body>
+</html>
