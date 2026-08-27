@@ -36,7 +36,7 @@ fix is one shared model, stated below.
    `git revert <cut-sha>` first. Revert the commit rather than hand-editing the version
    files back: the cut also folded both changelogs, and a version-only revert is refused
    by `check-changelog-sync.sh` locally and by `pre-release-check.sh` in CI.
-6. **Physical proof binds complete cut content.** Finalize version, changelogs, and V1/V2 before HA runs; its hardware-neutral digest survives squash and rejects all other drift, while `source_commit` remains provenance.
+6. **Physical proof binds complete cut content.** Finalize version, changelogs, and the V2 preship receipt before HA runs; its hardware-neutral digest survives squash and rejects all other drift, while `source_commit` remains provenance.
 
 ```
 v2.17.0   published, and main advertises 2.17.0
