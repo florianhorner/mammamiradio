@@ -13,4 +13,4 @@ All 10 check-merge-gate cases passed.
 3 passed in 1.08s
 
 ## make test-fast
-8569 passed, 4 skipped, 48 deselected in 596.64s
+8579 passed, 4 skipped, 48 deselected in 730.38s
