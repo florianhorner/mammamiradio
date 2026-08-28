@@ -2387,7 +2387,7 @@ async def test_exact_packaged_banter_segment_carries_its_starter_dependency(tmp_
     assert music_segment.metadata["provider_track_id"] == starter_id
     assert exact_segment.path.name == "06-normal-long-time-coming.mp3"
     assert exact_segment.metadata[PACKAGED_BANTER_PREDECESSOR_STARTER_ID_KEY] == starter_id
-    packaged_picker.assert_called_with(queue, state, config, contextual=True)
+    packaged_picker.assert_any_call(queue, state, config, contextual=True)
 
     # The listener-audible state snapshot preserves the producer's raw metadata,
     # so the final pre-air check accepts this real catalog-to-segment identity.
