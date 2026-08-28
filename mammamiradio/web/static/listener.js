@@ -1087,14 +1087,12 @@
 
   /* ── Toast helper (used by clip sharing) ── */
   let _toastTimer = null;
-  function _showToast(msg, durationMs) {
-    // A fixed 2.4s worked for short copy but disappears before a longer
-    // message can be read — scale with length instead of hardcoding one
-    // duration for every toast (leadership principle #5: always a way out,
-    // which means giving the reader time to read it).
-    if (durationMs === undefined) {
-      durationMs = Math.max(2400, Math.min(6000, (msg || '').length * 60));
-    }
+  // 2.4s suits a short confirmation. A recovery message that tells the listener
+  // what to do next needs longer, so those call sites pass TOAST_MS_LONG
+  // explicitly (leadership principle #5: a way out you cannot finish reading
+  // is not a way out).
+  const TOAST_MS_LONG = 6000;
+  function _showToast(msg, durationMs = 2400) {
     let el = document.getElementById('mmr-toast');
     if (!el) {
       el = document.createElement('div');
@@ -1145,7 +1143,7 @@
         } else {
           msg = _t('clip_error', "That clip didn't take — give it a moment and tap Share again.");
         }
-        _showToast(msg);
+        _showToast(msg, TOAST_MS_LONG);
         return;
       }
       const shareUrl = window.location.origin + _base + (data.share_url || data.url);

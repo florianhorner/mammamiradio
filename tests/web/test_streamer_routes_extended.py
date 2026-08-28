@@ -6208,6 +6208,13 @@ async def test_listener_share_reads_clip_error_body():
     # station cannot prove, so the copy must not carry one.
     assert "within 15 seconds" not in js_resp.text
     assert "lookback_seconds" not in js_resp.text
+    # The refusal is the one toast that has to be *read*, not just noticed: it
+    # carries the next step. A short confirmation keeps the 2.4s default; this
+    # path must ask for the longer one explicitly, or the way out scrolls past
+    # before it can be acted on.
+    assert "const TOAST_MS_LONG = 6000;" in js_resp.text
+    assert "function _showToast(msg, durationMs = 2400)" in js_resp.text
+    assert "_showToast(msg, TOAST_MS_LONG);" in js_resp.text
 
 
 # ---------------------------------------------------------------------------
