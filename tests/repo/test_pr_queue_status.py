@@ -270,9 +270,7 @@ def test_pr_queue_status_dies_on_malformed_pr_json(tmp_path: Path) -> None:
 
 
 def test_pr_queue_status_reports_local_origin_main_unavailable(tmp_path: Path) -> None:
-    """local_base_summary()'s branch for a worktree with no local
-    refs/remotes/origin/main ref (e.g. it was fetched before that ref
-    existed, or the ref was pruned)."""
+    """Cover a worktree without a local refs/remotes/origin/main ref."""
     _init_repo(tmp_path)
     _run(["git", "checkout", "-qb", "feature-no-origin-ref"], cwd=tmp_path)
     _run(["git", "update-ref", "-d", "refs/remotes/origin/main"], cwd=tmp_path)
@@ -380,32 +378,28 @@ def test_pr_queue_status_recommendation_covers_draft_conflict_and_checks_pending
 def test_pr_queue_status_does_not_recommend_land_now_without_evidence(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _run(["git", "checkout", "-qb", "feature-no-evidence"], cwd=tmp_path)
-
-    env = _env_with_fake_gh(
-        tmp_path,
-        [
-            {
-                "number": 30,
-                "title": "clean but no evidence",
-                "headRefName": "feature-no-evidence",
-                "headRefOid": "aaaa111111110000000000000000000000000000",
-                "baseRefOid": "bbbb222222220000000000000000000000000000",
-                "mergeStateStatus": "CLEAN",
-                "isDraft": False,
-                "updatedAt": "2026-07-07T00:09:00Z",
-                "url": "https://example.test/pr/30",
-            }
-        ],
-        skip_evidence=False,
-        skip_threads=True,
-    )
-
+    pr = {
+        "number": 30,
+        "title": "clean but no evidence",
+        "headRefName": "feature-no-evidence",
+        "headRefOid": "aaaa111111110000000000000000000000000000",
+        "baseRefOid": "bbbb222222220000000000000000000000000000",
+        "mergeStateStatus": "CLEAN",
+        "isDraft": False,
+        "updatedAt": "2026-07-07T00:09:00Z",
+        "url": "https://example.test/pr/30",
+    }
+    env = _env_with_fake_gh(tmp_path, [pr], skip_evidence=False)
     result = _run(["bash", str(PR_QUEUE_STATUS)], cwd=tmp_path, env=env)
-
     assert result.returncode == 0
     assert "evidence: missing/invalid" in result.stdout
     assert "recommendation: emit/review evidence" in result.stdout
     assert "recommendation: land now" not in result.stdout
+    pr["mergeStateStatus"] = "BEHIND"
+    _fake_gh(tmp_path.parent / f"{tmp_path.name}-bin", [pr])
+    result = _run(["bash", str(PR_QUEUE_STATUS)], cwd=tmp_path, env=env)
+    assert "recommendation: integrate + reattest" in result.stdout
+    assert "recommendation: emit/review evidence" not in result.stdout
 
 
 def test_pr_queue_status_fails_closed_when_thread_debt_is_unknown(tmp_path: Path) -> None:

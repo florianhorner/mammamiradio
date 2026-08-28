@@ -174,14 +174,14 @@ recommendation() {
     say "commit dirty work"
   elif [ -z "$worktree" ]; then
     say "inspect/no local worktree"
+  elif [ "$merge_state" = "BEHIND" ]; then
+    say "integrate + reattest"
   elif [ "$thread_debt" = "unknown" ]; then
     say "inspect/thread check unavailable"
   elif [ "$thread_debt" != "0" ] && [ "$thread_debt" != "skipped" ]; then
     say "resolve bot threads"
   elif [ "$evidence" != "ok" ] && [ "$evidence" != "skipped" ]; then
     say "emit/review evidence"
-  elif [ "$merge_state" = "BEHIND" ]; then
-    say "integrate + reattest"
   elif [ "$merge_state" = "CLEAN" ]; then
     say "land now"
   elif [ "$merge_state" = "BLOCKED" ] || [ "$merge_state" = "UNSTABLE" ]; then
