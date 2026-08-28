@@ -864,6 +864,13 @@ CLIP_MAX_SEGMENT_SECONDS = 180
 # After an ad/banter ends we keep its snapshot briefly, so a listener who taps
 # Share a moment too late (music already playing again) still gets the whole bit.
 CLIP_LOOKBACK_SECONDS = 15
+# Upper bound on a duration we are willing to print on the public share page.
+# Nothing shareable comes close: voice segments are capped at
+# CLIP_MAX_SEGMENT_SECONDS and the longest bundled starter track is under ten
+# minutes. Finiteness alone is not proof — 1e308 and a 300-digit integer are
+# both finite and both nonsense — so a value past this ceiling is treated as
+# corrupt metadata and no duration is claimed at all.
+CLIP_MAX_PROVABLE_DURATION_SECONDS = 3600
 CLIP_MAX_SAVED = 50
 DEFAULT_CLIP_BITRATE_KBPS = 192
 STREAM_MAX_PACKET_SECONDS = 0.125
@@ -11157,7 +11164,6 @@ async def create_clip(request: Request):
                 "retryable": False,
                 "next_action": "Wait for a bundled starter track to finish, then try again.",
                 "stream_status": "unaffected",
-                "lookback_seconds": CLIP_LOOKBACK_SECONDS,
             },
             status_code=403,
         )
@@ -11680,7 +11686,7 @@ async def clip_landing(clip_id: str, request: Request):
         except (TypeError, ValueError, OverflowError):
             pass
         else:
-            if math.isfinite(parsed_duration) and parsed_duration > 0:
+            if math.isfinite(parsed_duration) and 0 < parsed_duration <= CLIP_MAX_PROVABLE_DURATION_SECONDS:
                 clip_duration_seconds = max(1, round(parsed_duration))
 
     return _TEMPLATES.TemplateResponse(

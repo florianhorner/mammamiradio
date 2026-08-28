@@ -28,7 +28,7 @@ from mammamiradio.scheduling.producer import _reserve_music_segment
 from mammamiradio.web.listener_requests import _download_listener_song as _download_listener_song_impl
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
-    CLIP_LOOKBACK_SECONDS,
+    CLIP_MAX_PROVABLE_DURATION_SECONDS,
     LiveStreamHub,
     _admin_track_id,
     _apply_ban,
@@ -6199,12 +6199,15 @@ async def test_listener_share_reads_clip_error_body():
     assert "if (!res.ok || !data || !data.ok)" in js_resp.text
     assert "data.error_code === 'music_share_unavailable'" in js_resp.text
     assert (
-        "Only included tracks can be shared. Let the next included track finish, then tap Share within {s} seconds."
-        in js_resp.text
+        "Only included tracks can be shared. Keep the radio playing, and tap Share "
+        "right after the next included track ends." in js_resp.text
     )
-    # Nullish coalescing, not `||` — a legitimate lookback_seconds: 0 must not
-    # fall back to the stale default of 15.
-    assert "replace('{s}', data.lookback_seconds ?? 15)" in js_resp.text
+    # No numeric countdown: the server's window starts when it finishes sending,
+    # which is not when this listener hears the track end (send-ahead cushion +
+    # client buffering). Promising an exact audible deadline is a claim the
+    # station cannot prove, so the copy must not carry one.
+    assert "within 15 seconds" not in js_resp.text
+    assert "lookback_seconds" not in js_resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -7054,7 +7057,8 @@ async def test_clip_create_empty_ring_buffer():
     body = resp.json()
     assert body["ok"] is False
     assert body["error_code"] == "music_share_unavailable"
-    assert body["lookback_seconds"] == CLIP_LOOKBACK_SECONDS
+    # The refusal must not advertise a listener-side countdown it cannot honour.
+    assert "lookback_seconds" not in body
 
 
 @pytest.mark.asyncio
@@ -7829,6 +7833,30 @@ async def test_clip_landing_duration_plural_for_more_than_one_second(tmp_path):
     resp = await _clip_landing_with_raw_duration(tmp_path, "42")
     assert resp.status_code == 200
     assert "Questo momento è durato 42 secondi · Mamma Mi Radio" in resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["1e308", "86400", "3601"])
+async def test_clip_landing_duration_beyond_ceiling_is_not_claimed(tmp_path, raw):
+    """Finite is not the same as provable.
+
+    ``1e308`` and a full day are both finite and both nonsense for a clip: the
+    longest bundled starter track runs under ten minutes and voice segments are
+    capped well below that. Anything past the ceiling is corrupt metadata, so
+    the page claims no duration rather than printing an absurd one.
+    """
+    resp = await _clip_landing_with_raw_duration(tmp_path, raw)
+    assert resp.status_code == 200
+    assert "Questo momento è durato" not in resp.text
+    assert "Mamma Mi Radio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_duration_at_ceiling_is_still_claimed(tmp_path):
+    """The ceiling is inclusive — a value exactly at it is still a real duration."""
+    resp = await _clip_landing_with_raw_duration(tmp_path, str(CLIP_MAX_PROVABLE_DURATION_SECONDS))
+    assert resp.status_code == 200
+    assert f"Questo momento è durato {CLIP_MAX_PROVABLE_DURATION_SECONDS} secondi" in resp.text
 
 
 @pytest.mark.asyncio

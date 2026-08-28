@@ -129,7 +129,8 @@ COPY: dict[str, dict[str, str]] = {
         "clip_rate_limited": "The tape decks are still spooling your last clip — give them {s}s and tap again.",
         "clip_no_audio": "Nothing to clip just yet — let the radio play for a moment, then tap Share.",
         "music_share_unavailable": (
-            "Only included tracks can be shared. Let the next included track finish, then tap Share within {s} seconds."
+            "Only included tracks can be shared. Keep the radio playing, and tap Share "
+            "right after the next included track ends."
         ),
         "clip_error": "That clip didn't take — give it a moment and tap Share again.",
         "clip_copy_prompt": "Copy this link:",
@@ -249,8 +250,8 @@ COPY: dict[str, dict[str, str]] = {
         "clip_rate_limited": "I registratori stanno ancora montando l'ultima clip — aspetta {s}s e ritocca.",
         "clip_no_audio": "Ancora niente da clippare — lascia suonare la radio un attimo, poi tocca Condividi.",
         "music_share_unavailable": (
-            "Puoi condividere solo i brani inclusi. Lascia finire il prossimo brano incluso, "
-            "poi tocca Condividi entro {s} secondi."
+            "Puoi condividere solo i brani inclusi. Lascia suonare la radio e tocca "
+            "Condividi appena finisce il prossimo brano incluso."
         ),
         "clip_error": "La clip non è partita — aspetta un attimo e ritocca Condividi.",
         "clip_copy_prompt": "Copia il link:",
