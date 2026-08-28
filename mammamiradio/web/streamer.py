@@ -11157,6 +11157,7 @@ async def create_clip(request: Request):
                 "retryable": False,
                 "next_action": "Wait for a bundled starter track to finish, then try again.",
                 "stream_status": "unaffected",
+                "lookback_seconds": CLIP_LOOKBACK_SECONDS,
             },
             status_code=403,
         )
@@ -11196,12 +11197,20 @@ async def create_clip(request: Request):
         "station_name": station_name,
         "track_title": track_title,
         "track_artist": track_artist,
-        "duration_seconds": round(
-            float(snap.get("duration_seconds") or len(clip_data) / max(1, config.audio.bitrate * 1000 // 8)),
-            3,
-        ),
         "created_at": int(time.time()),
     }
+    # The starter catalog guarantees a positive duration_seconds for every
+    # entry, but this only claims one if the snapshot actually proves it —
+    # never guess from clip_data's byte length, which is the raw starter
+    # file at its own encode rate, not config.audio.bitrate.
+    snap_duration = snap.get("duration_seconds")
+    if (
+        isinstance(snap_duration, int | float)
+        and not isinstance(snap_duration, bool)
+        and math.isfinite(snap_duration)
+        and snap_duration > 0
+    ):
+        sidecar["duration_seconds"] = round(float(snap_duration), 3)
     if clip_attribution_override is not None:
         sidecar["music_attribution"] = clip_attribution_override
     try:

@@ -28,6 +28,7 @@ from mammamiradio.scheduling.producer import _reserve_music_segment
 from mammamiradio.web.listener_requests import _download_listener_song as _download_listener_song_impl
 from mammamiradio.web.listener_requests import router as listener_requests_router
 from mammamiradio.web.streamer import (
+    CLIP_LOOKBACK_SECONDS,
     LiveStreamHub,
     _admin_track_id,
     _apply_ban,
@@ -6198,9 +6199,10 @@ async def test_listener_share_reads_clip_error_body():
     assert "if (!res.ok || !data || !data.ok)" in js_resp.text
     assert "data.error_code === 'music_share_unavailable'" in js_resp.text
     assert (
-        "Only included tracks can be shared. Let the next included track finish, then tap Share within 15 seconds."
+        "Only included tracks can be shared. Let the next included track finish, then tap Share within {s} seconds."
         in js_resp.text
     )
+    assert "replace('{s}', data.lookback_seconds || 15)" in js_resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -7050,6 +7052,7 @@ async def test_clip_create_empty_ring_buffer():
     body = resp.json()
     assert body["ok"] is False
     assert body["error_code"] == "music_share_unavailable"
+    assert body["lookback_seconds"] == CLIP_LOOKBACK_SECONDS
 
 
 @pytest.mark.asyncio
@@ -7345,13 +7348,16 @@ async def test_clip_shares_only_a_complete_manifested_starter_snapshot(tmp_path)
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
-async def test_clip_computes_duration_from_bytes_when_snapshot_lacks_it(tmp_path):
-    """A starter snapshot with no ``duration_seconds`` must still produce a
+async def test_clip_omits_duration_when_snapshot_lacks_it(tmp_path):
+    """A starter snapshot with no ``duration_seconds`` must never trigger a guess.
 
-    provable number, computed from the actual bytes shared and the station's
-    configured bitrate — never a guess, and never a crash. In production
-    ``_validated_starter_share_snapshot`` always sets this field, but the
-    fallback is real code, reachable by any snapshot shape that omits it.
+    ``clip_data`` here is the raw starter-catalog file, encoded at the
+    catalog's own fixed bitrate — not ``config.audio.bitrate`` — so deriving
+    a duration from byte length would misreport it. The sidecar must simply
+    omit ``duration_seconds`` rather than claim an unproven number; the
+    share page then falls back to showing the station name only. In
+    production ``_validated_starter_share_snapshot`` always sets this field,
+    but this path is reachable by any snapshot shape that omits it.
     """
     app = _make_test_app()
     app.state.config.cache_dir = tmp_path / "cache"
@@ -7389,10 +7395,7 @@ async def test_clip_computes_duration_from_bytes_when_snapshot_lacks_it(tmp_path
     assert resp.status_code == 200
     body = resp.json()
     sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
-    bytes_per_sec = app.state.config.audio.bitrate * 1000 // 8
-    expected = round(len(clip_bytes) / bytes_per_sec, 3)
-    assert sidecar["duration_seconds"] == pytest.approx(expected)
-    assert sidecar["duration_seconds"] > 0
+    assert "duration_seconds" not in sidecar
 
 
 @pytest.mark.asyncio
