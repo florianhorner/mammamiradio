@@ -4379,6 +4379,17 @@ function pipelineHostStatus(c){
   if(usableOpenAi||usableAnthropic){
     return{state:'ready',label:'AI hosts · ready',detail:'New conversations are available.'};
   }
+  // A known-degraded, non-rejected Anthropic (circuit breaker tripped, backup content
+  // actually airing right now) must win outright before any pending-probe check below —
+  // otherwise an UNRELATED provider's own still-resolving probe (e.g. OpenAI sitting at
+  // 'unverified' because it hasn't been checked yet) masks a fact we already know.
+  if(anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected'){
+    return{
+      state:'degraded',
+      label:'AI hosts · backup active',
+      detail:'Included host clips keep the show moving while the AI service recovers.',
+    };
+  }
   // A provider's own probe still pending (never resolved to valid/rejected) means the
   // outcome could still improve, so "checking" wins — UNLESS that provider is the one
   // already known to be degraded (circuit breaker tripped): an inconclusive probe never
@@ -4395,13 +4406,6 @@ function pipelineHostStatus(c){
       state:'blocked',
       label:'AI key needs attention',
       detail:'Open Settings and replace the key to restore new conversations.',
-    };
-  }
-  if(anthropicConfigured&&c.anthropic_degraded){
-    return{
-      state:'degraded',
-      label:'AI hosts · backup active',
-      detail:'Included host clips keep the show moving while the AI service recovers.',
     };
   }
   return checkingAiHosts;

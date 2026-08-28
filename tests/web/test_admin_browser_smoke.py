@@ -116,6 +116,7 @@ def test_admin_browser_smoke_contract_is_bounded() -> None:
         "unverified fallback provider was masked by rejection",
         "valid provider cooldown was masked by rejected fallback",
         "circuit-breaker cooldown was masked by an inconclusive probe stuck at unverified",
+        "known-degraded provider was masked by an unrelated provider's own still-checking probe",
         "valid fallback provider did not keep AI hosts ready",
         "admin native controls did not declare dark color scheme",
         "host descriptions stayed below readable body size",

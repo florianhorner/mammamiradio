@@ -247,6 +247,14 @@ async (page) => {
         anthropic_degraded: true,
         openai: false,
       },
+      degradedMaskedByUnrelatedProbe: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'valid',
+        anthropic_degraded: true,
+        openai: true,
+        openai_key_status: 'unverified',
+      },
       fallback: {
         script_llm: true,
         anthropic_key: true,
@@ -275,6 +283,10 @@ async (page) => {
   assert(
     hostPipelineStates.degradedUnverified.state === 'degraded',
     `circuit-breaker cooldown was masked by an inconclusive probe stuck at unverified: ${JSON.stringify(hostPipelineStates.degradedUnverified)}`,
+  );
+  assert(
+    hostPipelineStates.degradedMaskedByUnrelatedProbe.state === 'degraded',
+    `known-degraded provider was masked by an unrelated provider's own still-checking probe: ${JSON.stringify(hostPipelineStates.degradedMaskedByUnrelatedProbe)}`,
   );
   assert(hostPipelineStates.fallback.state === 'ready', `valid fallback provider did not keep AI hosts ready: ${JSON.stringify(hostPipelineStates.fallback)}`);
 

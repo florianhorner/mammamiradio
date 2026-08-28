@@ -241,19 +241,26 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
     ):
         assert expected in hosts
     assert "statuses.includes('rejected')&&!statuses.includes('valid')" in hosts
+    # A known-degraded, non-rejected Anthropic must win outright before any pending-probe
+    # check — otherwise an UNRELATED provider's own still-resolving probe (e.g. OpenAI
+    # sitting at 'unverified' because it hasn't been checked yet) masks a fact we already
+    # know. This is why the degraded-and-not-rejected check runs FIRST, ahead of both the
+    # pending-probe check and the rejected check below it.
+    assert "anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected'" in hosts
     # A provider's own probe still pending wins ("checking") only when that provider
     # ISN'T the one already known to be degraded (circuit breaker tripped) — an
     # inconclusive probe never overwrites the prior status (see provider_verdict.py),
     # so anthropic can sit at its default 'unverified' indefinitely while backup
     # content is actually airing. That known fact must not be masked by a status
-    # that never really resolves. This is why the pending-check runs before, and is
-    # narrower than, the plain rejected/degraded checks below it.
+    # that never really resolves.
     assert "anthropicStatus==='unverified'&&!c.anthropic_degraded" in hosts
     assert "openaiStatus==='unverified'" in hosts
+    assert hosts.index("anthropicConfigured&&c.anthropic_degraded&&anthropicStatus!=='rejected'") < hosts.index(
+        "anthropicPendingUnresolved||openaiPendingUnresolved"
+    )
     assert hosts.index("anthropicPendingUnresolved||openaiPendingUnresolved") < hosts.index(
         "statuses.includes('rejected')"
     )
-    assert hosts.index("statuses.includes('rejected')") < hosts.index("anthropicConfigured&&c.anthropic_degraded")
     assert "usableOpenAi||usableAnthropic" in hosts
 
 
