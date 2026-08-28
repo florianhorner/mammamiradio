@@ -214,19 +214,49 @@ def test_direction_timeout_clears_stale_pending_record_hunt_before_refresh() -> 
 
 
 def test_pipeline_status_uses_canonical_status_chips() -> None:
-    block = _function_block(_read_admin_html(), "updatePipelineStatus")
+    html = _read_admin_html()
+    block = _function_block(html, "updatePipelineStatus")
+    hosts = _function_block(html, "pipelineHostStatus")
 
     assert 'class="chip ${state}"' not in block
     for expected in (
         "statusChip('working','Checking…')",
-        "statusChip('degraded','Anthropic')",
-        "statusChip('ready','Anthropic')",
-        "statusChip('blocked','Anthropic')",
         "statusChip('idle','HA: off')",
     ):
         assert expected in block
+    assert "const hosts=pipelineHostStatus(c)" in block
+    assert "statusChip(hosts.state,hosts.label,hosts.detail)" in block
     assert "statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail)" in block
     assert "statusChip('ready','Stream')" not in block
+    for expected in (
+        "state:'ready',",
+        "label:'Demo Radio · ready'",
+        "label:'AI hosts · ready'",
+        "state:'degraded'",
+        "label:'AI hosts · backup active'",
+        "state:'working'",
+        "label:'Checking AI hosts'",
+        "state:'blocked'",
+        "label:'AI key needs attention'",
+    ):
+        assert expected in hosts
+    assert "statuses.includes('unverified')" in hosts
+    assert "statuses.includes('rejected')&&!statuses.includes('valid')" in hosts
+    assert hosts.index("statuses.includes('unverified')") < hosts.index("statuses.includes('rejected')")
+    assert hosts.index("statuses.includes('rejected')") < hosts.index("anthropicConfigured&&c.anthropic_degraded")
+    assert "usableOpenAi||usableAnthropic" in hosts
+
+
+def test_admin_declares_dark_controls_and_readable_host_prose() -> None:
+    html = _read_admin_html()
+
+    assert re.search(r"html\s*\{[^}]*color-scheme:\s*dark", html, re.DOTALL)
+    host_style = re.search(r"\.host-style\s*\{([^}]*)\}", html)
+    assert host_style is not None
+    declarations = host_style.group(1)
+    assert "font-size: 14px" in declarations
+    assert "line-height: 1.5" in declarations
+    assert "max-width: 72ch" in declarations
 
 
 def test_pipeline_stream_status_is_driven_by_fast_runtime_truth() -> None:

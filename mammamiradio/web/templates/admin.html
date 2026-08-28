@@ -22,6 +22,7 @@
    and the drift we just fixed would re-open. See docs/design/system.md. */
 
 html {
+  color-scheme: dark;
   font-size: 16px; -webkit-font-smoothing: antialiased; min-height: 100vh;
   background:
     radial-gradient(400px 400px at 88% 14%, rgba(244,208,72,0.10), transparent 70%),
@@ -285,7 +286,7 @@ body[data-stopped="true"] .btn-util:not([data-stopped-exempt]) {
 .host-block { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .host-block:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
 .host-name { font-weight: 700; font-size: 13px; }
-.host-style { font-size: 10px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.4; }
+.host-style { max-width: 72ch; font-size: 14px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.5; }
 .host-presets-label { font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .host-presets { display: flex; gap: 7px; margin-bottom: 14px; }
 .host-preset {
@@ -2455,7 +2456,7 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                     <p class="guide-audio-copy" id="guideWelcomeNote"><strong>16 seconds on this device</strong><span>This does not confirm sound on this device.</span></p>
                   <details class="guide-transcript"><summary>Read transcript</summary><p><strong>Marco:</strong> Benvenuti! Sono Marco, and this is Mamma Mi Radio, your new favourite station, live from that device right there. <strong>Giulia:</strong> Giulia. I keep him honest. Five small steps, nothing personal, nothing automatic. You stay in charge.</p></details>
                 </div>
-                <p class="progress-line" id="firstListenProgressLine">Step 1 of 4. Next: play it on this device.</p>
+                <p class="progress-line" id="firstListenProgressLine">Checking your next step…</p>
               </header>
 
               <div class="first-listen" id="firstListenPath" aria-label="First Listen journey">
@@ -2490,7 +2491,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="first-listen-review" data-review-step="speaker" aria-expanded="false" aria-controls="firstListenSpeakerBody" onclick="toggleFirstListenReview('speaker',this)" hidden>Review playback</button>
                 </div>
                 <div class="first-listen-body" id="firstListenSpeakerBody" role="region" aria-labelledby="firstListenSpeakerHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 2 of 4</strong><span>Next: check the sound</span></div>
                   <h4 class="benefit-heading">Hear the station where you want it.</h4>
                   <p class="use-copy">The station plays on this device. Choose headphones, Bluetooth, or this device’s speaker. Hearing it here is enough to finish setup.</p>
                   <details class="guide-transcript" id="firstListenHomeAssistantGuide">
@@ -2516,7 +2516,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="first-listen-review" data-review-step="verify" aria-expanded="false" aria-controls="firstListenVerifyBody" onclick="toggleFirstListenReview('verify',this)" hidden>Review sound check</button>
                 </div>
                 <div class="first-listen-body" id="firstListenVerifyBody" role="region" aria-labelledby="firstListenVerifyHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 3 of 4</strong><span>Next: choose whether the hosts can use Home details</span></div>
                   <h4 class="benefit-heading">Can you hear Marco and Giulia?</h4>
                   <div class="semantic-visual evidence-line" aria-label="Station playback and human sound check">
                     <div class="evidence-stage"><span class="evidence-icon" aria-hidden="true">✓</span><strong>Sent</strong><span id="firstListenEvidenceSpeaker">This device</span></div>
@@ -2574,7 +2573,6 @@ body[data-first-listen-entry="complete"] #first-listen-panel{display:none!import
                   <button type="button" class="first-listen-review" data-review-step="privacy" aria-expanded="false" aria-controls="firstListenPrivacyBody" onclick="toggleFirstListenReview('privacy',this)" hidden>Review privacy choice</button>
                 </div>
                 <div class="first-listen-body" id="firstListenPrivacyBody" role="region" aria-labelledby="firstListenPrivacyHeading" hidden aria-hidden="true" inert>
-                  <div class="first-listen-current-meta"><strong>Step 4 of 4</strong><span>Last required step</span></div>
                     <div class="first-listen-lock" id="firstListenPrivacyLock"><span class="first-listen-lock-shape" aria-hidden="true">○</span>Confirm that you heard the station first.</div>
                   <div class="setup-home-preview-section" id="homeContextPreviewSection">
                     <h4 class="benefit-heading">The hosts can mention weather or an active timer.</h4>
@@ -4362,6 +4360,43 @@ function stationRuntimeVerdict(st,caps){
 function pipelineStreamStatus(st,caps){
   return stationRuntimeVerdict(st,caps);
 }
+function pipelineHostStatus(c){
+  const anthropicConfigured=Boolean(c?.anthropic_key);
+  const openaiConfigured=Boolean(c?.openai);
+  if(!anthropicConfigured&&!openaiConfigured){
+    return{
+      state:'ready',
+      label:'Demo Radio · ready',
+      detail:'Included host clips are ready. Add an AI key only if you want new conversations.',
+    };
+  }
+  const anthropicStatus=anthropicConfigured?c.anthropic_key_status:null;
+  const openaiStatus=openaiConfigured?c.openai_key_status:null;
+  const statuses=[anthropicStatus,openaiStatus].filter(Boolean);
+  const usableOpenAi=openaiConfigured&&openaiStatus==='valid';
+  const usableAnthropic=anthropicConfigured&&anthropicStatus==='valid'&&!c.anthropic_degraded;
+  if(usableOpenAi||usableAnthropic){
+    return{state:'ready',label:'AI hosts · ready',detail:'New conversations are available.'};
+  }
+  if(statuses.includes('unverified')){
+    return{state:'working',label:'Checking AI hosts',detail:'Checking the saved AI key.'};
+  }
+  if(statuses.includes('rejected')&&!statuses.includes('valid')){
+    return{
+      state:'blocked',
+      label:'AI key needs attention',
+      detail:'Open Settings and replace the key to restore new conversations.',
+    };
+  }
+  if(anthropicConfigured&&c.anthropic_degraded){
+    return{
+      state:'degraded',
+      label:'AI hosts · backup active',
+      detail:'Included host clips keep the show moving while the AI service recovers.',
+    };
+  }
+  return{state:'working',label:'Checking AI hosts',detail:'Checking the saved AI key.'};
+}
 function updatePipelineStatus(caps,st){
   const el=document.getElementById('pipelineStatus');
   if(!el)return;
@@ -4374,10 +4409,8 @@ function updatePipelineStatus(caps,st){
     html+=statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail)+'</div>';
     el.innerHTML=html; return;
   }
-  if(c.anthropic_key&&c.anthropic_key_status==='rejected'){ html+=statusChip('blocked','Anthropic'); }
-  else if(c.anthropic_key&&c.anthropic_degraded){ html+=statusChip('degraded','Anthropic'); }
-  else if(c.anthropic_key){ html+=statusChip('ready','Anthropic'); }
-  else { html+=statusChip('blocked','Anthropic'); }
+  const hosts=pipelineHostStatus(c);
+  html+=statusChip(hosts.state,hosts.label,hosts.detail);
   html+=statusChip(stream.state,'Stream Engine · '+stream.label,stream.detail);
   html+='</div><div class="srow">';
   if(c.ha){ html+=statusChip('ready','Home Assistant'); }
@@ -5569,6 +5602,13 @@ function firstListenListeningCue({healthy,recoveryOnAir,recoveryAvailable}){
   if(recoveryAvailable)return 'Listen for Marco and Giulia. Backup music is ready while the main music needs attention.';
   return 'Listen for Marco and Giulia. The opening may end before music because the music needs attention.';
 }
+function firstListenPendingPrivacyChoice(projection,localChoice=_firstListenUi.privacyReceiptChoice){
+  if(localChoice!==null)return Boolean(localChoice);
+  if(projection.heard&&!projection.privacyReviewed&&projection.privacy?.choice_explicit===true){
+    return Boolean(projection.privacyEnabled);
+  }
+  return null;
+}
 function renderFirstListenProgress(){
   const projection=firstListenProjection();
   const sourceState=firstListenSourceState(projection);
@@ -5725,11 +5765,7 @@ function renderFirstListenProgress(){
   const enableBtn=document.getElementById('firstListenEnableContextBtn');
   const previewBox=document.getElementById('haContextPreview');
   const permissionPrimer=document.querySelector('#firstListenPrivacyBody .permission-primer');
-  const pendingPrivacyChoice=_firstListenUi.privacyReceiptChoice!==null
-    ? Boolean(_firstListenUi.privacyReceiptChoice)
-    : !projection.privacyReviewed&&projection.privacy.choice_explicit===true
-    ? Boolean(projection.privacyEnabled)
-    : null;
+  const pendingPrivacyChoice=firstListenPendingPrivacyChoice(projection);
   if(previewBtn){
     previewBtn.disabled=!projection.privacyUnlocked||_firstListenUi.privacySaving||_firstListenUi.privacyPreview==='previewing';
     previewBtn.hidden=_firstListenUi.privacyPreviewValid;
