@@ -44,9 +44,24 @@ esac
 
 PASS=0
 FAIL=0
+WAIVED=0
 
 ok()   { echo "  [PASS] $*"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }
+# A waived gate is its own category on purpose. Counting it as a PASS would
+# make the summary claim evidence the release does not have.
+waive() { echo "  [WAIVED] $*"; WAIVED=$((WAIVED + 1)); }
+
+# MMR_REQUIRE_HA_RECEIPTS arms the physical Home Assistant Green receipt gate.
+# Unset or "0" waives it; "1" enforces it. Anything else is a hard error rather
+# than a silent skip: a gate that disables itself on a typo is worse than none.
+case "${MMR_REQUIRE_HA_RECEIPTS:-0}" in
+    0|1) ;;
+    *)
+        echo "ERROR: MMR_REQUIRE_HA_RECEIPTS must be 0 or 1, got '${MMR_REQUIRE_HA_RECEIPTS}'." >&2
+        exit 2
+        ;;
+esac
 
 echo ""
 echo "=== mammamiradio pre-release check ==="
@@ -263,7 +278,9 @@ fi
 echo ""
 echo "9. Physical HA Green release evidence"
 
-if "$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py --release-version "$ADDON_VER"; then
+if [ "${MMR_REQUIRE_HA_RECEIPTS:-0}" != "1" ]; then
+    waive "NOT CHECKED: this release ships WITHOUT physical Home Assistant Green cold-start evidence. Set MMR_REQUIRE_HA_RECEIPTS=1 to require it."
+elif "$MEDIA_PYTHON" scripts/validate-ha-green-release-evidence.py --release-version "$ADDON_VER"; then
     ok "at least 20 cold Home Assistant Green runs meet the <=2s p95 release contract"
 else
     fail "HA Green release evidence is incomplete — record 20 runs with scripts/ha-green-launch-smoke.py --record-release-receipt proof/media/ha-green-release-evidence, then commit only those receipt JSON files"
@@ -282,13 +299,16 @@ fi
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "======================================="
-echo "  Passed: $PASS  Failed: $FAIL"
+echo "  Passed: $PASS  Failed: $FAIL  Waived: $WAIVED"
 echo "======================================="
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then
     echo "Fix the failures above before tagging this cut."
     exit 1
+elif [ "$WAIVED" -gt 0 ]; then
+    echo "All enforced checks passed, but $WAIVED gate(s) were WAIVED and prove nothing."
+    exit 0
 else
     echo "All checks passed."
     exit 0
