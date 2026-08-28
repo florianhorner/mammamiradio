@@ -21,22 +21,33 @@ python scripts/banter-workshop.py board \
   --feedback scripts/banter-pack-v1-feedback.json \
   --output tmp/banter-workshop-run/listening-board.html
 
-# Rebuild the accepted first-pack board against shipped MP3s (no second copy)
+# Rebuild the accepted first-pack board against shipped MP3s (no second copy).
+# Derives portable report metadata from tracked plan + feedback + spoken_assets,
+# so a clean checkout is enough — no gitignored Krakow artifacts required.
 python scripts/banter-workshop.py board \
-  --report .context/plans/banter-authoring-kit-source/expanded-review-report.json \
-  --feedback scripts/banter-pack-v1-feedback.json \
+  --from-accepted-baseline \
   --shipped-audio \
   --output tmp/banter-accepted-board/listening-board.html
 
-# Fail closed if baseline IDs/hashes drift from spoken_assets.json
+# Fail closed if plan/feedback/spoken IDs or hashes drift
 python scripts/banter-workshop.py sync-check
 ```
 
-Serve the board directory locally (`python -m http.server` from the output
-folder, or open the HTML file directly) and review in a browser. The board is
-fully offline: no Google Fonts or other network assets. Feedback stays in
-browser localStorage, namespaced by candidate-set identity. Export / import
-JSON and Copy for chat — there is no network submission.
+Serve boards carefully:
+
+- Ordinary workshop output: `python -m http.server` from the report/output
+  folder (audio paths are rewritten relative to the board file).
+- Accepted `--shipped-audio` boards: write the HTML under the repository (for
+  example `tmp/banter-accepted-board/listening-board.html`) and serve from the
+  **repository root** so the relative links into
+  `mammamiradio/assets/demo/banter/` resolve. Opening the HTML file directly
+  also works when the browser can resolve those relatives. Output paths outside
+  the repo are rejected.
+
+The board is fully offline: no Google Fonts or other network assets. Feedback
+stays in browser localStorage, namespaced by candidate-set identity and bound to
+each clip's audio sha256. Export / import JSON and Copy for chat — there is no
+network submission. Changed audio under the same clip ID resets prior verdicts.
 
 ## Pack baseline
 
@@ -54,6 +65,8 @@ commit a second copy of those MP3s.
 
 - Default live `write_banter` behavior is unchanged unless
   `packaged_context` / `require_generated` are set.
+- Packaged authoring always suppresses listener-request injection, even if the
+  caller leaves `include_listener_request=True`.
 - Evergreen rows get no predecessor track and no live clock/weather/listener
   context.
 - Exact-track rows receive exactly one approved starter's title and artist.

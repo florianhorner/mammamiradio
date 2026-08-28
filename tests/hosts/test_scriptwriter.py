@@ -693,6 +693,43 @@ async def test_packaged_banter_excludes_live_home_and_listener_surfaces(config, 
 
 
 @pytest.mark.asyncio
+async def test_packaged_banter_suppresses_pending_listener_request_by_default(config, state):
+    state.pending_requests = [
+        {
+            "type": "message",
+            "name": "Lucia",
+            "message": "Please read my dedication on air forever.",
+        }
+    ]
+    captured = {}
+
+    async def _generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return _packaged_banter_response(config)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        lines, commit = await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            creative_direction="Keep Studio B folklore timeless.",
+            require_generated=True,
+        )
+
+    assert len(lines) == 2
+    assert commit is not None
+    assert commit.listener_request is None
+    prompt = captured["prompt"]
+    assert "Lucia" not in prompt
+    assert "dedication on air forever" not in prompt
+    assert "LISTENER REQUEST" not in prompt
+    assert state.pending_requests[0]["name"] == "Lucia"
+
+
+@pytest.mark.asyncio
 async def test_write_banter_parses_valid_json(config, state):
     config.super_italian_mode = True
     host_name = config.hosts[0].name

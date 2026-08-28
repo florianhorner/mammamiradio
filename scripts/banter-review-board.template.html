@@ -336,7 +336,7 @@
 <body>
   <header class="hero shell">
     <p class="eyebrow">__HERO_EYEBROW__</p>
-    <h1>Twenty-one cuts.<br>One verdict each.</h1>
+    <h1>__CUTS_HEADLINE__<br>One verdict each.</h1>
     <p class="hero-copy">Listen as if this were the first minute you ever heard Mamma Mi Radio. Keep only what protects the illusion. Your feedback stays in this browser until you export or copy it.</p>
     <div class="review-contract" aria-label="Review steps">
       <div class="contract-step"><strong><span class="step-n">01</span>Listen clean</strong><span>Headphones or the speaker you actually use.</span></div>
@@ -349,7 +349,7 @@
     <div class="shell control-grid">
       <div>
         <div class="progress-row">
-          <div class="progress-copy"><strong id="progressLabel">0 / 21</strong><span>reviewed</span></div>
+          <div class="progress-copy"><strong id="progressLabel">0 / __CANDIDATE_COUNT__</strong><span>reviewed</span></div>
           <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
         </div>
         <div class="counts" id="decisionCounts"><span><b>0</b> keep</span><span><b>0</b> maybe</span><span><b>0</b> redo</span></div>
@@ -357,7 +357,7 @@
       <div class="toolbar">
         <label><span class="visually-hidden">Filter by decision</span><select class="select" id="decisionFilter"><option value="all">All decisions</option><option value="unreviewed">Unreviewed</option><option value="keep">Keep</option><option value="maybe">Maybe</option><option value="redo">Redo</option></select></label>
         <label><span class="visually-hidden">Filter by mode</span><select class="select" id="modeFilter"><option value="all">Both modes</option><option value="normal">Normal Mode</option><option value="super_italian">Super Italian</option></select></label>
-        <label><span class="visually-hidden">Filter by collection</span><select class="select" id="variantFilter"><option value="all">All collections</option><option value="original">Original 12</option><option value="english_alternate">English sisters</option><option value="fourth_wall_special">Signal breaches</option></select></label>
+        <label><span class="visually-hidden">Filter by collection</span><select class="select" id="variantFilter"><option value="all">All collections</option><option value="original">__ORIGINAL_LABEL__</option><option value="english_alternate">English sisters</option><option value="fourth_wall_special">Signal breaches</option></select></label>
         <button class="btn" id="nextBtn" type="button">Next unreviewed</button>
         <button class="btn" id="copyBtn" type="button">Copy for chat</button>
         <button class="btn primary" id="exportBtn" type="button">Download feedback</button>
@@ -387,12 +387,13 @@
     const BASE_SET_ID = REVIEW_REPORT.clips.slice(0, BASE_CLIP_COUNT).map((clip) => clip.sha256.slice(0, 8)).join("-");
     const SET_ID = REVIEW_REPORT.clips.map((clip) => clip.sha256.slice(0, 8)).join("-");
     const STORAGE_KEY = `mmr-banter-feedback-${BASE_SET_ID}`;
-    const clipIds = new Set(REVIEW_REPORT.clips.map((clip) => clip.id));
+    const clipById = Object.fromEntries(REVIEW_REPORT.clips.map((clip) => [clip.id, clip]));
     const APPROVED_FEEDBACK = __APPROVED_FEEDBACK__;
     let state = loadState();
     let contextAudio = null;
     let contextButton = null;
     let toastTimer = null;
+    const noteTimers = new Map();
 
     function blankFeedback() {
       return { schema_version: "1", candidate_set: SET_ID, base_candidate_set: BASE_SET_ID, clips: {} };
@@ -400,6 +401,20 @@
 
     function approvedFeedback() {
       return { ...blankFeedback(), clips: structuredClone(APPROVED_FEEDBACK) };
+    }
+
+    function audioBoundEntry(id, entry) {
+      const reportClip = clipById[id];
+      if (!reportClip || !entry || entry.sha256 !== reportClip.sha256) return null;
+      return {
+        sha256: reportClip.sha256,
+        decision: entry.decision || "",
+        writing_score: entry.writing_score ?? null,
+        audio_score: entry.audio_score ?? null,
+        issues: Array.isArray(entry.issues) ? entry.issues : [],
+        notes: typeof entry.notes === "string" ? entry.notes : "",
+        updated_at: entry.updated_at || null
+      };
     }
 
     function loadState() {
@@ -410,33 +425,75 @@
           stored.candidate_set === BASE_SET_ID ||
           stored.base_candidate_set === BASE_SET_ID
         );
-        return compatible
-          ? {
-              ...stored,
-              candidate_set: SET_ID,
-              base_candidate_set: BASE_SET_ID,
-              clips: { ...structuredClone(APPROVED_FEEDBACK), ...(stored.clips || {}) }
-            }
-          : approvedFeedback();
+        if (!compatible) return approvedFeedback();
+        const clips = {};
+        Object.entries(APPROVED_FEEDBACK || {}).forEach(([id, entry]) => {
+          const bound = audioBoundEntry(id, entry);
+          if (bound) clips[id] = bound;
+        });
+        Object.entries(stored.clips || {}).forEach(([id, entry]) => {
+          const bound = audioBoundEntry(id, entry);
+          if (bound) clips[id] = bound;
+        });
+        return {
+          ...stored,
+          candidate_set: SET_ID,
+          base_candidate_set: BASE_SET_ID,
+          clips
+        };
       } catch (_) {
         return approvedFeedback();
       }
     }
 
     function feedbackFor(id) {
-      return state.clips[id] || { decision: "", writing_score: null, audio_score: null, issues: [], notes: "", updated_at: null };
+      return state.clips[id] || {
+        sha256: clipById[id].sha256,
+        decision: "",
+        writing_score: null,
+        audio_score: null,
+        issues: [],
+        notes: "",
+        updated_at: null
+      };
+    }
+
+    function persistState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
 
     function updateFeedback(id, patch) {
-      state.clips[id] = { ...feedbackFor(id), ...patch, updated_at: new Date().toISOString() };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      state.clips[id] = {
+        ...feedbackFor(id),
+        ...patch,
+        sha256: clipById[id].sha256,
+        updated_at: new Date().toISOString()
+      };
+      persistState();
       syncCard(id);
       syncSummary();
       applyFilters();
     }
 
+    function flushPendingNotes() {
+      noteTimers.forEach((timer) => clearTimeout(timer));
+      noteTimers.clear();
+      persistState();
+    }
+
+    function cancelPendingNotes() {
+      noteTimers.forEach((timer) => clearTimeout(timer));
+      noteTimers.clear();
+    }
+
     function escapeHtml(value) {
-      return String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]);
     }
 
     function formatDuration(seconds) {
@@ -454,10 +511,15 @@
         const exact = clip.context === "exact_track";
         const variant = clip.variant || "original";
         const collectionLabel = variant === "english_alternate" ? "English sister" : variant === "fourth_wall_special" ? "Signal breach" : "Original set";
+        const safeId = escapeHtml(clip.id);
+        const safeMode = escapeHtml(clip.mode);
+        const safeVariant = escapeHtml(variant);
+        const safeFile = escapeHtml(clip.file);
+        const safeContext = exact ? escapeHtml(CONTEXT_AUDIO[clip.id] || "") : "";
         const transcript = clip.transcript.map((line) => `<div class="line"><b>${escapeHtml(line.host)}</b><p>${escapeHtml(line.text)}</p></div>`).join("");
         const issueChips = ISSUES.map((issue) => `<label class="issue-chip"><input type="checkbox" value="${escapeHtml(issue)}" data-issue><span>${escapeHtml(issue)}</span></label>`).join("");
         const ratings = (key, label) => `<div class="rating-row"><span>${label}</span>${[1,2,3,4,5].map((n) => `<button class="rating-btn" type="button" data-rating="${key}" data-value="${n}" aria-pressed="false" aria-label="${label} ${n} out of 5">${n}</button>`).join("")}</div>`;
-        return `<article class="clip-card" id="clip-${clip.id}" data-id="${clip.id}" data-mode="${clip.mode}" data-variant="${variant}" data-decision="">
+        return `<article class="clip-card" id="clip-${safeId}" data-id="${safeId}" data-mode="${safeMode}" data-variant="${safeVariant}" data-decision="">
           <div class="card-main">
             <div class="card-head">
               <div class="clip-number">${String(index + 1).padStart(2, "0")}</div>
@@ -469,8 +531,8 @@
             </div>
             ${exact ? `<div class="exact-note"><strong>Context-bound:</strong> may follow only ${escapeHtml(clip.required_previous_track)} · ${escapeHtml(clip.required_previous_starter_id)}</div>` : ""}
             <div class="player-row">
-              <audio controls preload="metadata" src="${escapeHtml(clip.file)}" aria-label="Play ${escapeHtml(TITLES[clip.id])}"></audio>
-              ${exact ? `<button class="btn context-btn" type="button" data-context-src="${CONTEXT_AUDIO[clip.id]}">Play context → clip</button>` : ""}
+              <audio controls preload="metadata" src="${safeFile}" aria-label="Play ${escapeHtml(TITLES[clip.id])}"></audio>
+              ${exact ? `<button class="btn context-btn" type="button" data-context-src="${safeContext}">Play context → clip</button>` : ""}
             </div>
             <details><summary>Transcript and creative direction</summary><div class="transcript">${transcript}</div><p class="direction"><strong>Direction:</strong> ${escapeHtml(clip.creative_direction)}</p></details>
           </div>
@@ -508,10 +570,19 @@
           const issues = [...card.querySelectorAll("[data-issue]:checked")].map((item) => item.value);
           updateFeedback(id, { issues });
         }));
-        let noteTimer;
         card.querySelector("[data-notes]").addEventListener("input", (event) => {
-          clearTimeout(noteTimer);
-          noteTimer = setTimeout(() => updateFeedback(id, { notes: event.target.value }), 180);
+          const value = event.target.value;
+          state.clips[id] = {
+            ...feedbackFor(id),
+            notes: value,
+            sha256: clipById[id].sha256,
+            updated_at: new Date().toISOString()
+          };
+          if (noteTimers.has(id)) clearTimeout(noteTimers.get(id));
+          noteTimers.set(id, setTimeout(() => {
+            noteTimers.delete(id);
+            persistState();
+          }, 180));
         });
         const audio = card.querySelector("audio");
         audio.addEventListener("play", () => {
@@ -601,6 +672,7 @@
     }
 
     function exportPayload() {
+      flushPendingNotes();
       const clips = REVIEW_REPORT.clips.map((clip) => ({
         id: clip.id,
         title: TITLES[clip.id],
@@ -666,9 +738,14 @@
         try {
           const imported = JSON.parse(reader.result);
           if (!Array.isArray(imported.clips)) throw new Error("missing clips");
+          if (imported.candidate_set && imported.candidate_set !== SET_ID && imported.candidate_set !== BASE_SET_ID) {
+            throw new Error("candidate set mismatch");
+          }
           imported.clips.forEach((clip) => {
-            if (!clipIds.has(clip.id)) return;
+            const reportClip = clipById[clip.id];
+            if (!reportClip || clip.sha256 !== reportClip.sha256) return;
             state.clips[clip.id] = {
+              sha256: reportClip.sha256,
               decision: ["keep", "maybe", "redo"].includes(clip.decision) ? clip.decision : "",
               writing_score: [1,2,3,4,5].includes(clip.writing_score) ? clip.writing_score : null,
               audio_score: [1,2,3,4,5].includes(clip.audio_score) ? clip.audio_score : null,
@@ -677,7 +754,7 @@
               updated_at: clip.updated_at || new Date().toISOString()
             };
           });
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          persistState();
           REVIEW_REPORT.clips.forEach((clip) => syncCard(clip.id));
           syncSummary();
           applyFilters();
@@ -718,6 +795,7 @@
     document.getElementById("importInput").addEventListener("change", (event) => { if (event.target.files[0]) importFeedback(event.target.files[0]); event.target.value = ""; });
     document.getElementById("resetBtn").addEventListener("click", () => {
       if (!confirm("Clear all saved decisions, ratings, tags, and notes for this candidate set?")) return;
+      cancelPendingNotes();
       state = blankFeedback();
       localStorage.removeItem(STORAGE_KEY);
       REVIEW_REPORT.clips.forEach((clip) => syncCard(clip.id));

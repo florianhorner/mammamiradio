@@ -55,21 +55,36 @@ VARIANT_SUBDIRS = {
     "fourth_wall_special": "specials",
 }
 _CURRENT_TIME_RE = re.compile(
+    r"(?:"
     r"\b(?:today|tonight|this morning|this afternoon|this evening|yesterday|tomorrow|right now|just now|"
     r"currently|lately|recently|this week|last week|next week|this month|last month|next month|this year|"
-    r"last year|next year|the other day|the next day|next day|monday|tuesday|wednesday|thursday|friday|"
-    r"saturday|sunday|oggi|stasera|stanotte|stamattina|questo pomeriggio|ieri|domani|proprio adesso|"
+    r"last year|next year|the other day|the next day|next day|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|venerd[iì]|sabato|domenica|"
+    r"january|february|march|april|june|july|august|september|october|november|december|"
+    r"gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre|"
+    r"spring|summer|autumn|fall|winter|primavera|estate|autunno|inverno|"
+    r"oggi|stasera|stanotte|stamattina|questo pomeriggio|ieri|domani|proprio adesso|"
     r"in questo momento|ultimamente|recentemente|questa settimana|la settimana scorsa|questo mese|"
-    r"il mese scorso|il mese prossimo|l'altro giorno|poco fa|da (?:giorni|settimane|mesi))\b",
+    r"il mese scorso|il mese prossimo|l'altro giorno|poco fa|da (?:giorni|settimane|mesi))\b|"
+    r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|"
+    r"\b\d{1,2}:\d{2}\b"
+    r")",
     re.IGNORECASE,
 )
 _YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 _EXACT_SONIC_CLAIM_RE = re.compile(
     r"\b(?:sounds?|genre|tempo|beat|edm|electronic|guitars?|drums?|synths?|festival|dancefloor|"
-    r"vibes?|mood|banger|suona|genere|ritmo|elettronic[ao]|chitarr[ae]|batteria|sintetizzatore|"
+    r"vibes?|mood|banger|slow|fast|piano|bass|vocals?|melody|riff|hook|groove|acoustic|"
+    r"suona|genere|ritmo|elettronic[ao]|chitarr[ae]|batteria|sintetizzatore|"
+    r"lento|veloce|basso|voc[ei]|melodia|riff|ritmato|"
     r"festival|pista da ballo|energia del brano|atmosfera del brano|kevin would understand|kevin capirebbe)\b",
     re.IGNORECASE,
 )
+_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+_SAFE_REL_AUDIO_RE = re.compile(r"^(?:\.\./|[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$")
+_SPOKEN_LINE_RE = re.compile(r"(?=(?:Marco|Giulia):\s)")
+_SPOKEN_LINE_PARSE_RE = re.compile(r"^(Marco|Giulia):\s*(.*)$", re.DOTALL)
 
 
 def _json_dump(data: Any) -> str:
@@ -300,20 +315,31 @@ async def render_plan(plan: Path, output: Path, *, build_board: bool = True) -> 
     return report_path
 
 
-def _approved_feedback_map(feedback: Mapping[str, Any] | None, clip_ids: set[str]) -> dict[str, Any]:
+def _approved_feedback_map(
+    feedback: Mapping[str, Any] | None,
+    report_clips: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Restore prior verdicts only when both clip id and audio sha256 match."""
     if not feedback:
         return {}
     clips = feedback.get("clips")
     if not isinstance(clips, list):
         raise ValueError("feedback must contain a clips array")
+    by_id = {str(clip["id"]): clip for clip in report_clips}
     approved: dict[str, Any] = {}
     for clip in clips:
         if not isinstance(clip, dict):
             continue
         clip_id = clip.get("id")
-        if clip_id not in clip_ids:
+        report_clip = by_id.get(str(clip_id)) if clip_id is not None else None
+        if report_clip is None:
+            continue
+        feedback_sha = clip.get("sha256")
+        report_sha = report_clip.get("sha256")
+        if not isinstance(feedback_sha, str) or not isinstance(report_sha, str) or feedback_sha != report_sha:
             continue
         approved[str(clip_id)] = {
+            "sha256": feedback_sha,
             "decision": clip.get("decision") or "",
             "writing_score": clip.get("writing_score"),
             "audio_score": clip.get("audio_score"),
@@ -368,7 +394,140 @@ def _relpath_for_board(board_path: Path, target: Path) -> str:
     return Path(os.path.relpath(target.resolve(), start=board_path.parent.resolve())).as_posix()
 
 
+def _transcript_from_spoken(text: str) -> list[dict[str, str]]:
+    lines: list[dict[str, str]] = []
+    for part in _SPOKEN_LINE_RE.split(text.strip()):
+        part = part.strip()
+        if not part:
+            continue
+        match = _SPOKEN_LINE_PARSE_RE.match(part)
+        if match is None:
+            raise ValueError(f"spoken transcript line is not host-prefixed: {part[:80]!r}")
+        lines.append({"host": match.group(1), "text": match.group(2).strip()})
+    if len(lines) < 2:
+        raise ValueError("spoken transcript must contain at least two host lines")
+    return lines
+
+
+def _banter_spoken_by_id(spoken: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for entry in spoken.get("assets", []):
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get("path", ""))
+        if not path.startswith("banter/"):
+            continue
+        clip_id = Path(path).stem
+        if clip_id in by_id:
+            raise ValueError(f"spoken_assets.json has duplicate banter id {clip_id}")
+        by_id[clip_id] = entry
+    return by_id
+
+
+def build_accepted_baseline_report(
+    plan_path: Path = DEFAULT_PLAN,
+    feedback_path: Path = DEFAULT_FEEDBACK,
+    spoken_path: Path = SPOKEN_ASSETS,
+) -> dict[str, Any]:
+    """Build a portable review report from tracked plan/feedback/spoken assets."""
+    starter_by_id = {track.provider_track_id: track for track in load_starter_tracks(require_complete=True)}
+    plan_rows = _load_plan(plan_path, set(starter_by_id))
+    feedback = _load_json(feedback_path)
+    spoken = _load_json(spoken_path)
+    spoken_by_id = _banter_spoken_by_id(spoken if isinstance(spoken, dict) else {})
+    feedback_clips = feedback.get("clips") if isinstance(feedback, dict) else None
+    if not isinstance(feedback_clips, list) or not feedback_clips:
+        raise ValueError("feedback baseline has no clips")
+    feedback_by_id: dict[str, dict[str, Any]] = {}
+    for clip in feedback_clips:
+        if not isinstance(clip, dict) or not isinstance(clip.get("id"), str):
+            raise ValueError("feedback clip is missing an id")
+        if clip["id"] in feedback_by_id:
+            raise ValueError(f"feedback baseline has duplicate id {clip['id']}")
+        feedback_by_id[clip["id"]] = clip
+
+    plan_ids = [row["id"] for row in plan_rows]
+    if set(plan_ids) != set(feedback_by_id) or set(plan_ids) != set(spoken_by_id):
+        raise ValueError("accepted baseline plan/feedback/spoken id sets diverge")
+
+    receipts: list[dict[str, Any]] = []
+    for row in plan_rows:
+        clip_id = row["id"]
+        asset = SHIPPED_BANTER_DIR / f"{clip_id}.mp3"
+        if not asset.is_file():
+            raise FileNotFoundError(f"shipped banter asset missing: {asset}")
+        payload = asset.read_bytes()
+        actual = hashlib.sha256(payload).hexdigest()
+        spoken_entry = spoken_by_id[clip_id]
+        feedback_clip = feedback_by_id[clip_id]
+        expected = spoken_entry.get("sha256")
+        if expected != actual:
+            raise ValueError(f"shipped hash mismatch for {clip_id}: {actual} != {expected}")
+        if feedback_clip.get("sha256") != actual:
+            raise ValueError(f"feedback hash for {clip_id} does not match shipped audio")
+        track = starter_by_id.get(row["track_id"]) if row["track_id"] else None
+        duration = probe_duration_sec(asset)
+        if duration is None:
+            raise ValueError(f"could not measure shipped duration for {clip_id}")
+        receipt: dict[str, Any] = {
+            "id": clip_id,
+            "mode": row["mode"],
+            "variant": row.get("variant", "original"),
+            "context": row["context"],
+            "required_previous_starter_id": row["track_id"],
+            "required_previous_track": track.display if track is not None else None,
+            "creative_direction": row["direction"],
+            "file": f"banter/{clip_id}.mp3",
+            "bytes": len(payload),
+            "sha256": actual,
+            "duration_seconds": round(duration, 3),
+            "audio_measurements": {
+                "silence_ratio": None,
+                "longest_silence_seconds": None,
+                "mean_volume_db": None,
+                "peak_volume_db": None,
+            },
+            "generation_attempt": None,
+            "transcript": _transcript_from_spoken(str(spoken_entry.get("transcript") or "")),
+        }
+        if row.get("title") or feedback_clip.get("title"):
+            receipt["title"] = str(feedback_clip.get("title") or row.get("title"))
+        receipts.append(receipt)
+
+    return {
+        "schema_version": "1",
+        "complete": True,
+        "candidate_count": len(receipts),
+        "total_bytes": sum(item["bytes"] for item in receipts),
+        "total_duration_seconds": round(sum(item["duration_seconds"] for item in receipts), 3),
+        "clips": receipts,
+    }
+
+
+def _normalize_report_audio_paths(report: dict[str, Any], report_path: Path, board_path: Path) -> dict[str, Any]:
+    """Resolve clip audio against the report directory, rewrite relative to the board."""
+    rewritten = copy.deepcopy(report)
+    for clip in rewritten["clips"]:
+        raw = clip.get("file")
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(f"clip {clip.get('id')} is missing an audio file path")
+        source = Path(raw)
+        source = (report_path.parent / source).resolve() if not source.is_absolute() else source.resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"board audio missing for {clip.get('id')}: {source}")
+        clip["file"] = _relpath_for_board(board_path, source)
+    return rewritten
+
+
 def _rewrite_shipped_audio_paths(report: dict[str, Any], board_path: Path) -> dict[str, Any]:
+    try:
+        board_path.resolve().relative_to(ROOT)
+    except ValueError as exc:
+        raise ValueError(
+            "shipped-audio boards must be written under the repository root so "
+            "relative links into mammamiradio/assets/demo/banter/ stay portable; "
+            "serve with `python -m http.server` from the repo root"
+        ) from exc
     rewritten = copy.deepcopy(report)
     spoken = _load_json(SPOKEN_ASSETS)
     expected_by_id = {
@@ -393,6 +552,46 @@ def _rewrite_shipped_audio_paths(report: dict[str, Any], board_path: Path) -> di
     return rewritten
 
 
+def _validate_report_for_board(report: Mapping[str, Any]) -> None:
+    if not isinstance(report, dict) or not isinstance(report.get("clips"), list) or not report["clips"]:
+        raise ValueError("review report must contain a non-empty clips array")
+    ids: set[str] = set()
+    for index, clip in enumerate(report["clips"], start=1):
+        if not isinstance(clip, dict):
+            raise ValueError(f"report clip {index} must be an object")
+        clip_id = clip.get("id")
+        if not isinstance(clip_id, str) or not re.fullmatch(r"[a-z0-9-]+", clip_id) or clip_id in ids:
+            raise ValueError(f"report clip {index} has an invalid or duplicate id")
+        ids.add(clip_id)
+        if clip.get("mode") not in VALID_MODES or clip.get("context") not in VALID_CONTEXTS:
+            raise ValueError(f"report clip {clip_id} has an invalid mode or context")
+        variant = clip.get("variant", "original")
+        if variant not in VALID_VARIANTS:
+            raise ValueError(f"report clip {clip_id} has an invalid variant")
+        sha = clip.get("sha256")
+        if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
+            raise ValueError(f"report clip {clip_id} needs a sha256 digest")
+        audio_file = clip.get("file")
+        if not isinstance(audio_file, str) or not _SAFE_REL_AUDIO_RE.fullmatch(audio_file):
+            raise ValueError(f"report clip {clip_id} has an unsafe audio path")
+        transcript = clip.get("transcript")
+        if not isinstance(transcript, list) or not transcript:
+            raise ValueError(f"report clip {clip_id} needs a transcript")
+        for line in transcript:
+            if (
+                not isinstance(line, dict)
+                or not isinstance(line.get("host"), str)
+                or not isinstance(line.get("text"), str)
+            ):
+                raise ValueError(f"report clip {clip_id} has a malformed transcript line")
+        if not isinstance(clip.get("creative_direction"), str):
+            raise ValueError(f"report clip {clip_id} needs a creative direction")
+        if not isinstance(clip.get("duration_seconds"), int | float):
+            raise ValueError(f"report clip {clip_id} needs duration_seconds")
+        if not isinstance(clip.get("bytes"), int) or clip["bytes"] < 0:
+            raise ValueError(f"report clip {clip_id} needs a non-negative byte size")
+
+
 def _json_for_html(data: Any) -> str:
     """Serialize JSON for a classic script tag without allowing HTML breakouts."""
     return (
@@ -406,25 +605,39 @@ def _json_for_html(data: Any) -> str:
 
 
 def build_listening_board(
-    report_path: Path,
+    report_path: Path | None,
     output_path: Path,
     *,
     feedback_path: Path | None = None,
     template_path: Path = DEFAULT_TEMPLATE,
     shipped_audio: bool = False,
+    from_accepted_baseline: bool = False,
     base_clip_count: int | None = None,
     hero_eyebrow: str | None = None,
 ) -> Path:
-    report = _load_json(report_path)
+    if from_accepted_baseline:
+        if report_path is not None:
+            raise ValueError("pass either --report or --from-accepted-baseline, not both")
+        feedback_path = feedback_path or DEFAULT_FEEDBACK
+        report = build_accepted_baseline_report(feedback_path=feedback_path)
+        # Synthetic report path anchors relative lookups next to tracked feedback.
+        report_path = feedback_path.resolve()
+    else:
+        if report_path is None:
+            raise ValueError("board requires --report or --from-accepted-baseline")
+        report = _load_json(report_path)
     if not isinstance(report, dict) or not isinstance(report.get("clips"), list) or not report["clips"]:
         raise ValueError("review report must contain a non-empty clips array")
     feedback = _load_json(feedback_path) if feedback_path is not None else None
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    board_report = _rewrite_shipped_audio_paths(report, output_path) if shipped_audio else copy.deepcopy(report)
-    clip_ids = {str(clip["id"]) for clip in board_report["clips"]}
+    if shipped_audio:
+        board_report = _rewrite_shipped_audio_paths(report, output_path)
+    else:
+        board_report = _normalize_report_audio_paths(report, report_path, output_path)
+    _validate_report_for_board(board_report)
     titles = _titles_map(board_report, feedback if isinstance(feedback, dict) else None)
-    approved = _approved_feedback_map(feedback if isinstance(feedback, dict) else None, clip_ids)
+    approved = _approved_feedback_map(feedback if isinstance(feedback, dict) else None, board_report["clips"])
     context_audio = _context_audio_map(board_report, board_path=output_path, shipped_audio=shipped_audio)
 
     keep_count = sum(1 for item in approved.values() if item.get("decision") == "keep")
@@ -435,7 +648,8 @@ def build_listening_board(
         else:
             hero_eyebrow = f"Listening room · {candidate_count} candidates"
     if base_clip_count is None:
-        base_clip_count = min(12, candidate_count)
+        original_count = sum(1 for clip in board_report["clips"] if clip.get("variant", "original") == "original")
+        base_clip_count = original_count or min(12, candidate_count)
 
     template = template_path.read_text(encoding="utf-8")
     replacements = {
@@ -444,8 +658,12 @@ def build_listening_board(
         "__CONTEXT_AUDIO__": _json_for_html(context_audio),
         "__APPROVED_FEEDBACK__": _json_for_html(approved),
         "__CANDIDATE_COUNT__": str(candidate_count),
+        "__CUTS_HEADLINE__": html.escape(
+            "One cut." if candidate_count == 1 else f"{_count_words(candidate_count)} cuts."
+        ),
         "__HERO_EYEBROW__": html.escape(hero_eyebrow),
         "__BASE_CLIP_COUNT__": str(base_clip_count),
+        "__ORIGINAL_LABEL__": html.escape(f"Original {base_clip_count}" if base_clip_count else "Original set"),
     }
     rendered = template
     for key, value in replacements.items():
@@ -460,28 +678,98 @@ def build_listening_board(
     return output_path
 
 
+def _count_words(count: int) -> str:
+    words = {
+        1: "One",
+        2: "Two",
+        3: "Three",
+        4: "Four",
+        5: "Five",
+        6: "Six",
+        7: "Seven",
+        8: "Eight",
+        9: "Nine",
+        10: "Ten",
+        11: "Eleven",
+        12: "Twelve",
+        13: "Thirteen",
+        14: "Fourteen",
+        15: "Fifteen",
+        16: "Sixteen",
+        17: "Seventeen",
+        18: "Eighteen",
+        19: "Nineteen",
+        20: "Twenty",
+        21: "Twenty-one",
+    }
+    return words.get(count, str(count))
+
+
 def assert_pack_synchronized_with_spoken_assets(
     feedback_path: Path = DEFAULT_FEEDBACK,
     spoken_path: Path = SPOKEN_ASSETS,
+    plan_path: Path = DEFAULT_PLAN,
 ) -> None:
-    """Fail closed when baseline IDs/hashes drift from the shipped spoken manifest."""
+    """Fail closed when plan/feedback/spoken IDs or hashes drift."""
+    starter_ids = {track.provider_track_id for track in load_starter_tracks(require_complete=True)}
+    plan_rows = _load_plan(plan_path, starter_ids)
+    plan_ids = [row["id"] for row in plan_rows]
+    if len(plan_ids) != len(set(plan_ids)):
+        raise ValueError("plan baseline has duplicate ids")
+
     feedback = _load_json(feedback_path)
     spoken = _load_json(spoken_path)
-    by_id = {
-        Path(entry["path"]).stem: entry
-        for entry in spoken.get("assets", [])
-        if str(entry.get("path", "")).startswith("banter/")
-    }
+    spoken_by_id = _banter_spoken_by_id(spoken if isinstance(spoken, dict) else {})
     clips = feedback.get("clips") if isinstance(feedback, dict) else None
     if not isinstance(clips, list) or not clips:
         raise ValueError("feedback baseline has no clips")
+
+    feedback_ids: list[str] = []
+    feedback_by_id: dict[str, dict[str, Any]] = {}
     for clip in clips:
+        if not isinstance(clip, dict) or not isinstance(clip.get("id"), str):
+            raise ValueError("feedback clip is missing an id")
         clip_id = clip["id"]
-        entry = by_id.get(clip_id)
-        if entry is None:
-            raise ValueError(f"baseline clip {clip_id} is missing from spoken_assets.json")
-        if clip.get("sha256") != entry.get("sha256"):
+        if clip_id in feedback_by_id:
+            raise ValueError(f"feedback baseline has duplicate id {clip_id}")
+        feedback_ids.append(clip_id)
+        feedback_by_id[clip_id] = clip
+
+    plan_id_set = set(plan_ids)
+    feedback_id_set = set(feedback_ids)
+    spoken_id_set = set(spoken_by_id)
+    if plan_id_set != feedback_id_set:
+        raise ValueError(
+            "plan/feedback id sets diverge: "
+            f"only_plan={sorted(plan_id_set - feedback_id_set)} "
+            f"only_feedback={sorted(feedback_id_set - plan_id_set)}"
+        )
+    if plan_id_set != spoken_id_set:
+        raise ValueError(
+            "plan/spoken id sets diverge: "
+            f"only_plan={sorted(plan_id_set - spoken_id_set)} "
+            f"only_spoken={sorted(spoken_id_set - plan_id_set)}"
+        )
+
+    plan_by_id = {row["id"]: row for row in plan_rows}
+    for clip_id in plan_ids:
+        plan_row = plan_by_id[clip_id]
+        feedback_clip = feedback_by_id[clip_id]
+        spoken_entry = spoken_by_id[clip_id]
+        if feedback_clip.get("sha256") != spoken_entry.get("sha256"):
             raise ValueError(f"baseline hash for {clip_id} does not match spoken_assets.json")
+        if feedback_clip.get("mode") not in (None, plan_row["mode"]):
+            raise ValueError(f"baseline mode for {clip_id} diverges from plan")
+        if feedback_clip.get("context") not in (None, plan_row["context"]):
+            raise ValueError(f"baseline context for {clip_id} diverges from plan")
+        if feedback_clip.get("variant") not in (None, plan_row.get("variant", "original")):
+            raise ValueError(f"baseline variant for {clip_id} diverges from plan")
+        asset = SHIPPED_BANTER_DIR / f"{clip_id}.mp3"
+        if not asset.is_file():
+            raise FileNotFoundError(f"shipped banter asset missing: {asset}")
+        actual = hashlib.sha256(asset.read_bytes()).hexdigest()
+        if actual != feedback_clip.get("sha256"):
+            raise ValueError(f"shipped file hash for {clip_id} does not match feedback baseline")
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -494,7 +782,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     render.add_argument("--no-board", action="store_true", help="Skip automatic listening-board generation")
 
     board = sub.add_parser("board", help="Build a self-contained listening board (no provider cost)")
-    board.add_argument("--report", type=Path, required=True)
+    board.add_argument("--report", type=Path, default=None)
+    board.add_argument(
+        "--from-accepted-baseline",
+        action="store_true",
+        help="Derive the report from tracked plan, feedback, and spoken_assets (clean checkout)",
+    )
     board.add_argument("--feedback", type=Path, default=None)
     board.add_argument("--output", type=Path, required=True)
     board.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE)
@@ -509,6 +802,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     sync = sub.add_parser("sync-check", help="Verify accepted baseline IDs/hashes against spoken_assets.json")
     sync.add_argument("--feedback", type=Path, default=DEFAULT_FEEDBACK)
     sync.add_argument("--spoken-assets", type=Path, default=SPOKEN_ASSETS)
+    sync.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
     return parser.parse_args(argv)
 
 
@@ -519,17 +813,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             asyncio.run(render_plan(args.plan.resolve(), args.output.resolve(), build_board=not args.no_board))
         elif args.command == "board":
             build_listening_board(
-                args.report.resolve(),
+                args.report.resolve() if args.report else None,
                 args.output.resolve(),
                 feedback_path=args.feedback.resolve() if args.feedback else None,
                 template_path=args.template.resolve(),
                 shipped_audio=args.shipped_audio,
+                from_accepted_baseline=args.from_accepted_baseline,
                 base_clip_count=args.base_clip_count,
                 hero_eyebrow=args.hero_eyebrow,
             )
             print(f"Wrote {args.output}", flush=True)
         elif args.command == "sync-check":
-            assert_pack_synchronized_with_spoken_assets(args.feedback.resolve(), args.spoken_assets.resolve())
+            assert_pack_synchronized_with_spoken_assets(
+                args.feedback.resolve(),
+                args.spoken_assets.resolve(),
+                args.plan.resolve(),
+            )
             print("Baseline synchronized with spoken_assets.json", flush=True)
         else:  # pragma: no cover
             raise ValueError(f"unknown command: {args.command}")
