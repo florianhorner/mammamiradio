@@ -1,0 +1,14 @@
+Command: source .venv/bin/activate && pytest tests/ (full suite)
+Result: 8615 passed, 2 failed, 4 skipped, 49 deselected
+Ran: 2026-08-28
+
+The 2 failures are pre-existing and unrelated to this branch (confirmed
+against plain origin/main and in isolation — both are suite-ordering
+flakes / pre-existing scheduling-module bugs, filed as GitHub issues
+#1064, #1065, and tracked separately from this PR's scope):
+- tests/scheduling/test_queue_commit_contract.py::test_ban_last_track_mid_render_cannot_restore_playable_readiness
+- tests/scheduling/test_producer_coverage.py::test_exact_packaged_banter_segment_carries_its_starter_dependency (flaky, passes 3/3 isolated)
+
+Focused suite for this branch's changes, all passing:
+source .venv/bin/activate && pytest tests/web/test_streamer_routes_extended.py tests/web/test_keep_this.py tests/web/test_ui_copy.py
+-> 440 passed
