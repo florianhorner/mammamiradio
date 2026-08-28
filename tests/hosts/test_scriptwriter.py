@@ -643,6 +643,24 @@ async def test_require_generated_requires_packaged_context(config, state):
 
 
 @pytest.mark.asyncio
+async def test_creative_direction_requires_packaged_context(config, state):
+    with pytest.raises(ValueError, match="creative_direction applies only to packaged"):
+        await write_banter(state, config, creative_direction="Keep Studio B folklore timeless.")
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_rejects_companionship_context(config, state):
+    companionship = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+    with pytest.raises(ValueError, match="cannot receive companionship_context"):
+        await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            companionship_context=companionship,
+        )
+
+
+@pytest.mark.asyncio
 async def test_packaged_banter_rejects_stock_copy_when_generation_unavailable(config, state):
     config.anthropic_api_key = ""
     config.openai_api_key = ""

@@ -2575,9 +2575,13 @@ async def write_banter(
         raise ValueError("evergreen packaged banter cannot receive a played track")
     if packaged_context == "exact_track" and len(state.played_tracks) != 1:
         raise ValueError("exact packaged banter requires exactly one played track")
+    if creative_direction and packaged_context is None:
+        raise ValueError("creative_direction applies only to packaged banter authoring")
     # Packaged authoring must never bake live listener dedications into permanent audio.
     if packaged_context is not None:
         include_listener_request = False
+        if companionship_context is not None:
+            raise ValueError("packaged banter cannot receive companionship_context")
 
     # This must precede the no-key stock-copy return below.  Otherwise an old
     # private directive can remain latent for the whole Demo Radio session and
