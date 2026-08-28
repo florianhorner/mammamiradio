@@ -240,9 +240,19 @@ def test_pipeline_status_uses_canonical_status_chips() -> None:
         "label:'AI key needs attention'",
     ):
         assert expected in hosts
-    assert "statuses.includes('unverified')" in hosts
     assert "statuses.includes('rejected')&&!statuses.includes('valid')" in hosts
-    assert hosts.index("statuses.includes('unverified')") < hosts.index("statuses.includes('rejected')")
+    # A provider's own probe still pending wins ("checking") only when that provider
+    # ISN'T the one already known to be degraded (circuit breaker tripped) — an
+    # inconclusive probe never overwrites the prior status (see provider_verdict.py),
+    # so anthropic can sit at its default 'unverified' indefinitely while backup
+    # content is actually airing. That known fact must not be masked by a status
+    # that never really resolves. This is why the pending-check runs before, and is
+    # narrower than, the plain rejected/degraded checks below it.
+    assert "anthropicStatus==='unverified'&&!c.anthropic_degraded" in hosts
+    assert "openaiStatus==='unverified'" in hosts
+    assert hosts.index("anthropicPendingUnresolved||openaiPendingUnresolved") < hosts.index(
+        "statuses.includes('rejected')"
+    )
     assert hosts.index("statuses.includes('rejected')") < hosts.index("anthropicConfigured&&c.anthropic_degraded")
     assert "usableOpenAi||usableAnthropic" in hosts
 

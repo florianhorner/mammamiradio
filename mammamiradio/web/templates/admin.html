@@ -4361,6 +4361,7 @@ function pipelineStreamStatus(st,caps){
   return stationRuntimeVerdict(st,caps);
 }
 function pipelineHostStatus(c){
+  const checkingAiHosts={state:'working',label:'Checking AI hosts',detail:'Checking the saved AI key.'};
   const anthropicConfigured=Boolean(c?.anthropic_key);
   const openaiConfigured=Boolean(c?.openai);
   if(!anthropicConfigured&&!openaiConfigured){
@@ -4378,8 +4379,16 @@ function pipelineHostStatus(c){
   if(usableOpenAi||usableAnthropic){
     return{state:'ready',label:'AI hosts · ready',detail:'New conversations are available.'};
   }
-  if(statuses.includes('unverified')){
-    return{state:'working',label:'Checking AI hosts',detail:'Checking the saved AI key.'};
+  // A provider's own probe still pending (never resolved to valid/rejected) means the
+  // outcome could still improve, so "checking" wins — UNLESS that provider is the one
+  // already known to be degraded (circuit breaker tripped): an inconclusive probe never
+  // overwrites the prior status (see provider_verdict.py), so anthropic can sit at its
+  // default 'unverified' indefinitely while backup content is actually airing right now.
+  // That known fact must not be masked by a status that never really resolves.
+  const anthropicPendingUnresolved=anthropicStatus==='unverified'&&!c.anthropic_degraded;
+  const openaiPendingUnresolved=openaiStatus==='unverified';
+  if(anthropicPendingUnresolved||openaiPendingUnresolved){
+    return checkingAiHosts;
   }
   if(statuses.includes('rejected')&&!statuses.includes('valid')){
     return{
@@ -4395,7 +4404,7 @@ function pipelineHostStatus(c){
       detail:'Included host clips keep the show moving while the AI service recovers.',
     };
   }
-  return{state:'working',label:'Checking AI hosts',detail:'Checking the saved AI key.'};
+  return checkingAiHosts;
 }
 function updatePipelineStatus(caps,st){
   const el=document.getElementById('pipelineStatus');

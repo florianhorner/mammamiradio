@@ -240,6 +240,13 @@ async (page) => {
         openai_key_status: 'unverified',
       },
       backupWithRejected: { script_llm: true, anthropic_key: true, anthropic_key_status: 'valid', anthropic_degraded: true, openai: true, openai_key_status: 'rejected' },
+      degradedUnverified: {
+        script_llm: true,
+        anthropic_key: true,
+        anthropic_key_status: 'unverified',
+        anthropic_degraded: true,
+        openai: false,
+      },
       fallback: {
         script_llm: true,
         anthropic_key: true,
@@ -265,6 +272,10 @@ async (page) => {
   assert(hostPipelineStates.rejectedDegraded.state === 'blocked', `rejected AI provider was masked by cooldown: ${JSON.stringify(hostPipelineStates.rejectedDegraded)}`);
   assert(hostPipelineStates.rejectedChecking.state === 'working', `unverified fallback provider was masked by rejection: ${JSON.stringify(hostPipelineStates.rejectedChecking)}`);
   assert(hostPipelineStates.backupWithRejected.state === 'degraded', `valid provider cooldown was masked by rejected fallback: ${JSON.stringify(hostPipelineStates.backupWithRejected)}`);
+  assert(
+    hostPipelineStates.degradedUnverified.state === 'degraded',
+    `circuit-breaker cooldown was masked by an inconclusive probe stuck at unverified: ${JSON.stringify(hostPipelineStates.degradedUnverified)}`,
+  );
   assert(hostPipelineStates.fallback.state === 'ready', `valid fallback provider did not keep AI hosts ready: ${JSON.stringify(hostPipelineStates.fallback)}`);
 
   const jamendoControls=await page.evaluate(async()=>{const status=(source,shared,enabled=true,acknowledged=true)=>({enabled,noncommercial_acknowledged:acknowledged,client_id_configured:Boolean(source),client_id_source:source,shared_access_available:shared}),view=()=>({label:jamendoSecretLabel.textContent,action:jamendoOwnClientIdAction.textContent,fieldHidden:jamendoClientField.hidden,clearHidden:jamendoClearClientId.hidden,help:jamendoAccessHelp.textContent});
