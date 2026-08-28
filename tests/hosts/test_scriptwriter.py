@@ -730,6 +730,39 @@ async def test_packaged_banter_suppresses_pending_listener_request_by_default(co
 
 
 @pytest.mark.asyncio
+async def test_packaged_banter_preserves_full_creative_direction(config, state):
+    direction = ("Keep the Studio B mug on the third shelf. " * 40).strip()
+    assert 1200 < len(direction) <= scriptwriter_module.PACKAGED_BANTER_DIRECTION_MAX_CHARS
+    captured = {}
+
+    async def _generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return _packaged_banter_response(config)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            creative_direction=direction,
+            require_generated=True,
+        )
+
+    assert direction in captured["prompt"]
+    assert f"{direction[:1200]}..." not in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_rejects_overlong_creative_direction(config, state):
+    direction = "x" * (scriptwriter_module.PACKAGED_BANTER_DIRECTION_MAX_CHARS + 1)
+    with pytest.raises(ValueError, match="creative direction exceeds"):
+        await write_banter(state, config, packaged_context="evergreen", creative_direction=direction)
+
+
+@pytest.mark.asyncio
 async def test_write_banter_parses_valid_json(config, state):
     config.super_italian_mode = True
     host_name = config.hosts[0].name

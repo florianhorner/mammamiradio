@@ -2539,6 +2539,9 @@ def _retire_disabled_home_directive(state: StationState, config: StationConfig) 
     state.ha_running_gag_moment_id = ""
 
 
+PACKAGED_BANTER_DIRECTION_MAX_CHARS = 2000
+
+
 async def write_banter(
     state: StationState,
     config: StationConfig,
@@ -3075,9 +3078,11 @@ GUEST HOST GATE:
         predecessor_line = recent if recent else "opening of the show"
 
     if creative_direction:
+        if len(creative_direction) > PACKAGED_BANTER_DIRECTION_MAX_CHARS:
+            raise ValueError(f"creative direction exceeds {PACKAGED_BANTER_DIRECTION_MAX_CHARS} characters")
         packaged_direction_block += (
             "\nPACKAGED EDITORIAL DIRECTION:\n"
-            + _sanitize_prompt_data(creative_direction, max_len=1200)
+            + _sanitize_prompt_data(creative_direction, max_len=PACKAGED_BANTER_DIRECTION_MAX_CHARS)
             + "\nTreat this as subject and tone direction. Preserve the exchange-shape directive above. "
             "Write a complete, self-contained broadcast bit with a clear ending, not setup notes or a promo.\n"
         )
