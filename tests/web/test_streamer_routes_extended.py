@@ -7345,6 +7345,58 @@ async def test_clip_shares_only_a_complete_manifested_starter_snapshot(tmp_path)
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clear_clip_rate")
+async def test_clip_computes_duration_from_bytes_when_snapshot_lacks_it(tmp_path):
+    """A starter snapshot with no ``duration_seconds`` must still produce a
+
+    provable number, computed from the actual bytes shared and the station's
+    configured bitrate — never a guess, and never a crash. In production
+    ``_validated_starter_share_snapshot`` always sets this field, but the
+    fallback is real code, reachable by any snapshot shape that omits it.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    app.state.config.cache_dir.mkdir()
+    app.state.station_state.now_streaming = {
+        "type": "music",
+        "metadata": {"source_kind": "jamendo", "title": "Current transient song"},
+    }
+    attribution = {
+        "provider": "incompetech",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "source_url": "https://incompetech.com/music/royalty-free/",
+        "credit": "Starter Artist - Starter Song",
+        "modified": True,
+        "basis": "bundled_manifest",
+    }
+    app.state.last_shareworthy_starter = {
+        "path": tmp_path / "starter.mp3",
+        "ended_monotonic": time.monotonic(),
+        "type": "starter",
+        "title": "Starter Song",
+        "artist": "Starter Artist",
+        # No "duration_seconds" key — exercises the fallback branch.
+        "provider_track_id": "USUAN0000000",
+        "attribution": attribution,
+    }
+    clip_bytes = b"\xff" * 8192
+
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    with patch("mammamiradio.web.streamer._read_validated_starter_share", return_value=clip_bytes):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            resp = await client.post("/api/clip")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
+    bytes_per_sec = app.state.config.audio.bitrate * 1000 // 8
+    expected = round(len(clip_bytes) / bytes_per_sec, 3)
+    assert sidecar["duration_seconds"] == pytest.approx(expected)
+    assert sidecar["duration_seconds"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clear_clip_rate")
 @pytest.mark.parametrize("source_kind", ["jamendo", "local", "unknown"])
 async def test_clip_rejects_nonstarter_music(source_kind):
     app = _make_test_app()
@@ -7695,6 +7747,77 @@ async def test_create_clip_sidecar_pruned_with_cap(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+async def _clip_landing_with_raw_duration(tmp_path: Path, raw_duration_json: str) -> httpx.Response:
+    """Write a clip sidecar whose ``duration_seconds`` value is exactly the
+
+    given raw JSON literal, then fetch its landing page. Used to exercise the
+    validation branch in ``clip_landing`` directly, independent of what
+    ``create_clip``/``keep_this`` would ever actually write.
+    """
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+    (clips_dir / "abc123.json").write_text(
+        '{"station_name": "Mamma Mi Radio", "track_title": "Albachiara", '
+        '"track_artist": "Vasco Rossi", "created_at": 0, '
+        f'"duration_seconds": {raw_duration_json}}}'
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.get("/clips/abc123")
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_duration_bool_is_not_treated_as_a_number(tmp_path):
+    """``True``/``False`` must never read as ``1.0``/``0.0`` seconds.
+
+    Python's ``bool`` is a subclass of ``int``, so ``float(True) == 1.0`` — a
+    corrupt or hand-edited sidecar with ``"duration_seconds": true`` must not
+    silently turn into "durato 1 secondi". The route explicitly excludes
+    ``bool`` before the ``float()`` call; this pins that guard.
+    """
+    resp = await _clip_landing_with_raw_duration(tmp_path, "true")
+    assert resp.status_code == 200
+    assert "Questo momento è durato" not in resp.text
+    assert "Mamma Mi Radio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_duration_non_numeric_string_falls_back_gracefully(tmp_path):
+    """A non-numeric ``duration_seconds`` must not 500 the public share page."""
+    resp = await _clip_landing_with_raw_duration(tmp_path, '"soon"')
+    assert resp.status_code == 200
+    assert "Questo momento è durato" not in resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["0", "-5", "-0.001"])
+async def test_clip_landing_duration_zero_or_negative_is_ignored(tmp_path, raw):
+    """A zero or negative duration is not a real duration — never claim one."""
+    resp = await _clip_landing_with_raw_duration(tmp_path, raw)
+    assert resp.status_code == 200
+    assert "Questo momento è durato" not in resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+async def test_clip_landing_duration_nan_and_infinity_are_ignored(tmp_path, raw):
+    """Non-finite values must not reach the template as a literal duration."""
+    resp = await _clip_landing_with_raw_duration(tmp_path, raw)
+    assert resp.status_code == 200
+    assert "Questo momento è durato" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_duration_rounds_up_to_at_least_one_second(tmp_path):
+    """A sub-second clip must read "1 secondo", never "0 secondi"."""
+    resp = await _clip_landing_with_raw_duration(tmp_path, "0.4")
+    assert resp.status_code == 200
+    assert "Questo momento è durato 1 secondi · Mamma Mi Radio" in resp.text
+
+
 @pytest.mark.asyncio
 async def test_clip_landing_returns_html(tmp_path):
     """GET /clips/{id} returns 200 HTML with an <audio> element."""
@@ -7797,6 +7920,44 @@ async def test_clip_landing_with_sidecar(tmp_path):
     assert resp.status_code == 200
     assert "Albachiara" in resp.text
     assert "Vasco Rossi" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_legacy_sidecar_without_duration_shows_no_duration_claim(tmp_path):
+    """A sidecar written before this field existed must not resurrect the old,
+
+    hardcoded "30 secondi" claim, and it must not silently render some other
+    unproven number either. Regression guard for cf4ab565: every sidecar on
+    disk before that fix has exactly this shape (no ``duration_seconds`` key),
+    and the fix's entire point was to stop asserting a duration the station
+    cannot prove for a clip like this one.
+    """
+    import json as _json
+
+    app = _make_test_app()
+    app.state.config.cache_dir = tmp_path / "cache"
+    clips_dir = app.state.config.cache_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "abc123.mp3").write_bytes(b"\xff" * 1000)
+    (clips_dir / "abc123.json").write_text(
+        _json.dumps(
+            {
+                "station_name": "Mamma Mi Radio",
+                "track_title": "Albachiara",
+                "track_artist": "Vasco Rossi",
+                "created_at": int(time.time()),
+            }
+        )
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.get("/clips/abc123")
+
+    assert resp.status_code == 200
+    assert "Questo momento è durato" not in resp.text
+    assert "30 secondi" not in resp.text
+    assert "Mamma Mi Radio" in resp.text
 
 
 @pytest.mark.asyncio
