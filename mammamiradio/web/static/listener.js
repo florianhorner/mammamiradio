@@ -1087,7 +1087,14 @@
 
   /* ── Toast helper (used by clip sharing) ── */
   let _toastTimer = null;
-  function _showToast(msg, durationMs = 2400) {
+  function _showToast(msg, durationMs) {
+    // A fixed 2.4s worked for short copy but disappears before a longer
+    // message can be read — scale with length instead of hardcoding one
+    // duration for every toast (leadership principle #5: always a way out,
+    // which means giving the reader time to read it).
+    if (durationMs === undefined) {
+      durationMs = Math.max(2400, Math.min(6000, (msg || '').length * 60));
+    }
     let el = document.getElementById('mmr-toast');
     if (!el) {
       el = document.createElement('div');
@@ -1133,7 +1140,7 @@
             .replace('{s}', data.retry_after);
         } else if (data && data.error_code === 'music_share_unavailable') {
           msg = _t('music_share_unavailable', 'Only included tracks can be shared. Let the next included track finish, then tap Share within {s} seconds.')
-            .replace('{s}', data.lookback_seconds || 15);
+            .replace('{s}', data.lookback_seconds ?? 15);
         } else if (data && data.reason === 'no_audio') {
           msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
         } else {

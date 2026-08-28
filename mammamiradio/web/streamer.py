@@ -11677,7 +11677,7 @@ async def clip_landing(clip_id: str, request: Request):
     if raw_duration is not None and not isinstance(raw_duration, bool):
         try:
             parsed_duration = float(raw_duration)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
         else:
             if math.isfinite(parsed_duration) and parsed_duration > 0:

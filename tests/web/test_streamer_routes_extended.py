@@ -6202,7 +6202,9 @@ async def test_listener_share_reads_clip_error_body():
         "Only included tracks can be shared. Let the next included track finish, then tap Share within {s} seconds."
         in js_resp.text
     )
-    assert "replace('{s}', data.lookback_seconds || 15)" in js_resp.text
+    # Nullish coalescing, not `||` — a legitimate lookback_seconds: 0 must not
+    # fall back to the stale default of 15.
+    assert "replace('{s}', data.lookback_seconds ?? 15)" in js_resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -7818,7 +7820,30 @@ async def test_clip_landing_duration_rounds_up_to_at_least_one_second(tmp_path):
     """A sub-second clip must read "1 secondo", never "0 secondi"."""
     resp = await _clip_landing_with_raw_duration(tmp_path, "0.4")
     assert resp.status_code == 200
-    assert "Questo momento è durato 1 secondi · Mamma Mi Radio" in resp.text
+    assert "Questo momento è durato 1 secondo · Mamma Mi Radio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_duration_plural_for_more_than_one_second(tmp_path):
+    """Any duration other than exactly 1 second must read plural "secondi"."""
+    resp = await _clip_landing_with_raw_duration(tmp_path, "42")
+    assert resp.status_code == 200
+    assert "Questo momento è durato 42 secondi · Mamma Mi Radio" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_clip_landing_duration_huge_integer_does_not_500(tmp_path):
+    """A corrupt sidecar with an oversized integer must not crash the page.
+
+    Python's ``int`` has unbounded precision, so valid JSON can carry a
+    duration that ``float()`` cannot represent — raising ``OverflowError``,
+    not ``ValueError``. The route must catch it like any other malformed
+    value and fall back to showing no duration claim, not a 500.
+    """
+    resp = await _clip_landing_with_raw_duration(tmp_path, "1" * 400)
+    assert resp.status_code == 200
+    assert "Questo momento è durato" not in resp.text
+    assert "Mamma Mi Radio" in resp.text
 
 
 @pytest.mark.asyncio
