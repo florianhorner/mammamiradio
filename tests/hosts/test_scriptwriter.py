@@ -625,6 +625,16 @@ async def test_packaged_context_rejects_wrong_track_cardinality(config, state):
     with pytest.raises(ValueError, match="cannot receive a played track"):
         await write_banter(state, config, packaged_context="evergreen")
 
+    state.played_tracks.append(Track(title="Extra", artist="Artist", duration_ms=1, spotify_id="two"))
+    with pytest.raises(ValueError, match="requires exactly one played track"):
+        await write_banter(state, config, packaged_context="exact_track")
+
+
+@pytest.mark.asyncio
+async def test_packaged_context_rejects_unknown_mode(config, state):
+    with pytest.raises(ValueError, match="unknown packaged banter context"):
+        await write_banter(state, config, packaged_context="live_show")  # type: ignore[arg-type]
+
 
 @pytest.mark.asyncio
 async def test_require_generated_requires_packaged_context(config, state):
