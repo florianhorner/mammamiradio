@@ -26,8 +26,7 @@ _review_thread_comments_json() {
   printf '%s\n' "$comments"
 }
 
-# review_threads_json <owner> <repo> <pr> -> all review threads with complete
-# comments for every unresolved, current thread.
+# review_threads_json <owner> <repo> <pr> -> unresolved/current threads with complete comments.
 review_threads_json() {
   local owner="$1" repo="$2" pr="$3" cursor="" response threads='[]' normalized='[]'
   local has_next query thread thread_id comments
