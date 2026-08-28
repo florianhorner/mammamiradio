@@ -728,7 +728,12 @@ def _stream_and_normalize(
         try:
             with ffmpeg_slot(background=True):
                 try:
-                    _raise_if_active_transfer_expired(active_deadline)
+                    # No transfer-deadline check here on purpose. The bytes are
+                    # already in hand (checked at the end of the download), and
+                    # acquiring the encode slot is an unbounded LOCAL wait. Failing
+                    # here raised "network_timeout" for a track that downloaded
+                    # perfectly, blaming the provider for the station's own queue.
+                    # The encode budget below is the correct bound for local work.
                     process = subprocess.Popen(
                         command,
                         stdin=subprocess.PIPE,

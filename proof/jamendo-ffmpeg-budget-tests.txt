@@ -1,16 +1,24 @@
 # Jamendo encoder-budget fix — local verification
-# commit: 8a66861c575123a279f5ee1646b699ad7cdabdb9  base: 17cfbb86a8f5147d2871e0c166268749e4765c9b
-# date: 2026-08-28T11:52:59Z
+# base: 17cfbb86a8f5147d2871e0c166268749e4765c9b
+# date: 2026-08-28T12:19:27Z
 
-$ pytest tests/playlist/ -q
-........................................                                 [100%]
-760 passed, 1 deselected in 2.70s
+$ .venv/bin/python -m pytest tests/playlist/test_jamendo_transient.py -q
+.............                                                            [100%]
+157 passed, 1 deselected in 1.31s
 
-$ ruff check <changed>
+# Regression guard proven by mutation: restoring the removed
+# _raise_if_active_transfer_expired(active_deadline) call after the encode-slot
+# acquire makes the new test fail with _TransientError(network_timeout).
+$ .venv/bin/python -m pytest tests/playlist/test_jamendo_transient.py::test_worker_survives_an_encode_slot_wait_longer_than_the_transfer_budget -q   # with the check restored
+1 failed in 0.74s
+$ .venv/bin/python -m pytest tests/playlist/test_jamendo_transient.py::test_worker_survives_an_encode_slot_wait_longer_than_the_transfer_budget -q   # with the fix
+1 passed in 0.66s
+
+$ .venv/bin/ruff check mammamiradio/playlist/jamendo_transient.py tests/playlist/test_jamendo_transient.py
 All checks passed!
-$ ruff format --check <changed>
+$ .venv/bin/ruff format --check mammamiradio/playlist/jamendo_transient.py tests/playlist/test_jamendo_transient.py
 2 files already formatted
-$ mypy mammamiradio/playlist/jamendo_transient.py
+$ .venv/bin/mypy mammamiradio/playlist/jamendo_transient.py
 Success: no issues found in 1 source file
 $ bash scripts/check-changelog-lint.sh
 Changelog lint clean.

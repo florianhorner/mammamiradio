@@ -1464,6 +1464,58 @@ def test_worker_starts_ffmpeg_budget_after_background_admission(tmp_path):
     assert events.index("slot.exit") < events.index("hash") < events.index("publish")
 
 
+def test_worker_survives_an_encode_slot_wait_longer_than_the_transfer_budget(tmp_path):
+    """A downloaded track must not fail as a provider timeout while queueing locally.
+
+    The encode slot is an unbounded local wait. Before this guard, the transfer
+    deadline was re-checked after acquiring it, so a track whose download had
+    already finished was reported as `network_timeout` because the station's own
+    encode queue was busy. Duration is 180s, so the transfer budget is 240s; the
+    slot is not granted until 300s.
+    """
+    operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
+    operation_dir.mkdir(parents=True)
+    candidate = jt._candidate_from_exact_result(_item(), "12345")
+    now = [0.0]
+    processes: list[_FakeProcess] = []
+
+    class PromptResponse(_StreamResponse):
+        def iter_bytes(self, chunk_size: int):
+            assert chunk_size == 64 * 1024
+            now[0] = 5.0
+            yield b"audio-bytes"
+
+    response = PromptResponse()
+    client = _SyncClient(response)
+
+    @contextmanager
+    def congested_slot(*, background: bool):
+        assert background is True
+        now[0] = 300.0  # past the 240s transfer budget, purely local queueing
+        yield
+
+    def popen(command, **_kwargs):
+        process = _FakeProcess(command)
+        processes.append(process)
+        return process
+
+    with (
+        patch.object(jt, "ffmpeg_slot", new=congested_slot),
+        patch.object(jt, "_monotonic", side_effect=lambda: now[0]),
+        patch.object(jt.httpx, "Client", return_value=client),
+        patch.object(jt.subprocess, "Popen", side_effect=popen),
+        patch.object(jt.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="180.0\n")),
+        patch.object(jt.os, "set_blocking"),
+        patch.object(jt.os, "write", side_effect=_fake_os_write(processes)),
+        patch.object(jt, "_wait_for_pipe_writable", return_value=True),
+    ):
+        artifact = jt._stream_and_normalize(candidate, operation_dir, lambda: None)
+
+    assert artifact.path == operation_dir / "normalized.mp3"
+    assert bytes(processes[0].stdin.data) == b"audio-bytes"
+    assert now[0] >= jt._active_transfer_timeout_sec(180.0)
+
+
 def test_worker_allows_progressing_ffmpeg_pipe_past_finalize_window(tmp_path):
     operation_dir = tmp_path / "jamendo" / ("a" * 32) / ("b" * 32)
     operation_dir.mkdir(parents=True)
