@@ -7,7 +7,7 @@ All 22 land-pr cases passed.
 All 10 check-merge-gate cases passed.
 
 ## pytest tests/repo/test_pr_queue_status.py tests/repo/test_read_preship_ledger.py
-13 passed in 5.87s
+13 passed in 8.61s
 
 ## COVERAGE_RATCHET_XDIST=auto .venv/bin/python scripts/coverage-ratchet.py check
 8608 passed, 4 skipped in 521.33s — all coverage floors held (92.44%, floor 92%)
