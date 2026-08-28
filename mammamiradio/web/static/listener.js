@@ -1132,7 +1132,7 @@
           msg = _t('clip_rate_limited', 'The tape decks need a moment — give them {s}s and tap again.')
             .replace('{s}', data.retry_after);
         } else if (data && data.error_code === 'music_share_unavailable') {
-          msg = _t('music_share_unavailable', 'A complete included track has to finish before it can be shared.');
+          msg = _t('music_share_unavailable', 'Only included tracks can be shared. Let the next included track finish, then tap Share within 15 seconds.');
         } else if (data && data.reason === 'no_audio') {
           msg = _t('clip_no_audio', 'Nothing to clip just yet — let the radio play for a moment, then tap Share.');
         } else {

@@ -1103,6 +1103,7 @@ def _validated_starter_share_snapshot(segment: Segment) -> dict[str, Any] | None
         "type": "starter",
         "title": entry.title,
         "artist": entry.artist,
+        "duration_seconds": entry.duration_seconds,
         "provider_track_id": entry.isrc,
         "attribution": safe_attribution,
     }
@@ -11195,6 +11196,10 @@ async def create_clip(request: Request):
         "station_name": station_name,
         "track_title": track_title,
         "track_artist": track_artist,
+        "duration_seconds": round(
+            float(snap.get("duration_seconds") or len(clip_data) / max(1, config.audio.bitrate * 1000 // 8)),
+            3,
+        ),
         "created_at": int(time.time()),
     }
     if clip_attribution_override is not None:
@@ -11390,6 +11395,7 @@ async def keep_this(request: Request, _: None = Depends(require_admin_access)):
         "station_name": config.display_station_name,
         "track_title": kept_title,
         "track_artist": "",
+        "duration_seconds": round(len(clip_data) / bytes_per_sec, 3),
         "segment_type": kept_type,
         "source": source,
         "created_at": int(now),
@@ -11657,6 +11663,16 @@ async def clip_landing(clip_id: str, request: Request):
     station_name = sidecar.get("station_name") or config.display_station_name
     track_title = sidecar.get("track_title", "")
     track_artist = sidecar.get("track_artist", "")
+    clip_duration_seconds = None
+    raw_duration = sidecar.get("duration_seconds")
+    if raw_duration is not None and not isinstance(raw_duration, bool):
+        try:
+            parsed_duration = float(raw_duration)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if math.isfinite(parsed_duration) and parsed_duration > 0:
+                clip_duration_seconds = max(1, round(parsed_duration))
 
     return _TEMPLATES.TemplateResponse(
         request,
@@ -11667,6 +11683,7 @@ async def clip_landing(clip_id: str, request: Request):
             "station_name": station_name,
             "track_title": track_title,
             "track_artist": track_artist,
+            "clip_duration_seconds": clip_duration_seconds,
             "clip_mp3_url": f"{public_base_url}/clips/{clip_id}.mp3",
             "og_image_url": f"{public_base_url}/og-card.png",
             "station_url": f"{public_base_url}/listen" if ingress_prefix else f"{public_base_url}/",

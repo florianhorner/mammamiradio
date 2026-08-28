@@ -6197,7 +6197,10 @@ async def test_listener_share_reads_clip_error_body():
     assert "const data = await res.json().catch(() => null);" in js_resp.text
     assert "if (!res.ok || !data || !data.ok)" in js_resp.text
     assert "data.error_code === 'music_share_unavailable'" in js_resp.text
-    assert "A complete included track has to finish before it can be shared." in js_resp.text
+    assert (
+        "Only included tracks can be shared. Let the next included track finish, then tap Share within 15 seconds."
+        in js_resp.text
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -7321,6 +7324,7 @@ async def test_clip_shares_only_a_complete_manifested_starter_snapshot(tmp_path)
         "type": "starter",
         "title": "Starter Song",
         "artist": "Starter Artist",
+        "duration_seconds": 181.25,
         "provider_track_id": "USUAN0000000",
         "attribution": attribution,
     }
@@ -7335,6 +7339,7 @@ async def test_clip_shares_only_a_complete_manifested_starter_snapshot(tmp_path)
     sidecar = json.loads((app.state.config.cache_dir / "clips" / f"{body['clip_id']}.json").read_text())
     assert sidecar["track_title"] == "Starter Song"
     assert sidecar["track_artist"] == "Starter Artist"
+    assert sidecar["duration_seconds"] == pytest.approx(181.25)
     assert sidecar["music_attribution"] == attribution
 
 
@@ -7809,6 +7814,7 @@ async def test_clip_landing_without_sidecar(tmp_path):
         resp = await client.get("/clips/abc123")
     assert resp.status_code == 200
     assert "<audio" in resp.text
+    assert "Questo momento è durato" not in resp.text
 
 
 @pytest.mark.asyncio
