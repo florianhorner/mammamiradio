@@ -136,6 +136,8 @@ def test_board_generation_is_deterministic_and_escapes_injection(tmp_path: Path)
     text_b = out_b.read_text(encoding="utf-8")
     assert text_a == text_b
     assert "__REVIEW_REPORT__" not in text_a
+    assert "fonts.googleapis.com" not in text_a
+    assert "fonts.gstatic.com" not in text_a
     assert '<img src=x onerror="alert(1)">' not in text_a
     assert "\\u003c/script\\u003e" in text_a
     assert "normal/01-demo-clip.mp3" in text_a

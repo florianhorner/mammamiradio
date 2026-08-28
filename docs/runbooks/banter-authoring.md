@@ -33,8 +33,9 @@ python scripts/banter-workshop.py sync-check
 ```
 
 Serve the board directory locally (`python -m http.server` from the output
-folder, or open the HTML file directly) and review in a browser. Feedback stays
-in browser localStorage, namespaced by candidate-set identity. Export / import
+folder, or open the HTML file directly) and review in a browser. The board is
+fully offline: no Google Fonts or other network assets. Feedback stays in
+browser localStorage, namespaced by candidate-set identity. Export / import
 JSON and Copy for chat — there is no network submission.
 
 ## Pack baseline

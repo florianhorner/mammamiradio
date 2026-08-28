@@ -2566,6 +2566,8 @@ async def write_banter(
     """
     if packaged_context not in {None, "evergreen", "exact_track"}:
         raise ValueError(f"unknown packaged banter context: {packaged_context!r}")
+    if require_generated and packaged_context is None:
+        raise ValueError("require_generated applies only to packaged banter authoring")
     if packaged_context == "evergreen" and state.played_tracks:
         raise ValueError("evergreen packaged banter cannot receive a played track")
     if packaged_context == "exact_track" and len(state.played_tracks) != 1:
@@ -3059,7 +3061,7 @@ GUEST HOST GATE:
             "or identify anything that played before this clip."
         )
     elif packaged_context == "exact_track":
-        predecessor_line = recent
+        predecessor_line = recent[0]
         packaged_direction_block += (
             "\nEXACT-TRACK SAFETY: You know only the supplied title and artist metadata; you did not hear "
             "the recording. You may name the title and artist and use literal title wordplay. Do not infer "

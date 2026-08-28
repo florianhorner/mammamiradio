@@ -608,6 +608,8 @@ async def test_packaged_exact_banter_receives_only_declared_track_metadata(confi
         )
 
     prompt = captured["prompt"]
+    assert f"Just played: {track.display}" in prompt
+    assert "Just played: [" not in prompt
     assert track.display in prompt
     assert "Use literal title wordplay only." in prompt
     assert "you did not hear the recording" in prompt
@@ -622,6 +624,12 @@ async def test_packaged_context_rejects_wrong_track_cardinality(config, state):
     state.played_tracks.append(Track(title="Track", artist="Artist", duration_ms=1, spotify_id="one"))
     with pytest.raises(ValueError, match="cannot receive a played track"):
         await write_banter(state, config, packaged_context="evergreen")
+
+
+@pytest.mark.asyncio
+async def test_require_generated_requires_packaged_context(config, state):
+    with pytest.raises(ValueError, match="require_generated applies only to packaged"):
+        await write_banter(state, config, require_generated=True)
 
 
 @pytest.mark.asyncio
