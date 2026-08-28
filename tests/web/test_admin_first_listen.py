@@ -93,7 +93,8 @@ def test_first_listen_is_one_vertical_progressive_path_before_advanced_details()
     assert "Restart Home Assistant" in html
     assert "Settings → Devices &amp; Services → Add Integration → Mamma Mi Radio" in html
     assert "Media → Mamma Mi Radio → Mamma Mi Radio Live" in html
-    assert "Step 1 of 4. Next: play it on this device." in html
+    assert '<p class="progress-line" id="firstListenProgressLine">Checking your next step…</p>' in html
+    assert "first-listen-current-meta" not in html
 
     step = _function("firstListenSetStep", "focusCurrentFirstListenStep")
     assert "const current=state==='current'" in step
@@ -360,12 +361,16 @@ def test_privacy_choice_invalidates_the_client_preview_proof() -> None:
     progress = _function("renderFirstListenProgress", "shouldShowHomeContextPreview")
     assert "!_firstListenUi.privacyPreviewValid" in progress
     assert "keepOffBtn.disabled=!projection.privacyUnlocked" in progress
-    assert "const pendingPrivacyChoice=_firstListenUi.privacyReceiptChoice!==null" in progress
-    assert "projection.privacy.choice_explicit===true" in progress
+    assert "const pendingPrivacyChoice=firstListenPendingPrivacyChoice(projection)" in progress
     assert "Home context is on, but First Listen did not save this step." in progress
     assert "Home context stays off, but First Listen did not save this step." in progress
     assert "Show your Home details again, then save the choice." in progress
     assert "Save the private choice again." in progress
+
+    pending = _function("firstListenPendingPrivacyChoice", "renderFirstListenProgress")
+    assert "if(localChoice!==null)return Boolean(localChoice)" in pending
+    assert "projection.heard&&!projection.privacyReviewed&&projection.privacy?.choice_explicit===true" in pending
+    assert "return null" in pending
 
     preview = _function("renderHomeContextPreview", "retestFirstListenSpeaker")
     assert "payload.status==='review_retry'" in preview
