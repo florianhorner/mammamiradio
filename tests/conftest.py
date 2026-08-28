@@ -106,29 +106,12 @@ def _reset_broadcast_chain():
 
 @pytest.fixture(autouse=True)
 def _restore_station_env():
-    """Roll back station env vars that PRODUCTION writes during a test.
+    """Restore station-owned env namespaces after each test.
 
-    ``load_config`` writes ``MAMMAMIRADIO_SUPER_ITALIAN`` /
-    ``MAMMAMIRADIO_FESTIVAL_MODE`` / ``MAMMAMIRADIO_BROADCAST_CHAIN`` straight
-    into ``os.environ`` (mammamiradio/core/config.py). A test that exercises one
-    of those toggles leaves the value behind, because
-    ``monkeypatch.delenv(key, raising=False)`` records no undo entry when the key
-    was absent — so it never rolls back a write that happened *after* it. 134
-    call sites in this suite use that idiom, which is why the guard belongs here
-    rather than in each test.
-
-    Measured consequence before this fixture existed: tests/web/test_festival_mode.py
-    left ``MAMMAMIRADIO_FESTIVAL_MODE=true`` in the worker, so every later
-    ``load_config`` set ``party_mode="festival"``. That is one conjunct of
-    ``packaged_banter_contextual`` in the producer, so every packaged-banter pick
-    became non-contextual and
-    ``test_exact_packaged_banter_segment_carries_its_starter_dependency`` failed —
-    reproducibly, with or without xdist. The same leak escapes
-    ``MAMMAMIRADIO_ALLOW_YTDLP``, which gates external media.
-
-    Scoped to the MAMMAMIRADIO_/JAMENDO_ namespaces on purpose: the
-    session-scoped ``_isolate_env`` above owns the credential keys, and
-    ``load_dotenv`` legitimately populates those mid-session.
+    Production paths can write these settings after a test has deleted an absent
+    key through ``monkeypatch``. Pytest did not perform that later write, so its
+    undo stack cannot restore the pre-test state. Snapshot before the test and
+    restore at teardown to keep each worker isolated.
     """
     prefixes = ("MAMMAMIRADIO_", "JAMENDO_")
     saved = {k: v for k, v in os.environ.items() if k.startswith(prefixes)}
