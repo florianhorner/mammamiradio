@@ -100,6 +100,7 @@ _DISCOVERY_DEADLINE_SEC = 30.0
 _ACTIVE_TRANSFER_HEADROOM_SEC = 60.0
 _MIN_ACTIVE_TRANSFER_TIMEOUT_SEC = 120.0
 _MAX_ACTIVE_TRANSFER_TIMEOUT_SEC = 780.0
+_MAX_FFMPEG_PROCESSING_TIMEOUT_SEC = 300.0
 _PIPE_PROGRESS_TIMEOUT_SEC = 10.0
 _PIPE_POLL_INTERVAL_SEC = 0.25
 _FFMPEG_FINALIZE_TIMEOUT_SEC = 30.0
@@ -458,6 +459,18 @@ def _active_transfer_timeout_sec(duration_sec: float) -> float:
     )
 
 
+def _ffmpeg_processing_timeout_sec(duration_sec: float) -> float:
+    """Bound how long FFmpeg may hold a shared slot while it consumes input.
+
+    The transfer budget is a network allowance; this is a local-CPU allowance,
+    and they are capped differently on purpose. A background render holds one of
+    only two encode slots on a Pi, on a thread that cannot be cancelled, so a
+    long track must not be able to hold half the station's encode capacity for
+    the whole of its own duration.
+    """
+    return min(_active_transfer_timeout_sec(duration_sec), _MAX_FFMPEG_PROCESSING_TIMEOUT_SEC)
+
+
 def _monotonic() -> float:
     """Provide a clock seam for deterministic deadline tests."""
     return time.monotonic()
@@ -479,7 +492,7 @@ def _raise_if_write_expired(
     active_deadline: float,
     pipe_deadline: float,
     *,
-    deadline_code: str = "network_timeout",
+    deadline_code: str,
 ) -> None:
     """Raise for the first expired deadline; transfer wins ties."""
     if now >= active_deadline and active_deadline <= pipe_deadline:
@@ -496,7 +509,7 @@ def _write_all_nonblocking(
     chunk: bytes,
     active_deadline: float,
     *,
-    deadline_code: str = "network_timeout",
+    deadline_code: str,
 ) -> None:
     """Write a chunk while enforcing transfer and pipe-progress deadlines."""
     view = memoryview(chunk)
@@ -728,16 +741,14 @@ def _stream_and_normalize(
                     stdin_open = True
                     file_descriptor = process.stdin.fileno()
                     os.set_blocking(file_descriptor, False)
-                    ffmpeg_deadline = _monotonic() + _FFMPEG_FINALIZE_TIMEOUT_SEC
-                    write_deadline = min(active_deadline, ffmpeg_deadline)
-                    write_deadline_code = "network_timeout" if active_deadline <= ffmpeg_deadline else "ffmpeg_timeout"
+                    ffmpeg_deadline = _monotonic() + _ffmpeg_processing_timeout_sec(candidate["duration_sec"])
                     while chunk := audio_buffer.read(64 * 1024):
                         _write_all_nonblocking(
                             process,
                             file_descriptor,
                             chunk,
-                            write_deadline,
-                            deadline_code=write_deadline_code,
+                            ffmpeg_deadline,
+                            deadline_code="ffmpeg_timeout",
                         )
                     process.stdin.close()
                     stdin_open = False
