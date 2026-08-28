@@ -1,0 +1,16 @@
+# Jamendo encoder-budget fix — local verification
+# commit: 8a66861c575123a279f5ee1646b699ad7cdabdb9  base: 17cfbb86a8f5147d2871e0c166268749e4765c9b
+# date: 2026-08-28T11:52:59Z
+
+$ pytest tests/playlist/ -q
+........................................                                 [100%]
+760 passed, 1 deselected in 2.70s
+
+$ ruff check <changed>
+All checks passed!
+$ ruff format --check <changed>
+2 files already formatted
+$ mypy mammamiradio/playlist/jamendo_transient.py
+Success: no issues found in 1 source file
+$ bash scripts/check-changelog-lint.sh
+Changelog lint clean.
