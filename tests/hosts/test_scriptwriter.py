@@ -533,6 +533,263 @@ def test_massage_transition_text_all_rewrites_exhausted_returns_first():
 # --- write_banter tests ---
 
 
+def _packaged_banter_response(config):
+    return {
+        "lines": [
+            {"host": config.hosts[0].name, "text": "The Studio B mug has finally returned."},
+            {"host": config.hosts[1].name, "text": "Put it down. I want a witness."},
+        ],
+        "new_joke": None,
+        "home_fact_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_packaged_evergreen_banter_uses_direction_without_live_context(config, state):
+    captured = {}
+
+    async def _generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return _packaged_banter_response(config)
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter.compute_context_block",
+            side_effect=AssertionError("packaged copy must not read live time context"),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new=_generate,
+        ),
+    ):
+        lines, _commit = await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            creative_direction="Debate the missing Studio B mug.",
+            include_listener_request=False,
+            require_generated=True,
+        )
+
+    assert len(lines) == 2
+    prompt = captured["prompt"]
+    assert "Debate the missing Studio B mug." in prompt
+    assert "No predecessor context is available" in prompt
+    assert "opening of the show" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_packaged_exact_banter_receives_only_declared_track_metadata(config, state):
+    track = Track(title="Long Time Coming", artist="Kevin MacLeod", duration_ms=1, spotify_id="starter")
+    state.played_tracks.append(track)
+    captured = {}
+
+    async def _generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return _packaged_banter_response(config)
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter.compute_context_block",
+            side_effect=AssertionError("packaged copy must not read live time context"),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new=_generate,
+        ),
+    ):
+        await write_banter(
+            state,
+            config,
+            packaged_context="exact_track",
+            creative_direction="Use literal title wordplay only.",
+            include_listener_request=False,
+            require_generated=True,
+        )
+
+    prompt = captured["prompt"]
+    assert f"Just played: {track.display}" in prompt
+    assert "Just played: [" not in prompt
+    assert track.display in prompt
+    assert "Use literal title wordplay only." in prompt
+    assert "you did not hear the recording" in prompt
+    assert "festival association" in prompt
+
+
+@pytest.mark.asyncio
+async def test_packaged_context_rejects_wrong_track_cardinality(config, state):
+    with pytest.raises(ValueError, match="requires exactly one played track"):
+        await write_banter(state, config, packaged_context="exact_track")
+
+    state.played_tracks.append(Track(title="Track", artist="Artist", duration_ms=1, spotify_id="one"))
+    with pytest.raises(ValueError, match="cannot receive a played track"):
+        await write_banter(state, config, packaged_context="evergreen")
+
+    state.played_tracks.append(Track(title="Extra", artist="Artist", duration_ms=1, spotify_id="two"))
+    with pytest.raises(ValueError, match="requires exactly one played track"):
+        await write_banter(state, config, packaged_context="exact_track")
+
+
+@pytest.mark.asyncio
+async def test_packaged_context_rejects_unknown_mode(config, state):
+    with pytest.raises(ValueError, match="unknown packaged banter context"):
+        await write_banter(state, config, packaged_context="live_show")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_require_generated_requires_packaged_context(config, state):
+    with pytest.raises(ValueError, match="require_generated applies only to packaged"):
+        await write_banter(state, config, require_generated=True)
+
+
+@pytest.mark.asyncio
+async def test_creative_direction_requires_packaged_context(config, state):
+    with pytest.raises(ValueError, match="creative_direction applies only to packaged"):
+        await write_banter(state, config, creative_direction="Keep Studio B folklore timeless.")
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_rejects_companionship_context(config, state):
+    companionship = CompanionshipPromptContext(CompanionshipDurationBucket.MINUTES_30_TO_44)
+    with pytest.raises(ValueError, match="cannot receive companionship_context"):
+        await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            companionship_context=companionship,
+        )
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_rejects_stock_copy_when_generation_unavailable(config, state):
+    config.anthropic_api_key = ""
+    config.openai_api_key = ""
+
+    with pytest.raises(RuntimeError, match="requires generated script copy"):
+        await write_banter(state, config, packaged_context="evergreen", require_generated=True)
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_rejects_stock_copy_after_provider_failure(config, state):
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new=AsyncMock(side_effect=RuntimeError("provider failed")),
+        ),
+        pytest.raises(RuntimeError, match="did not produce usable script copy"),
+    ):
+        await write_banter(state, config, packaged_context="evergreen", require_generated=True)
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_excludes_live_home_and_listener_surfaces(config, state):
+    config.homeassistant.enabled = True
+    config.homeassistant.context_enabled = True
+    state.ha_context = "kitchen light is on"
+    state.listener.request_count = 3
+    state.listener.skip_count = 1
+    captured = {}
+
+    async def _generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return _packaged_banter_response(config)
+
+    with (
+        patch(
+            "mammamiradio.hosts.scriptwriter._load_song_cues_for_current_track",
+            new=AsyncMock(side_effect=AssertionError("packaged copy must not load song cues")),
+        ),
+        patch(
+            "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+            new=_generate,
+        ),
+    ):
+        await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            creative_direction="Keep Studio B folklore timeless.",
+            include_listener_request=False,
+            require_generated=True,
+        )
+
+    prompt = captured["prompt"]
+    assert "<home_state_data>" not in prompt
+    assert "kitchen light is on" not in prompt
+    assert "<listener_behavior>" not in prompt
+    assert "Keep Studio B folklore timeless." in prompt
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_suppresses_pending_listener_request_by_default(config, state):
+    state.pending_requests = [
+        {
+            "type": "message",
+            "name": "Lucia",
+            "message": "Please read my dedication on air forever.",
+        }
+    ]
+    captured = {}
+
+    async def _generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return _packaged_banter_response(config)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        lines, commit = await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            creative_direction="Keep Studio B folklore timeless.",
+            require_generated=True,
+        )
+
+    assert len(lines) == 2
+    assert commit is not None
+    assert commit.listener_request is None
+    prompt = captured["prompt"]
+    assert "Lucia" not in prompt
+    assert "dedication on air forever" not in prompt
+    assert "LISTENER REQUEST" not in prompt
+    assert state.pending_requests[0]["name"] == "Lucia"
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_preserves_full_creative_direction(config, state):
+    direction = ("Keep the Studio B mug on the third shelf. " * 40).strip()
+    assert 1200 < len(direction) <= scriptwriter_module.PACKAGED_BANTER_DIRECTION_MAX_CHARS
+    captured = {}
+
+    async def _generate(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return _packaged_banter_response(config)
+
+    with patch(
+        "mammamiradio.hosts.scriptwriter._generate_json_response_with_language_guard",
+        new=_generate,
+    ):
+        await write_banter(
+            state,
+            config,
+            packaged_context="evergreen",
+            creative_direction=direction,
+            require_generated=True,
+        )
+
+    assert direction in captured["prompt"]
+    assert f"{direction[:1200]}..." not in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_packaged_banter_rejects_overlong_creative_direction(config, state):
+    direction = "x" * (scriptwriter_module.PACKAGED_BANTER_DIRECTION_MAX_CHARS + 1)
+    with pytest.raises(ValueError, match="creative direction exceeds"):
+        await write_banter(state, config, packaged_context="evergreen", creative_direction=direction)
+
+
 @pytest.mark.asyncio
 async def test_write_banter_parses_valid_json(config, state):
     config.super_italian_mode = True
