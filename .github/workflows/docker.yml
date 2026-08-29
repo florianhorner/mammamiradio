@@ -22,6 +22,16 @@ jobs:
       packages: write
 
     steps:
+      - name: Validate HA Green receipt gate setting
+        run: |
+          case "${MMR_REQUIRE_HA_RECEIPTS}" in
+            0|1) ;;
+            *)
+              echo "::error::MMR_REQUIRE_HA_RECEIPTS must be 0 or 1, got '${MMR_REQUIRE_HA_RECEIPTS}'."
+              exit 2
+              ;;
+          esac
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
@@ -31,7 +41,7 @@ jobs:
           python-version: "3.11"
 
       # MMR_REQUIRE_HA_RECEIPTS=1 arms the physical HA Green receipt gate.
-      # Unset waives it: this tag then ships WITHOUT physical cold-start
+      # 0 waives it: this tag then ships WITHOUT physical cold-start
       # evidence. See docs/release-process.md.
       - name: Validate physical HA Green release evidence
         if: env.MMR_REQUIRE_HA_RECEIPTS == '1'
@@ -43,7 +53,7 @@ jobs:
             --output ha-green-release-proof.json
 
       - name: Note waived HA Green release evidence
-        if: env.MMR_REQUIRE_HA_RECEIPTS != '1'
+        if: env.MMR_REQUIRE_HA_RECEIPTS == '0'
         run: |
           echo "::warning title=HA Green evidence waived::This release ships WITHOUT physical Home Assistant Green cold-start evidence. Set MMR_REQUIRE_HA_RECEIPTS=1 to require it."
 

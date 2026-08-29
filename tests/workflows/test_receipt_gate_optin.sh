@@ -57,10 +57,10 @@ for bad in true yes on TRUE 2; do
 done
 pass "invalid values are a hard error"
 
-# Case 5: both tag-path workflows must gate the validation step on the variable
-# AND define that variable at workflow scope. Two of the four enforcement sites
-# sit on `push: tags`, so missing either one means the tag push fails after main
-# is already frozen.
+# Case 5: both tag-path workflows must accept only 0 and 1, gate receipt
+# validation on 1, gate the explicit waiver on 0, and define the variable at
+# workflow scope. Two of the four enforcement sites sit on `push: tags`, so
+# missing either one means the tag push fails after main is already frozen.
 #
 # The definition check is the load-bearing half. In GitHub Actions an
 # `if: env.X == '1'` on an UNDEFINED variable evaluates against the empty
@@ -71,7 +71,11 @@ for wf in .github/workflows/addon-release.yml .github/workflows/docker.yml; do
     | grep -q "if: env.MMR_REQUIRE_HA_RECEIPTS == '1'" \
     || fail "$wf validation step is not conditioned on the variable"
 
-  python3 - "$REPO_ROOT/$wf" <<'PYEOF' || fail "$wf does not define MMR_REQUIRE_HA_RECEIPTS at workflow scope"
+  grep -A2 "name: Note waived HA Green release evidence" "$REPO_ROOT/$wf" \
+    | grep -q "if: env.MMR_REQUIRE_HA_RECEIPTS == '0'" \
+    || fail "$wf waiver step is not conditioned explicitly on 0"
+
+  gate_script="$(python3 - "$REPO_ROOT/$wf" <<'PYEOF'
 import sys, yaml
 
 doc = yaml.safe_load(open(sys.argv[1]))
@@ -82,8 +86,30 @@ if value is None:
 # It must default to waived, not to an empty string that reads as "off" by luck.
 if "'0'" not in str(value) and '"0"' not in str(value):
     sys.exit(1)
+
+for job in (doc.get("jobs") or {}).values():
+    for step in job.get("steps") or []:
+        if step.get("name") == "Validate HA Green receipt gate setting":
+            print(step.get("run") or "")
+            sys.exit(0)
+sys.exit(1)
 PYEOF
+)" || fail "$wf does not define and validate MMR_REQUIRE_HA_RECEIPTS"
+
+  for allowed in 0 1; do
+    MMR_REQUIRE_HA_RECEIPTS="$allowed" bash -c "$gate_script" >/dev/null 2>&1 \
+      || fail "$wf should accept MMR_REQUIRE_HA_RECEIPTS=$allowed"
+  done
+
+  for bad in true yes on TRUE 2; do
+    set +e
+    MMR_REQUIRE_HA_RECEIPTS="$bad" bash -c "$gate_script" >/dev/null 2>&1
+    rc=$?
+    set -e
+    [[ "$rc" -eq 2 ]] \
+      || fail "$wf should exit 2 for MMR_REQUIRE_HA_RECEIPTS=$bad, got $rc"
+  done
 done
-pass "both tag-path workflows gate on AND define the variable"
+pass "both tag-path workflows accept only 0 and 1"
 
 echo "All receipt-gate opt-in scenarios passed."
