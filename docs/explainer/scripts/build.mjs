@@ -32,8 +32,8 @@ if (audioIds.length === 0) throw new Error("No scenario ids found in index.html"
 
 // scenarios.mjs is the single source of truth; the picker buttons in
 // index.html must agree with it in both directions, and at least one moment
-// must be reachable by a fresh install (narrow ambient context: sun and
-// weather only). A page whose every demo needs a home grant oversells.
+// must be the narrowest post-opt-in grant (sun and weather only). A page
+// whose every demo needs a wider home grant oversells.
 const truthIds = Object.keys(scenarios);
 for (const id of audioIds) {
   if (!truthIds.includes(id)) throw new Error(`index.html offers "${id}" but scenarios.mjs does not define it`);
@@ -41,8 +41,8 @@ for (const id of audioIds) {
 for (const id of truthIds) {
   if (!audioIds.includes(id)) throw new Error(`scenarios.mjs defines "${id}" but index.html never offers it`);
 }
-if (!truthIds.some((id) => scenarios[id].reachability === "day-one")) {
-  throw new Error("No scenario is fresh-install reachable (reachability: \"day-one\") — the page would demonstrate only gated capability");
+if (!truthIds.some((id) => scenarios[id].reachability === "ambient-grant")) {
+  throw new Error("No scenario is ambient-grant (narrowest post-opt-in) — the page would demonstrate only gated capability");
 }
 // Every scenario must carry what a visitor who cannot hear the clip needs,
 // and a cue point may only exist alongside the produced manifest that

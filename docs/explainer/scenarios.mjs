@@ -13,12 +13,13 @@
 // in Node (scripts/produce-segments.mjs, scripts/build.mjs), and in tests.
 //
 // Field notes:
-// - reachability: "day-one" means every entity shown is available to a fresh
-//   install in narrow ambient context (weather.ambient + sun.ambient only,
-//   per mammamiradio/home/authorization.py). "home-grant" means the moment
-//   needs the operator to let the hosts use household entities. The page must
-//   always contain at least one "day-one" scenario — a build guard and a test
-//   enforce it, so honesty cannot regress silently.
+// - reachability: "ambient-grant" means every entity shown is available only
+//   after the operator opts in to narrow ambient context (weather.ambient +
+//   sun.ambient only, per mammamiradio/home/authorization.py). "home-grant"
+//   means the moment needs a wider household grant. A fresh install shares
+//   no Home context. The page must always contain at least one
+//   "ambient-grant" scenario — a build guard and a test enforce it, so the
+//   narrowest post-opt-in demo cannot regress silently.
 // - beats: the segment script for scripts/produce-segments.mjs. Ordered.
 //   "tail" is a starter-catalog music tail (CC-BY, attribution required on
 //   the page), "imaging" ids reference assets/imaging/manifest.json (CC0),
@@ -155,18 +156,15 @@ const scenarios = {
     revealAtSec: 16.78,
   },
   quiet: {
-    // The one moment a brand-new install can actually produce. Narrow ambient
-    // context projects exactly two entities — the sun and the weather — and
-    // this scenario uses nothing else. It exists so the page demonstrates at
-    // Narrowest grant: sun and weather only, after the operator opts in.
+    // Narrowest grant after opt-in: sun and weather only.
     id: "quiet",
     time: "21:48 · Sunday",
-    tag: "Day one, no permissions",
+    tag: "Sun and weather",
     heading: "Evening, officially.",
-    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. This is everything a brand-new station knows about your home, and it is already a segment.",
+    summary: "The sun set twenty minutes ago. Clear night, eleven degrees and falling. After you allow daylight and weather, this is the narrowest segment. A fresh install shares nothing until that choice.",
     host: "Giulia checks the sky",
     quote: "Sunset was twenty minutes ago, eleven degrees and clear. È ufficialmente sera. Act accordingly.",
-    reachability: "day-one",
+    reachability: "ambient-grant",
     color: "#60a5fa",
     rgb: "96, 165, 250",
     sensors: [
