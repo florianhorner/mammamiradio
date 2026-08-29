@@ -158,7 +158,7 @@ const scenarios = {
     // The one moment a brand-new install can actually produce. Narrow ambient
     // context projects exactly two entities — the sun and the weather — and
     // this scenario uses nothing else. It exists so the page demonstrates at
-    // least one thing a stranger can reach on day one, before any home grant.
+    // Narrowest grant: sun and weather only, after the operator opts in.
     id: "quiet",
     time: "21:48 · Sunday",
     tag: "Day one, no permissions",

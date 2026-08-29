@@ -124,7 +124,7 @@ test("the voice plays on the first click, not the second", () => {
 });
 
 test("the day-one boundary is said in plain words", () => {
-  assert.match(html, /On day one the station knows the sky\./);
+  assert.match(html, /On day one the house stays off the air\./);
   assert.match(html, /day-one-chip/);
   assert.match(html, /class="aired-truth"/);
   // The demos are the fully-wired dreamstate (premium voices). The page may

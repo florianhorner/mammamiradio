@@ -399,7 +399,7 @@ body[data-phase="revealed"] .listen-button.is-speaking {
 .scenario-button:active { transform: translateY(0) scale(.98); }
 .scenario-button.is-active { color: var(--cream); border-color: rgba(var(--scenario-rgb),.55); background: rgba(var(--scenario-rgb),.11); }
 .scenario-button.is-active span { color: var(--scenario); }
-/* The one moment a fresh install can reach gets said out loud. */
+/* The narrowest grant (sun and weather) gets said out loud. */
 .day-one-chip { display: inline-block; margin-left: 5px; padding: 1px 6px; border: 1px solid rgba(96,165,250,.45); border-radius: 999px; color: var(--ok-text); font-size: 9px; font-style: normal; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; vertical-align: 1px; }
 
 .thesis { max-width: 1180px; margin: 0 auto; padding: 92px 32px 112px; border-top: 1px solid var(--line); animation: wake 700ms var(--ease-out) 240ms both; }

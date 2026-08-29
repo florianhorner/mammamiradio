@@ -8,8 +8,9 @@ notes.
 The scenarios are invented. Marco and Giulia are not: the clips in
 `public/audio/` are the station's own hosts in their own configured voices.
 One of the four moments ("Evening, officially") uses only the sun and the
-weather, which is all a fresh install can share. The other three need the home
-grant, and the page says so. The page reads no Home Assistant data and sends
+weather: the narrowest grant after you opt in. A fresh install shares no Home
+context until that choice. The other three need a wider grant, and the page
+says so. The page reads no Home Assistant data and sends
 nothing anywhere.
 
 ## How it is put together
