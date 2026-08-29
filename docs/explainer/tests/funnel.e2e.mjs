@@ -141,3 +141,19 @@ test("the local preview serves every Studio B trailing-slash route", async () =>
   assert.equal(poster.status, 200);
   assert.equal(poster.headers.get("content-type"), "image/png");
 });
+
+test("desktop Studio B cards keep their copy inside the clickable card", async () => {
+  const hubPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await hubPage.goto(new URL("shorts/", BASE).href);
+  const geometry = await hubPage.locator(".episode-card").evaluateAll((cards) => cards.map((card) => {
+    const cardBox = card.getBoundingClientRect();
+    const copyBox = card.querySelector(".card-copy").getBoundingClientRect();
+    return { cardBottom: cardBox.bottom, copyBottom: copyBox.bottom, copyHeight: copyBox.height };
+  }));
+  assert.equal(geometry.length, 3);
+  for (const item of geometry) {
+    assert.ok(item.copyHeight > 100, "title, premise, and action must occupy real layout space");
+    assert.ok(item.copyBottom <= item.cardBottom + 1, "card copy must not be clipped below its link");
+  }
+  await hubPage.close();
+});

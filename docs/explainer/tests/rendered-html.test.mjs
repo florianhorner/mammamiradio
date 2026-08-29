@@ -50,16 +50,19 @@ test("the Studio B hub and exactly three watch routes ship", async () => {
   const episodes = [
     {
       slug: "archive-receipt",
+      title: "Archive Receipt",
       asset: "mamma-mi-radio-studio-b-archive-receipt.mp4",
       poster: "archive-receipt.png",
     },
     {
       slug: "jealous-microphone",
+      title: "Jealous Microphone",
       asset: "mamma-mi-radio-studio-b-jealous-microphone.mp4",
       poster: "jealous-microphone.png",
     },
     {
       slug: "third-chair",
+      title: "Third Chair",
       asset: "mamma-mi-radio-studio-b-third-chair.mp4",
       poster: "third-chair.png",
     },
@@ -75,6 +78,7 @@ test("the Studio B hub and exactly three watch routes ship", async () => {
     const assetUrl = `https://github.com/florianhorner/mammamiradio/releases/download/v2.18.0/${episode.asset}`;
     assert.match(watch, new RegExp(`<link rel="canonical" href="https://florianhorner\\.github\\.io/mammamiradio/shorts/${episode.slug}/"`));
     assert.match(watch, /<video controls playsinline preload="metadata"/);
+    assert.match(watch, new RegExp(`aria-label="[^\"]*${episode.title}[^\"]*"`));
     assert.doesNotMatch(watch, /<video[^>]*\sautoplay(?:\s|=|>)/i);
     assert.equal(watch.split(assetUrl).length - 1, 3, "source, fallback, and direct-download links must agree");
     assert.match(watch, /Contains synthetic voices\./);
@@ -84,6 +88,11 @@ test("the Studio B hub and exactly three watch routes ship", async () => {
     assert.ok(poster.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")));
     assert.equal(poster.readUInt32BE(16), 540);
     assert.equal(poster.readUInt32BE(20), 960);
+  }
+  for (const page of [hub, ...await Promise.all(episodes.map((episode) => readFile(`dist/shorts/${episode.slug}/index.html`, "utf8")))]) {
+    assert.match(page, /<meta name="twitter:image:alt" content="Mamma Mi Radio:/);
+    assert.match(page, /<meta property="og:image:width" content="1280"/);
+    assert.match(page, /<meta property="og:image:height" content="640"/);
   }
   await access("dist/shorts/styles.css");
 });
