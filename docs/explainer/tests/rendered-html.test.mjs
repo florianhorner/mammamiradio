@@ -43,6 +43,49 @@ test("the built root page contains both outbound exits in order", async () => {
   assert.match(html, /class="footer-links"/);
   assert.match(html, /\/\/ listen:/);
   assert.doesNotMatch(html, /<a[^>]*>Listen live<\/a>/i);
+  assert.match(html, /href="shorts\/"[^>]*>Watch Studio B Transmissions<\/a>/);
+});
+
+test("the Studio B hub and exactly three watch routes ship", async () => {
+  const episodes = [
+    {
+      slug: "archive-receipt",
+      asset: "mamma-mi-radio-studio-b-archive-receipt.mp4",
+      poster: "archive-receipt.png",
+    },
+    {
+      slug: "jealous-microphone",
+      asset: "mamma-mi-radio-studio-b-jealous-microphone.mp4",
+      poster: "jealous-microphone.png",
+    },
+    {
+      slug: "third-chair",
+      asset: "mamma-mi-radio-studio-b-third-chair.mp4",
+      poster: "third-chair.png",
+    },
+  ];
+  const hub = await readFile("dist/shorts/index.html", "utf8");
+  assert.equal([...hub.matchAll(/class="episode-card"/g)].length, episodes.length);
+  assert.match(hub, /Contains synthetic voices\./);
+
+  for (const episode of episodes) {
+    assert.match(hub, new RegExp(`href="${episode.slug}/"`));
+    const watchPath = `dist/shorts/${episode.slug}/index.html`;
+    const watch = await readFile(watchPath, "utf8");
+    const assetUrl = `https://github.com/florianhorner/mammamiradio/releases/download/v2.18.0/${episode.asset}`;
+    assert.match(watch, new RegExp(`<link rel="canonical" href="https://florianhorner\\.github\\.io/mammamiradio/shorts/${episode.slug}/"`));
+    assert.match(watch, /<video controls playsinline preload="metadata"/);
+    assert.doesNotMatch(watch, /<video[^>]*\sautoplay(?:\s|=|>)/i);
+    assert.equal(watch.split(assetUrl).length - 1, 3, "source, fallback, and direct-download links must agree");
+    assert.match(watch, /Contains synthetic voices\./);
+    assert.match(watch, /href="\.\.\/\.\.\/"/);
+
+    const poster = await readFile(`dist/shorts/posters/${episode.poster}`);
+    assert.ok(poster.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")));
+    assert.equal(poster.readUInt32BE(16), 540);
+    assert.equal(poster.readUInt32BE(20), 960);
+  }
+  await access("dist/shorts/styles.css");
 });
 
 test("the Pages root keeps runtime assets subpath-safe", () => {

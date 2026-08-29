@@ -130,3 +130,14 @@ test("start over returns the page to an honest idle", async () => {
   const waiting = await page.textContent(".reveal-waiting p");
   assert.equal(waiting, "Tune in to hear what they notice.");
 });
+
+test("the local preview serves every Studio B trailing-slash route", async () => {
+  for (const route of ["shorts/", "shorts/archive-receipt/", "shorts/jealous-microphone/", "shorts/third-chair/"]) {
+    const response = await fetch(new URL(route, BASE));
+    assert.equal(response.status, 200, route);
+    assert.match(response.headers.get("content-type") || "", /^text\/html/);
+  }
+  const poster = await fetch(new URL("shorts/posters/archive-receipt.png", BASE));
+  assert.equal(poster.status, 200);
+  assert.equal(poster.headers.get("content-type"), "image/png");
+});
