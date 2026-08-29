@@ -42,18 +42,10 @@ body {
   margin: 0;
   color: var(--cream);
   background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.035'/%3E%3C/svg%3E"),
     radial-gradient(700px 520px at 76% 0%, rgba(244, 208, 72, 0.11), transparent 70%),
     linear-gradient(180deg, #1e1711 0%, var(--espresso) 34%, #0e0c0a 100%);
   line-height: 1.5;
-}
-body::before {
-  position: fixed;
-  z-index: -1;
-  inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitchTiles'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
-  content: "";
-  opacity: 0.035;
-  pointer-events: none;
 }
 a { color: inherit; }
 img, video { display: block; max-width: 100%; }

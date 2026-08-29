@@ -96,7 +96,10 @@ test("the Studio B hub and exactly three watch routes ship", async () => {
     assert.match(page, /<meta property="og:image:width" content="1280"/);
     assert.match(page, /<meta property="og:image:height" content="640"/);
   }
-  await access("dist/shorts/styles.css");
+  const styles = await readFile("dist/shorts/styles.css", "utf8");
+  assert.doesNotMatch(styles, /body::before/);
+  assert.match(styles, /stitchTiles='stitch'/);
+  assert.doesNotMatch(styles, /stitchTiles='stitchTiles'/);
 });
 
 test("the Pages root keeps runtime assets subpath-safe", () => {
