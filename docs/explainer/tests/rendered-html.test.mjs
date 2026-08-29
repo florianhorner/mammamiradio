@@ -44,6 +44,8 @@ test("the built root page contains both outbound exits in order", async () => {
   assert.match(html, /\/\/ listen:/);
   assert.doesNotMatch(html, /<a[^>]*>Listen live<\/a>/i);
   assert.match(html, /href="shorts\/"[^>]*>Watch Studio B Transmissions<\/a>/);
+  assert.doesNotMatch(html, /href="shorts\/"[^>]*target="_blank"/);
+  assert.match(html, new RegExp(`href="${escapeRegExp(sourceUrl)}" target="_blank" rel="noreferrer noopener"`));
 });
 
 test("the Studio B hub and exactly three watch routes ship", async () => {

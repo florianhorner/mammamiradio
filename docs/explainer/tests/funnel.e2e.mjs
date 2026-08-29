@@ -142,6 +142,15 @@ test("the local preview serves every Studio B trailing-slash route", async () =>
   assert.equal(poster.headers.get("content-type"), "image/png");
 });
 
+test("runtime footer links keep internal navigation in the same tab", async () => {
+  const shorts = page.getByRole("link", { name: "Watch Studio B Transmissions" });
+  const source = page.getByRole("link", { name: "Browse the source on GitHub" });
+  assert.equal(await shorts.getAttribute("target"), null);
+  assert.equal(await shorts.getAttribute("rel"), null);
+  assert.equal(await source.getAttribute("target"), "_blank");
+  assert.equal(await source.getAttribute("rel"), "noreferrer noopener");
+});
+
 test("desktop Studio B cards keep their copy inside the clickable card", async () => {
   const hubPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await hubPage.goto(new URL("shorts/", BASE).href);

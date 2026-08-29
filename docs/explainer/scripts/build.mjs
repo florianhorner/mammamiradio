@@ -10,7 +10,11 @@ const siteLinks = runInNewContext(`(${configMatch[1]})`);
 const escapeHtml = (value) => String(value).replace(/[&<>\"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[character]));
 const renderedSiteLinks = Object.values(siteLinks)
   .filter((link) => link?.href && link?.label)
-  .map((link) => `<a href="${escapeHtml(link.href)}" target="_blank" rel="noreferrer noopener">${escapeHtml(link.label)}</a>`)
+  .map((link) => {
+    const external = /^https:\/\//.test(link.href);
+    const externalAttrs = external ? ' target="_blank" rel="noreferrer noopener"' : "";
+    return `<a href="${escapeHtml(link.href)}"${externalAttrs}>${escapeHtml(link.label)}</a>`;
+  })
   .join("");
 const renderedIndex = indexTemplate.replace(
   /<nav id="site-links" class="footer-links" aria-label="Project links"><\/nav>/,
