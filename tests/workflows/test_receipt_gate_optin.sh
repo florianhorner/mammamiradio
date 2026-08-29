@@ -57,16 +57,33 @@ for bad in true yes on TRUE 2; do
 done
 pass "invalid values are a hard error"
 
-# Case 5: both tag-path workflows must gate the validation step on the variable.
-# Two of the four enforcement sites sit on `push: tags`, so missing either one
-# means the tag push fails after main is already frozen.
+# Case 5: both tag-path workflows must gate the validation step on the variable
+# AND define that variable at workflow scope. Two of the four enforcement sites
+# sit on `push: tags`, so missing either one means the tag push fails after main
+# is already frozen.
+#
+# The definition check is the load-bearing half. In GitHub Actions an
+# `if: env.X == '1'` on an UNDEFINED variable evaluates against the empty
+# string, so it is always false: the gate would be permanently disabled rather
+# than opt-in, and a grep for the `if:` line alone would still pass.
 for wf in .github/workflows/addon-release.yml .github/workflows/docker.yml; do
-  grep -q "MMR_REQUIRE_HA_RECEIPTS" "$REPO_ROOT/$wf" \
-    || fail "$wf does not gate HA Green validation on MMR_REQUIRE_HA_RECEIPTS"
   grep -A2 "name: Validate physical HA Green release evidence" "$REPO_ROOT/$wf" \
     | grep -q "if: env.MMR_REQUIRE_HA_RECEIPTS == '1'" \
     || fail "$wf validation step is not conditioned on the variable"
+
+  python3 - "$REPO_ROOT/$wf" <<'PYEOF' || fail "$wf does not define MMR_REQUIRE_HA_RECEIPTS at workflow scope"
+import sys, yaml
+
+doc = yaml.safe_load(open(sys.argv[1]))
+env = doc.get("env") or {}
+value = env.get("MMR_REQUIRE_HA_RECEIPTS")
+if value is None:
+    sys.exit(1)
+# It must default to waived, not to an empty string that reads as "off" by luck.
+if "'0'" not in str(value) and '"0"' not in str(value):
+    sys.exit(1)
+PYEOF
 done
-pass "both tag-path workflows gate on the variable"
+pass "both tag-path workflows gate on AND define the variable"
 
 echo "All receipt-gate opt-in scenarios passed."

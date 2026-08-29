@@ -8,6 +8,11 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Arms the physical HA Green receipt gate. Defined here on purpose: an
+  # `if: env.X == '1'` on an UNDEFINED variable is always false, which would
+  # disable the gate permanently instead of making it opt-in. Set the
+  # repository variable MMR_REQUIRE_HA_RECEIPTS to 1 to require receipts.
+  MMR_REQUIRE_HA_RECEIPTS: ${{ vars.MMR_REQUIRE_HA_RECEIPTS || '0' }}
 
 jobs:
   build-and-push:
