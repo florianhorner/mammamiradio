@@ -28,8 +28,11 @@ Usage: scripts/pre-release-check.sh
 Pre-release sanity check. Run before bumping the version number.
 Verifies version consistency across pyproject.toml + addon config.yaml,
 CHANGELOG head matches the version, all release invariants (FFmpeg eq
-chain count, recovery and browser audio, test mocks, post-restart guard),
-and the physical 20-run Home Assistant Green cold-launch receipt set.
+chain count, recovery and browser audio, test mocks, post-restart guard).
+
+The physical 20-run Home Assistant Green cold-launch receipt set is opt-in:
+it is waived unless MMR_REQUIRE_HA_RECEIPTS=1, and a waived gate is reported
+as WAIVED rather than counted as a pass. See docs/music-sources.md.
 
 Catches the class of bugs that have caused production silence incidents.
 

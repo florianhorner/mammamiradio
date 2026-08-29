@@ -131,7 +131,7 @@ jobs:
 
       # MMR_REQUIRE_HA_RECEIPTS=1 arms the physical HA Green receipt gate.
       # 0 waives it: this tag then ships WITHOUT physical cold-start
-      # evidence. See docs/release-process.md.
+      # evidence. See the opt-in section in docs/music-sources.md.
       - name: Validate physical HA Green release evidence
         if: env.MMR_REQUIRE_HA_RECEIPTS == '1'
         run: |

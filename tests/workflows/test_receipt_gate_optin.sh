@@ -40,10 +40,16 @@ if [[ -d "$REPO_ROOT/proof/media/ha-green-release-evidence" ]] \
    && compgen -G "$REPO_ROOT/proof/media/ha-green-release-evidence/run-*.json" >/dev/null; then
   echo "SKIP: receipts exist, cannot assert the empty-evidence failure"
 else
-  if MMR_REQUIRE_HA_RECEIPTS=1 bash "$SCRIPT" >/dev/null 2>&1; then
-    fail "armed gate should fail with zero receipts, but passed"
-  fi
-  pass "armed gate still fails on zero receipts"
+  set +e
+  armed_out="$(MMR_REQUIRE_HA_RECEIPTS=1 bash "$SCRIPT" 2>&1)"
+  armed_rc=$?
+  set -e
+  [[ "$armed_rc" -ne 0 ]] || fail "armed gate should fail with zero receipts, but passed"
+  grep -q "\[FAIL\] HA Green release evidence" <<<"$armed_out" \
+    || fail "armed run failed, but not on the receipt gate — exit status alone does not prove the gate ran"
+  grep -q "\[WAIVED\]" <<<"$armed_out" \
+    && fail "armed run still reported a waiver"
+  pass "armed gate still fails on zero receipts, and fails on the gate itself"
 fi
 
 # Case 4: anything else is a hard error, never a silent skip. A gate that
