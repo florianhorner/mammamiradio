@@ -63,6 +63,11 @@ without it by an explicit decision. Arm it with `MMR_REQUIRE_HA_RECEIPTS=1` on
 `scripts/pre-release-check.sh` and on the tag workflows; unset, each reports the
 waiver rather than a pass.
 
+Armed, it requires 20 cold Home Assistant Green runs with the first accepted
+non-silent starter byte reaching a connected listener at p95 no slower than two
+seconds. That measurement is unchanged; only whether a release must produce it
+before tagging has moved.
+
 The ordinary pull-request gate runs one cold aarch64 launch in
 `.github/workflows/pi-smoke.yml`; it does not require physical-device receipts.
 Finalize version, changelogs, and the V2 preship receipt before recording.
