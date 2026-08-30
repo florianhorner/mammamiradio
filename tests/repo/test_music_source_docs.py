@@ -1,9 +1,10 @@
-"""Keep current operator docs aligned with the B-transient media boundary."""
+"""Keep operator docs and release metadata aligned with the media boundary."""
 
 from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +28,40 @@ def _bundled_titles_in_guide(guide: str) -> list[str]:
             if item:
                 titles.append(item)
     return sorted(titles)
+
+
+def _latest_versioned_changelog_section(relative: str) -> str:
+    content = _read(relative)
+    match = re.search(
+        r"^## \[?\d+\.\d+\.\d+\]?[^\n]*\n.*?(?=^## \[?\d+\.\d+\.\d+\]?|\Z)",
+        content,
+        re.M | re.S,
+    )
+    assert match, f"{relative} has no versioned release section"
+    return match.group(0)
+
+
+def test_editable_lock_version_matches_project_version() -> None:
+    project_version = tomllib.loads(_read("pyproject.toml"))["project"]["version"]
+    packages = tomllib.loads(_read("uv.lock"))["package"]
+    editable_project = [
+        package
+        for package in packages
+        if package["name"] == "mammamiradio" and package.get("source") == {"editable": "."}
+    ]
+
+    assert len(editable_project) == 1
+    assert editable_project[0]["version"] == project_version
+
+
+def test_changelogs_reopen_unreleased_before_the_latest_release() -> None:
+    root_headings = re.findall(r"^## .+$", _read("CHANGELOG.md"), re.M)
+    addon_headings = re.findall(r"^## .+$", _read("ha-addon/mammamiradio/CHANGELOG.md"), re.M)
+
+    assert root_headings[0] == "## [Unreleased]"
+    assert re.fullmatch(r"## \[\d+\.\d+\.\d+\] - \d{4}-\d{2}-\d{2}", root_headings[1])
+    assert addon_headings[0] == "## Unreleased"
+    assert re.fullmatch(r"## \d+\.\d+\.\d+ - \d{4}-\d{2}-\d{2}", addon_headings[1])
 
 
 def test_canonical_music_source_guide_records_the_rights_boundaries() -> None:
@@ -117,15 +152,23 @@ def test_current_addon_guides_do_not_reintroduce_the_old_chart_boot_contract() -
     assert "MAMMAMIRADIO_ALLOW_YTDLP=false" in current
 
 
-def test_unreleased_changelogs_share_the_media_boundary() -> None:
-    root = _read("CHANGELOG.md").split("## 2.", 1)[0]
-    addon = _read("ha-addon/mammamiradio/CHANGELOG.md").split("## 2.", 1)[0]
+def test_latest_changelogs_share_the_release_media_boundary() -> None:
+    root = _latest_versioned_changelog_section("CHANGELOG.md")
+    addon = _latest_versioned_changelog_section("ha-addon/mammamiradio/CHANGELOG.md")
     for statement in (
-        "rights-aware offline starter-catalog contract",
-        "Release remains intentionally blocked",
-        "Jamendo is available as an explicit transient music source",
-        "External extraction is now a standalone opt-in capability",
-        "Music sharing now fails closed around the eligible bundled window",
+        "The add-on no longer downloads music from the internet",
+        "searching the music you already have still works",
+        "song request the station cannot fetch becomes a shout-out on air",
+        "Twelve tracks come with the station",
+        "attribution-only",
+        "six from Incompetech",
+        "six from Jamendo",
+        "music folder is picked up without a restart",
     ):
         assert statement in root
         assert statement in addon
+
+    # The root notes carry the standalone and sharing detail that the concise
+    # add-on notes intentionally omit.
+    assert "optional `external-media` package" in root
+    assert "Only a complete bundled track can be shared" in root
