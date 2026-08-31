@@ -30,14 +30,14 @@ def _bundled_titles_in_guide(guide: str) -> list[str]:
     return sorted(titles)
 
 
-def _latest_versioned_changelog_section(relative: str) -> str:
-    content = _read(relative)
+def _versioned_changelog_section(content: str, version: str, source: str) -> str:
+    escaped_version = re.escape(version)
     match = re.search(
-        r"^## \[?\d+\.\d+\.\d+\]?[^\n]*\n.*?(?=^## \[?\d+\.\d+\.\d+\]?|\Z)",
+        rf"^## \[?{escaped_version}\]?[^\n]*\n.*?(?=^## \[?\d+\.\d+\.\d+\]?|\Z)",
         content,
         re.M | re.S,
     )
-    assert match, f"{relative} has no versioned release section"
+    assert match, f"{source} has no {version} release section"
     return match.group(0)
 
 
@@ -59,9 +59,35 @@ def test_changelogs_reopen_unreleased_before_the_latest_release() -> None:
     addon_headings = re.findall(r"^## .+$", _read("ha-addon/mammamiradio/CHANGELOG.md"), re.M)
 
     assert root_headings[0] == "## [Unreleased]"
-    assert re.fullmatch(r"## \[\d+\.\d+\.\d+\] - \d{4}-\d{2}-\d{2}", root_headings[1])
+    root_release = re.fullmatch(r"## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})", root_headings[1])
+    assert root_release
     assert addon_headings[0] == "## Unreleased"
-    assert re.fullmatch(r"## \d+\.\d+\.\d+ - \d{4}-\d{2}-\d{2}", addon_headings[1])
+    addon_release = re.fullmatch(r"## (\d+\.\d+\.\d+) - (\d{4}-\d{2}-\d{2})", addon_headings[1])
+    assert addon_release
+    assert root_release.groups() == addon_release.groups()
+
+
+def test_versioned_changelog_lookup_survives_a_newer_release() -> None:
+    content = """# Changelog
+
+## [3.1.0] - 2026-09-01
+
+Newer notes.
+
+## [3.0.0] - 2026-08-30
+
+The 3.0 boundary.
+
+## [2.18.0] - 2026-08-07
+
+Older notes.
+"""
+
+    section = _versioned_changelog_section(content, "3.0.0", "synthetic changelog")
+
+    assert "The 3.0 boundary." in section
+    assert "Newer notes." not in section
+    assert "Older notes." not in section
 
 
 def test_canonical_music_source_guide_records_the_rights_boundaries() -> None:
@@ -152,9 +178,13 @@ def test_current_addon_guides_do_not_reintroduce_the_old_chart_boot_contract() -
     assert "MAMMAMIRADIO_ALLOW_YTDLP=false" in current
 
 
-def test_latest_changelogs_share_the_release_media_boundary() -> None:
-    root = _latest_versioned_changelog_section("CHANGELOG.md")
-    addon = _latest_versioned_changelog_section("ha-addon/mammamiradio/CHANGELOG.md")
+def test_3_0_changelogs_share_the_release_media_boundary() -> None:
+    root = _versioned_changelog_section(_read("CHANGELOG.md"), "3.0.0", "CHANGELOG.md")
+    addon = _versioned_changelog_section(
+        _read("ha-addon/mammamiradio/CHANGELOG.md"),
+        "3.0.0",
+        "ha-addon/mammamiradio/CHANGELOG.md",
+    )
     for statement in (
         "The add-on no longer downloads music from the internet",
         "searching the music you already have still works",
