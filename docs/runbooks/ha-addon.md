@@ -633,10 +633,15 @@ gates" (single source of truth). The short version:
 
 - `/ship` opens the PR and never arms auto-merge; the PR soaks (CodeRabbit,
   review time) until Florian gives the merge signal.
-- On the signal, run `scripts/land-pr.sh <PR#>`. It verifies the pre-ship
-  squad entry against the PR head (code-state freshness — a soak of days is
-  fine, a push after the review is not), updates the branch if it is behind
-  (CI re-runs on the integrated state), and arms
+- On the signal, run `scripts/land-pr.sh <PR#>`. It verifies committed v2
+  pre-ship evidence on the PR head (portable — works from cloud agents once
+  the receipt is on the branch); a current local gstack ledger supplements that
+  proof and is required if the evidence check is explicitly skipped. It blocks
+  unresolved current Major/Critical/P0/P1 bot threads and fails closed when
+  thread data cannot be read. A behind branch is not changed from the landing
+  seat: return to its feature workspace, merge `origin/main`, run
+  `scripts/emit-review-evidence.sh --reattest --base origin/main`, commit and
+  push the receipt swap, then retry after CI. For an up-to-date head it arms
   `gh pr merge --squash --auto --match-head-commit <head>` so the merge only
   fires on the exact head it verified.
 - Raw `gh pr merge` and mutating `gh api` merge calls are denied by the local
@@ -651,12 +656,12 @@ gates" (single source of truth). The short version:
   authenticated maintainer handles that specific PR. If Dependabot still owns
   the branch, request its rebase as the maintainer; if the branch was edited,
   use `@dependabot recreate` and re-review the new head. Human-authored PRs land
-  through `scripts/land-pr.sh <PR#>`, which updates the branch after verifying
-  pre-ship evidence.
+  through `scripts/land-pr.sh <PR#>`; a behind branch returns to its feature
+  workspace for integration and reattestation.
 - Settings drift tripwire: `bash scripts/check-merge-gate.sh` (also part of
   `make pre-release`) asserts strict checks, `allow_update_branch`,
-  `allow_auto_merge`, and the required contexts. Run it if landing behaves
-  oddly.
+  `allow_auto_merge`, required contexts, and that the main-branch ruleset
+  enables review thread resolution. Run it if landing behaves oddly.
 
 ## Pre-merge checklist
 
@@ -701,9 +706,11 @@ Before merging ANY change that touches addon files:
    missing-content notice, exit 0); the stable promotion media-proof job in
    `addon-release.yml` and `scripts/pre-release-check.sh` section 10 keep the
    hard gate on the release path. Stable remains blocked until exactly 12
-   approved derivatives total at least 45 minutes and no more than 75 MiB, every
-   full audition receipt is complete, and 20 cold HA Green runs show p95 first
-   accepted non-silent starter byte at or below two seconds.
+   approved derivatives total at least 45 minutes and no more than 75 MiB and
+   every full audition receipt is complete. The 20 cold HA Green runs at p95
+   first accepted non-silent starter byte within two seconds are a separate
+   opt-in gate, armed with `MMR_REQUIRE_HA_RECEIPTS=1`; unset, the cut reports
+   the waiver instead of a pass.
 7. **Release beat source manifest**: `scripts/validate-release-beat.py` (no args) checks that `mammamiradio/assets/release/release_beat.toml`, if present and enabled, has valid schema, listener-safe copy, and is declared in `pyproject.toml` package-data. A missing or explicitly disabled manifest passes as a no-op.
 
 **Version sync check**: also wired into every PR. If `pyproject.toml` or `ha-addon/mammamiradio/config.yaml` appears in the PR diff, CI runs the full `scripts/pre-release-check.sh` (version consistency + CHANGELOG head + all invariants). No-ops on non-version PRs. This closes the version-drift class of bug that caused the stale 2.10.7→2.10.9 CHANGELOG incident.

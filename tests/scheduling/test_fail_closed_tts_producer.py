@@ -699,7 +699,7 @@ async def test_impossible_tts_unavailable_uses_canned_or_propagates_to_recovery(
     state = _make_state()
     state.force_next = SegmentType.BANTER
     state.songs_since_banter = 7
-    state.canned_clips_streamed = producer.SHAREWARE_CANNED_LIMIT - 1
+    state.canned_clips_streamed = producer.SHAREWARE_CANNED_LIMIT
     config = _make_config(tmp_path)
     queue: asyncio.Queue[Segment] = asyncio.Queue(maxsize=1)
     canned = tmp_path / "impossible_canned.mp3"

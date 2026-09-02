@@ -8,7 +8,9 @@
 #      date before merging) — the setting whose absence enabled the 2026-06-11
 #      stale-base rebase footgun;
 #   2. repo: allow_update_branch (the Update-branch affordance land-pr.sh uses);
-#   3. repo: allow_auto_merge (arming `--auto` at all).
+#   3. repo: allow_auto_merge (arming `--auto` at all);
+#   4. ruleset: required_review_thread_resolution on main (unresolved review
+#      threads block merge on GitHub; land-pr.sh mirrors this locally).
 #
 # Run locally (user-auth gh): wired into `make pre-release` and the runbook
 # pre-merge checklist. In CI this SKIPS LOUDLY — GITHUB_TOKEN lacks admin read
@@ -62,6 +64,29 @@ for ctx in quality pi-smoke; do
     rc=1
   fi
 done
+
+effective_rules="$(gh api --paginate --slurp 'repos/{owner}/{repo}/rules/branches/main' 2>/dev/null | jq 'add // []')" || {
+  echo "check-merge-gate: FAIL — could not read effective rules for main." >&2
+  exit 1
+}
+
+thread_resolution=false
+if printf '%s' "$effective_rules" | jq -e '
+  any(.[]?;
+    .type == "pull_request"
+    and (.parameters.required_review_thread_resolution == true)
+  )
+' >/dev/null 2>&1; then
+  thread_resolution=true
+fi
+
+if [ "$thread_resolution" = true ]; then
+  echo "check-merge-gate: PASS — ruleset requires review thread resolution"
+else
+  echo "check-merge-gate: FAIL — no active ruleset sets required_review_thread_resolution=true." >&2
+  echo "check-merge-gate:         Enable it on the main-branch ruleset before landing." >&2
+  rc=1
+fi
 
 if [ "$rc" -eq 0 ]; then
   echo "check-merge-gate: all merge-gate settings intact."

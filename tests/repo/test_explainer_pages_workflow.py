@@ -13,6 +13,7 @@ touches only the workflow.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -21,6 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PAGES_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "explainer-pages.yml"
 TESTS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "explainer.yml"
 OPERATIONS_DOC = REPO_ROOT / "docs" / "operations.md"
+README = REPO_ROOT / "README.md"
+SHORTS_DIR = REPO_ROOT / "docs" / "explainer" / "shorts"
 
 MAIN_ONLY = "github.ref == 'refs/heads/main'"
 
@@ -76,3 +79,42 @@ def test_operations_doc_states_the_gate_the_workflow_carries() -> None:
     doc = OPERATIONS_DOC.read_text()
     assert MAIN_ONLY in doc, "operations.md must quote the guard it claims exists"
     assert MAIN_ONLY in PAGES_WORKFLOW.read_text()
+
+
+def test_shorts_keep_video_masters_out_of_git() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files", "*.mp4"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert tracked == "", f"video masters must stay in release assets, found: {tracked}"
+
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--no-index", "docs/explainer/shorts/unapproved.mp4"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert ignored.returncode == 0, "future shorts MP4s must be ignored before staging"
+
+
+def test_readme_has_one_canonical_shorts_link() -> None:
+    hub = "https://florianhorner.github.io/mammamiradio/shorts/"
+    readme = README.read_text()
+    assert readme.count(hub) == 1
+    assert "releases/download/" not in readme, "README should link to the hub, never a master"
+
+
+def test_shorts_publish_only_the_approved_github_destination() -> None:
+    text = "\n".join(path.read_text() for path in sorted(SHORTS_DIR.rglob("*.html")))
+    assert "instagram" not in text.lower()
+    assert "bearblog" not in text.lower()
+    assert text.count("Contains synthetic voices.") == 4
+    release_sources = re.findall(r'<source src="([^"]+)" type="video/mp4"', text)
+    assert len(release_sources) == 3
+    assert all(
+        source.startswith("https://github.com/florianhorner/mammamiradio/releases/download/v2.18.0/")
+        for source in release_sources
+    )
