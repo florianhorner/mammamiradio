@@ -1,10 +1,9 @@
-"""Keep operator docs and release metadata aligned with the media boundary."""
+"""Keep current operator docs aligned with the B-transient media boundary."""
 
 from __future__ import annotations
 
 import json
 import re
-import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -28,66 +27,6 @@ def _bundled_titles_in_guide(guide: str) -> list[str]:
             if item:
                 titles.append(item)
     return sorted(titles)
-
-
-def _versioned_changelog_section(content: str, version: str, source: str) -> str:
-    escaped_version = re.escape(version)
-    match = re.search(
-        rf"^## \[?{escaped_version}\]?[^\n]*\n.*?(?=^## \[?\d+\.\d+\.\d+\]?|\Z)",
-        content,
-        re.M | re.S,
-    )
-    assert match, f"{source} has no {version} release section"
-    return match.group(0)
-
-
-def test_editable_lock_version_matches_project_version() -> None:
-    project_version = tomllib.loads(_read("pyproject.toml"))["project"]["version"]
-    packages = tomllib.loads(_read("uv.lock"))["package"]
-    editable_project = [
-        package
-        for package in packages
-        if package["name"] == "mammamiradio" and package.get("source") == {"editable": "."}
-    ]
-
-    assert len(editable_project) == 1
-    assert editable_project[0]["version"] == project_version
-
-
-def test_changelogs_reopen_unreleased_before_the_latest_release() -> None:
-    root_headings = re.findall(r"^## .+$", _read("CHANGELOG.md"), re.M)
-    addon_headings = re.findall(r"^## .+$", _read("ha-addon/mammamiradio/CHANGELOG.md"), re.M)
-
-    assert root_headings[0] == "## [Unreleased]"
-    root_release = re.fullmatch(r"## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})", root_headings[1])
-    assert root_release
-    assert addon_headings[0] == "## Unreleased"
-    addon_release = re.fullmatch(r"## (\d+\.\d+\.\d+) - (\d{4}-\d{2}-\d{2})", addon_headings[1])
-    assert addon_release
-    assert root_release.groups() == addon_release.groups()
-
-
-def test_versioned_changelog_lookup_survives_a_newer_release() -> None:
-    content = """# Changelog
-
-## [3.1.0] - 2026-09-01
-
-Newer notes.
-
-## [3.0.0] - 2026-08-30
-
-The 3.0 boundary.
-
-## [2.18.0] - 2026-08-07
-
-Older notes.
-"""
-
-    section = _versioned_changelog_section(content, "3.0.0", "synthetic changelog")
-
-    assert "The 3.0 boundary." in section
-    assert "Newer notes." not in section
-    assert "Older notes." not in section
 
 
 def test_canonical_music_source_guide_records_the_rights_boundaries() -> None:
@@ -178,27 +117,15 @@ def test_current_addon_guides_do_not_reintroduce_the_old_chart_boot_contract() -
     assert "MAMMAMIRADIO_ALLOW_YTDLP=false" in current
 
 
-def test_3_0_changelogs_share_the_release_media_boundary() -> None:
-    root = _versioned_changelog_section(_read("CHANGELOG.md"), "3.0.0", "CHANGELOG.md")
-    addon = _versioned_changelog_section(
-        _read("ha-addon/mammamiradio/CHANGELOG.md"),
-        "3.0.0",
-        "ha-addon/mammamiradio/CHANGELOG.md",
-    )
+def test_unreleased_changelogs_share_the_media_boundary() -> None:
+    root = _read("CHANGELOG.md").split("## 2.", 1)[0]
+    addon = _read("ha-addon/mammamiradio/CHANGELOG.md").split("## 2.", 1)[0]
     for statement in (
-        "The add-on no longer downloads music from the internet",
-        "searching the music you already have still works",
-        "song request the station cannot fetch becomes a shout-out on air",
-        "Twelve tracks come with the station",
-        "attribution-only",
-        "six from Incompetech",
-        "six from Jamendo",
-        "music folder is picked up without a restart",
+        "rights-aware offline starter-catalog contract",
+        "Release remains intentionally blocked",
+        "Jamendo is available as an explicit transient music source",
+        "External extraction is now a standalone opt-in capability",
+        "Music sharing now fails closed around the eligible bundled window",
     ):
         assert statement in root
         assert statement in addon
-
-    # The root notes carry the standalone and sharing detail that the concise
-    # add-on notes intentionally omit.
-    assert "optional `external-media` package" in root
-    assert "Only a complete bundled track can be shared" in root

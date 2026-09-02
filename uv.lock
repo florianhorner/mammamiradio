@@ -580,7 +580,7 @@ wheels = [
 
 [[package]]
 name = "mammamiradio"
-version = "3.0.0"
+version = "2.18.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
