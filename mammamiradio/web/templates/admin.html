@@ -2916,7 +2916,7 @@ function resetFirstListenGuideSource(audio){
   audio.removeAttribute('src');
   audio.load();
 }
-function stopFirstListenGuide({reset=true}={}){
+function stopFirstListenGuide({reset=true,resumeStation=true}={}){
   if(_firstListenGuideWatchdog){clearTimeout(_firstListenGuideWatchdog);_firstListenGuideWatchdog=null;}
   const audio=firstListenGuideAudio();
   const button=_firstListenUi.guideButton;
@@ -2934,7 +2934,7 @@ function stopFirstListenGuide({reset=true}={}){
   if(_firstListenUi.stationPausedForGuide){
     _firstListenUi.stationPausedForGuide=false;
     const stationAudio=firstListenStationAudio();
-    if(stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
+    if(resumeStation&&stationAudio&&stationAudio.src)stationAudio.play().catch(()=>{});
   }
 }
 async function toggleFirstListenGuide(key,button){
@@ -3335,12 +3335,18 @@ function adminTabsForNav(){
 function finalizeFirstListenCompletion(){
   if(document.body.dataset.firstListenEntry!=='completing')return false;
   _firstListenUi.showSuccess=false;
-  stopFirstListenGuide();
-  stopFirstListenStationAudio();
   updateFirstListenSuccess();
   document.body.dataset.firstListenEntry='complete';
   syncFirstListenSetupMount();
   return true;
+}
+function exitFirstListenFlow(){
+  // Music-source setup replaces the journey without changing tabs. Suppress
+  // the ordinary guide-resume handoff because this same-tab exit releases the
+  // station itself; tab-away teardown remains owned by showAdminTab().
+  finalizeFirstListenCompletion();
+  stopFirstListenGuide({resumeStation:false});
+  stopFirstListenStationAudio();
 }
 function showAdminTab(name,{render=true,persist=true}={}){
   const setupContext=document.getElementById('firstListenSetupContext');
@@ -4654,11 +4660,6 @@ function setupRow(label, detail, status){
   return `<div class="setup-row"><div class="status-copy"><div class="setup-title">${esc(label)}</div><div class="setup-detail">${esc(detail)}</div></div>${statusChip(pill.state,pill.label)}</div>`;
 }
 function openListener(){
-  // The First Listen element is `hidden`, which is display:none and does NOT
-  // pause media. Without this the admin tab keeps its own hub subscription
-  // while /listen opens a second one, and the operator hears two
-  // unsynchronized copies of the same live stream at the celebration moment.
-  stopFirstListenStationAudio();
   window.open((_base||'')+'/listen','_blank','noopener');
 }
 let _lastJamendoAnnouncementKey='';
@@ -5023,13 +5024,15 @@ async function turnOffJamendo(){
 }
 function openSetupPanel(focus=''){
   _adminTabUserInteracted=true;
-  finalizeFirstListenCompletion();
   if(focus==='source'){
     _firstListenUi.showSuccess=false;
     updateFirstListenSuccess();
     document.body.dataset.firstListenFocus='source';
   }
   const firstListenRequired=document.body.dataset.firstListenEntry==='required';
+  // Music-source setup replaces the required journey without changing tabs.
+  // Treat that same-tab route as an explicit exit before hiding its player.
+  if(focus==='music-sources'&&firstListenRequired)exitFirstListenFlow();
   showAdminTab(firstListenRequired?'setup':'motore',{render:true,persist:true});
   if(focus==='music-sources')document.body.dataset.firstListenSetupView='music-sources';else delete document.body.dataset.firstListenSetupView;
   setFirstListenSetupView(focus);

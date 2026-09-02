@@ -34,6 +34,7 @@ async (page) => {
   let privacyResponseGate = null;
   let setupResponseGate = null;
   let nextSetupStatusError = null;
+  let smokeStage = 'bootstrap';
   function responseGate(){let arrive,release;return{arrived:new Promise((resolve)=>{arrive=resolve;}),wait:new Promise((resolve)=>{release=resolve;}),arrive,release};}
   const initialCapabilitiesGate = responseGate();
   let capabilitiesResponseGate = initialCapabilitiesGate;
@@ -157,9 +158,20 @@ async (page) => {
     // session down with it, so stand in for it here and record the asking —
     // the prompt existing at all is part of what this smoke proves.
     window.__firstListenConfirms = [];
+    window.__firstListenOpenedWindows = [];
+    window.__firstListenStationMedia = {
+      activeSrc: '',
+      events: [],
+      playing: false,
+      streamRequests: [],
+    };
     window.confirm = (message) => {
       window.__firstListenConfirms.push(String(message ?? ''));
       return true;
+    };
+    window.open = (...args) => {
+      window.__firstListenOpenedWindows.push(args.map((value) => String(value ?? '')));
+      return null;
     };
     const nativeSetInterval = window.setInterval.bind(window);
     window.__firstListenSmokeIntervals = [];
@@ -172,12 +184,57 @@ async (page) => {
     if (proto && !proto.__firstListenPlayPatched) {
       proto.__firstListenPlayPatched = true;
       const nativePlay = proto.play;
+      const nativePause = proto.pause;
+      const nativeLoad = proto.load;
+      const pausedDescriptor = Object.getOwnPropertyDescriptor(proto, 'paused');
+      const stationState = () => window.__firstListenStationMedia;
       proto.play = function play() {
         if (this && this.id === 'firstListenStationAudio') {
+          const state = stationState();
+          const src = this.getAttribute('src') || '';
+          state.events.push({ type: 'play', src });
+          if (src && state.activeSrc !== src) {
+            state.activeSrc = src;
+            state.streamRequests.push(src);
+          }
+          state.playing = Boolean(src);
           queueMicrotask(() => this.dispatchEvent(new Event('playing')));
           return Promise.resolve();
         }
         return nativePlay.apply(this, arguments);
+      };
+      proto.pause = function pause() {
+        if (this && this.id === 'firstListenStationAudio') {
+          const state = stationState();
+          state.events.push({ type: 'pause', src: this.getAttribute('src') || '' });
+          state.playing = false;
+        }
+        return nativePause.apply(this, arguments);
+      };
+      proto.load = function load() {
+        if (this && this.id === 'firstListenStationAudio') {
+          stationState().events.push({ type: 'load', src: this.getAttribute('src') || '' });
+        }
+        return nativeLoad.apply(this, arguments);
+      };
+      if (pausedDescriptor?.get && pausedDescriptor.configurable) {
+        Object.defineProperty(proto, 'paused', {
+          ...pausedDescriptor,
+          get() {
+            if (this && this.id === 'firstListenStationAudio') return !stationState().playing;
+            return pausedDescriptor.get.call(this);
+          },
+        });
+      }
+      const nativeRemoveAttribute = Element.prototype.removeAttribute;
+      Element.prototype.removeAttribute = function removeAttribute(name) {
+        if (this && this.id === 'firstListenStationAudio' && String(name).toLowerCase() === 'src') {
+          const state = stationState();
+          state.events.push({ type: 'remove-src', src: this.getAttribute('src') || '' });
+          state.activeSrc = '';
+          state.playing = false;
+        }
+        return nativeRemoveAttribute.apply(this, arguments);
       };
     }
   });
@@ -480,6 +537,7 @@ async (page) => {
   });
 
   async function runCalmJourneySmoke() {
+    smokeStage = 'journey-start';
     const resetUi = async (setup, overrides = {}) => {
       setupStatusProjection = setup;
       await page.evaluate(({ projection, ui }) => {
@@ -585,6 +643,92 @@ async (page) => {
       dispatch: 'accepted',
       verification: 'heard',
     });
+
+    const stationMediaSnapshot = () => page.evaluate(() => {
+      const state = window.__firstListenStationMedia;
+      const station = document.getElementById('firstListenStationAudio');
+      return {
+        activeSrc: state.activeSrc,
+        events: state.events.map((event) => ({ ...event })),
+        playing: state.playing,
+        src: station?.getAttribute('src') || null,
+        streamRequests: [...state.streamRequests],
+      };
+    });
+
+    const startAudibleFirstListen = async () => {
+      await resetUi(setupProjection());
+      const before = await stationMediaSnapshot();
+      await page.locator('#firstListenPlayBtn').click();
+      await page.waitForFunction(() => (
+        _firstListenUi.dispatch === 'accepted'
+          && !_firstListenUi.busy
+          && window.__firstListenStationMedia.playing
+      ));
+      await page.locator('#firstListenHeardBtn').click();
+      await page.waitForFunction(() => _firstListenUi.verification === 'heard' && !_firstListenUi.busy);
+      const started = await stationMediaSnapshot();
+      assert(started.src?.endsWith('/stream?first_listen=1'), `First Listen opened the wrong stream: ${started.src}`);
+      assert(started.activeSrc === started.src, 'instrumented station connection does not own the audio element source');
+      assert(started.streamRequests.length === before.streamRequests.length + 1, 'sound check did not open exactly one station stream');
+      assert(started.playing, 'sound confirmation paused the station');
+      return {
+        eventIndex: started.events.length,
+        requestCount: started.streamRequests.length,
+        src: started.src,
+      };
+    };
+
+    const assertStationPreserved = async (checkpoint, label, { playing = true } = {}) => {
+      const state = await stationMediaSnapshot();
+      const destructive = state.events.slice(checkpoint.eventIndex).filter(({ type }) => (
+        type === 'remove-src' || type === 'load'
+      ));
+      assert(state.src === checkpoint.src, `${label} replaced or cleared the station source`);
+      assert(state.activeSrc === checkpoint.src, `${label} released the station connection`);
+      assert(state.streamRequests.length === checkpoint.requestCount, `${label} opened a second station stream`);
+      assert(destructive.length === 0, `${label} tore down the station: ${JSON.stringify(destructive)}`);
+      assert(state.playing === playing, `${label} left station playing=${state.playing}`);
+      return state;
+    };
+
+    const prepareOwnedStation = async ({ showSuccess = false, sourceOptions = {} } = {}) => {
+      await resetUi(setupProjection({ audio: true, ...sourceOptions }), audioReadyOverrides());
+      const before = await stationMediaSnapshot();
+      await page.evaluate(async ({ success }) => {
+        if (success) {
+          document.body.dataset.firstListenEntry = 'completing';
+          _firstListenUi.showSuccess = true;
+          syncFirstListenSetupMount();
+          updateFirstListenSuccess();
+        }
+        const station = document.getElementById('firstListenStationAudio');
+        station.src = `${_base}${FIRST_LISTEN_STREAM}`;
+        await station.play();
+      }, { success: showSuccess });
+      await page.waitForFunction(() => window.__firstListenStationMedia.playing);
+      const started = await stationMediaSnapshot();
+      assert(started.streamRequests.length === before.streamRequests.length + 1, 'owned-station fixture did not open one stream');
+      return {
+        eventIndex: started.events.length,
+        requestCount: started.streamRequests.length,
+        src: started.src,
+      };
+    };
+
+    const assertStationReleasedOnce = async (checkpoint, label) => {
+      await page.waitForFunction(() => (
+        !window.__firstListenStationMedia.playing
+          && window.__firstListenStationMedia.activeSrc === ''
+          && document.getElementById('firstListenStationAudio')?.getAttribute('src') === null
+      ));
+      const state = await stationMediaSnapshot();
+      const exitEvents = state.events.slice(checkpoint.eventIndex);
+      for (const type of ['pause', 'remove-src', 'load']) {
+        assert(exitEvents.filter((event) => event.type === type).length === 1, `${label} did not release ${type} exactly once: ${JSON.stringify(exitEvents)}`);
+      }
+      assert(state.streamRequests.length === checkpoint.requestCount, `${label} opened a replacement stream while exiting`);
+    };
 
     const assertPrivacyDidNotAdvance = async (label, { receiptChoice = null } = {}) => {
       const state = await page.evaluate(() => ({
@@ -1205,6 +1349,73 @@ async (page) => {
     assert(await page.locator('#firstListenSuccess').isVisible(), 'fresh enabled completion did not reach the success moment');
     assert((await page.locator('#firstListenSuccessPrivacy').innerText()) === 'Home context is on', 'success receipt lost the enabled choice');
 
+    smokeStage = 'continuous-private-achievement';
+    const privateStation = await startAudibleFirstListen();
+    await page.locator('#firstListenKeepOffBtn').click();
+    await page.waitForFunction(() => _firstListenUi.showSuccess && !_firstListenUi.privacySaving);
+    await assertStationPreserved(privateStation, 'private achievement transition');
+    assert(await page.locator('#firstListenSuccess').isVisible(), 'audible private path did not keep achievement inside First Listen');
+
+    const successGuide = page.locator('#firstListenSuccess .guide-audio[data-guide="success"]');
+    await successGuide.locator('.guide-audio-play').click();
+    await page.waitForFunction(() => (
+      document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'playing'
+        && !window.__firstListenStationMedia.playing
+    ));
+    await assertStationPreserved(privateStation, 'success narration pause', { playing: false });
+    await page.locator('#firstListenGuideAudio').evaluate((audio) => audio.dispatchEvent(new Event('ended')));
+    await page.waitForFunction(() => (
+      window.__firstListenStationMedia.playing
+        && document.querySelector('#firstListenSuccess .guide-audio[data-guide="success"]')?.dataset.state === 'ended'
+    ));
+    const afterSuccessGuide = await assertStationPreserved(privateStation, 'success narration resume');
+    assert(await page.locator('#firstListenSuccess').isVisible(), 'success narration dismissed the achievement');
+    const reviewExit = { ...privateStation, eventIndex: afterSuccessGuide.events.length };
+    await page.getByRole('button', { name: 'Review choices' }).click();
+    await assertStationReleasedOnce(reviewExit, 'Review choices exit');
+
+    smokeStage = 'failed-privacy-keeps-stream';
+    const failedPrivacyStation = await startAudibleFirstListen();
+    failNextPrivacyReceipt = true;
+    await page.locator('#firstListenKeepOffBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyReceiptChoice === false && !_firstListenUi.privacySaving);
+    await assertStationPreserved(failedPrivacyStation, 'failed privacy persistence');
+    assert(await page.locator('#firstListenSuccess').isHidden(), 'failed privacy persistence exposed achievement');
+
+    smokeStage = 'continuous-enabled-achievement';
+    const enabledStation = await startAudibleFirstListen();
+    await page.locator('#firstListenPreviewBtn').click();
+    await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
+    rejectNextEnable = false;
+    await page.locator('#firstListenEnableContextBtn').click();
+    await page.waitForFunction(() => _firstListenUi.showSuccess && !_firstListenUi.privacySaving);
+    const enabledSuccess = await assertStationPreserved(enabledStation, 'enabled achievement transition');
+    assert((await page.locator('#firstListenSuccessPrivacy').innerText()) === 'Home context is on', 'audible enabled path lost its choice');
+    const stationControlsExit = { ...enabledStation, eventIndex: enabledSuccess.events.length };
+    await page.locator('#firstListenSuccess').getByRole('button', { name: 'Station controls' }).click();
+    await assertStationReleasedOnce(stationControlsExit, 'Station controls exit');
+
+    smokeStage = 'explicit-admin-tab-exit';
+    const adminTabExit = await prepareOwnedStation();
+    await page.evaluate(() => document.getElementById('tab-rotazione').click());
+    await assertStationReleasedOnce(adminTabExit, 'admin tab exit');
+
+    smokeStage = 'explicit-music-source-exit';
+    const musicToolsExit = await prepareOwnedStation({
+      sourceOptions: { primary: 'unavailable', recovery: 'unavailable' },
+    });
+    await page.locator('#firstListenRepairMusicBtn').click();
+    await assertStationReleasedOnce(musicToolsExit, 'music-source tools exit');
+
+    smokeStage = 'explicit-listener-exit';
+    const listenerExit = await prepareOwnedStation({ showSuccess: true });
+    const openedWindowBaseline = await page.evaluate(() => window.__firstListenOpenedWindows.length);
+    await page.getByRole('button', { name: 'Open full listener' }).click();
+    await assertStationReleasedOnce(listenerExit, 'Open full listener exit');
+    const openedWindows = await page.evaluate(() => window.__firstListenOpenedWindows.map((args) => [...args]));
+    assert(openedWindows.length === openedWindowBaseline + 1, 'Open full listener did not open exactly one listener window');
+    assert(openedWindows.at(-1)?.[0]?.endsWith('/listen'), `Open full listener used the wrong URL: ${JSON.stringify(openedWindows.at(-1))}`);
+
     await resetUi(setupProjection({ audio: true }), audioReadyOverrides());
     await page.locator('#firstListenPreviewBtn').click();
     await page.waitForFunction(() => _firstListenUi.privacyPreviewValid === true);
@@ -1564,6 +1775,7 @@ async (page) => {
     const completedZoomJourneyGeometry = await measureJourneyGeometry();
     assertJourneyGeometry(320, completedZoomJourneyGeometry, 'completed 200% zoom');
 
+    smokeStage = 'ingress-guide-audio';
     await page.route(`${baseUrl}${ingressPrefix}/admin`, async (route) => {
       const response = await route.fetch({ url: `${baseUrl}/admin` });
       await route.fulfill({ response });
@@ -1607,6 +1819,10 @@ async (page) => {
         'privacy-off',
         'privacy-preview-expiry',
         'privacy-enabled',
+        'continuous-private-achievement',
+        'continuous-enabled-achievement',
+        'failed-privacy-keeps-stream',
+        'explicit-exit-release',
         'privacy-receipt-repair',
         'ambient-only-preview',
         'resume-unreachable',
@@ -1625,5 +1841,9 @@ async (page) => {
     };
   }
 
-  return runCalmJourneySmoke();
+  try {
+    return await runCalmJourneySmoke();
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)} [stage=${smokeStage}]`);
+  }
 }

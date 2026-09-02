@@ -4977,6 +4977,67 @@ async def test_fresh_unfinished_audio_generator_prepends_show_before_live_subscr
 
 
 @pytest.mark.asyncio
+async def test_first_listen_receipt_completion_keeps_the_connected_live_stream(tmp_path):
+    """Heard/privacy receipts never terminate or replay an attached stream."""
+    from mammamiradio.web.streamer import _audio_generator
+
+    app = _make_test_app()
+    app.state.first_listen_install_origin = FirstListenInstallOriginV1(FirstListenInstallOriginStatus.FRESH)
+    app.state.first_listen_receipt = None
+    show = tmp_path / "first-listen-show.mp3"
+    show.write_bytes(b"authored-mini-show")
+
+    mock_request = MagicMock()
+    mock_request.app = app
+    mock_request.is_disconnected = AsyncMock(return_value=False)
+
+    with (
+        patch("mammamiradio.web.streamer.first_listen_show_required", return_value=True) as show_required,
+        patch("mammamiradio.web.streamer.approved_first_listen_show_path", return_value=show),
+        patch(
+            "mammamiradio.web.streamer.iter_first_listen_show_chunks",
+            return_value=iter([b"authored-mini-show"]),
+        ) as show_chunks,
+    ):
+        generator = _audio_generator(mock_request, first_listen=True)
+        assert await anext(generator) == b"authored-mini-show"
+
+        before_receipt = asyncio.create_task(anext(generator))
+        deadline = time.monotonic() + 1.0
+        while app.state.station_state.listeners_active == 0:
+            if time.monotonic() > deadline:
+                raise AssertionError("First Listen did not attach to the live hub")
+            await asyncio.sleep(0)
+        await app.state.stream_hub.broadcast(b"live-before-receipt")
+        assert await asyncio.wait_for(before_receipt, timeout=1.0) == b"live-before-receipt"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+        )
+        after_heard = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-heard")
+        assert await asyncio.wait_for(after_heard, timeout=1.0) == b"live-after-heard"
+
+        app.state.first_listen_receipt = FirstListenReceiptV1(
+            accepted_attempt_id="listener_route-proof",
+            accepted_at=100.0,
+            heard_at=101.0,
+            privacy_reviewed_at=102.0,
+        )
+        after_privacy = asyncio.create_task(anext(generator))
+        await app.state.stream_hub.broadcast(b"live-after-privacy")
+        assert await asyncio.wait_for(after_privacy, timeout=1.0) == b"live-after-privacy"
+        assert app.state.station_state.listeners_active == 1
+        await generator.aclose()
+
+    assert app.state.station_state.listeners_active == 0
+    show_required.assert_called_once_with(app.state)
+    show_chunks.assert_called_once_with(show)
+
+
+@pytest.mark.asyncio
 async def test_stopped_first_listen_stream_waits_for_explicit_resume_then_plays_prelude(tmp_path):
     """The current-device request observes Start; the stream GET never starts the station."""
     from mammamiradio.core.first_listen import FirstListenReceiptLoadStatus
