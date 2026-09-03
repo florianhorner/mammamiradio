@@ -264,8 +264,14 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
             removed_tracks.append(existing)
             continue
         same_identity = normalized_track_key(existing) == normalized_track_key(replacement)
-        reconciled.append(existing if same_identity else replacement)
-        if not same_identity:
+        if same_identity:
+            # Keep the live Track object (reservations / pins), but refresh duration
+            # when a later probe succeeded after an earlier fallback.
+            if replacement.duration_ms and replacement.duration_ms != existing.duration_ms:
+                existing.duration_ms = replacement.duration_ms
+            reconciled.append(existing)
+        else:
+            reconciled.append(replacement)
             removed_tracks.append(existing)
 
     active_identities = {normalized_track_key(track) for track in reconciled}
@@ -310,6 +316,14 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
                 "Demo",
             }:
                 state.playlist_source.label = "Local music"
+        elif scan.complete and state.playlist_source.kind == "local":
+            # Locals left the crate; restore a starter composition label when the
+            # remaining bag is starter media so kind stays an honest composition fact.
+            has_starter = any(track.source == "starter" for track in state.playlist)
+            if has_starter:
+                state.playlist_source.kind = "starter"
+                if state.playlist_source.label == "Local music":
+                    state.playlist_source.label = "Bundled starter music"
 
     return {
         "added": len(added_tracks),

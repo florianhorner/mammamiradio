@@ -337,3 +337,58 @@ def test_mixed_pool_local_share_and_starter_no_repeat():
     local_count = sum(1 for track in selected if track.source == "local")
     assert local_count / 50 >= 0.80
     assert len(starter_seen) == sum(1 for track in selected if track.source == "starter")
+
+
+def test_complete_reconcile_demotes_kind_when_locals_leave(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    local_path = root / "Artist - Song.mp3"
+    local_path.write_bytes(b"audio")
+    starter = _track("Starter", source="starter")
+    state = StationState(
+        playlist=[starter, _track("Song", source="local", path=local_path)],
+        playlist_source=PlaylistSource(kind="local", label="Local music", track_count=2),
+    )
+    local_path.unlink()
+    with patch(
+        "mammamiradio.playlist.local_library.subprocess.run",
+        return_value=SimpleNamespace(returncode=1, stdout="", stderr=""),
+    ):
+        scan = scan_local_library(_config(root))
+    outcome = reconcile_local_library(state, scan)
+    assert outcome["active"] == 0
+    assert outcome["removed"] == 1
+    assert [track.title for track in state.playlist] == ["Starter"]
+    assert state.playlist_source.kind == "starter"
+    assert state.playlist_source.label == "Bundled starter music"
+
+
+def test_same_identity_refresh_updates_duration(tmp_path):
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "Artist - Song.mp3"
+    path.write_bytes(b"audio")
+    existing = Track(
+        title="Song",
+        artist="Artist",
+        duration_ms=210_000,
+        source="local",
+        local_path=path,
+    )
+    state = StationState(
+        playlist=[existing],
+        playlist_source=PlaylistSource(kind="local", label="Local music", track_count=1),
+    )
+
+    def _fake_ffprobe(cmd, **_kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"format":{"duration":"201.0","tags":{"artist":"Artist","title":"Song"}}}',
+            stderr="",
+        )
+
+    with patch("mammamiradio.playlist.local_library.subprocess.run", side_effect=_fake_ffprobe):
+        scan = scan_local_library(_config(root))
+    reconcile_local_library(state, scan)
+    assert state.playlist[0] is existing
+    assert existing.duration_ms == 201_000
