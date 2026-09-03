@@ -743,7 +743,14 @@ class RuntimeProviderObservation:
 
 @dataclass
 class PlaylistSource:
-    """The user-visible source backing the currently loaded playlist."""
+    """The user-visible source backing the currently loaded playlist.
+
+    ``kind`` names what is in the crate right now (starter-only, local base,
+    charts, …), not merely how the crate was first loaded at boot. When the
+    local library scanner overlays operator files onto a starter bag, kind
+    becomes ``local`` so every consumer — selection, setup copy, provenance —
+    reads the same composition fact.
+    """
 
     kind: str
     source_id: str = ""
@@ -3135,6 +3142,7 @@ class StationState:
         artist_cooldown: int = 3,
         max_artist_per_hour: int = 3,
         excluded_cache_keys: Collection[str] | None = None,
+        restrict_to_source: str | None = None,
     ) -> Track:
         """Pick the next track using weighted random selection with diversity rules.
 
@@ -3142,6 +3150,12 @@ class StationState:
         tracks that haven't played recently, from under-represented artists,
         and with smooth energy transitions.  Falls back to progressively
         relaxed filters if the pool is too small.
+
+        A genuinely starter-only pool keeps bag order (one manifest cycle, no
+        repeats until every starter has aired). A mixed crate — locals overlaid
+        on the starter bag — uses the weighted selector, with local files as
+        the base whenever they are present. ``restrict_to_source`` narrows the
+        pool for recovery callers that must stay on one source.
         """
         if not self.playlist:
             raise RuntimeError("Playlist is empty")
@@ -3154,7 +3168,8 @@ class StationState:
             starter_blocked = track.source == "starter" and (
                 track.cache_key not in self.starter_cycle_remaining or track.cache_key in self.starter_cycle_reserved
             )
-            if not starter_blocked:
+            source_blocked = bool(restrict_to_source) and track.source != restrict_to_source
+            if not starter_blocked and not source_blocked:
                 # Consuming the pin is a semantic write: go through the setter so
                 # the revision advances and a listener/operator pin owner can
                 # still tell its own pin apart from a newer one.
@@ -3165,6 +3180,8 @@ class StationState:
                     raise RuntimeError("Playlist has no eligible tracks")
 
         pool = [track for track in self.playlist if track.cache_key not in excluded]
+        if restrict_to_source:
+            pool = [track for track in pool if track.source == restrict_to_source]
         if not pool:
             raise RuntimeError("Playlist has no eligible tracks")
 
@@ -3188,7 +3205,11 @@ class StationState:
                         "Starter cycle is waiting for queued tracks to begin playback"
                     )
                 raise RuntimeError("Playlist has no eligible tracks in the current starter cycle")
-            if self.playlist_source is not None and self.playlist_source.kind == "starter":
+            # Strict bag order applies only to a genuinely starter-only pool.
+            # Kind is composition (what is in the crate), so a mixed local+starter
+            # rotation must reach the weighted selector below; locals are the base.
+            starter_only_pool = all(track.source == "starter" for track in pool)
+            if starter_only_pool:
                 # Startup supplied one manifest-digest-pinned bag cycle in
                 # playlist order. Honor that order; reserve after queue
                 # admission and consume only at playback start, so a render
@@ -3301,6 +3322,10 @@ class StationState:
         # the heading-match flag and the split base-weight sums the adaptive lift needs.
         heading = active_heading
         preference_scores = preference_score_map(self.song_preferences)
+        # Local files are the base whenever any are in the live pool. A x2 lift
+        # over starters keeps operator music as the majority share without
+        # silencing the starter bag (see starter no-repeat reservation above).
+        local_is_base = any(track.source == "local" for track in pool)
         base_weights: list[float] = []
         heading_flags: list[bool] = []
         sum_heading_base = 0.0
@@ -3314,6 +3339,9 @@ class StationState:
                 w *= 1.0 - math.exp(-0.1 * songs_ago)
             else:
                 w *= 1.2  # Never-played bonus
+
+            if local_is_base and track.source == "local":
+                w *= 2.0
 
             # Artist diversity: penalize over-represented artists in recent history
             recent_artist_count = recent_artist_10.get(track.artist, 0)

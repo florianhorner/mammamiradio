@@ -1348,6 +1348,63 @@ def test_reserved_pinned_starter_falls_through_to_local_track() -> None:
     assert state.pinned_track is starter
 
 
+def test_mixed_starter_local_pool_uses_weighted_selector_not_bag_order() -> None:
+    """A mixed crate must not return the first starter before weighted selection."""
+    starter = _starter_track(0)
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    # kind may still read "starter" briefly after boot; pool composition decides.
+    state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="starter"))
+    captured: dict = {}
+
+    def _choose(candidates, **kwargs):
+        captured["candidates"] = list(candidates)
+        return [local]
+
+    with patch("mammamiradio.core.models.random.choices", side_effect=_choose) as choices:
+        picked = state.select_next_track(repeat_cooldown=0, artist_cooldown=0, max_artist_per_hour=0)
+
+    choices.assert_called_once()
+    assert picked is local
+    assert starter in captured["candidates"]
+    assert local in captured["candidates"]
+
+
+def test_starter_only_pool_keeps_bag_order() -> None:
+    first = _starter_track(0)
+    second = _starter_track(1)
+    state = StationState(playlist=[first, second], playlist_source=PlaylistSource(kind="starter"))
+
+    with patch("mammamiradio.core.models.random.choices") as choices:
+        picked = state.select_next_track()
+
+    choices.assert_not_called()
+    assert picked is first
+
+
+def test_restrict_to_source_limits_mixed_pool_to_starters() -> None:
+    starter = _starter_track(0)
+    local = Track(
+        title="Operator Local",
+        artist="Operator",
+        duration_ms=180_000,
+        source="local",
+        local_path=Path("/music/local.mp3"),
+    )
+    state = StationState(playlist=[starter, local], playlist_source=PlaylistSource(kind="local"))
+
+    with patch("mammamiradio.core.models.random.choices") as choices:
+        picked = state.select_next_track(restrict_to_source="starter")
+
+    choices.assert_not_called()
+    assert picked is starter
+
+
 def test_exhausted_starter_cycle_without_available_reservation_fails_closed() -> None:
     starter = _starter_track(0)
     state = StationState(playlist=[starter], playlist_source=PlaylistSource(kind="starter"))

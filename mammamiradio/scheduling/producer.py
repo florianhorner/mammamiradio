@@ -631,6 +631,7 @@ def _select_accepted_music_track(
     queue: asyncio.Queue[Segment],
     *,
     consumed_force_clear_revision: int | None = None,
+    restrict_to_source: str | None = None,
 ) -> Track | None:
     handoff = state.listener_request_handoff
     if handoff is not None and _is_session_rejected_without_concrete_source(handoff.track, config):
@@ -766,6 +767,7 @@ def _select_accepted_music_track(
                 repeat_cooldown=config.playlist.repeat_cooldown,
                 artist_cooldown=config.playlist.artist_cooldown,
                 excluded_cache_keys=excluded_keys,
+                restrict_to_source=restrict_to_source,
             )
         finally:
             if held_listener_pin is not None:
@@ -1459,7 +1461,11 @@ async def _queue_starter_catalog_bridge_segment(
 ) -> bool:
     """Queue one verified starter song when a drain cannot see cache music."""
     source = state.playlist_source
-    if source is None or source.kind != "starter" or not state.playlist or state.listener_request_handoff is not None:
+    # Gate on crate composition, not load provenance: a mixed local+starter
+    # rotation still carries starter media the bridge may use. Kind names what
+    # is in the crate (often ``local`` once the scanner overlays operator files).
+    has_starter = any(track.source == "starter" for track in state.playlist)
+    if source is None or not has_starter or not state.playlist or state.listener_request_handoff is not None:
         return False
 
     captured_playlist_revision = state.playlist_revision
@@ -1477,10 +1483,12 @@ async def _queue_starter_catalog_bridge_segment(
         # remaining acceptance rules live in StationState and its reservation
         # ledger, so a private empty queue is enough to reuse the canonical
         # selector without widening every continuity-bridge call signature.
+        # restrict_to_source keeps this rung on starter media even when the
+        # global weighted selector would prefer the operator's local base.
         if held_pin is not None:
             state.pinned_track = None
         try:
-            track = _select_accepted_music_track(state, config, asyncio.Queue())
+            track = _select_accepted_music_track(state, config, asyncio.Queue(), restrict_to_source="starter")
         finally:
             if held_pin is not None:
                 state.pinned_track = held_pin

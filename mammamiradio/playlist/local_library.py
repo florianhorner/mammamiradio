@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
+import subprocess
 from collections import Counter
 from dataclasses import dataclass, field
 from itertools import islice
@@ -19,7 +21,9 @@ logger = logging.getLogger(__name__)
 LOCAL_LIBRARY_SCAN_INTERVAL_SECONDS = 60.0
 MAX_LOCAL_LIBRARY_ENTRIES = 20_000
 MAX_LOCAL_LIBRARY_TRACKS = 5_000
+DEFAULT_LOCAL_DURATION_MS = 210_000
 SUPPORTED_LOCAL_AUDIO_SUFFIXES = frozenset({".aac", ".flac", ".m4a", ".mp3", ".mp4", ".ogg", ".opus", ".wav"})
+_FFPROBE_TIMEOUT_SEC = 5.0
 
 
 @dataclass
@@ -52,6 +56,76 @@ def _finish_scan(result: LocalLibraryScanResult, warning: str = "") -> LocalLibr
         result.complete = False
         result.warnings.append(warning)
     return result
+
+
+def _filename_artist_title(path: Path) -> tuple[str, str]:
+    """Filename convention fallback: ``Artist - Title.ext``, else Unknown + stem."""
+    stem = path.stem.strip()
+    if " - " in stem:
+        artist, title = stem.split(" - ", 1)
+        return (artist.strip() or "Unknown", title.strip() or path.name)
+    return ("Unknown", stem or path.name)
+
+
+def _probe_local_metadata(path: Path) -> tuple[str, str, int]:
+    """Read title/artist/duration via ffprobe; fall back to filename + 3:30.
+
+    Same ``ffprobe -show_entries`` path used by the normalizer, Jamendo prepare,
+    and audio-quality checks. Tags win when present; empty or missing tags keep
+    the ``Artist - Title`` filename convention (or Unknown + stem).
+    """
+    artist, title = _filename_artist_title(path)
+    duration_ms = DEFAULT_LOCAL_DURATION_MS
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:format_tags=artist,title,ARTIST,TITLE",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_FFPROBE_TIMEOUT_SEC,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.debug("ffprobe metadata skipped for %s: %s", path.name, exc)
+        return artist, title, duration_ms
+    if result.returncode != 0:
+        logger.debug(
+            "ffprobe metadata failed for %s: %s",
+            path.name,
+            (result.stderr or result.stdout or "").strip(),
+        )
+        return artist, title, duration_ms
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return artist, title, duration_ms
+    fmt = payload.get("format") if isinstance(payload, dict) else None
+    if not isinstance(fmt, dict):
+        return artist, title, duration_ms
+    tags = fmt.get("tags")
+    if isinstance(tags, dict):
+        tag_artist = tags.get("artist") or tags.get("ARTIST") or ""
+        tag_title = tags.get("title") or tags.get("TITLE") or ""
+        if isinstance(tag_artist, str) and tag_artist.strip():
+            artist = tag_artist.strip()
+        if isinstance(tag_title, str) and tag_title.strip():
+            title = tag_title.strip()
+    raw_duration = fmt.get("duration")
+    try:
+        seconds = float(raw_duration) if raw_duration is not None else 0.0
+    except (TypeError, ValueError):
+        seconds = 0.0
+    if seconds > 0:
+        duration_ms = max(1, round(seconds * 1000))
+    return artist, title, duration_ms
 
 
 def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
@@ -124,13 +198,12 @@ def scan_local_library(source: StationConfig | Path) -> LocalLibraryScanResult:
                     continue
 
                 result.supported_files += 1
-                stem = path.stem.strip()
-                artist, title = stem.split(" - ", 1) if " - " in stem else ("Unknown", stem)
+                artist, title, duration_ms = _probe_local_metadata(path)
                 digest = hashlib.sha256(str(path).encode("utf-8", errors="surrogatepass")).hexdigest()[:20]
                 track = Track(
                     title=title.strip() or path.name,
                     artist=artist.strip() or "Unknown",
-                    duration_ms=210_000,
+                    duration_ms=duration_ms,
                     spotify_id=f"local_{digest}",
                     local_path=path,
                     source="local",
@@ -227,6 +300,16 @@ def reconcile_local_library(state: StationState, scan: LocalLibraryScanResult) -
         state.source_readiness.reconcile_active_tracks(state.playlist, removed_tracks=removed_tracks)
     if state.playlist_source is not None:
         state.playlist_source.track_count = len(state.playlist)
+        # kind means what is in the crate: local files are the base whenever present.
+        if local_tracks:
+            state.playlist_source.kind = "local"
+            state.playlist_source.source_id = state.playlist_source.source_id or "local_music_dir"
+            if not state.playlist_source.label or state.playlist_source.label in {
+                "Starter",
+                "Bundled starter music",
+                "Demo",
+            }:
+                state.playlist_source.label = "Local music"
 
     return {
         "added": len(added_tracks),
