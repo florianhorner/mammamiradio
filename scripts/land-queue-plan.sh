@@ -97,7 +97,7 @@ EDGE_SELECT_LIB="$SCRIPT_DIR/edge-select.sh"
 # threads, here is the first") with "waiting on something".
 classify_pr() {
   local pr="$1" head="$2" base="$3" merge_state="$4" is_draft="$5" held="$6" skipped="$7"
-  local gate_out
+  local gate_out last_push last_push_epoch
 
   if [ "$is_draft" = "true" ]; then
     printf 'OPEN\tdraft — not a landing candidate\n'; return
@@ -123,9 +123,22 @@ classify_pr() {
   # verify_head refuses when the evidence check was skipped AND no local ledger
   # entry covers the head. Without this the shadow reports "would arm" for a PR
   # land-pr.sh would refuse — divergence exactly where the escape hatch is in use.
-  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ] \
-     && ! squad_check "$head" "$(date -u +%s)" >/dev/null 2>&1; then
-    printf 'BLOCKED_EVIDENCE\tevidence check skipped and no ledger entry covers this head\n'; return
+  # squad_check compares the entry against the head's own last push, not against
+  # now. Passing wall clock made every ledger entry look stale once it aged past
+  # the grace window, so the shadow blocked where land-pr.sh accepts — the same
+  # divergence this check exists to close, pointed the other way.
+  if [ "${MMR_LAND_SKIP_EVIDENCE_CHECK:-0}" = "1" ]; then
+    # Fetched per PR, and only here: `commits` on a 50-PR list query exceeds
+    # GitHub's 500k node budget, and the normal path never needs it. This is the
+    # hotfix escape hatch, so one extra call on it costs nothing in production.
+    last_push="$(gh pr view "$pr" --json commits -q '[.commits[].committedDate] | max // empty' 2>/dev/null)" || last_push=""
+    last_push_epoch="$(iso_to_epoch "$last_push")"
+    if [ -z "$last_push_epoch" ]; then
+      printf 'BLOCKED_EVIDENCE\tcould not read the head commit date to age-check the review\n'; return
+    fi
+    if ! squad_check "$head" "$last_push_epoch" >/dev/null 2>&1; then
+      printf 'BLOCKED_EVIDENCE\tevidence check skipped and no ledger entry covers this head\n'; return
+    fi
   fi
 
   # Plan Q7: UNSTABLE means only non-required checks are failing and is landable.

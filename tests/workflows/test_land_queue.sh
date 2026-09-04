@@ -74,6 +74,9 @@ case "$1 $2" in
   "repo view")
     printf '%s' "florianhorner/mammamiradio"
     exit 0 ;;
+  "pr view")
+    printf '%s' "${GH_MOCK_LAST_PUSH:-2026-01-01T00:00:00Z}"
+    exit 0 ;;
   "run list")
     [ "${GH_MOCK_RUN_FAIL:-0}" = "1" ] && exit 1
     printf '%s' "${GH_MOCK_RUN_SHAS:-}"
@@ -123,13 +126,15 @@ chmod +x "$TMPDIR_T/evidence-ok.sh" "$TMPDIR_T/evidence-missing.sh"
 pr_row() { # number title head merge draft labels created author is_bot [branch]
   local number="$1" title="$2" head="$3" merge="$4" draft="$5" labels="$6" created="$7" author="$8" is_bot="$9"
   local branch="${10:-feature/pr-$1}"
+  # committedDate feeds the ledger age check; default is deliberately old so a
+  # test that cares about staleness sets it explicitly.
   jq -cn --argjson number "$number" --arg title "$title" --arg head "$head" \
     --arg merge "$merge" --argjson draft "$draft" --argjson labels "$labels" \
     --arg created "$created" --arg author "$author" --argjson is_bot "$is_bot" \
-    --arg branch "$branch" \
+    --arg branch "$branch" --arg pushed "${11:-2026-01-01T00:00:00Z}" \
     '{number:$number,title:$title,headRefOid:$head,baseRefOid:"'"$ANC_FULL"'",
       mergeStateStatus:$merge,isDraft:$draft,labels:$labels,createdAt:$created,
-      headRefName:$branch,
+      headRefName:$branch,commits:[{committedDate:$pushed}],
       url:("https://example.test/pull/" + ($number|tostring)),
       author:{login:$author,is_bot:$is_bot}}'
 }
@@ -450,6 +455,7 @@ GHOST="$(jq -cn --arg base "$ANC_FULL" --arg head "$HEAD_FULL" \
   '{number:130,title:"chore(edge): cut edge release abc1234",headRefOid:$head,
     baseRefOid:$base,mergeStateStatus:"CLEAN",isDraft:false,labels:[],
     createdAt:"2026-01-01T00:00:00Z",headRefName:"edge-release/abc1234",
+    commits:[{committedDate:"2026-01-01T00:00:00Z"}],
     url:"https://example.test/pull/130",author:null}')"
 OUT="$(run_plan "[$GHOST]")"
 [ "$(jq -r '.prs[0].lane' <<<"$OUT")" = "edge" ] \
@@ -565,6 +571,58 @@ grep -Eq 'pr (merge|comment|edit|review|close)|api -X|--method (POST|PUT|PATCH|D
   && fail "shadow planner issued a mutating gh call in at least one run"
 [ -s "$ALL_GH_LOG" ] || fail "cumulative gh log is empty — the assertion would be vacuous"
 pass "no mutating gh call across every planner run in this suite"
+
+# =============================================================================
+# Case 31: a jq failure inside the blocking-thread scan must BLOCK, not report
+# "no debt". The scan used a process substitution, which discards its exit
+# status: jq failing yielded zero lines, left the counter at 0, and returned
+# PASS — so land-pr.sh would arm on a PR whose thread debt was never evaluated.
+# =============================================================================
+PRS="[$(pr_row 180 "fix: jq breaks" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false)]"
+# A response the blocking filter cannot walk: reviewThreads.nodes is not an array.
+BROKEN_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":"not-an-array"}}}}}'
+OUT="$(THREADS="$BROKEN_THREADS" run_plan "$PRS")"
+[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "BLOCKED_BOT" ] \
+  || fail "an unevaluable thread response must block, never read as zero debt"
+[ "$(jq -r '.decision.action' <<<"$OUT")" = "none" ] \
+  || fail "must not arm when thread debt could not be evaluated"
+pass "unevaluable thread response fails closed (jq soft-pass guard)"
+
+# =============================================================================
+# Case 32: the blocking filter matches the bot logins in both spellings. This
+# GraphQL path returns them unsuffixed, but the same accounts appear as
+# "<name>[bot]" elsewhere on GitHub; matching one spelling only would silently
+# report zero debt if this surface ever changed.
+# =============================================================================
+for login in "coderabbitai" "coderabbitai[bot]" "copilot-pull-request-reviewer[bot]"; do
+  COMMENTS_JSON="$(jq -cn --arg l "$login" \
+    '{data:{node:{comments:{pageInfo:{hasNextPage:false,endCursor:null},
+      nodes:[{author:{login:$l},body:"Major: blocking",url:"https://example.test/c/1"}]}}}}')"
+  OUT="$(THREADS="$ONE_THREAD" COMMENTS="$COMMENTS_JSON" run_plan "$PRS")"
+  [ "$(jq -r '.prs[0].state' <<<"$OUT")" = "BLOCKED_BOT" ] \
+    || fail "a Major from '$login' must block"
+done
+# ...and a genuinely unrelated author still does not block.
+COMMENTS_JSON='{"data":{"node":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"author":{"login":"some-human"},"body":"Major: opinion","url":"https://example.test/c/2"}]}}}}'
+OUT="$(THREADS="$ONE_THREAD" COMMENTS="$COMMENTS_JSON" run_plan "$PRS")"
+[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "READY" ] \
+  || fail "a human comment must not be treated as blocking bot debt"
+pass "blocking filter matches both bot login spellings, and only bots"
+
+# =============================================================================
+# Case 33: the ledger age check uses the head's own last push, not wall clock.
+# Passing `date +%s` made every entry look stale once it aged past the grace
+# window, so the shadow blocked where land-pr.sh accepts.
+# =============================================================================
+grep -q 'squad_check "$head" "$(date' "$PLAN" \
+  && fail "the ledger age check must use the head commit date, not wall clock"
+grep -q 'gh pr view "$pr" --json commits' "$PLAN" \
+  || fail "the ledger age check must read the head commit date from the PR"
+PRS="[$(pr_row 190 "fix: aged" "$HEAD_FULL" CLEAN false '[]' "2026-01-01T00:00:00Z" florianhorner false "feature/pr-190" "2026-01-01T00:00:00Z")]"
+OUT="$(run_plan "$PRS")"
+[ "$(jq -r '.prs[0].state' <<<"$OUT")" = "READY" ] \
+  || fail "an old head commit date must not block when evidence is present"
+pass "ledger age check reads the head commit date, not the wall clock"
 
 echo
 echo "All $PASS_COUNT land-queue cases passed."

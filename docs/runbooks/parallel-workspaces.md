@@ -266,7 +266,7 @@ order.
 minutes and writes to the job summary the one thing an auto-land controller
 would do next: which PR it would integrate or arm, and why every other open PR
 is not that PR. **It changes nothing.** No push, no comment, no arm, no merge,
-no edge move. The workflow requests `contents: read` The workflow requests `contents: read`, `pull-requests: read` and
+no edge move. The workflow requests `contents: read`, `pull-requests: read` and
 `actions: read` — the last one because the edge lane asks `gh run list` which
 add-on builds went green. It holds no write permission at all.
 

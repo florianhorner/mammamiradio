@@ -30,15 +30,23 @@ _review_thread_comments_json() {
 # reader, because every consumer of these threads asks the same question and a
 # second copy is how a newly-added review bot gets silently ignored by one of
 # them. Consumers select the field they need (.url, a count) around this filter.
+#
+# The trailing "[bot]" is stripped before comparison. Review-thread comment
+# authors come back UNSUFFIXED from this GraphQL path (verified against live
+# threads), but the same accounts appear as "<name>[bot]" on other GitHub
+# surfaces, so matching only one spelling would silently report zero debt if
+# that ever changed here.
 # shellcheck disable=SC2034  # consumed by sourcing scripts (land-gates.sh, pr-queue-status.sh)
 # shellcheck disable=SC2016  # a jq program, deliberately unexpanded by the shell
 REVIEW_THREADS_BLOCKING_JQ='
   .data.repository.pullRequest.reviewThreads.nodes[]
   | select(.isResolved == false and .isOutdated == false)
   | [.comments.nodes[]?
-      | select(.author.login == "coderabbitai"
-          or .author.login == "copilot-pull-request-reviewer"
-          or .author.login == "chatgpt-codex-connector")
+      | (.author.login // "") as $login
+      | select(($login | sub("\\[bot\\]$"; "")) as $name
+          | $name == "coderabbitai"
+          or $name == "copilot-pull-request-reviewer"
+          or $name == "chatgpt-codex-connector")
       | select((.body // "") | test("(Major|Critical|P0|P1)"; "i"))
     ] as $blocking
   | select(($blocking | length) > 0)

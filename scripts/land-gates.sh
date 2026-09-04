@@ -168,14 +168,25 @@ thread_check() {
       return 1
     }
 
+  # Capture before iterating. A process substitution discards its exit status,
+  # so a jq failure (missing binary, unexpected node shape) yielded zero lines,
+  # left blocked at 0, and returned PASS — land-pr.sh would then arm on a PR
+  # whose thread debt was never evaluated. The one path in this file that did
+  # not honour the fail-closed contract in the header.
+  local urls
+  urls="$(printf '%s' "$response" | jq -r "$REVIEW_THREADS_BLOCKING_JQ | .url")" \
+    || {
+      _gate_say "could not evaluate the review threads for PR #$pr."
+      _gate_cont "Check that jq is installed and the API response is intact, then re-run."
+      return 1
+    }
+
   blocked=0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     blocked=$((blocked + 1))
     _gate_say "unresolved Major/Critical bot thread: $line"
-  done < <(
-    printf '%s' "$response" | jq -r "$REVIEW_THREADS_BLOCKING_JQ | .url"
-  )
+  done <<<"$urls"
 
   if [ "$blocked" -gt 0 ]; then
     _gate_say "$blocked unresolved Major/Critical bot review thread(s) block landing."
